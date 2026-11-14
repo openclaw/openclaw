@@ -10,7 +10,7 @@ import {
   resolveTargetSqlitePath,
   scanReadOnlySqliteActiveTranscriptFiles,
 } from "../infra/session-sqlite-migration-readers.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import { resolveActiveSqliteTranscriptFile } from "./doctor-session-sqlite-transcript-file.js";
 import type {
@@ -126,7 +126,9 @@ export async function compactSqliteDatabase(
 ): Promise<void> {
   try {
     if (options.operation === "import-finalize") {
-      closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
+      // Discovery can hold a whole database family, including an absent target.
+      // Join its retirement before compaction or subsequent sibling reads.
+      await closeOpenClawAgentDatabaseByPathAsync(resolveTargetSqlitePath(target));
     }
     report.compact = await compactDoctorSessionSqliteTarget(target, options);
   } catch (err) {
