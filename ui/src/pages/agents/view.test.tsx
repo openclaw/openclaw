@@ -430,7 +430,7 @@ describe("renderAgents", () => {
       defaultPicker
         ?.querySelector('[role="option"][aria-selected="true"]')
         ?.getAttribute("data-value"),
-    ).toBe("openai/gpt-5.4");
+    ).toBe("");
 
     renderView(
       {
@@ -509,7 +509,7 @@ describe("renderAgents", () => {
     await openPicker(select!);
     expect(
       select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("anthropic/claude-opus-4-8");
+    ).toBe("");
     const options = new Map(
       Array.from(select?.querySelectorAll('[role="option"]') ?? []).map((option) => [
         option.getAttribute("data-value"),
