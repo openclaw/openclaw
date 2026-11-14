@@ -115,10 +115,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
-export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
-  "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
-);
-
 // These independent fixture/build owners do not share the source optimizer cache.
 // New files stay bundled unless they own every UI server they use.
 export const uiE2eProductionArtifactTestFiles = [
@@ -145,7 +141,6 @@ export const uiE2eSerialTestFiles = [
     ...uiE2eRealGatewayTestFiles,
     // Native paste spans multiple gestures; sibling contexts share Chromium's clipboard.
     resolveUiTypeScriptPath("ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts"),
-    uiE2eRuntimeBudgetTestFile,
   ]),
 ].toSorted();
 
