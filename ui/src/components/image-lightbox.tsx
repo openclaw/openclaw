@@ -13,6 +13,10 @@ const Content = lazy(() => import("./image-lightbox-content.tsx"), {
   export: "ImageLightboxContent",
 });
 
+const nonAttributeProperty = { default: undefined, attribute: false } as const;
+const textProperty = { default: "" };
+const nonAttributeTextProperty = { default: "", attribute: false } as const;
+
 const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   "openclaw-image-lightbox",
   (props, host) => (
@@ -52,18 +56,18 @@ const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   ),
   {
     properties: {
-      onUseImage: { default: undefined, attribute: false },
-      connectVideo: { default: undefined, attribute: false },
-      gallery: { default: undefined, attribute: false },
-      loadDisplayImage: { default: undefined, attribute: false },
-      readOriginalBlob: { default: undefined, attribute: false },
+      onUseImage: nonAttributeProperty,
+      connectVideo: nonAttributeProperty,
+      gallery: nonAttributeProperty,
+      loadDisplayImage: nonAttributeProperty,
+      readOriginalBlob: nonAttributeProperty,
       mediaKind: { default: "image" },
-      src: { default: "" },
-      originalSrc: { default: "" },
-      imageTitle: { default: "", attribute: false },
-      imageDescription: { default: "", attribute: false },
-      imageWidth: { default: undefined, attribute: false },
-      imageHeight: { default: undefined, attribute: false },
+      src: textProperty,
+      originalSrc: textProperty,
+      imageTitle: nonAttributeTextProperty,
+      imageDescription: nonAttributeTextProperty,
+      imageWidth: nonAttributeProperty,
+      imageHeight: nonAttributeProperty,
     },
   },
 );
@@ -78,13 +82,13 @@ export function ImageLightboxItemView(props: {
       {(item) => (
         <ImageLightbox
           onUseImage={props.onUseImage}
-          mediaKind={item().kind ?? "image"}
+          mediaKind={item().kind}
           gallery={item().gallery}
           connectVideo={item().connectVideo}
           loadDisplayImage={item().loadDisplayImage}
           readOriginalBlob={item().readOriginalBlob}
           src={item().src}
-          originalSrc={item().originalSrc ?? ""}
+          originalSrc={item().originalSrc}
           imageTitle={item().title}
           imageWidth={item().width}
           imageHeight={item().height}

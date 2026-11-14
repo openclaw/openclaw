@@ -185,8 +185,8 @@ export type PaneLayoutData = {
   background: Parameters<typeof SessionBackgroundView>[0];
   overlays: {
     presentation: PresentationValue;
-    image: ImageLightboxItem | null;
-    onCloseImage: () => void;
+    item: ImageLightboxItem | null;
+    onClose: () => void;
     onUseImage?: ImageLightboxProps["onUseImage"];
     reset: ChatBoardResetConfirmationProps | null;
   };
@@ -235,11 +235,7 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
         background={background}
       />
       <Show when={presented()}>
-        <ImageLightboxItemView
-          item={props.data.overlays.image}
-          onClose={() => props.data.overlays.onCloseImage()}
-          onUseImage={props.data.overlays.onUseImage}
-        />
+        <ImageLightboxItemView {...props.data.overlays} />
         <Show when={props.data.overlays.reset}>
           {(reset) => (
             <ChatLazyBoundary onClose={() => reset().onResolve(false)}>

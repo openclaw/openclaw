@@ -714,8 +714,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       },
       overlays: {
         presentation: panePresentation,
-        image: state.imageLightbox,
-        onCloseImage: state.handleCloseImage,
+        item: state.imageLightbox,
+        onClose: state.handleCloseImage,
         onUseImage: canUseImage ? createLightboxComposerAction(this, state) : undefined,
         reset: this.renderResetConfirmation(),
       },

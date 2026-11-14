@@ -2,7 +2,8 @@ import { BROWSER_IMAGE_MIME_TYPES } from "../../../../src/shared/browser-image-m
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { readLightboxOriginalBlob } from "../../components/image-lightbox-files.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
-import { readChatPaneRouteMutationAccess } from "./chat-pane-session-controls.ts";
+import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
+import { isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import type { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -52,7 +53,13 @@ export default async function useLightboxImage(
     }
     return (
       hasOperatorWriteAccess(snapshot.hello?.auth ?? null) ||
-      readChatPaneRouteMutationAccess(snapshot, state, session).composeScope.allowed
+      readSessionMethodScopeAccess(snapshot.hello?.auth, {
+        method: "chat.send",
+        requiredScope: "operator.write",
+        sessionScope: true,
+        session,
+        sessionAbsent: !session && isChatSessionProvenAbsent(state),
+      }).allowed
     );
   };
   if (!ownsDestination() || !canCompose()) {
