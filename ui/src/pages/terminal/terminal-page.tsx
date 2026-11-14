@@ -1,8 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.tsx";
+import { isGatewayConnectionAttemptPending } from "../../lib/gateway-status.ts";
 import {
   projectAgentSelection,
   projectApplicationConfig,
@@ -61,16 +63,23 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
               themeMode={themeMode()}
             />
             {!available() && (
-              <PanelEmptyState
-                heading={t("terminal.title")}
-                description={t("terminal.unavailable")}
-                icon={<Icon name="terminal" />}
-                action={
-                  <button class="btn" onClick={() => context.navigate("new-session")}>
-                    {t("newSession.title")}
-                  </button>
+              <Show
+                when={
+                  !isGatewayConnectionAttemptPending(snapshot()) || snapshot().lastError !== null
                 }
-              />
+                fallback={<PanelLoadingSkeleton variant="terminal" label={t("common.loading")} />}
+              >
+                <PanelEmptyState
+                  heading={t("terminal.title")}
+                  description={t("terminal.unavailable")}
+                  icon={<Icon name="terminal" />}
+                  action={
+                    <button class="btn" onClick={() => context.navigate("new-session")}>
+                      {t("newSession.title")}
+                    </button>
+                  }
+                />
+              </Show>
             )}
           </>
         )}
