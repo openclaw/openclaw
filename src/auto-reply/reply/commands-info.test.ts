@@ -265,6 +265,30 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
   });
 
+  it.each(["webchat", "whatsapp"])(
+    "reports denied /status only on the internal surface (%s)",
+    async (channel) => {
+      const params = buildInfoParams(
+        "/status",
+        { commands: { text: true, allowFrom: { "*": ["verified-user"] } } },
+        { Provider: channel, Surface: channel, GatewayClientScopes: ["operator.admin"] },
+      );
+      params.command.channel = channel;
+      params.command.isAuthorizedSender = false;
+      params.command.senderId = undefined;
+
+      const result = await handleStatusCommand(params, true);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        ...(channel === "webchat"
+          ? { reply: { text: "You are not authorized to use this command." } }
+          : {}),
+      });
+      expect(buildStatusReply).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves the shared session store path when routing /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },

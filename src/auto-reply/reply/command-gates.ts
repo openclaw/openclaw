@@ -7,6 +7,7 @@ import {
   type CommandFlagKey,
 } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { ReplyPayload } from "../types.js";
 import type {
@@ -60,7 +61,9 @@ export function defineAuthorizedTextCommand<T>(
     }
     const unauthorized = rejectUnauthorizedCommand(params, options.label);
     if (unauthorized) {
-      return options.silentUnauthorized ? { shouldContinue: false } : unauthorized;
+      return options.silentUnauthorized && !isInternalMessageChannel(params.command.channel)
+        ? { shouldContinue: false }
+        : unauthorized;
     }
     const ownerOnly =
       typeof options.ownerOnly === "function"
@@ -104,13 +107,16 @@ export function rejectUnauthorizedCommand(
       params.command.assertAuthorizedCurrent?.();
       return null;
     } catch {
-      // Preserve native refusals and silent text-command denial below.
+      // Preserve refusals without granting authority after admission changes.
     }
   }
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
-  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
+  if (
+    isNativeCommandTurn(resolveCommandTurnContext(params.ctx)) ||
+    isInternalMessageChannel(params.command.channel)
+  ) {
     return commandReply("You are not authorized to use this command.");
   }
   return { shouldContinue: false };
