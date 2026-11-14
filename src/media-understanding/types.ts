@@ -32,6 +32,22 @@ type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {
 
 export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
+/** Native document input, admitted by the caller's full-document upload policy. */
+export type PdfAnalysisRequest = {
+  pdfs: readonly Buffer[];
+  model: string;
+  api: string;
+  apiKey: string;
+  prompt: string;
+  maxTokens?: number;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  request?: ModelProviderRequestTransportOverrides;
+  signal?: AbortSignal;
+};
+
+export type PdfAnalysisResult = { text: string };
+
 export type MediaUnderstandingProviderAuthResult =
   | { kind: "none"; source: string }
   | { kind: "api-key"; apiKey: string; source: string; mode?: "api-key" };

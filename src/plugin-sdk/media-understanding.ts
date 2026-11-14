@@ -22,6 +22,8 @@ export type {
   MediaUnderstandingProviderAuthResult,
   MediaUnderstandingProviderRequestAuth,
   MediaUnderstandingProviderSyntheticAuthResult,
+  PdfAnalysisRequest,
+  PdfAnalysisResult,
   VideoDescriptionRequest,
 } from "../media-understanding/types.js";
 
