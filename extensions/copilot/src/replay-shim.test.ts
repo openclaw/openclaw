@@ -25,7 +25,7 @@ describe("isMissingCopilotSessionError", () => {
       (message) => [new Error(message), false] as const,
     ),
     [{ message: "session not found" }, true],
-  ])("classifies %s as recoverable=%s", (error, expected) => {
+  ] as const)("classifies %s as recoverable=%s", (error, expected) => {
     expect(isMissingCopilotSessionError(error)).toBe(expected);
   });
 });

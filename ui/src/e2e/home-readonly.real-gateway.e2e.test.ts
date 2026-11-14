@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import type { OperatorScope } from "../../../src/gateway/operator-scopes.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -62,7 +63,12 @@ suite.define(() => {
             OPENCLAW_GATEWAY_TOKEN: undefined,
           },
         });
-        const people = [
+        const people: {
+          email: string;
+          name: string;
+          role: string;
+          scopes: OperatorScope[];
+        }[] = [
           {
             email: "home-owner@example.test",
             name: "Home Owner",

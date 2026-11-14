@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import type { OperatorScope } from "../../../src/gateway/operator-scopes.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -30,7 +31,7 @@ const suite = createControlUiE2eSuite({
   name: "Guest personal groups real Gateway",
   startServerBeforeBrowser: true,
 });
-const scopes = ["operator.sessions.read", "operator.sessions.write"];
+const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
 const parentKey = "agent:main:dashboard:groups-parent";
 const childKey = "agent:main:dashboard:groups-child";
 const otherKey = "agent:main:dashboard:groups-other";

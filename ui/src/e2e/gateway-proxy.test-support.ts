@@ -1,12 +1,13 @@
 import { createServer, type ProxyOptions } from "vite";
 import type { GatewayOperatorRolesConfig } from "../../../src/config/types.gateway.ts";
+import type { OperatorScope } from "../../../src/gateway/operator-scopes.ts";
 
 export function createPermissionGatewayConfig(options: {
   port: number;
   workspaceDir: string;
   uiBaseUrl: string;
   users: string[];
-  scopes: string[];
+  scopes: OperatorScope[];
   roles: GatewayOperatorRolesConfig;
 }) {
   const trustedProxy = {

@@ -89,7 +89,7 @@ export function createModelGatewayFixture(options: {
     get instance() {
       return instance;
     },
-    async open(route: string) {
+    open: async (route: string) => {
       // Pairing links are single-use, so each page load needs a fresh handoff.
       const handoff = await instance.cli(["dashboard", "--json"]);
       expect(handoff.code, handoff.stderr).toBe(0);

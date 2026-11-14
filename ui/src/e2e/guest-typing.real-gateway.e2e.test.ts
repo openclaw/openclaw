@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.ts";
+import type { OperatorScope } from "../../../src/gateway/operator-scopes.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -31,7 +32,12 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const sessionKey = "agent:main:dashboard:guest-typing";
-const people = [
+const people: {
+  email: string;
+  name: string;
+  role: string;
+  scopes: OperatorScope[];
+}[] = [
   {
     email: "typing-guest@example.test",
     name: "Guest Writer",
