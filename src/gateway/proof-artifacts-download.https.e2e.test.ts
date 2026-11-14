@@ -7,11 +7,13 @@ import type {
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
+import { runMediaRetentionLiveProof } from "../../test/helpers/media-retention-live-proof.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
@@ -277,4 +279,13 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
       );
     },
   );
+}, 60_000);
+
+test("generated image survives blocked delivery and is recovered through authenticated Gateway history", async () => {
+  const openedMedia = vi.spyOn(fsSafe, "openLocalFileSafely");
+  try {
+    await runMediaRetentionLiveProof({ getMediaOpenCount: () => openedMedia.mock.calls.length });
+  } finally {
+    openedMedia.mockRestore();
+  }
 }, 60_000);
