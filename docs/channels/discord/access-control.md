@@ -325,7 +325,7 @@ Use `emoji-list` to discover the current server's custom emoji:
 { "action": "emoji-list", "channel": "discord", "limit": 25 }
 ```
 
-`guildId` defaults to the current conversation's server; provide it explicitly to query another server. Results are sorted by name, and `limit` defaults to and cannot exceed 100:
+`guildId` defaults to the current conversation's server; provide it explicitly to query another server. In DMs or sessions without a current server channel, provide `guildId` or a server channel with `channelId`. Results are sorted by name, and `limit` defaults to and cannot exceed 100:
 
 ```json
 {
