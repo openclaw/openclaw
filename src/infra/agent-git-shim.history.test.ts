@@ -12,7 +12,12 @@ async function withHistoryFixture(
   await withTempDir("agent-git-blobs-", async (root) => run(await historyFixture(root)));
 }
 
-async function historyFixture(root: string, versions = 12, append = true, rename = false) {
+async function historyFixture(
+  root: string,
+  versions = 12,
+  append = true,
+  options: { rename?: boolean; unchangedRange?: boolean } = {},
+) {
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
     GIT_CONFIG_NOSYSTEM: "1",
@@ -42,12 +47,16 @@ async function historyFixture(root: string, versions = 12, append = true, rename
   for (let index = 0; index < versions; index++) {
     content = `${append ? content : ""}history line ${index}\n`;
     const other = `unrelated version ${index}\n`;
-    input += `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> ${1700000000 + index} +0000\ndata 7\nhistory\nM 100644 inline ${file}\ndata ${content.length}\n${content}\nM 100644 inline other.txt\ndata ${other.length}\n${other}\n`;
+    const fileChange =
+      options.unchangedRange && index >= versions - 4 && index < versions - 1
+        ? ""
+        : `M 100644 inline ${file}\ndata ${content.length}\n${content}\n`;
+    input += `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> ${1700000000 + index} +0000\ndata 7\nhistory\n${fileChange}M 100644 inline other.txt\ndata ${other.length}\n${other}\n`;
   }
   git(origin, ["fast-import", "--quiet"], input);
   git(origin, ["reset", "--hard", "HEAD"]);
   git(origin, ["repack", "-adq"]);
-  if (rename) {
+  if (options.rename) {
     for (const next of ["first renamed.txt", "folder/second renamed.txt"]) {
       await fs.mkdir(path.dirname(path.join(origin, next)), { recursive: true });
       git(origin, ["mv", file, next]);
@@ -199,10 +208,16 @@ it.skipIf(process.platform === "win32")(
       // A failed explicit batch must not fall through to per-object lazy fetches.
       const bin = path.join(root, "failed-batch");
       await fs.mkdir(bin);
+      const fetchLog = path.join(root, "failed-fetch.log");
       await fs.writeFile(
         path.join(bin, "git"),
         `#!/bin/sh
-for arg do [ "$arg" != --stdin ] || exit 1; done
+for arg do
+  if [ "$arg" = fetch ]; then
+    echo fetch >> "$OPENCLAW_FIXTURE_FETCH_LOG"
+    exit 1
+  fi
+done
 exec "$OPENCLAW_FIXTURE_GIT" "$@"
 `,
         { mode: 0o755 },
@@ -211,7 +226,9 @@ exec "$OPENCLAW_FIXTURE_GIT" "$@"
       const failure = await failed.invoke(["log", "-p", "--", file], undefined, {
         PATH: `${bin}${path.delimiter}${process.env.PATH}`,
         OPENCLAW_FIXTURE_GIT: path.join(git(root, ["--exec-path"]).trim(), "git"),
+        OPENCLAW_FIXTURE_FETCH_LOG: fetchLog,
       });
+      expect(await fs.readFile(fetchLog, "utf8")).toBe("fetch\n");
       expect(await failed.newPacks()).toHaveLength(0);
       expect(await failed.requests()).toHaveLength(0);
       expect(failure.code).toBe(2);
@@ -249,6 +266,7 @@ it.skipIf(process.platform === "win32")(
       expect(await requests()).toHaveLength(1);
       for (const args of [
         ["log", "--oneline", "-S", "selectThemeSettings"],
+        ["-c", "log.follow=true", "log", "--oneline", "-S", "selectThemeSettings"],
         ["log", "-G", "history"],
         ["log", "-p"],
         ["blame", "HEAD", "--", file],
@@ -309,7 +327,7 @@ it.skipIf(process.platform === "win32")(
   "batches blame history across edited renames without unrelated blobs",
   () =>
     withTempDir("agent-git-renames-", async (root) => {
-      const { origin, file, git, reader } = await historyFixture(root, 12, true, true);
+      const { origin, file, git, reader } = await historyFixture(root, 12, true, { rename: true });
       for (const mode of ["default", "flag", "environment", "relative"]) {
         const { linked, invoke, newPacks, requests } = await reader();
         const relative = mode === "relative";
@@ -330,5 +348,31 @@ it.skipIf(process.platform === "win32")(
         expect.soft(await newPacks(), mode).toHaveLength(1);
         expect.soft(await requests(), mode).toHaveLength(13);
       }
+      for (const args of [
+        ["-c", "log.follow=true", "log", "-p", file],
+        ["-c", "log.follow=true", "log", "-p", "--", file],
+        ["log", "-p", "other.txt"],
+      ]) {
+        const { invoke } = await reader();
+        const result = await invoke(args);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe(git(origin, args));
+      }
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "prepares the endpoint content for a blame range with no file changes",
+  () =>
+    withTempDir("agent-git-blame-range-", async (root) => {
+      const { origin, file, git, reader } = await historyFixture(root, 12, true, {
+        unchangedRange: true,
+      });
+      const { invoke, newPacks } = await reader();
+      const args = ["blame", "HEAD~3..HEAD~1", "--", file];
+      const result = await invoke(args);
+      expect.soft(result.code, result.stderr).toBe(0);
+      expect.soft(result.stdout).toBe(git(origin, args));
+      expect(await newPacks()).toHaveLength(1);
     }),
 );

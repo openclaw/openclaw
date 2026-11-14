@@ -123,12 +123,13 @@ query_repository() {
       done
       return 1 ;;
     blobless)
-      remote_settings=$(git "$@" config --get-regexp '^remote\\..*\\.(url|promisor|partialclonefilter)$' 2>/dev/null) || return 1
+      remote_settings=$(git "$@" config --get-regexp '^(remote\\..*\\.(url|promisor|partialclonefilter)|log[.]follow)$' 2>/dev/null) || return 1
       remote_settings="
 $remote_settings
 "
       case $remote_settings in *'.partialclonefilter blob:none
 '*) ;; *) return 1 ;; esac ;;
+    log_follow) git "$@" config --bool --get log.follow 2>/dev/null ;;
     register_remotes)
       remotes=$(git "$@" remote) || return 1
       fetch_cwd=
@@ -381,6 +382,8 @@ $1
 prepare_blobs() {
   [ "$no_lazy_fetch" != 1 ] || return 0
   case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
+  # Log arguments that are implicit paths retain their native handling.
+  [ "$verb" != log ] || [ "$unresolved_revision" != 1 ] || return 0
   # This portable shell helper uses line-delimited arguments and object IDs.
   for arg do case $arg in *'
 '*) return 0 ;; esac; done
@@ -394,6 +397,13 @@ EOF
   fi
   query_repository blobless "$@" || return 0
   query_repository shared "$@" || return 0
+  if [ "$blob_verb" = log ] && [ -n "$blob_paths" ]; then
+    case $remote_settings in *'
+log.follow'*)
+      # Implicit follow has the same native contract as unsupported --follow.
+      [ "$(query_repository log_follow "$@")" != true ] || return 0 ;;
+    esac
+  fi
   # Show prepares history speculatively; other content searches must stay offline
   # after this bounded prefetch, even when discovery or the fetch cannot finish.
   [ "$blob_verb" = show ] || prepared_blobs=1
@@ -417,6 +427,17 @@ EOF
       done
     fi
     candidates=$(query_repository history_blobs "$@")
+    if [ -z "$candidates" ] && [ "$blob_verb" = blame ]; then
+      # An unchanged range still needs its endpoint content. Let Git expand the
+      # range, then read the last path change reachable from its positive tip.
+      revisions=$(printf %s "$blob_args")
+      query_repository revisions "$@" || return 0
+      blob_args=$(printf '%s\\n' "$resolved" | awk 'substr($0, 1, 1) != "^" { print; exit }')
+      blob_args="$blob_args
+-n
+1"
+      candidates=$(query_repository history_blobs "$@")
+    fi
     case $candidates in ''|skip) return 0 ;; esac
     missing=$candidates
     missing=$(query_repository missing_blobs "$@")
@@ -465,7 +486,7 @@ append_revision_roots() {
     fi
     revision=\${revision%%:*}
     revision=\${revision%%[~^]*}
-    case $revision in ''|*[[:space:]]*) continue ;; esac
+    case $revision in '') continue ;; *[[:space:]]*) unresolved_revision=1; continue ;; esac
     revisions="$revisions$revision
 "
   done
@@ -524,7 +545,7 @@ EOF
   ) || return 0
   while read -r revision kind; do
     [ "$kind" = missing ] || continue
-    oid=$(query_repository resolve "$@") || continue
+    oid=$(query_repository resolve "$@") || { unresolved_revision=1; continue; }
     if [ -z "$missing" ]; then
       query_repository blobless "$@" || return 0
       query_repository shared "$@" || return 0
@@ -543,6 +564,7 @@ EOF
 }
 prepare_commits() {
   revision_marker=
+  unresolved_revision=
   [ "$no_lazy_fetch" != 1 ] || return 0
   case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
   revision_roots "$@"
@@ -601,7 +623,7 @@ if ! is_probe "$@"; then
       result=$?
       [ "$result" = 0 ] && exit 0
       [ "$blob_verb" = grep ] && [ "$result" = 1 ] && exit 1
-      echo 'OpenClaw: content search could not finish within the shared partial-clone blob budget; command stopped without lazy fetching. Add a narrower pathspec, use git grep on specific revisions, or set a --since bound (a revision range for blame), then retry.' >&2
+      echo 'OpenClaw: content search could not finish within the shared partial-clone blob budget; command stopped without lazy fetching. Add a narrower pathspec after --, use git grep on specific revisions, or set a --since bound (a revision range for blame), then retry.' >&2
       exit 2
     fi
   fi
