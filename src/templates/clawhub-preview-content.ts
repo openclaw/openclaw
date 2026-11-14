@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import { fetchClawHubSkillCard } from "../infra/clawhub-skills.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -58,6 +59,12 @@ export async function readClawHubCatalogPreview(input: {
           "This workspace file changed during preview.",
         );
       }
+      if (!isUtf8(read.buffer)) {
+        throw new ClawHubSourceError(
+          "clawhub_preview_not_text",
+          "This workspace file is not text, so it has no preview.",
+        );
+      }
       content = read.buffer.toString("utf8");
     }
     return content === undefined
@@ -112,4 +119,16 @@ export async function readClawHubCatalogPreview(input: {
     return { kind: "skill", name: skill.name, content };
   }
   return undefined;
+}
+
+/** Detail excerpts list binary workspace files, such as images, without text. */
+export async function readClawHubCatalogExcerpt(
+  input: Parameters<typeof readClawHubCatalogPreview>[0],
+): Promise<ClawHubTemplateCatalogPreview | undefined> {
+  return await readClawHubCatalogPreview(input).catch((error: unknown) => {
+    if (error instanceof ClawHubSourceError && error.code === "clawhub_preview_not_text") {
+      return undefined;
+    }
+    throw error;
+  });
 }
