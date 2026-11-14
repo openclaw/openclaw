@@ -129,6 +129,17 @@ gh run view <run-id> --repo owner/repo --log-failed
 gh run rerun <run-id> --repo owner/repo --failed
 ```
 
+### Wait for CI
+
+Run one of these as a single background `exec` (`background: true`, `timeoutSeconds` above the expected CI time). When its running result says the exit wakes this conversation, end the turn: the wake carries the exit code and the output tail. Otherwise, collect it with `process poll`. Do not start a second waiter for the same checks. Polling loops and one-shot automations cost a model turn per check ([#199122](https://github.com/openclaw/openclaw/pull/199122)).
+
+```bash
+# Exits 0 when every check passes, non-zero at the first failure.
+gh pr checks 55 --repo owner/repo --watch --fail-fast
+# Exits non-zero when the run fails.
+gh run watch <run-id> --repo owner/repo --exit-status
+```
+
 ## API
 
 ```bash

@@ -1201,6 +1201,8 @@ const enSettings = {
       checking: "Checking…",
       checkFailed:
         "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkBillingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then use Test access to try again.",
       checkInconclusive:
         "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
       checkUnavailable:
@@ -1865,7 +1867,7 @@ const enSettings = {
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",
       deliverDevice: "Deliver to this browser or app",
-      notificationLabel: "Notification label",
+      notificationLabel: "Notification title prefix",
       approvalRequested: "Approval requested",
       agentFinished: "Agent finished",
       agentQuestion: "Agent question",
@@ -1882,6 +1884,7 @@ const enSettings = {
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
       onlyAgents: "Only these agents",
+      onlyAgentsHint: "Enter agent IDs separated by commas. Leave blank for all agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
@@ -2013,9 +2016,6 @@ const enSettings = {
         title: "Browser tab icon",
         default: "Default",
         agent: "Agent avatar",
-        square: "Square",
-        rounded: "Rounded corners",
-        circle: "Circle",
         lobsterdex: "Lobsterdex",
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
