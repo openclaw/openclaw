@@ -180,7 +180,7 @@ suite.define(() => {
               expect((await download).suggestedFilename()).toBe("reader-source.txt");
             }
             await page
-              .getByText(scenario === "save" ? "Original file saved." : "Download started.", {
+              .getByText(scenario === "save" ? "Original file saved." : "Download requested.", {
                 exact: true,
               })
               .waitFor();

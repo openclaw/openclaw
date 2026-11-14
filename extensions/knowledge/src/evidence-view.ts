@@ -312,7 +312,7 @@ export function originalDownload(
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
-      status.textContent = writer ? "Original file saved." : "Download started.";
+      status.textContent = writer ? "Original file saved." : "Download requested.";
     } catch (error) {
       await writer?.abort().catch(() => {});
       status.textContent = redact(String(error));
