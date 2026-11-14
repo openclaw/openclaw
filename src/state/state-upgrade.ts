@@ -576,6 +576,8 @@ function isMachineFailure(error: unknown): boolean {
     code === "EDQUOT" ||
     code === "EROFS" ||
     // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(String((error as Error)?.message))
+    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(
+      (error as Error | undefined)?.message ?? "",
+    )
   );
 }

@@ -84,7 +84,7 @@ function countRows(db: DatabaseSync): Map<string, number> {
     counts.set(
       name,
       Number(
-        readSqliteRows<{ n: number }>(
+        readSqliteRows<{ n: number | bigint }>(
           db,
           `SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}"`,
         )[0]?.n ?? 0,

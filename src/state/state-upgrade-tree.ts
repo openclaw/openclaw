@@ -458,7 +458,7 @@ export function countSqlitePrefix(db: DatabaseSync, needle: string): number {
             `SELECT count(*) AS n FROM ${table} WHERE typeof(${column}) = 'text' AND instr(${column}, ?) > 0`,
           )
           // SAFETY: the statement fixes the column names and types of each row.
-          .get(needle) as { n: number }
+          .get(needle) as { n: number | bigint }
       ).n,
     );
   }
@@ -478,7 +478,7 @@ export function rewriteFilePrefix(file: string, from: string, to: string): boole
     return true;
   }
   const bytes = fs.readFileSync(file);
-  if (bytes.indexOf(from) < 0) {
+  if (!bytes.includes(from)) {
     return false;
   }
   const parts: Buffer[] = [];
