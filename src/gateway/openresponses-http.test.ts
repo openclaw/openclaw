@@ -6,6 +6,7 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -216,7 +217,7 @@ const STREAM_FAILURE_CASES = [
         rawError: "Invalid top_p: expected a value less than or equal to 1.",
       }),
     tools: [],
-    expectedCode: "invalid_request_error",
+    expectedCode: "decimal_above_max_value",
     expectedMessage: "Invalid top_p",
   },
   {
@@ -891,6 +892,30 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(failedResponse?.error?.message).toContain(expectedMessage);
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the work-start conflict code on the failed response (stream=%s)",
+    async (stream) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async () => {
+        throw new SessionWorkStartChangedError(
+          'Session "main" changed while starting work. Retry.',
+        );
+      }) as never);
+
+      const res = await post({ stream });
+      expect(res.status).toBe(stream ? 200 : 409);
+
+      const { response } = await readResponse(res, stream, "response.failed");
+      expect(response).toMatchObject({
+        status: "failed",
+        error: {
+          code: "SESSION_WORK_START_CHANGED",
+          message: expect.stringContaining("changed while starting work"),
+        },
+      });
     },
   );
 

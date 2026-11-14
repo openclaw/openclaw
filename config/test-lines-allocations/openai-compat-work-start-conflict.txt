@@ -1,0 +1,3 @@
+# Retriable session work-start rejections map to a 409 conflict envelope, and the
+# Responses adapters keep that stable code on failed responses.
+50

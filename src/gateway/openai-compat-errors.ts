@@ -5,6 +5,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -43,6 +44,18 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
       error: {
         message: "Session is archived. Restore it in the Control UI before retrying.",
         type: "invalid_request_error",
+      },
+    };
+  }
+  // Work-start rejections are retriable coordination failures (#192465): the session
+  // changed under the run, so the same request can be resubmitted as-is.
+  if (isSessionWorkStartInvalidatedError(err)) {
+    return {
+      status: 409,
+      error: {
+        message: err.message,
+        type: "invalid_request_error",
+        code: err.code,
       },
     };
   }
