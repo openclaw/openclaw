@@ -334,6 +334,7 @@ function projectedStringEnd(
 type RedactionPatternGroup = {
   patterns: ResolvedRedactPattern[];
   couldMatch?: (input: string) => boolean;
+  visitMatches?: typeof visitRedactMatches;
 };
 
 export function redactJsonRecord(
@@ -435,6 +436,7 @@ export function redactJsonRecord(
       }
     };
     for (const group of groups) {
+      const visitMatches = group.visitMatches ?? visitRedactMatches;
       // Earlier serialized rules can change the boundaries inspected by the next group.
       if (group.couldMatch && !group.couldMatch(current)) {
         continue;
@@ -442,10 +444,10 @@ export function redactJsonRecord(
       for (const pattern of group.patterns) {
         if (phase === 0) {
           for (decodedToken of decodedTokens) {
-            visitRedactMatches(decodedToken.currentValue, pattern, visitDecodedMatch);
+            visitMatches(decodedToken.currentValue, pattern, visitDecodedMatch);
           }
         } else {
-          visitRedactMatches(current, pattern, (match) => {
+          visitMatches(current, pattern, (match) => {
             const capture = getCapture(match, pattern);
             if (!capture || capture.end < capture.start) {
               return;
