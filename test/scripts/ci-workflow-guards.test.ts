@@ -6441,7 +6441,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           .toSorted(),
       );
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 13);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 14);
         expectExcludes(selectedFiles, [
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
           "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
