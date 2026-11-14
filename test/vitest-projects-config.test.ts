@@ -534,7 +534,6 @@ describe("projects vitest config", () => {
   });
 
   it.each([
-    "test/plugins/deep-research-recovery.gateway.test.ts",
     "test/plugins/deep-research-routing.gateway.test.ts",
     "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
   ])("routes %s through the Gateway database owner exactly once", (file) => {

@@ -12,7 +12,6 @@ const pageStyles = {
   ],
   activity: [
     "ui/src/pages/activity/run-inspector.css",
-    "ui/src/pages/activity/session-activity-media.css",
     "ui/src/styles/activity.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",

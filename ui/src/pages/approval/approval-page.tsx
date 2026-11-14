@@ -487,7 +487,7 @@ function createApprovalPage(
     const current = view.read();
     const pageTitle =
       current.connected && !current.approvalsAccess
-        ? t("common.disabled")
+        ? t("approvalPage.accessRequiredTitle")
         : current.requestError === "unavailable"
           ? t("approvalPage.unavailableTitle")
           : current.requestError === "connection" && !current.approval
@@ -565,7 +565,7 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
         const title = {
           loading: "approvalPage.loadingTitle",
           unavailable: "approvalPage.unavailableTitle",
-          "missing-scope": "common.disabled",
+          "missing-scope": "approvalPage.accessRequiredTitle",
           connection: "approvalPage.connectionErrorTitle",
         }[kind];
         const description = {
@@ -593,7 +593,10 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
             </h1>
             <p>
               {kind === "missing-scope" ? (
-                <code>{APPROVAL_REQUIRED_SCOPE}</code>
+                <>
+                  {t("approvalPage.accessRequiredDescription")}{" "}
+                  <code>{APPROVAL_REQUIRED_SCOPE}</code>
+                </>
               ) : (
                 t(description[kind])
               )}

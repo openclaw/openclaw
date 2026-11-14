@@ -235,7 +235,7 @@ const enSettings = {
       editFile: "Edit file",
       closePreview: "Close preview",
       coreFilesTitle: "Core files",
-      coreFilesSubtitle: "Bootstrap persona, identity, and tool guidance.",
+      coreFilesSubtitle: "Instructions for this agent’s behavior, identity, and tools.",
       workspace: "Workspace",
       loadHint: "Load the agent workspace files to edit core instructions.",
       empty: "No files yet.",
@@ -262,7 +262,7 @@ const enSettings = {
     lastError: "Last error",
     refreshingStaleSnapshot: "Refreshing channel status… Showing the last available status.",
     hub: {
-      connectedTitle: "Connected channels",
+      connectedTitle: "Your channels",
       addTitle: "Add a channel",
       addSubtitle: "Choose a messaging app to set up.",
       updatedAgo: "Updated {ago}",
@@ -587,7 +587,7 @@ const enSettings = {
       },
       bindings: {
         label: "Bindings",
-        description: "Key bindings and shortcuts",
+        description: "Route conversations to agents and bind persistent ACP sessions.",
       },
       broadcast: {
         label: "Broadcast",
@@ -631,7 +631,7 @@ const enSettings = {
       },
       acp: {
         label: "ACP",
-        description: "Agent Communication Protocol runtime and streaming settings",
+        description: "Agent Client Protocol (ACP) runtime and streaming settings",
       },
       mcp: {
         label: "MCP",
@@ -1201,6 +1201,8 @@ const enSettings = {
       checking: "Checking…",
       checkFailed:
         "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkBillingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then use Test access to try again.",
       checkInconclusive:
         "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
       checkUnavailable:
@@ -1667,7 +1669,9 @@ const enSettings = {
       locationHint: "Allow agents to use device location when a tool asks for it.",
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
-      preciseLocationHint: "Always may require System Settings to approve background location.",
+      locationAlwaysHint: "Always may require System Settings to approve background location.",
+      preciseLocationHint:
+        "Allow the Gateway to request this Mac’s precise location when location access is enabled.",
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
@@ -1863,7 +1867,7 @@ const enSettings = {
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",
       deliverDevice: "Deliver to this browser or app",
-      notificationLabel: "Notification label",
+      notificationLabel: "Notification title prefix",
       approvalRequested: "Approval requested",
       agentFinished: "Agent finished",
       agentQuestion: "Agent question",
@@ -1880,6 +1884,7 @@ const enSettings = {
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
       onlyAgents: "Only these agents",
+      onlyAgentsHint: "Enter agent IDs separated by commas. Leave blank for all agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
@@ -2011,9 +2016,6 @@ const enSettings = {
         title: "Browser tab icon",
         default: "Default",
         agent: "Agent avatar",
-        square: "Square",
-        rounded: "Rounded corners",
-        circle: "Circle",
         lobsterdex: "Lobsterdex",
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",

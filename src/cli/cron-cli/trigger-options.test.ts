@@ -532,3 +532,14 @@ describe("cron scratch", () => {
     expectRpc(["set", { content, expectedRevision: Number(revision) }]);
   });
 });
+
+it.each(["standard", "daybreak_blue", "daybreak_red"])(
+  "forwards explicit scheduled Access %s through add and edit",
+  async (cyberAccessProgram) => {
+    await add(["--access", cyberAccessProgram], { cyberAccessProgram });
+    await edit(["--access", cyberAccessProgram], { cyberAccessProgram });
+  },
+);
+it("clears scheduled Access through edit", async () => {
+  await edit(["--clear-access"], { cyberAccessProgram: null });
+});
