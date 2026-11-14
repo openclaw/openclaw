@@ -653,6 +653,7 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
+  "src/gateway/server-methods/usage.row-attribution.test.ts",
 ];
 
 export const gatewayMethodsTestInclude = [
