@@ -74,7 +74,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/gateway.continuation-skip-bootstrap.integration.test.ts",
   "src/gateway/github-personal-publication-outcomes.test.ts",
   "src/gateway/github-personal-publication.lifecycle.test.ts",
-  "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-pr-attribution.test.ts",
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",
@@ -406,7 +405,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/live-events.test.ts",
   "src/gateway/worker-environments/local-workspace-conversion.test.ts",
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
-  "src/gateway/worker-environments/local-workspace-store.test.ts",
   "src/gateway/worker-environments/local-workspace-template.test.ts",
   "src/gateway/worker-environments/node-desktop-carrier.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
@@ -652,7 +650,6 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/users-preferences.test.ts",
   "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/usage.test.ts",
-  "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
 
 export const gatewayMethodsTestInclude = [

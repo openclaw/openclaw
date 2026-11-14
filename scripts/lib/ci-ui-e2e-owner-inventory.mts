@@ -1096,16 +1096,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/desktop/desktop-panel-solid.tsx",
     ],
   ),
-  pageWatch(
-    "ui/src/e2e/desktop-panel.e2e.test.ts",
-    ["activity", "chat", "terminal"],
-    [
-      "ui/src/components/command-palette.tsx",
-      "ui/src/components/desktop/desktop-client.ts",
-      "ui/src/components/desktop/desktop-panel-solid.tsx",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
   {
     testFile: "ui/src/e2e/desktop-picture-in-picture.e2e.test.ts",
     ownerRoots: [

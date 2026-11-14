@@ -130,7 +130,6 @@ const bothHostFiles = new Set([
   // Cold Decision preparation must retain the same owner on both host runtimes.
   "src/decisions/clawrouter.integration.test.ts",
   "src/infra/sqlite-database-admission.worker.test.ts",
-  "src/infra/sqlite-schema-facts.native.test.ts",
   "src/infra/sqlite-schema-facts.physical-cache.test.ts",
   "src/infra/update-run-recovery-admission.test.ts",
   "src/state/openclaw-agent-db-schema-refresh.test.ts",
