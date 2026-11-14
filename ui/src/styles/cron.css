@@ -600,7 +600,14 @@
   tab-size: 2;
 }
 
-.cron-payload-code:focus-visible {
+.cron-prompt-preview {
+  width: 100%;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.cron-payload-code:focus-visible,
+.cron-prompt-preview:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
