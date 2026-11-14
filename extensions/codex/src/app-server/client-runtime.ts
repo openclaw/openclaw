@@ -12,6 +12,7 @@ import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
   isThreadBackgroundOnly,
+  refreshThreadOwnership,
   waitForThreadBackgroundCleanup,
   releaseThreadProtection,
   forgetThreadOwnership,
@@ -48,7 +49,6 @@ type ClientRuntime = ThreadOwnershipState &
     context: ClientRuntimeContext;
     authHandoff?: CodexAppServerAuthHandoff;
     evictionTimer?: ReturnType<typeof setTimeout>;
-    onThreadOwnershipChange?: () => void;
   };
 
 /** Match Codex's native grace window without retaining inactive conversations indefinitely. */
@@ -245,20 +245,8 @@ export function ensureCodexAppServerClientRuntime(
 function updateThreadOwnership(client: CodexAppServerClient, runtime: ClientRuntime): void {
   clearTimeout(runtime.evictionTimer);
   runtime.evictionTimer = undefined;
-  for (const listener of runtime.threadOwnershipListeners ?? []) {
-    listener();
-  }
-  if (runtime.closed) {
-    return;
-  }
-  runtime.onThreadOwnershipChange?.();
-  let expiresAt = Number.POSITIVE_INFINITY;
-  for (const [threadId, thread] of runtime.retainedThreads) {
-    if (!runtime.protectedThreads.has(threadId)) {
-      expiresAt = Math.min(expiresAt, thread.expiresAt);
-    }
-  }
-  if (!Number.isFinite(expiresAt)) {
+  const expiresAt = refreshThreadOwnership(runtime);
+  if (expiresAt === undefined || !Number.isFinite(expiresAt)) {
     return;
   }
   runtime.evictionTimer = setTimeout(
@@ -646,8 +634,15 @@ export function isCodexAppServerLiveThreadProtected(
   client: CodexAppServerClient,
   threadId: string,
 ): boolean {
+  return countCodexAppServerLiveThreadProtections(client, threadId) > 0;
+}
+
+export function countCodexAppServerLiveThreadProtections(
+  client: CodexAppServerClient,
+  threadId: string,
+): number {
   const runtime = configuredClients.get(client);
-  return runtime !== undefined && !runtime.closed && runtime.protectedThreads.has(threadId);
+  return runtime && !runtime.closed ? (runtime.protectedThreads.get(threadId) ?? 0) : 0;
 }
 
 export function hasCodexAppServerSiblingThreadWork(
