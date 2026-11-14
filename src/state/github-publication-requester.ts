@@ -135,9 +135,11 @@ export function matchesGitHubPublicationRequester(
       // An accepted principal-free request keeps its original profile/grant basis on retry.
       openclawIdPrincipal: original.openclawIdPrincipal ? current.openclawIdPrincipal : undefined,
       grant:
-        current.grant && original.grant
-          ? { ...current.grant, aliasBindingIds: original.grant.aliasBindingIds }
-          : current.grant,
+        !original.openclawIdPrincipal && current.openclawIdPrincipal && current.grant === null
+          ? original.grant
+          : current.grant && original.grant
+            ? { ...current.grant, aliasBindingIds: original.grant.aliasBindingIds }
+            : current.grant,
       ...(current.origin && original.origin
         ? { origin: { ...current.origin, runId: original.origin.runId } }
         : {}),

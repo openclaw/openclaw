@@ -10,4 +10,5 @@
 # Publication: attested member capture/restoration, revocation, legacy/nonmember parity,
 # malformed-record isolation, task handoff, and accepted-snapshot retry preservation.
 # CI integration: committed member fixture snapshot and owned hot-reload recovery.
-1241
+# Historical member retries: original-grant continuity and actor/principal boundaries.
+1424
