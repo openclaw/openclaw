@@ -8,6 +8,7 @@ import {
   CircularIncludeError,
   ConfigIncludeError,
   MAX_INCLUDE_DEPTH,
+  MAX_INCLUDE_FILE_LOADS,
   type ConfigIncludeResolutionEvent,
   type IncludeResolver,
   resolveConfigIncludes as resolveIncludes,
@@ -213,6 +214,42 @@ it("allows depth 10 but rejects depth 11", () => {
     () => resolve({ $include: "./chain0.json" }, includeChain(11)),
     /Maximum include depth/,
   );
+});
+
+const INCLUDE_LOAD_LIMIT_ERROR =
+  /^Maximum include file loads \(1024\) exceeded at: \.\/\w+\.json\. Each repeated \$include entry loads its file again\. Remove repeated \$include references to the same file or merge those files, then rerun openclaw config validate\.$/;
+
+it("allows the include file load budget but rejects one more load", () => {
+  const files = { [configPath("leaf.json")]: { leaf: true } };
+  const includeLeaf = (count: number) => ({
+    $include: Array.from({ length: count }, () => "./leaf.json"),
+  });
+  expect(resolve(includeLeaf(MAX_INCLUDE_FILE_LOADS), files)).toEqual({ leaf: true });
+  expectIncludeError(
+    () => resolve(includeLeaf(MAX_INCLUDE_FILE_LOADS + 1), files),
+    INCLUDE_LOAD_LIMIT_ERROR,
+  );
+});
+
+it("rejects repeated includes that multiply across levels", () => {
+  // Nine levels that each include the next level four times would load 349,524 files.
+  const files: Record<string, unknown> = { [configPath("level9.json")]: { leaf: true } };
+  for (let level = 0; level < 9; level += 1) {
+    files[configPath(`level${level}.json`)] = {
+      $include: Array.from({ length: 4 }, () => `./level${level + 1}.json`),
+    };
+  }
+  let reads = 0;
+  const resolver = createMockResolver(files);
+  const readFile = resolver.readFile;
+  resolver.readFile = (filePath) => {
+    reads += 1;
+    return readFile(filePath);
+  };
+  expect(() => resolveIncludes({ $include: "./level0.json" }, CONFIG_FILE, resolver)).toThrow(
+    INCLUDE_LOAD_LIMIT_ERROR,
+  );
+  expect(reads).toBe(MAX_INCLUDE_FILE_LOADS);
 });
 
 it.runIf(process.platform !== "win32")(

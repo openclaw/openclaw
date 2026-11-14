@@ -27,6 +27,12 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
+/**
+ * Total include files one resolution may load. Depth and cycle checks bound one
+ * chain, but a file may include the same child many times, and each repeat
+ * re-reads and re-merges that whole subtree, so the work grows as fan-out^depth.
+ */
+export const MAX_INCLUDE_FILE_LOADS = 1024;
 
 // Container traversal inside one document runs on an explicit work stack, so
 // document depth costs heap instead of call frames; only the $include file
@@ -217,6 +223,8 @@ function deepMerge(target: unknown, source: unknown): unknown {
 }
 
 class IncludeProcessor {
+  private fileLoads = 0;
+
   constructor(
     private basePath: string,
     private resolver: IncludeResolver,
@@ -393,6 +401,15 @@ class IncludeProcessor {
         includePath,
       );
     }
+    if (this.fileLoads >= MAX_INCLUDE_FILE_LOADS) {
+      throw new ConfigIncludeError(
+        `Maximum include file loads (${MAX_INCLUDE_FILE_LOADS}) exceeded at: ${includePath}. ` +
+          "Each repeated $include entry loads its file again. Remove repeated $include " +
+          "references to the same file or merge those files, then rerun openclaw config validate.",
+        includePath,
+      );
+    }
+    this.fileLoads += 1;
 
     const raw = this.readFile(includePath, resolvedPath, root);
     const parsed = this.parseFile(includePath, resolvedPath, raw);

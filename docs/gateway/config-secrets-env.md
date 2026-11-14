@@ -216,7 +216,7 @@ Split config into multiple files:
 - Single file: replaces the containing object.
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
-- Nested includes: up to 10 levels deep.
+- Nested includes: up to 10 levels deep, and at most 1024 include file loads per config read. Including the same file again counts as another load. If a config reaches the limit, remove repeated `$include` references to the same file or merge those files.
 - Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Set `OPENCLAW_INCLUDE_ROOTS` (absolute paths) to allow additional roots outside the config directory.
 - Limits: paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution; each included file is capped at 2 MB.
 - OpenClaw-owned writes whose changed keys are all owned by one single-file include at an object-key path write through to the deepest owning include. This supports top-level sections and nested object-map entries, including numeric object keys, while leaving `openclaw.json` intact. Write-through only targets include files inside the top-level config directory; includes admitted through `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
