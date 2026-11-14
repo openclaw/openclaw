@@ -106,6 +106,14 @@ it("uses the bound workspace, exposes bounded untrusted metadata, and never inst
   expect(JSON.stringify(tool?.parameters)).not.toContain("install");
 });
 
+it("uses the bound workspace cwd verbatim when it carries edge whitespace", async () => {
+  const { tool, expectWorkspace } = toolFixture({ bindingCwd: " /bound/company " });
+
+  await tool?.execute("list-plugins", {});
+
+  expectWorkspace(" /bound/company ");
+});
+
 it.each(["workspaceDir", "configWorkspaceDir"] as const)("falls back to %s", async (field) => {
   const { tool, expectWorkspace } = toolFixture({ [field]: "/fallback/workspace" });
   await tool?.execute("list-plugins", {});
