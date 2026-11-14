@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "../system-agent/agent-id.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
@@ -189,9 +189,33 @@ export function preparedModelRuntimeConfigsMatch(
   }
 }
 
-function sameConfiguredModelRefs(left: OpenClawConfig, right: OpenClawConfig): boolean {
+function sameConfiguredModelRefs(
+  left: OpenClawConfig,
+  right: OpenClawConfig,
+  agentId: string | undefined,
+): boolean {
   const leftRefs = collectConfiguredModelRefs(left);
-  const rightRefs = collectConfiguredModelRefs(right);
+  const projectedToolsPath = `agents.entries.${SYSTEM_AGENT_ID}.tools.`;
+  // Setup copies this configured agent's tools into its reserved execution entry.
+  // Ignore only those exact copied refs; changed or additional selectors still differ.
+  const rightRefs = collectConfiguredModelRefs(right).filter((ref) => {
+    if (
+      !agentId ||
+      agentId === SYSTEM_AGENT_ID ||
+      !ref.path.startsWith(projectedToolsPath) ||
+      leftRefs.some((source) => source.path === ref.path)
+    ) {
+      return true;
+    }
+    const sourcePath = `agents.entries.${agentId}.tools.${ref.path.slice(projectedToolsPath.length)}`;
+    return !leftRefs.some(
+      (source) =>
+        source.path === sourcePath &&
+        source.value === ref.value &&
+        source.kind === ref.kind &&
+        source.capability === ref.capability,
+    );
+  });
   return (
     leftRefs.length === rightRefs.length &&
     leftRefs.every((ref, index) => {
@@ -209,23 +233,34 @@ function sameConfiguredModelRefs(left: OpenClawConfig, right: OpenClawConfig): b
 /**
  * A read-only setup probe borrows the configured agent's published catalog when its config
  * agrees on everything the catalog build consumes. The configured config may differ only by
- * the setup execution projection (the SYSTEM_AGENT_ID entry's params/tools), which the catalog
- * never reads. Model selection refs (agents/tools/channels/hooks/tts), the models section
- * (mode + provider static configs), and the plugins section (manifest provider availability)
- * must all match for the published inventory to stay valid.
+ * the setup execution projection: params do not affect the catalog, and copied tools add
+ * only duplicate refs from the configured agent. Model selection refs, the models section
+ * (mode + provider static configs), plugins, auth, and configured environment must all match
+ * for the published inventory to stay valid.
  */
 export function preparedModelRuntimeCatalogConfigsCompatible(
   left: OpenClawConfig,
   right: OpenClawConfig,
+  agentId?: string,
 ): boolean {
   if (left === right) {
     return true;
   }
   try {
     return (
-      sameConfiguredModelRefs(left, right) &&
-      hashRuntimeConfigValue({ models: left.models, plugins: left.plugins } as OpenClawConfig) ===
-        hashRuntimeConfigValue({ models: right.models, plugins: right.plugins } as OpenClawConfig)
+      sameConfiguredModelRefs(left, right, agentId) &&
+      hashRuntimeConfigValue({
+        models: left.models,
+        plugins: left.plugins,
+        auth: left.auth,
+        env: left.env,
+      }) ===
+        hashRuntimeConfigValue({
+          models: right.models,
+          plugins: right.plugins,
+          auth: right.auth,
+          env: right.env,
+        })
     );
   } catch {
     return false;

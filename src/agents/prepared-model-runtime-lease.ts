@@ -450,6 +450,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       preparedModelRuntimeCatalogConfigsCompatible(
         configuredOwner.input.config,
         inventoryInput.config,
+        configuredOwner.input.agentId,
       )
         ? configuredOwner
         : owner;
