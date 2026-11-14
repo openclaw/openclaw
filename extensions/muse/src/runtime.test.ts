@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +22,109 @@ afterAll(async () => {
   await rm(workspace, { recursive: true, force: true });
 });
 
+// The fake holds its initialize reply until the test writes to this socket.
+// `waiting` settles once the fake has received initialize, so the startup timer exists.
+async function holdInitialize() {
+  const gate =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\muse-${crypto.randomUUID()}`
+      : join(await mkdtemp(join(workspace, "muse-gate-")), "init.sock");
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(gate, resolve);
+  });
+  const waiting = new Promise<Socket>((resolve) => {
+    server.once("connection", resolve);
+  });
+  vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", gate);
+  return { server, waiting };
+}
+
 describe("Muse process pool", () => {
+  it.each([new Error("catalog deadline passed"), "catalog deadline passed", { kind: "cancelled" }])(
+    "preserves the caller's startup cancellation reason: %s",
+    async (reason) => {
+      const { server, waiting } = await holdInitialize();
+      const pool = new MusePool(fixture);
+      const controller = new AbortController();
+      try {
+        const start = expect(
+          pool.acquire(workspace, undefined, false, controller.signal),
+        ).rejects.toBe(reason);
+        await waiting;
+        controller.abort(reason);
+        await start;
+        vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", undefined);
+        const retry = await pool.acquire(workspace, undefined, false);
+        retry.release();
+      } finally {
+        await pool.dispose();
+        server.close();
+      }
+    },
+  );
+  it("cancels one startup waiter without aborting the shared host", async () => {
+    const { server, waiting } = await holdInitialize();
+    const pool = new MusePool(fixture);
+    const cancelled = new AbortController();
+    const survivor = new AbortController();
+    const joined = Promise.withResolvers<void>();
+    // Synchronize the second caller's admission, not the outcome under test.
+    const addListener = survivor.signal.addEventListener.bind(survivor.signal);
+    const listener = vi.spyOn(survivor.signal, "addEventListener").mockImplementation((...args) => {
+      addListener(...args);
+      joined.resolve();
+    });
+    const log = join(workspace, "shared-startup.jsonl");
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    const reason = new Error("first caller cancelled");
+    const first = expect(pool.acquire(workspace, undefined, false, cancelled.signal)).rejects.toBe(
+      reason,
+    );
+    const socket = await waiting;
+    try {
+      const second = pool.acquire(workspace, undefined, false, survivor.signal);
+      await joined.promise;
+      cancelled.abort(reason);
+      await first; // Cancellation must settle before initialize is allowed to finish.
+      socket.write("resume");
+      const lease = await second;
+      expect(await lease.runtime.host.connection.request("model/list", {})).toMatchObject({
+        models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
+      });
+      lease.release();
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.filter((request) => request.event === "spawn")).toHaveLength(1);
+    } finally {
+      listener.mockRestore();
+      cancelled.abort();
+      survivor.abort();
+      socket.destroy();
+      await pool.dispose();
+      server.close();
+    }
+  });
+  it("reports a slow Muse start as a startup timeout, not a missing install", async () => {
+    const { server, waiting } = await holdInitialize();
+    const pool = new MusePool(fixture);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const start = expect(pool.acquire(workspace, undefined, false)).rejects.toThrow(
+        /did not finish starting within 120s/,
+      );
+      await waiting;
+      // Past the startup limit and the 1s shutdown grace that closing the host waits on.
+      await vi.advanceTimersByTimeAsync(125_000);
+      await start;
+    } finally {
+      vi.useRealTimers();
+      await pool.dispose();
+      server.close();
+    }
+  });
   it.each([undefined, "key-a"])(
     "retires a warm process when managed auth changes with API key %s",
     async (apiKey) => {

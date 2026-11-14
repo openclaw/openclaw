@@ -491,6 +491,36 @@ describe("Muse native MSP harness", () => {
     expect(result.assistantTexts).toEqual([`effort:${expected}`]);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "cancels a turn while its host is still starting",
+    async () => {
+      const { run, log, bindings } = setup(true);
+      const controller = new AbortController();
+      await using server = createServer();
+      const gate = join(await mkdtemp(join(workspace, "startup-")), "init.sock");
+      await once(server.listen(gate), "listening");
+      vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", gate);
+      const connected = once(server, "connection");
+      const reason = new Error("turn cancelled during startup");
+      const attempt = expect(run({ abortSignal: controller.signal })).rejects.toBe(reason);
+      const [socket] = (await connected) as [Socket];
+      try {
+        await once(socket, "data");
+        controller.abort(reason);
+        await attempt;
+        const requests = await readRequests(log);
+        expect(requests.some((request) => request.method === "initialize")).toBe(true);
+        expect(requests.some((request) => request.method === "turn/start")).toBe(false);
+        expect(bindings.size).toBe(0);
+        vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", undefined);
+        expect((await run()).assistantTexts).toEqual(["started: hello"]);
+      } finally {
+        controller.abort();
+        socket.destroy();
+      }
+    },
+  );
+
   it("does not retire a shared host when another attempt aborts before turn dispatch", async () => {
     const state = setup();
     const firstController = new AbortController();
