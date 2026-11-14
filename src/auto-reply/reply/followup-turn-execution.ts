@@ -62,6 +62,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     MessageSid: currentMessageId,
     MessageSidFull: currentMessageId,
     MessageThreadId: queued.originatingThreadId,
+    NativeChannelId: queued.originatingChatId,
     ReplyToId: queued.originatingReplyToId,
     SenderId: run.senderId,
     MemberRoleIds: run.memberRoleIds,
