@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
   loadTranscriptEvents,
@@ -65,7 +65,7 @@ it.each([false, true])(
         ctxPayload: ctx,
         recordInboundSession: async () => undefined,
         runDispatch: async () => {
-          prompt = buildInboundUserContextPrefix(ctx);
+          prompt = buildInboundUserContext(ctx).text;
           return { queuedFinal: false };
         },
       });
@@ -125,7 +125,7 @@ it.each([false, true])(
       },
     ]);
     await mergeSessionTranscriptContext({ ...scope, ctx });
-    expect(buildInboundUserContextPrefix(ctx).split(exchanges[0][1])).toHaveLength(2);
+    expect(buildInboundUserContext(ctx).text.split(exchanges[0][1])).toHaveLength(2);
     expect(await loadTranscriptEvents(scope)).toEqual(stored);
 
     const mirrorOrigin = "codex-app-server";

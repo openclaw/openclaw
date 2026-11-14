@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
 import { createClientInfo } from "./chat-send-user-turn.test-support.js";
@@ -222,7 +222,7 @@ describe("chat send command authority", () => {
       attachments: { parsedMessage: "Change my theme" },
       client,
     });
-    const render = () => buildInboundUserContextPrefix(finalizeInboundContext({ ...ctx }));
+    const render = () => buildInboundUserContext(finalizeInboundContext({ ...ctx })).text;
     expect(render()).toContain("requester_profile");
     expect(render()).toContain("profile-ada");
     switch (change) {

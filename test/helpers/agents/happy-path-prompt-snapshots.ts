@@ -7,7 +7,7 @@ import {
 } from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
-  buildInboundUserContextPrefix,
+  buildInboundUserContext,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
@@ -361,7 +361,7 @@ function textStats(value: string): { chars: number; roughTokens: number } {
 }
 
 async function createPrompt(ctx: TemplateContext, body: string): Promise<string> {
-  const inboundUserContext = buildInboundUserContextPrefix(ctx);
+  const inboundUserContext = buildInboundUserContext(ctx).text;
   const promptBody = [inboundUserContext, body].filter(Boolean).join("\n\n");
   const prepared = await preparePromptSnapshotReply({
     ctx,
