@@ -13,7 +13,6 @@ import {
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
-  loadExecApprovalsReadOnlyAsync: vi.fn(),
   bundleMcp: { config: { mcpServers: {} }, diagnostics: [] },
 }));
 const tempDirs: string[] = [];
@@ -41,17 +40,12 @@ function expectServers(
   expect(loaded.configPatch).toEqual({ mcp_servers });
 }
 
-vi.mock("../infra/exec-approvals-store.js", () => ({
-  loadExecApprovalsReadOnlyAsync: mocks.loadExecApprovalsReadOnlyAsync,
-}));
-
 // mock-isolation: Supply bundle MCP configuration without loading plugin runtimes.
 vi.mock("../plugins/bundle-mcp.js", () => ({
   loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
 }));
 
 beforeEach(() => {
-  mocks.loadExecApprovalsReadOnlyAsync.mockReset().mockResolvedValue({ version: 1, agents: {} });
   mocks.bundleMcp = { config: { mcpServers: {} }, diagnostics: [] };
 });
 
@@ -60,47 +54,6 @@ afterEach(async () => {
 });
 
 describe("loadCodexBundleMcpThreadConfigCore", () => {
-  it("projects durable grants only for configured bundle names and fingerprints their removal", async () => {
-    setServers({
-      configured: { command: "mcp" },
-      prompt: { command: "mcp" },
-      pluginOnly: { command: "mcp" },
-    });
-    mocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({
-      version: 1,
-      agents: {
-        main: {
-          mcpTools: ["configured", "prompt", "pluginOnly"].map((server) => ({
-            server,
-            tool: "write.raw_tool",
-            source: "allow-always",
-            addedAt: 1,
-          })),
-        },
-      },
-    });
-    const params = {
-      agentId: "main",
-      cfg: configured({
-        configured: { command: "mcp" },
-        prompt: { command: "mcp", codex: { defaultToolsApprovalMode: "prompt" } },
-      }),
-    };
-
-    const granted = await load(params);
-
-    expect(granted.configPatch?.mcp_servers).toEqual({
-      configured: { command: "mcp", tools: { "write.raw_tool": { approval_mode: "approve" } } },
-      prompt: { command: "mcp" },
-      pluginOnly: { command: "mcp" },
-    });
-    expect(mocks.loadExecApprovalsReadOnlyAsync).toHaveBeenCalledTimes(1);
-    mocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({ version: 1, agents: {} });
-    const revoked = await load(params);
-    expect(revoked.configPatch?.mcp_servers.configured).not.toHaveProperty("tools");
-    expect(revoked.fingerprint).not.toBe(granted.fingerprint);
-  });
-
   it("prepares Agent Plugins data dirs before projecting Codex thread config", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-agent-mcp-"));
     tempDirs.push(tempDir);
@@ -245,10 +198,28 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     const cfg = configured({ docs: { enabled: false, url: "https://configured.example.com/mcp" } });
 
     expect((await load({ cfg })).configPatch).toBeUndefined();
+    // The session enables the configured server, which then owns the name.
     const enabled = await load({ cfg, toolOverrides: { mcpServers: { docs: true } } });
-    expectServers(enabled, {
-      docs: { url: "https://bundled.example.com/mcp" },
+    expect(enabled.configPatch).toBeUndefined();
+    expect(enabled.userStaticServerNames).toEqual(["docs"]);
+  });
+
+  it("leaves a same-named bundled server to the enabled configured server (#194825)", async () => {
+    setServers({
+      gbrain: { command: "./.agents/gbrain-launcher", args: ["serve"] },
+      notes: http("https://notes.example.com/mcp"),
     });
+
+    const loaded = await load({
+      cfg: configured({
+        gbrain: { url: "http://127.0.0.1:3131/mcp", transport: "streamable-http" },
+      }),
+    });
+
+    // Codex would merge a bundled stdio `gbrain` into the configured HTTP one.
+    expectServers(loaded, { notes: { url: "https://notes.example.com/mcp" } });
+    expect(loaded.userStaticServerNames).toEqual(["gbrain"]);
+    expect(loaded.staticServerNames).toEqual(["gbrain", "notes"]);
   });
 
   it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", async () => {
