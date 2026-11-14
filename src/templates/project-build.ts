@@ -2,6 +2,7 @@ import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promise
 import { dirname, join, resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
@@ -22,7 +23,7 @@ async function readSelectedProjectFile(projectRoot: string, path: string): Promi
   const sourceRoot = await fsSafeRoot(projectRoot);
   const read = await sourceRoot.read(path, {
     hardlinks: "reject",
-    maxBytes: MAX_MANAGED_FILE_BYTES,
+    maxBytes: path === "BOOTSTRAP.md" ? MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES : MAX_MANAGED_FILE_BYTES,
     symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;
