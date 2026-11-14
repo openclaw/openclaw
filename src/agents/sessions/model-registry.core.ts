@@ -12,7 +12,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
 import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../model-auth-runtime-config.js";
-import { parseGeneratedModelCatalogJson, parseModelCatalogJson } from "../model-catalog-json.js";
+import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
   buildSourceModelFields,
