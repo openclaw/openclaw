@@ -360,7 +360,6 @@ describe("google prompt cache", () => {
         streamFn: innerStreamFn,
       });
 
-      expect(wrapped).toBeTypeOf("function");
       expect(fetchMock).not.toHaveBeenCalled();
       await withPluginMetadataSnapshotScope(providerMetadata, () =>
         wrapped?.(
@@ -396,7 +395,6 @@ describe("google prompt cache", () => {
       expect(createHeaders["Content-Type"]).toBe("application/json");
       expect(createHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
       expect(createHeaders["X-Provider"]).toBe("google");
-      expect(typeof createInit.body).toBe("string");
       const createBody = JSON.parse(createInit.body as string) as Record<string, unknown>;
       expect(createBody).toEqual({
         model: "models/gemini-3.1-pro-preview",
@@ -602,7 +600,6 @@ describe("google prompt cache", () => {
     expect(fetchInit(fetchMock).method).toBe("PATCH");
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
     expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
-    expect(typeof streamOptions(innerStreamFn)).toBe("object");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
   });
 

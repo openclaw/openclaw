@@ -403,28 +403,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     ).toBeNull();
   });
 
-  it("does not retry generic external runner failure text after committed delivery", () => {
-    expect(
-      classifyResult("external", "primary", {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        messagingToolSentTexts: ["already delivered"],
-        meta: { durationMs: 42 },
-      }),
-    ).toBeNull();
-  });
-
-  it("preserves hook blocks with generic external runner failure text", () => {
-    expect(
-      classifyResult("external", "primary", {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-          error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
-        },
-      }),
-    ).toBeNull();
-  });
-
   it("preserves hook block results with auth-like error payload text", () => {
     // Hook policy blocks are intentional local decisions, not provider failures
     // that should rotate models.

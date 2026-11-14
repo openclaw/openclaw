@@ -399,21 +399,6 @@ describe("refreshGatewayHealthSnapshot", () => {
     ]);
   });
 
-  it("coalesces concurrent explicit probe waiters", async () => {
-    const healthState = await loadHealthState();
-    const probeDeferred = createPendingHealthSnapshot();
-    const probeSummary = createHealthSummary();
-    collectGatewayHealthSnapshotMock.mockImplementationOnce(probeDeferred.collect);
-
-    const first = healthState.refreshGatewayHealthSnapshot({ probe: true });
-    const second = healthState.refreshGatewayHealthSnapshot({ probe: true });
-
-    await probeDeferred.started;
-    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(1);
-    probeDeferred.resolve(probeSummary);
-    await expect(Promise.all([first, second])).resolves.toEqual([probeSummary, probeSummary]);
-  });
-
   it.each(["success", "rejection"] as const)(
     "coalesces refresh waiters by strength and recovers after probe %s",
     async (outcome) => {

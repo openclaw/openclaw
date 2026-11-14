@@ -562,7 +562,6 @@ it.each([
     expect(publications()).toHaveLength(0);
     return;
   }
-  expect(guest.onPublish).toBeTypeOf("function");
   void guest.onPublish?.();
   await settled();
   expect(request).toHaveBeenLastCalledWith("sessions.github.publish", {

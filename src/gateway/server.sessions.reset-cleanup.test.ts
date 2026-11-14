@@ -157,7 +157,6 @@ test.each<[string, ArchivedMainResetCase]>([
     const entry = loadSessionEntry({ storePath, sessionKey: key });
     expect(entry?.sessionId).toBe(sessionId);
     const after = await loadTranscriptRows({ storePath, sessionKey: key, sessionId });
-    expect(after.slice(0, before.length)).toEqual(before);
     expect(entry?.archivedAt).toBe(100);
     expect(entry?.archiveReason).toBe("manual");
     expect(after).toEqual(before);

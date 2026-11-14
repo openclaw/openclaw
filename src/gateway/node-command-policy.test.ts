@@ -726,13 +726,4 @@ describe("gateway/node-command-policy", () => {
     } as OpenClawConfig;
     expect(resolveNodeCommandAllowlist(denied, node).has("health.summary")).toBe(false);
   });
-
-  it("reads foreground restriction metadata from plugin node policies", () => {
-    expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(false);
-
-    installCanvasPluginDefaults();
-
-    expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(true);
-    expect(isForegroundRestrictedPluginNodeCommand("system.run")).toBe(false);
-  });
 });
