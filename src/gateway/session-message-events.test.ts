@@ -900,18 +900,16 @@ describe("session.message websocket events", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
     };
-    const message = textMessage("spawn and thread route snapshot");
-    await createSessionStore({ child: { sessionId: "sess-child", ...metadata } });
+    const storePath = await createSessionStore({ child: { sessionId: "sess-child", ...metadata } });
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
-        ws,
-        sessionKey: "agent:main:child",
-        sessionFile: "agent:main:child",
-        message,
-        messageId: "msg-spawn",
-      });
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:child");
+      const [appended, messageEvent] = await Promise.all([
+        appendAssistant(storePath, "agent:main:child", "spawn and thread route snapshot"),
+        messageEventPromise,
+      ]);
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:child",
+        messageId: appended.messageId,
         ...metadata,
         goal: { ...goal, tokenStartFresh: true },
       });
