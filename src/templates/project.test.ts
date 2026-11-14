@@ -312,6 +312,43 @@ describe("Template project packages", () => {
     });
   });
 
+  it("rejects a mapped HEARTBEAT.md that Add could not store as scratch", async () => {
+    const heartbeatProject = tempDirs.make("openclaw-template-heartbeat-");
+    await mkdir(join(heartbeatProject, "workspace"), { recursive: true });
+    await writePackage(heartbeatProject);
+    await writeFile(
+      join(heartbeatProject, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent:\n  id: demo-template\nworkspace:\n  bootstrapFiles:\n    HEARTBEAT.md:\n      source: workspace/HEARTBEAT.md\n---\nYou are the demo Template.\n",
+    );
+    await writeFile(
+      join(heartbeatProject, "workspace", "HEARTBEAT.md"),
+      Buffer.alloc(324_000, 0x61),
+    );
+
+    await expectInvalidProject(heartbeatProject, "workspace_heartbeat_too_large");
+    await expect(buildTemplateProject(heartbeatProject, output)).rejects.toMatchObject({
+      code: "project_invalid",
+    });
+  });
+
+  it("packages an oversized ordinary workspace file that only collides with HEARTBEAT.md", async () => {
+    const collisionProject = tempDirs.make("openclaw-template-heartbeat-collision-");
+    await mkdir(join(collisionProject, "workspace", "HEARTBEAT.md"), { recursive: true });
+    await writePackage(collisionProject);
+    await writeFile(
+      join(collisionProject, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent:\n  id: demo-template\nworkspace:\n  files:\n    - source: workspace/HEARTBEAT.md/notes.md\n      path: HEARTBEAT.md/notes.md\n---\nYou are the demo Template.\n",
+    );
+    await writeFile(
+      join(collisionProject, "workspace", "HEARTBEAT.md", "notes.md"),
+      Buffer.alloc(324_000, 0x61),
+    );
+
+    expect(await validateTemplateProject(collisionProject)).toMatchObject({ ok: true });
+    const built = await buildTemplateProject(collisionProject, output);
+    expect(built.files).toContain("workspace/HEARTBEAT.md/notes.md");
+  });
+
   it.each(["@notes.md", "..notes.md"])(
     "packages %s as an ordinary workspace source",
     async (name) => {

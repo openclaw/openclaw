@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDefaultProactiveJob } from "../cron/default-proactive-job.js";
 import { assertCronJobScratchContent } from "../cron/scratch-contract.js";
 import type { CronJobCreate, CronStoredJob } from "../cron/types.js";
+import { isTemplateHeartbeatAction } from "./heartbeat-content.js";
 import type { TemplateOpenClawAgentSettings } from "./manifest-contract.js";
 import type { TemplateAddPlanAction } from "./types.js";
 
@@ -25,9 +26,7 @@ export function planTemplatePortableAutomation(params: {
   config: OpenClawConfig;
   agentId: string;
 }): void {
-  const fileIndex = params.actions.findIndex(
-    (action) => action.kind === "workspaceFile" && action.id === "HEARTBEAT.md",
-  );
+  const fileIndex = params.actions.findIndex(isTemplateHeartbeatAction);
   if (params.heartbeat === undefined && fileIndex < 0) {
     return;
   }
