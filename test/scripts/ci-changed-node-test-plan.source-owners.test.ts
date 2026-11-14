@@ -3,7 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
-import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  hasBuildArtifactAffectingChange,
+  resolveChangedNodeTestTargets,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
@@ -185,7 +188,11 @@ describe("CI changed Node test plan", () => {
     },
     {
       source: "extensions/anthropic/openclaw.plugin.json",
-      targets: ["src/agents/model-ref-shared.test.ts"],
+      targets: [
+        "src/agents/model-ref-shared.test.ts",
+        "src/plugins/bundled-plugin-icons.test.ts",
+        "src/plugins/bundled-plugin-categories.test.ts",
+      ],
       areas: ["extensions/anthropic", "src/config"],
     },
     {
@@ -1016,5 +1023,36 @@ describe("CI changed Node test plan", () => {
         "test/scripts/ci-node-test-plan.commands.test.ts",
       ]),
     );
+  });
+  it.each([
+    [
+      "extensions/new-provider/openclaw.plugin.json",
+      ["src/plugins/bundled-plugin-icons.test.ts", "src/plugins/bundled-plugin-categories.test.ts"],
+    ],
+    ["extensions/new-provider/assets/icon.png", ["src/plugins/bundled-plugin-icons.test.ts"]],
+    ["extensions/new-provider/assets/activity.svg", ["src/plugins/bundled-plugin-icons.test.ts"]],
+    ["extensions/new-provider/assets/README.md", []],
+  ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
+    const readers = [
+      "src/plugins/bundled-plugin-icons.test.ts",
+      "src/plugins/bundled-plugin-categories.test.ts",
+    ];
+    const cwd = createSourceFixture("changed-inventory-owner-", {
+      [input]: "export {};\n",
+      ...Object.fromEntries(readers.map((file) => [file, "export {};\n"])),
+      "src/other/unrelated.test.ts": "export {};\n",
+      "test/scripts/unrelated.test.ts": "export {};\n",
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    if (input.endsWith("activity.svg")) {
+      rmSync(path.join(cwd, input));
+    }
+    const targets = resolveChangedNodeTestTargets([input], {
+      cwd,
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(targets.toSorted()).toEqual([...owners].toSorted());
   });
 });
