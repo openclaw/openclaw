@@ -1,5 +1,9 @@
 // Verifies package transports consume the route generation prepared on the model.
-import { getAiTransportHost } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  getDefaultAiTransportHost,
+} from "@openclaw/ai";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import "./ai-transport-runtime-host.js";
@@ -38,6 +42,42 @@ function buildOwners(): PluginMetadataSnapshotOwnerMaps {
 }
 
 describe("AI transport prepared provider routes", () => {
+  it("retains runtime capabilities when another module graph installs the base host", async () => {
+    const originalHost = getDefaultAiTransportHost();
+    const model = attachModelProviderRequestRouteFacts(
+      makeProviderModelFixture<"openai-responses">({
+        id: "prepared-model",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://prepared.example/v1",
+      }),
+      buildOwners(),
+    );
+    try {
+      await import(
+        /* @vite-ignore */ new URL(
+          "../llm/ai-transport-host.ts?duplicate-base-install",
+          import.meta.url,
+        ).href
+      );
+      expect(
+        getDefaultAiTransportHost().resolveProviderRequestCapabilities({
+          model,
+          provider: model.provider,
+          api: model.api,
+          baseUrl: model.baseUrl,
+          capability: "llm",
+          transport: "stream",
+        }),
+      ).toMatchObject({
+        endpointClass: "openai-public",
+        knownProviderFamily: "prepared-openai-family",
+      });
+    } finally {
+      configureAiTransportHost(originalHost);
+    }
+  });
+
   it("keeps headers, capabilities, and SSRF posture on the prepared metadata generation", () => {
     const model = attachModelProviderRequestRouteFacts(
       makeProviderModelFixture<"openai-responses">({

@@ -1,6 +1,6 @@
 // Installs OpenClaw-owned transport and diagnostic policy before package helpers;
 // direct imports need the same wiring as the process-default stream facade.
-import { configureAiTransportHost } from "@openclaw/ai";
+import { configureAiTransportHost, getDefaultAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
@@ -30,6 +30,8 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  // Another module graph may have already installed the runtime-owned ports.
+  ...getDefaultAiTransportHost(),
   runInDetachedAsyncContext,
   observePendingProviderWork: (pending) => {
     void trackAsyncWork(() => pending).catch(() => {});

@@ -306,8 +306,10 @@ type AiTransportHostState = {
 const HOST_STATE_KEY = Symbol.for("openclaw.ai.transportHost");
 
 function resolveAiTransportHostState(): AiTransportHostState {
+  // SAFETY: globalThis is an object; this view only accesses our symbol-owned state.
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   if (Object.hasOwn(globalStore, HOST_STATE_KEY)) {
+    // SAFETY: this module is the sole writer of this symbol and always stores AiTransportHostState.
     return globalStore[HOST_STATE_KEY] as AiTransportHostState;
   }
   const state: AiTransportHostState = {
