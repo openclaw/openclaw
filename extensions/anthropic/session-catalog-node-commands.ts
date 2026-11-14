@@ -30,6 +30,7 @@ async function requireLocalResumableClaudeSession(
   while (true) {
     const page = await listLocalClaudeSessionPage({
       limit: CLAUDE_NODE_LOOKUP_PAGE_LIMIT,
+      searchTerm: threadId,
       ...(cursor ? { cursor } : {}),
     });
     const record = page.sessions.find((candidate) => candidate.threadId === threadId);

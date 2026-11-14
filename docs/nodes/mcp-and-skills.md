@@ -38,10 +38,28 @@ Gateway:
 }
 ```
 
-The headless node host starts these servers, lists their tools, and publishes
-the descriptors after connecting. Tool calls return to that node through
-`mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
-plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+The headless node host runs the MCP client. It starts command-based servers
+or connects to remote servers such as `internalApi` above, then lists their
+tools and publishes the descriptors to the Gateway. Those descriptors let the
+Gateway decide which tools a turn can use without a matching server entry or
+JS plugin on the Gateway. When the model worker runs
+on the same node as the MCP client, it can call an admitted tool through the
+node host even if the server is remote. The Gateway routes calls through
+`mcp.tools.call.v1` for other placements, older workers, and tools that require
+Gateway-side call policy or hooks.
+
+For a remote server protected by OAuth, supply an externally obtained bearer
+token through the `Authorization` header, as in `internalApi`. The node host
+skips server entries that request an OpenClaw-managed OAuth flow by setting
+`auth: "oauth"` or an `oauth` block.
+
+A node-hosted tool can ask the user a question during a call. Enable
+`mcp.apps.enabled` on the node and Gateway and restart both. The Gateway shows
+the form or URL prompt in the session that called the tool. The node returns
+the answer to the MCP server and continues the original call. During a same-node
+call only the question and answer go through the Gateway. The node rejects
+a prompt if overlapping calls make its requester ambiguous. See [MCP Apps](/cli/mcp/apps)
+for the Gateway listener and reverse proxy settings.
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an
@@ -51,11 +69,20 @@ require re-pairing because the approved command family is unchanged. Restart
 `openclaw node run` or `openclaw node restart` to apply node MCP config changes;
 the node host does not watch this config.
 
+The node publishes model-visible tools. A server can reserve a tool for its app
+by setting `_meta.ui.visibility` to `["app"]`. Server `toolFilter` entries use
+the same [raw names, probe aliases, and wildcard rules](/cli/mcp/registry) as
+Gateway-hosted servers.
+
 Server-advertised tool-list changes apply live and replace the published node
 catalog. If an MCP transport closes or an SSE or stateful Streamable HTTP session
 expires, the node withdraws that server's stale tools and reconnects with
 bounded backoff. The failed call that detects an expired session is not replayed;
 a later call can use the replacement connection after its tools are republished.
+
+If a node warns that an MCP server's cleanup could not be confirmed, check that
+server process on the node. Other servers continue shutting down or reconnecting;
+the warning does not confirm that the affected server has stopped.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with
@@ -91,6 +118,10 @@ its active OpenClaw state directory, so relative paths resolve on the node rathe
 than the Gateway machine. The publishing node must have approved `system.run`,
 and the agent's exec policy must allow `host=node`; otherwise the skill stays
 out of that agent's snapshot.
+
+Native Claude CLI turns receive selected node-hosted instructions through the
+session-scoped skills plugin, including the existing node execution guidance.
+Referenced scripts and binaries stay on the publishing node.
 
 Set `nodeHost.skills.enabled: false` on the node to stop publication. Gateway
 operators can ignore skills from every paired node with

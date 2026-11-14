@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, onSettled, Repeat } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import "./custom-elements.ts";
 
 // Mirrors renderCatalogCard's geometry (art tile, title, action slot, two summary
@@ -27,11 +28,13 @@ export function renderCatalogGridSkeleton(params: {
               <div class="installed-plugins-card__head">
                 <span class="skeleton plugin-catalog-card__skeleton-art" />
                 <div class="installed-plugins-card__identity">
-                  <span class="skeleton plugin-catalog-card__skeleton-title" />
+                  <div class="plugin-card-title-row">
+                    <span class="skeleton plugin-catalog-card__skeleton-title" />
+                    <div class="plugin-catalog-card__action">
+                      <span class="skeleton plugin-catalog-card__skeleton-action" />
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div class="plugin-catalog-card__action">
-                <span class="skeleton plugin-catalog-card__skeleton-action" />
               </div>
             </div>
             <span class="plugin-catalog-card__skeleton-summary">
@@ -49,35 +52,32 @@ export function PluginCatalogSkeleton(props: { label?: string }): JSX.Element {
   let host!: HTMLElement;
   let grid!: HTMLDivElement;
   const [cards, setCards] = createSignal(8);
+  let frame = 0;
+  const measure = () => {
+    const card = grid.firstElementChild;
+    if (!card) {
+      return;
+    }
+    const height = card.getBoundingClientRect().height;
+    if (!height) {
+      return;
+    }
+    const style = getComputedStyle(grid);
+    const columns = style.gridTemplateColumns.split(" ").length;
+    const gap = Number.parseFloat(style.rowGap) || 0;
+    const remaining = innerHeight - Math.max(0, grid.getBoundingClientRect().top);
+    setCards(Math.max(1, Math.ceil((remaining + gap) / (height + gap))) * columns);
+  };
+  // Card-count writes can resize the observed ancestor; defer the next measurement.
+  const scheduleMeasure = () => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(measure);
+  };
+  createResizeObserver(() => [host.closest(".plugin-catalog-results") ?? host], scheduleMeasure);
   onSettled(() => {
-    let frame = 0;
-    const measure = () => {
-      const card = grid.firstElementChild;
-      if (!card) {
-        return;
-      }
-      const height = card.getBoundingClientRect().height;
-      if (!height) {
-        return;
-      }
-      const style = getComputedStyle(grid);
-      const columns = style.gridTemplateColumns.split(" ").length;
-      const gap = Number.parseFloat(style.rowGap) || 0;
-      const remaining = innerHeight - Math.max(0, grid.getBoundingClientRect().top);
-      setCards(Math.max(1, Math.ceil((remaining + gap) / (height + gap))) * columns);
-    };
-    // Card-count writes can resize the observed ancestor; defer the next measurement.
-    const scheduleMeasure = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(measure);
-    };
-    const observer =
-      typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleMeasure) : undefined;
-    observer?.observe(host.closest(".plugin-catalog-results") ?? host);
     const stopResize = listen(window, "resize", scheduleMeasure);
     scheduleMeasure();
     return () => {
-      observer?.disconnect();
       cancelAnimationFrame(frame);
       stopResize();
     };

@@ -1,11 +1,11 @@
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
@@ -16,13 +16,14 @@ import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   captureChatComposerReplacement,
   loadChatComposerState,
   persistChatComposerState,
-} from "./composer-persistence.ts";
-import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { chatAttachmentDraftSignature } from "./composer-draft.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
@@ -86,7 +87,7 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   }
   return Boolean(
     state.sessionsResult?.sessions.some(
-      (session) => session.key === state.sessionKey && isSessionRunActive(session),
+      (session) => session.key === state.sessionKey && isSessionRunStateActive(session),
     ),
   );
 }
@@ -137,7 +138,10 @@ export async function clearChatHistory(
   try {
     const resetResult = await state.sessions.reset(sessionKey, agentParams);
     if (resetResult === "not-started") {
-      setChatError(state, "Gateway was unavailable before chat history could be cleared.");
+      setChatError(
+        state,
+        "Couldn’t clear the conversation. The Gateway was unavailable before clearing started. Reconnect and try again.",
+      );
       scheduleChatScroll(state);
       return "failed";
     }
@@ -251,7 +255,13 @@ export async function rewindChatHistory(
     const editorText = result.editorText ?? "";
     clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");
     if (viewMatches()) {
-      resetChatHistoryProjection(state, agentParams.agentId);
+      const entries = getChatSessionProjection(state).entries;
+      const rewindIndex = entries.findIndex((entry) => entry.identity?.id === entryId);
+      const retainedHistory = entries
+        .slice(0, Math.max(0, rewindIndex))
+        .filter((entry) => !entry.pending)
+        .map((entry) => entry.message);
+      resetChatHistoryProjection(state, agentParams.agentId, retainedHistory);
       await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
     }
     // Rewind commits history independently; only its unchanged composer package

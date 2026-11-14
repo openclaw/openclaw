@@ -5,6 +5,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
+import { findSqlitePathsOnNetworkFilesystems } from "../infra/sqlite-wal-filesystem.js";
 import type {
   DoctorDatabaseEngineInspection,
   ObservedDatabaseEngines,
@@ -16,20 +17,7 @@ function collectDatabaseEngineHealthFindings(
   observed: ObservedDatabaseEngines = {},
 ): HealthFinding[] {
   const families = describeDatabaseEngineSelection(cfg);
-  const findings: HealthFinding[] = families.some((family) => family.effective === "postgres")
-    ? [
-        {
-          checkId: "core/doctor/database-engine",
-          severity: "warning",
-          source: "doctor",
-          path: "database.engine",
-          message:
-            "The PostgreSQL database engine is experimental. Stores without a registered PostgreSQL schema remain on SQLite.",
-          fixHint:
-            "Review the store engine selections and https://docs.openclaw.ai/reference/database-engines before using this configuration.",
-        },
-      ]
-    : [];
+  const findings: HealthFinding[] = [];
   for (const family of families) {
     if (observed[family.id]?.some((engine) => engine !== family.effective)) {
       findings.push({
@@ -90,9 +78,25 @@ function collectInspectionFindings(
 ) {
   // State mismatches retain their precise physical paths instead of a duplicate family warning.
   const observed = { ...inspection.observed, state: undefined };
+  const sqlitePaths = (inspection.stores ?? []).flatMap((store) =>
+    store.path &&
+    (store.observed === "sqlite" ||
+      (store.observed === "unknown" && store.configured.effective === "sqlite"))
+      ? [store.path]
+      : [],
+  );
   return [
     ...collectDatabaseEngineHealthFindings(cfg, observed),
     ...stateRootFindings(cfg, inspection),
+    ...findSqlitePathsOnNetworkFilesystems(sqlitePaths).map((path): HealthFinding => ({
+      checkId: "core/doctor/database-engine",
+      severity: "warning",
+      source: "doctor",
+      path,
+      message: `SQLite path ${path} is on a network filesystem, where WAL can cause corruption. OpenClaw uses rollback journaling on supported network filesystems.`,
+      fixHint:
+        "Stop the Gateway, back up the state, and move the state directory and any custom database paths to a local disk before restarting.",
+    })),
     ...(inspection.stores ?? []).map((store): HealthFinding => ({
       checkId: "core/doctor/database-engine",
       severity: store.issues.length || store.legacyMigrations.state !== "none" ? "warning" : "info",

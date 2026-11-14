@@ -21,6 +21,9 @@ not post the same images again.
 
 You can send a follow-up while the completion agent is still working. The new
 turn waits for the completion and its delivery to settle before starting.
+On an external channel, the generated files are sent once the turn that
+requested them has finished, even while later turns in that chat are still
+running.
 
 In WebChat and the macOS app, generated attachments stay on the completion
 reply instead of appearing again in a separate image-only message. An interactive
@@ -34,6 +37,75 @@ available. If you do not see `image_generate` in your agent's tools,
 configure `agents.defaults.mediaModels.image`, set up a provider API key,
 or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
+
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
+
+## Review before delivery
+
+Automatic preview delivery remains the default. For creative work that needs a
+quality check before the user sees an image, the agent can opt in per request:
+
+```text
+action=generate deliveryMode=review prompt="..."
+```
+
+The tool returns a task ID immediately. Once generation finishes, OpenClaw saves
+the candidate and its held disposition in the existing durable delivery queue
+**before** waiting for the originating turn or waking the agent to review it.
+The review completion provides private file references, not a visible image send.
+The agent inspects the candidate against the request and reference images, then
+chooses an exact-task action:
+
+- `action=review` lists at most eight saved candidate summaries in stable task
+  order in the current original session, including after a restart. Continue with
+  `cursor=nextCursor` until `nextCursor` is null; omit the cursor to refresh this
+  live list. Add `taskId` to prepare private `inspectionFiles` for one
+  candidate without widening filesystem access; original sandbox references
+  remain available in its `inspectionContext`.
+- `action=deliver taskId="<task-id>"` approves only that candidate for the existing
+  delivery queue. Approval is not delivery confirmation; the agent must not send
+  the same files independently.
+- `action=supersede taskId="<task-id>"` suppresses only that older task's automatic
+  delivery. Accepted generation continues and its paid output is retained. Other
+  concurrent jobs are unaffected. Generate a corrected candidate separately with
+  `deliveryMode=review`.
+
+Review mode requires a durable chat session. Cancelling the requesting turn does
+not cancel already accepted generation. A failed reviewer wake or Gateway restart
+leaves the candidate held; startup does not start a review or provider inference.
+Use `action=review` in a later turn to resume the decision. Files whose delivery has
+already started cannot be retracted. Ambiguous send evidence is reconciled from
+its original receipt, never by blindly sending again.
+
+Held candidates use an inert queue payload kind and candidate-specific names in
+the existing durable media spool. Rolling back does not approve a held candidate,
+but older releases may refuse state written with a newer database schema. Do not
+assume downgrade compatibility; keep a verified backup before changing versions.
+Return to a version supporting review mode to make a decision. This feature adds
+no database schema migration, configuration change, or global media-retention
+extension.
+
+## Creative projects
+
+The bundled `creative-project` skill guides branding, posters, illustrations,
+and related visual assets. With bundled skills enabled for the agent, ordinary
+requests such as “redesign these social assets using the posters in this repo”
+can select it through normal [skill discovery](/tools/skills). No special command
+or provider-specific generation script is required.
+
+The workflow inspects existing compositions before choosing a direction, selects
+references by purpose, and preserves the current candidate and revision
+constraints. It uses editable project sources for precise vector or typographic
+work and the available image tool for raster generation or editing. Looking at a
+reference does not automatically pass it to the generator: the generation request
+must include the selected inputs.
+
+The skill does not add providers or bypass file access. It can select a supported
+review-before-delivery mode for the current chat; otherwise background results
+follow the tool’s automatic delivery contract. Inspection after completion does
+not retract an attachment already sent.
 
 ## Quick start
 
@@ -101,6 +173,7 @@ does not force the legacy `response_format` parameter on custom endpoints.
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | OpenAI image generation with API billing         | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                               |
 | OpenAI GPT Image 2.5                             | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route                  |
+| OpenAI GPT Image 2.6                             | `openai/gpt-image-2.6-flare` or `openai/gpt-image-2.6-sunburst`                                     | Explicit OpenAI API-key route                  |
 | OpenAI image generation with ChatGPT/Codex OAuth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth                     |
 | OpenAI transparent-background PNG/WebP           | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth |
 | DeepInfra image generation                       | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                            |
@@ -116,8 +189,8 @@ for one reference or `images` for multiple. For Krea 2 models on fal, those
 references are sent as style references instead of edit inputs.
 Provider-supported output hints such as `quality`, `outputFormat`, and
 `background` are forwarded when available and reported as ignored when a
-provider does not declare support. OpenAI and fal GPT Image 2.5 declare
-transparent-background support. Other providers may still preserve PNG alpha if their
+provider does not declare support. OpenAI GPT Image 2.5 and 2.6 and fal GPT
+Image 2.5 declare transparent-background support. Other providers may still preserve PNG alpha if their
 backend emits it.
 
 OpenAI supports `low` and `auto` moderation for both text-to-image generation
@@ -157,6 +230,12 @@ current session:
 Task status and duplicate detection are scoped to the requesting chat, even
 when direct chats share the main session transcript. Completion returns to
 the peer who requested the image.
+Exact retries reuse active or recently completed tasks. Keeping the same prompt while changing
+references, model, delivery mode, or options starts different work; image references are loaded
+before duplicate detection, so replacing a file at the same path also counts.
+Started and completed receipts include ordered `referenceInputs` facts (SHA-256,
+byte count, and MIME type) for the bytes loaded, not proof of what the provider
+visually preserved. Inline image payloads are omitted from printable receipts.
 
 ## Provider capabilities
 
@@ -199,7 +278,7 @@ the peer who requested the image.
 <ParamField path="resolution" type='"1K" | "2K" | "4K"'>Resolution hint.</ParamField>
 <ParamField path="quality" type='"low" | "medium" | "high" | "xhigh" | "max" | "auto"'>
   Quality hint when the model supports it. GPT Image 2.5 supports `xhigh`
-  and `max` through OpenAI and fal.
+  and `max` through OpenAI and fal; GPT Image 2.6 supports them through OpenAI.
 </ParamField>
 <ParamField path="outputFormat" type='"png" | "jpeg" | "webp"'>
   Output format hint when the provider supports it.
@@ -227,9 +306,12 @@ Not all providers support all parameters. When a fallback provider supports a
 nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
-support and reported in the tool result. Tool results report the applied
-settings. `details.normalization` captures any requested-to-applied
-translation.
+support and reported in the tool result. Completed results keep request hints in
+`details.requested` and report each saved image in `details.outputs`. Dimensions
+and format come from the image bytes; quality is included only when the provider
+reports a concrete value. Missing output settings remain unknown.
+`details.normalization` describes adjustments before submission, not proof that
+the provider applied them. Completion messages include the observed output settings.
 </Note>
 
 ## Configuration
@@ -346,6 +428,19 @@ and ComfyUI support 1.
     `resolution` overrides for these models or infer resolution from edit inputs.
 
   </Accordion>
+  <Accordion title="GPT Image 2.6 through OpenAI">
+    Select `openai/gpt-image-2.6-sunburst` for detailed work such as dense text
+    and complex layouts, or `openai/gpt-image-2.6-flare` for fast iteration.
+    The default stays `openai/gpt-image-2`.
+
+    Both models use the GPT Image 2.5 OpenAI rules above: generation and edits,
+    up to 5 reference images, `xhigh` and `max` quality, `auto` or flexible
+    `WIDTHxHEIGHT` sizes, and transparent PNG or WebP backgrounds through the
+    [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5).
+    OpenClaw does not yet expose 2.6 `complexity`, markup-guided edits, SVG
+    output, or animated GIF output.
+
+  </Accordion>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">
     OpenAI image generation defaults to `openai/gpt-image-2`. If an
     `openai` OAuth profile is configured, OpenClaw reuses the same
@@ -370,6 +465,10 @@ and ComfyUI support 1.
     `aspectRatio` or `resolution` directly. When possible OpenClaw maps
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
+
+    OpenClaw also reports `size` in `ignoredOverrides` when it can read a
+    returned image's dimensions and they differ from the requested size.
+    The generated image is still returned.
 
     For direct OpenAI Images API requests, `gpt-image-2` and its
     `gpt-image-2-2026-04-21` snapshot preserve valid explicit

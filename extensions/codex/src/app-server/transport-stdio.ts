@@ -1,10 +1,6 @@
-/**
- * Creates and configures stdio-backed Codex app-server transports, including
- * Windows spawn normalization and environment filtering.
- */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -16,6 +12,7 @@ import { normalizeCodexAppServerArgs } from "./launch-args.js";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
 import { observeManagedCodexLauncherFailure } from "./managed-launcher-failure.js";
 import { getCodexAppServerSpawnFailure, recordCodexAppServerSpawnFailure } from "./spawn-error.js";
+import { spawnCodexStdio, type CodexStdioChild } from "./stdio-worker.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
 import { closeCodexAppServerTransportAndWait, type CodexAppServerTransport } from "./transport.js";
 
@@ -53,7 +50,7 @@ export function resolveCodexAppServerSpawnInvocation(
     // never let its env shebang choose another Node architecture from PATH.
     return {
       ...resolved,
-      command: process.execPath,
+      command: resolveLaunchableNodePath(),
       argv: [resolved.command, ...resolved.argv],
       resolution: "node-entrypoint",
     };
@@ -63,7 +60,7 @@ export function resolveCodexAppServerSpawnInvocation(
 
 /** Merges app-server environment overrides while honoring clearEnv and unsafe key filtering. */
 export function resolveCodexAppServerSpawnEnv(
-  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
+  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv" | "managedGitConfigParameters">,
   baseEnv: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
@@ -89,6 +86,9 @@ export function resolveCodexAppServerSpawnEnv(
       delete env[key];
     }
   }
+  if (options.managedGitConfigParameters !== undefined) {
+    env.GIT_CONFIG_PARAMETERS = options.managedGitConfigParameters;
+  }
   return env;
 }
 
@@ -108,19 +108,7 @@ export function withCodexAppServerGitConfig(
   const inherited = key === undefined ? undefined : env[key];
   return {
     ...options,
-    env: {
-      ...options.env,
-      GIT_CONFIG_PARAMETERS: appendCodexGitConfigParameters(inherited, parameters),
-    },
-    ...(options.clearEnv
-      ? {
-          clearEnv: options.clearEnv.filter(
-            (name) =>
-              (process.platform === "win32" ? name.trim().toUpperCase() : name.trim()) !==
-              "GIT_CONFIG_PARAMETERS",
-          ),
-        }
-      : {}),
+    managedGitConfigParameters: appendCodexGitConfigParameters(inherited, parameters),
   };
 }
 
@@ -129,8 +117,8 @@ export async function createStdioTransport(
   options: CodexAppServerStartOptions,
   baseEnv: NodeJS.ProcessEnv = process.env,
   assertCurrent?: () => void | Promise<void>,
-  onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
-): Promise<ChildProcessWithoutNullStreams> {
+  onSpawn?: (child: CodexStdioChild) => void,
+): Promise<CodexStdioChild> {
   const isHostedGateway = baseEnv.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin";
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, env);
@@ -160,19 +148,23 @@ export async function createStdioTransport(
     platform: process.platform,
     arch: process.arch,
   });
-  let child: ChildProcessWithoutNullStreams & Pick<CodexAppServerTransport, "startupFailure">;
+  let child: CodexStdioChild & Pick<CodexAppServerTransport, "startupFailure">;
   try {
-    child = spawn(invocation.command, invocation.argv, {
-      // Preserve the shipped Supervisor endpoint contract: relative commands and
-      // config discovery may depend on the endpoint's process working directory.
-      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-      env,
-      // Child environment overrides cannot change the Gateway's containment boundary.
-      detached: process.platform !== "win32" && !isHostedGateway,
-      shell: invocation.shell,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: invocation.windowsHide,
-    });
+    child = spawnCodexStdio(
+      invocation.command,
+      invocation.argv,
+      {
+        // Preserve the shipped Supervisor endpoint contract: relative commands and
+        // config discovery may depend on the endpoint's process working directory.
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+        env,
+        // Child environment overrides cannot change the Gateway's containment boundary.
+        detached: process.platform !== "win32" && !isHostedGateway,
+        shell: invocation.shell,
+        windowsHide: invocation.windowsHide,
+      },
+      assertCurrent,
+    );
   } catch (error) {
     throw recordCodexAppServerSpawnFailure(error, invocation.command, launchKey);
   }

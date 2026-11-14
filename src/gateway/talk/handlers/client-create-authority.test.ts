@@ -578,7 +578,6 @@ describe("voice creation authority", () => {
           context: createDirectChatContext({
             getRuntimeConfig: fixture.context.getRuntimeConfig,
             getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
-            chatAbortControllers: fixture.context.chatAbortControllers,
             broadcastToConnIds: fixture.context.broadcastToConnIds,
           }),
           client,

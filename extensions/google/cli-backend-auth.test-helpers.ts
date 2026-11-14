@@ -52,3 +52,33 @@ export function buildGeminiOAuthPrepareContext(workspaceDir: string): GeminiPrep
     },
   };
 }
+
+export function buildGeminiApiKeyPrepareContext(
+  workspaceDir: string,
+  email?: string,
+): GeminiPrepareContext {
+  return {
+    workspaceDir,
+    agentDir: path.join(workspaceDir, "agent"),
+    provider: "google-gemini-cli",
+    modelId: "gemini-3.1-flash-lite",
+    authProfileId: "google:api-key",
+    authCredential: {
+      type: "api_key",
+      provider: "google",
+      key: "gemini-api-key",
+      ...(email === undefined ? {} : { email }),
+    },
+  };
+}
+
+export function buildGeminiIsolatedPrepareContext(workspaceDir: string): GeminiPrepareContext {
+  return {
+    workspaceDir,
+    provider: "google-gemini-cli",
+    modelId: "gemini-3.1-flash-preview",
+    toolAvailability: { native: [], openClaw: [] },
+    isolatedCompletionModelId: "gemini-3.1-flash-preview",
+    isolatedCompletionSystemPrompt: "Return only JSON.",
+  };
+}

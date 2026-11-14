@@ -1,4 +1,5 @@
 import { expect, it, type Mock } from "vitest";
+import type { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../agents/embedded-agent-runner/model.fixture.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { LoadPreparedModelCatalogParams as CatalogParams } from "../agents/prepared-model-catalog.js";
@@ -8,7 +9,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
-import type { deferred as createDeferred } from "./embedded-backend.test-helpers.js";
 import type { TuiModelChoice } from "./tui-backend.js";
 
 const model = (name: string, details: Partial<TuiModelChoice> = {}): TuiModelChoice => ({

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { modelDefinition } from "../model-auth.fixtures.test-support.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import {
   getModelProviderRequestRouteFacts,
@@ -343,15 +344,11 @@ describe("prepared bundled provider static catalogs", () => {
                 google: {
                   baseUrl: "https://fixture.example/v1",
                   models: [
-                    {
-                      id: "google-model",
-                      name: "google-model",
+                    modelDefinition("google-model", {
                       contextWindow: 128_000,
                       reasoning: false,
-                      input: ["text"],
                       maxTokens: 4096,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
+                    }),
                   ],
                 },
               },

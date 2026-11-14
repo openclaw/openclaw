@@ -24,12 +24,15 @@ export async function admitProviderRateLimitStream(
   assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
   const stream = await start(request.options);
-  let observed = false;
+  // Unkeyed and delegated requests cannot establish a gate; leave their streams alone.
+  if (!request.observe) {
+    return stream;
+  }
+  let observer: typeof request.observe | undefined = request.observe;
   const observe = (message: AssistantMessage) => {
-    if (!observed) {
-      observed = true;
-      request.observe(message);
-    }
+    const pending = observer;
+    observer = undefined;
+    pending?.(message);
   };
   // Keep native producer completion identity for idle guards and repair consumers.
   const iterate = stream[Symbol.asyncIterator].bind(stream);
@@ -45,9 +48,13 @@ export async function admitProviderRateLimitStream(
     }
   };
   stream.result = async () => {
-    const message = await result();
-    observe(message);
-    return message;
+    try {
+      const message = await result();
+      observe(message);
+      return message;
+    } finally {
+      observer = undefined;
+    }
   };
   return stream;
 }

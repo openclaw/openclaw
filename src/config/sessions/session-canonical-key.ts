@@ -30,7 +30,7 @@ import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   normalizeAgentId,
@@ -38,6 +38,10 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  hasOpenClawAgentCanonicalValidationReceiptColumn,
+  loadOpenClawAgentCanonicalValidationReceipt,
+} from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "../../state/openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -59,8 +63,9 @@ import {
 } from "./session-accessor.sqlite-owner-projection.js";
 import {
   canonicalSessionKeyMigrationRequiredError,
-  validateCanonicalSessionRow,
+  validateCanonicalSessionRowEntry,
 } from "./session-canonical-row.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -81,6 +86,16 @@ const mainKeyReader = createSqliteQueryCache((db) =>
       .selectFrom("session_key_contract")
       .select("main_key")
       .where("id", "=", 1),
+  ),
+);
+const startupContractReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<void, { main_key: string; canonical_ready: string | null }>(
+    db,
+    () =>
+      getNodeSqliteKysely<CanonicalSessionDatabase>(db)
+        .selectFrom("session_key_contract")
+        .select(["main_key", "canonical_ready"])
+        .where("id", "=", 1),
   ),
 );
 const mainKeyAdmission = {
@@ -159,7 +174,7 @@ export function readWithCanonicalSessionAdmission<T>(
   // The actual guard requested admission before validation or publication. Retry
   // the materialized read under one snapshot, including policy/receipt changes.
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, read),
+    runSqliteReadSnapshotSync(database.db, read),
   );
 }
 
@@ -335,7 +350,7 @@ export function readWithCanonicalSessionReaderContinuation<T>(
     }
   };
   const value = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       const previous = canonicalReadScope.current;
       canonicalReadScope.current = scope;
       try {
@@ -392,9 +407,11 @@ export function readCanonicalSessionMainKey(database: { db: EngineConnection }):
   return normalizeMainKey(readStoredCanonicalSessionMainKey(database) ?? undefined);
 }
 
-export function readStoredCanonicalSessionMainKey(database: {
-  db: EngineConnection;
-}): string | null {
+/** Startup also loads canonical proof; historical readers keep the main-key projection. */
+export function readStoredCanonicalSessionMainKey(
+  database: { db: EngineConnection },
+  startupAgentId?: string,
+): string | null {
   const pending = readerAdmissions.get(database.db)?.pendingMainKey;
   if (database.db.isTransaction && pending !== undefined) {
     return pending.mainKey;
@@ -415,7 +432,20 @@ export function readStoredCanonicalSessionMainKey(database: {
   if (revision && policy?.revision === revision) {
     return policy.stored;
   }
-  const stored = mainKeyReader(database.db)()?.main_key ?? null;
+  let stored: string | null;
+  if (
+    startupAgentId !== undefined &&
+    hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)
+  ) {
+    const contract = startupContractReader(database.db)();
+    loadOpenClawAgentCanonicalValidationReceipt(
+      { db: database.db, agentId: startupAgentId },
+      { canonicalReady: contract?.canonical_ready ?? null },
+    );
+    stored = contract?.main_key ?? null;
+  } else {
+    stored = mainKeyReader(database.db)()?.main_key ?? null;
+  }
   // Schema repair can seed a missing row; only existing policy survives unrelated DDL.
   if (stored !== null) {
     publishSqliteDatabaseAdmission(database.db, mainKeyAdmission, stored);
@@ -514,7 +544,15 @@ export function scanCanonicalSqliteSessionEntries(
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
-    const entry = validateCanonicalSessionRow(row);
+    const entry = validateCanonicalSessionRowEntry(
+      row,
+      row.entry_valid === 1
+        ? parseCanonicalSqliteSessionEntry({
+            entry_json: row.entry_json,
+            current_session_id: row.current_session_id,
+          })
+        : null,
+    );
     if (!entry) {
       continue;
     }

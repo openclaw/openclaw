@@ -89,7 +89,13 @@ export async function buildExecutionHostRuntimeFacts(
         return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
       });
     if (sessions.length || includeEmptySnapshots) {
-      sections.push(`Active exec sessions:\n${sessions.join("\n") || "none"}`);
+      sections.push(
+        [
+          "Active exec sessions at turn start (snapshot):",
+          "Scope: exec-tool process sessions only; persistent automations and other background work are not included.",
+          sessions.join("\n") || "No active exec-tool sessions in this scope at turn start.",
+        ].join("\n"),
+      );
     }
   }
   return sections.map((text) => ({ kind: "conversation-data", text }));

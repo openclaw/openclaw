@@ -1,12 +1,15 @@
+import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type {
   NativeWorkerResourceModule,
   NativeWorkerResourceOwner,
+  NativeWorkerResourcePort,
 } from "../../infra/worker-native-lifecycle.types.js";
 import { MAX_PENDING_BYTES, MAX_PENDING_MESSAGES } from "./ipc.js";
-import { BrokerResourcePort } from "./resource-port.js";
 import {
   SPAWN_BROKER_STARTUP_TIMEOUT_MS,
   type BrokerResourceAttachment,
@@ -14,6 +17,37 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 import { createBrokerResourceSocket } from "./resource-socket.js";
+
+type PortEvents = { message: [unknown]; close: []; messageerror: [unknown] };
+
+/** A logical resource port; closing it does not assert anything about a native child. */
+class BrokerResourcePort extends EventEmitter<PortEvents> implements NativeWorkerResourcePort {
+  private closed = false;
+
+  constructor(private readonly send: (value: unknown) => void) {
+    super();
+  }
+
+  postMessage(value: unknown): void {
+    if (this.closed) {
+      throw new Error("Native resource message port is closed");
+    }
+    this.send(value);
+  }
+
+  receive(value: unknown): void {
+    if (!this.closed) {
+      this.emit("message", value);
+    }
+  }
+
+  close(): void {
+    if (!this.closed) {
+      this.closed = true;
+      this.emit("close");
+    }
+  }
+}
 
 type ResourceSocket = ReturnType<typeof createBrokerResourceSocket>;
 type ResourceRequest = Exclude<BrokerResourceRequest, { type: "resource-attach" }>;
@@ -47,6 +81,7 @@ export async function createBrokerNativeResourceServer(options: {
   const connections = new Set<ResourceSocket>();
   let available = true;
   let sourceSealed = false;
+  let sourceLoaderRegistered = false;
   let closePromise: Promise<void> | undefined;
   let ownerBufferedBytes = 0;
   let ownerBufferedMessages = 0;
@@ -332,6 +367,8 @@ export async function createBrokerNativeResourceServer(options: {
           !Number.isSafeInteger(attachment.id) ||
           attachment.id <= 0 ||
           typeof attachment.moduleUrl !== "string" ||
+          (attachment.sourceLoaderUrl !== undefined &&
+            typeof attachment.sourceLoaderUrl !== "string") ||
           typeof attachment.ownerPort !== "boolean"
         ) {
           transport.close();
@@ -397,6 +434,17 @@ export async function createBrokerNativeResourceServer(options: {
           if (!live() || sourceSealed) {
             return;
           }
+          if (!sourceLoaderRegistered && attachment.sourceLoaderUrl) {
+            const loader: unknown = await import(attachment.sourceLoaderUrl);
+            if (!live() || sourceSealed) {
+              return;
+            }
+            if (!isRecord(loader) || typeof loader.register !== "function") {
+              throw new Error("Native resource source loader is unavailable");
+            }
+            loader.register();
+            sourceLoaderRegistered = true;
+          }
           const module: NativeWorkerResourceModule = await import(attachment.moduleUrl);
           if (!live() || sourceSealed) {
             return;
@@ -460,12 +508,7 @@ export async function createBrokerNativeResourceServer(options: {
         }),
       );
       await serverClosed;
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Spawn broker native resource cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "Spawn broker native resource cleanup failed");
       resources.clear();
     });
     disconnect();

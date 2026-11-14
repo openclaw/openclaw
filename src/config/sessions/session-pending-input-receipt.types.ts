@@ -10,7 +10,9 @@ export type SessionPendingInputReceipt = {
   run: <T>(operation: () => T) => T;
   runAsync?: <T>(operation: () => T) => Promise<Awaited<T>>;
   assertLifetimeCurrent?: () => void;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  /** Validate the original request before acknowledging a completed transcript replay. */
+  validateCommittedReplay?: () => Promise<void>;
+  finish: (disposition: Exclude<SessionPendingInputState, "queued">, userInitiated?: true) => void;
   completion?: AgentRunTerminalOutcome;
   /** @deprecated Await completeAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;

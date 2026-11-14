@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
-/** Human replies inherit native child custody, never main-session replay privileges. */
+/**
+ * Human replies inherit the retained child's native custody. A tool handoff result
+ * continues the task whose own run handed off; other internal turns stay separate follow-ups.
+ */
 export async function prepareReplySubagentContinuation(
   turn: AgentTurnParams,
   runId: string,
@@ -13,10 +16,13 @@ export async function prepareReplySubagentContinuation(
 ): Promise<void> {
   const entry = turn.getActiveSessionEntry();
   const provenance = turn.followupRun.run.inputProvenance;
+  const handoffRunId =
+    provenance?.kind === "internal_system" && provenance.sourceTool === "tool_handoff"
+      ? provenance.runId
+      : undefined;
   if (
     !turn.sessionKey ||
-    turn.isHeartbeat ||
-    (provenance && provenance.kind !== "external_user") ||
+    (provenance && provenance.kind !== "external_user" && !handoffRunId) ||
     !(entry?.spawnedBy || entry?.subagentRole || (entry?.spawnDepth ?? 0) > 0)
   ) {
     return;
@@ -34,12 +40,14 @@ export async function prepareReplySubagentContinuation(
   await reactivateCompletedSubagentSession({
     sessionKey: turn.sessionKey,
     runId,
-    task: turn.followupRun.prompt,
+    // Handoff results continue the original task rather than restating it.
+    ...(handoffRunId ? {} : { task: turn.followupRun.prompt }),
+    ...(handoffRunId ? { pausedRunId: handoffRunId } : {}),
     gatewayContextResolver:
       readChannelContextGatewayContextResolver(turn.sessionCtx) ??
       getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
     assertCurrent,
-    acpSession: { cfg, activeSessionAgentId: turn.followupRun.run.agentId, sessionEntry: entry },
+    session: { cfg, activeSessionAgentId: turn.followupRun.run.agentId, sessionEntry: entry },
   });
   assertCurrent();
 }

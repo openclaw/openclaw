@@ -8,6 +8,7 @@ import {
   readStateLeaseProcessOwnerStatus,
   type StateLeaseProcessOwner,
 } from "../../infra/state-lease-process-owner.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
@@ -91,6 +92,10 @@ function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
 }
 
 function readPendingWorktreesInDatabase(db: EngineConnection): PendingWorktreeSlot[] {
+  // Backup discovery precedes schema validation; an absent lease table has no pending paths.
+  if (!tableExists(db, "state_leases")) {
+    return [];
+  }
   return readSlots(db).map(({ record, state }) => ({ record, state }));
 }
 

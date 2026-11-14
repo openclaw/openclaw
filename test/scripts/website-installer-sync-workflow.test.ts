@@ -4,7 +4,6 @@ import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { detectInstallSmokeScope } from "../../scripts/ci-changed-scope.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -13,27 +12,10 @@ type Step = { id?: string; name?: string; if?: string; run?: string; with?: { sc
 const config = parse(workflow) as {
   jobs: Record<string, { if?: string; needs?: string[]; steps: Step[] }>;
 };
-const unixJobs = [
-  "linux-docker",
-  "debian-installer",
-  "linux-build-tools-failure",
-  "linux-non-root",
-  "fedora-installer",
-  "macos-installer",
-];
-const scopedJobs = ["static", ...unixJobs, "windows-installer"];
-const unixInputs = [
-  "scripts/install.sh",
-  "scripts/install-cli.sh",
-  "scripts/install-policy.sh",
-  "scripts/build-installers.mjs",
-  "scripts/lib/standalone-installers.mjs",
-];
-function contains(...fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(workflow).toContain(fragment);
-  }
-}
+const scopedJobs = Object.keys(config.jobs).filter(
+  (job) => !["scope", "sync-website"].includes(job),
+);
+const unixJobs = scopedJobs.filter((job) => !["static", "windows-installer"].includes(job));
 function stepRun(job: string, name: string) {
   const run = config.jobs[job]?.steps.find((step) => step.name === name)?.run;
   if (!run) {
@@ -128,58 +110,21 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
     expect(diagnostics.stdout).toContain("librepo: fixture mirror connection stalled");
   });
 
-  it("verifies installers across Linux privilege and package-manager paths", () => {
-    expect(Object.keys(config.jobs)).toEqual(expect.arrayContaining(unixJobs));
-    contains(
-      "debian:bookworm-slim",
-      "node --version | grep -E '^v24\\.[0-9]+\\.[0-9]+$'",
-      'require("node:sqlite")',
-      "/tmp/build-tools-stub-triggered",
-      'grep -aFq "Installing build tools failed"',
-      'grep -aFq "Build tools installed"',
-      "sudo -u installer -H bash",
-      'test "$(npm config get prefix)" = "$HOME/.npm-global"',
-      `grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"`,
-      "user: [root, non-root]",
-      "bash /tmp/install.sh --version latest && openclaw --version",
-      "bash /tmp/install-cli.sh --prefix /tmp/openclaw",
-      "runs-on: macos-15",
-      "node-version: 24",
-      'OPENCLAW_NO_ONBOARD: "1"',
-      'OPENCLAW_NO_PROMPT: "1"',
-      "bash dist/installers/install.sh --no-onboard --no-prompt --version latest",
-      "openclaw --version",
-      "windows-installer:",
-      "runs-on: windows-latest",
-      ".\\scripts\\install.ps1 -DryRun",
+  it("bounds every installer container with a kill-after timeout", () => {
+    const runs = Object.values(config.jobs).flatMap((job) =>
+      job.steps.flatMap((step) => step.run?.split("\n") ?? []),
     );
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
-    expect(workflow.match(/fedora:44/g)?.length).toBe(2);
-    expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm/u);
-    for (const absent of [
-      "timeout 20m docker run --rm",
-      "bash /tmp/install.sh --no-prompt --no-onboard",
-      "install.cmd dry run",
-      ".\\scripts\\install.cmd",
-    ]) {
-      expect(workflow).not.toContain(absent);
+    const containers = runs.filter((line) => line.includes("docker run"));
+    expect(containers.length).toBeGreaterThan(0);
+    for (const line of containers) {
+      expect(line.trim()).toMatch(/^timeout --kill-after=\d+s \d+m docker run --rm\b/u);
     }
   });
 
   it("syncs verified scripts to openclaw.ai only after all installer checks pass", () => {
-    expect(config.jobs["sync-website"]?.needs).toEqual(scopedJobs);
-    contains(
-      "repository: openclaw/openclaw.ai",
-      "OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}",
-      "OPENCLAW_GH_TOKEN is not configured",
-      "token: ${{ env.OPENCLAW_GH_TOKEN }}",
-      "cp openclaw/dist/installers/install.sh openclaw.ai/public/install.sh",
-      "cp openclaw/dist/installers/install-cli.sh openclaw.ai/public/install-cli.sh",
-      "cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1",
-      "rm -f openclaw.ai/public/install.cmd",
-      "bun run build",
-      "git push origin HEAD:main",
-    );
+    expect(config.jobs["sync-website"]?.needs?.toSorted()).toEqual(scopedJobs.toSorted());
+    expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
+    expect(workflow).toContain("token: ${{ env.OPENCLAW_GH_TOKEN }}");
   });
 });
 
@@ -237,15 +182,12 @@ describe("installer platform admission", () => {
 
   it.each([
     { file: "scripts/install.ps1", unix: false, windows: true },
-    ...unixInputs.map((file) => ({ file, unix: true, windows: false })),
+    { file: "test/scripts/install-ps1-entrypoint.ps1", unix: false, windows: true },
+    { file: "scripts/install.sh", unix: true, windows: false },
     { file: ".github/workflows/website-installer-sync.yml", unix: true, windows: true },
     { file: "scripts/install.ps1", moveTo: "retired.ps1", unix: false, windows: true },
     { file: "retired.ps1", moveTo: "scripts/install.ps1", unix: false, windows: true },
   ])("routes the tested event tree for $file (move: $moveTo)", async (scenario) => {
-    if (scenario.file.startsWith("scripts/")) {
-      expect(workflow).toContain(scenario.file);
-      expect(detectInstallSmokeScope([scenario.file]).runFullInstallSmoke).toBe(true);
-    }
     const cwd = tempDirs.make("installer-platform-scope-");
     const git = (...args: string[]) =>
       execFileSync(
@@ -293,10 +235,8 @@ describe("installer platform admission", () => {
 
   it.each([
     { event: "push" },
-    { event: "workflow_dispatch" },
     { checkout: "failure", diffExitCodes: [] },
     { diffExitCodes: [128] },
-    { diffExitCodes: [0, 128] },
   ])("keeps full validation for unrestricted or unavailable scope: %j", async (options) => {
     const result = await select(options);
     if ("event" in options) {

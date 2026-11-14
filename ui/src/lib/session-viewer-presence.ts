@@ -2,7 +2,7 @@ import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-prot
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
-import { resolveSessionKey } from "./sessions/index.ts";
+import { resolveSessionKey } from "./sessions/navigation.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
 
@@ -45,13 +45,12 @@ export function sessionViewerPresenceForGateway(
       lifecycle.clearRequest();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (client !== knownClient) {
-      retry.reset();
+      lifecycle.resetRetry();
       knownClient = client;
       lifecycle.clearRequest();
     }
@@ -88,11 +87,11 @@ export function sessionViewerPresenceForGateway(
       signature,
       {
         onSuccess: () => {
-          if (!isActive()) {
+          if (!isActive() && sessionKeys.length === 0) {
             lifecycle.detach();
           }
         },
-        onError: () => retry.schedule(lifecycle.schedule),
+        onError: () => lifecycle.scheduleRetry(lifecycle.schedule),
       },
     );
   }
@@ -112,13 +111,11 @@ export function sessionViewerPresenceForGateway(
     } else {
       watchedByOwner.set(owner, next);
     }
-    retry.reset();
+    lifecycle.resetRetry();
     if (isActive()) {
       lifecycle.attach();
-      lifecycle.schedule();
-    } else if (lifecycle.attached) {
-      lifecycle.sync();
     }
+    lifecycle.schedule();
   };
 
   const store: SessionViewerPresenceStore = { watch, unwatch: (owner) => watch(owner, []) };

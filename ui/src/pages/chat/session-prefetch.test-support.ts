@@ -8,6 +8,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { registerChatPane } from "./chat-pane-elements.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
 import { createSessionPrefetch } from "./session-prefetch.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
@@ -31,19 +32,17 @@ export type SessionPrefetchUpdate = {
   rows: readonly GatewaySessionRow[] | null;
 };
 
-export function prefetchState(
+export const prefetchState = (
   request: GatewayRequestHandler,
   rows: SessionPrefetchUpdate["rows"],
   overrides: Partial<SessionPrefetchUpdate> = {},
-): SessionPrefetchUpdate {
-  return {
-    client: createTestGatewayClient(request),
-    listRevision: 1,
-    openSessionKeys: ["agent:main:foreground"],
-    rows,
-    ...overrides,
-  };
-}
+): SessionPrefetchUpdate => ({
+  client: createTestGatewayClient(request),
+  listRevision: 1,
+  openSessionKeys: ["agent:main:foreground"],
+  rows,
+  ...overrides,
+});
 
 export function prefetchHistoryRequest() {
   return vi.fn(async (_method: string, params: unknown) =>
@@ -56,30 +55,25 @@ export async function advanceSessionPrefetch(milliseconds = 300) {
   await settleSessionPrefetch();
 }
 
-export function prefetchSessionRow(
+export const prefetchSessionRow = (
   key: string,
   activityAt: number | undefined,
   updatedAt = activityAt ?? 0,
-): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    updatedAt,
-    ...(activityAt === undefined ? {} : { lastActivityAt: activityAt }),
-  };
-}
+): GatewaySessionRow => ({
+  key,
+  kind: "direct",
+  updatedAt,
+  ...(activityAt === undefined ? {} : { lastActivityAt: activityAt }),
+});
 
-export function prefetchHistoryResult(sessionKey: string) {
-  return {
-    completeSnapshot: true,
-    messages: [{ role: "assistant", content: sessionKey }],
-    sessionId: `id:${sessionKey}`,
-  };
-}
+export const prefetchHistoryResult = (sessionKey: string) => ({
+  completeSnapshot: true,
+  messages: [{ role: "assistant", content: sessionKey }],
+  sessionId: `id:${sessionKey}`,
+});
 
-export function prefetchSessionKeyFromCall(call: unknown[]): string {
-  return (call[1] as { sessionKey: string }).sessionKey;
-}
+export const prefetchSessionKeyFromCall = (call: unknown[]): string =>
+  (call[1] as { sessionKey: string }).sessionKey;
 
 export async function settleSessionPrefetch(): Promise<void> {
   for (let index = 0; index < 60; index += 1) {
@@ -136,6 +130,7 @@ export function createSessionPrefetchFixture() {
   const shell = document.createElement("openclaw-app-shell");
   shell.append(host);
   document.body.append(shell);
+  let unregisterPanes: (() => void)[] = [];
   let syncPrefetch: () => void;
   let unmountPrefetch: () => void;
   function mountPrefetch(): void {
@@ -152,16 +147,16 @@ export function createSessionPrefetchFixture() {
       client: update.client,
       phase: update.client ? "connected" : "stopped",
     });
-    host.replaceChildren(
-      ...update.openSessionKeys.map((sessionKey) =>
-        Object.assign(document.createElement("openclaw-chat-pane"), {
-          sessionKey,
-          conversationPresented:
-            update.hiddenConversationSessionKeys?.includes(sessionKey) !== true,
-          transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
-        }),
-      ),
+    unregisterPanes.forEach((unregister) => unregister());
+    const panes = update.openSessionKeys.map((sessionKey) =>
+      Object.assign(document.createElement("openclaw-chat-pane"), {
+        sessionKey,
+        conversationPresented: update.hiddenConversationSessionKeys?.includes(sessionKey) !== true,
+        transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
+      }),
     );
+    unregisterPanes = panes.map(registerChatPane);
+    host.replaceChildren(...panes);
     syncPrefetch();
   }
 
@@ -185,6 +180,7 @@ export function createSessionPrefetchFixture() {
     },
     dispose: async () => {
       unmountPrefetch();
+      unregisterPanes.forEach((unregister) => unregister());
       shell.remove();
       await store.flush();
       store.disconnect();

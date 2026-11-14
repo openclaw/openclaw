@@ -1,17 +1,13 @@
-import { ComponentType, InteractionResponseType } from "discord-api-types/v10";
+import {
+  ComponentType,
+  InteractionResponseType,
+  type APIContainerComponent,
+} from "discord-api-types/v10";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it } from "vitest";
 import { buildDiscordComponentMessage, createDiscordFormModal } from "./components.js";
 import type { DiscordComponentBlock, DiscordComponentSelectSpec } from "./components.types.js";
-import {
-  ChannelSelectMenu,
-  Container,
-  MentionableSelectMenu,
-  RoleSelectMenu,
-  Row,
-  StringSelectMenu,
-  UserSelectMenu,
-} from "./internal/components.message.js";
+import { RoleSelectMenu, StringSelectMenu, UserSelectMenu } from "./internal/components.message.js";
 import { BaseComponentInteraction, createInteraction } from "./internal/interactions.js";
 import {
   createInternalComponentInteractionPayload,
@@ -23,8 +19,8 @@ const generatedId = (prefix: string) =>
   expect.stringMatching(new RegExp(`^${prefix}_[A-Za-z0-9_-]{8}$`));
 
 function readContainer(result: ReturnType<typeof buildDiscordComponentMessage>) {
-  const container = result.components[0];
-  if (!(container instanceof Container)) {
+  const container = result.components[0]?.serialize() as APIContainerComponent | undefined;
+  if (container?.type !== ComponentType.Container) {
     throw new Error("Expected a Discord component container");
   }
   return container;
@@ -45,76 +41,72 @@ function buttonBlock(length: number): DiscordComponentBlock[] {
 
 describe("discord select components", () => {
   it.each([
-    ["string", ComponentType.StringSelect, StringSelectMenu, "select"],
-    ["user", ComponentType.UserSelect, UserSelectMenu, "user select"],
-    ["role", ComponentType.RoleSelect, RoleSelectMenu, "role select"],
-    ["mentionable", ComponentType.MentionableSelect, MentionableSelectMenu, "mentionable select"],
-    ["channel", ComponentType.ChannelSelect, ChannelSelectMenu, "channel select"],
-  ] as const)(
-    "preserves %s identity, payload, and metadata",
-    (type, componentType, constructor, defaultLabel) => {
-      const options = [
-        {
-          label: "Primary",
-          value: "primary",
-          description: "First choice",
-          emoji: { name: "1️⃣" },
-          default: true,
-        },
-      ];
-      const result = buildDiscordComponentMessage({
-        spec: {
-          reusable: false,
-          blocks: selectBlock({
-            type,
-            callbackData: "select:callback",
-            callbackDataKind: "callback",
-            minValues: 0,
-            maxValues: 2,
-            options,
-            allowedUsers: ["user-1"],
-          }),
-        },
+    ["string", ComponentType.StringSelect, "select"],
+    ["user", ComponentType.UserSelect, "user select"],
+    ["role", ComponentType.RoleSelect, "role select"],
+    ["mentionable", ComponentType.MentionableSelect, "mentionable select"],
+    ["channel", ComponentType.ChannelSelect, "channel select"],
+  ] as const)("preserves %s payload and metadata", (type, componentType, defaultLabel) => {
+    const options = [
+      {
+        label: "Primary",
+        value: "primary",
+        description: "First choice",
+        emoji: { name: "1️⃣" },
+        default: true,
+      },
+    ];
+    const result = buildDiscordComponentMessage({
+      spec: {
+        reusable: false,
+        blocks: selectBlock({
+          type,
+          callbackData: "select:callback",
+          callbackDataKind: "callback",
+          minValues: 0,
+          maxValues: 2,
+          options,
+          allowedUsers: ["user-1"],
+        }),
+      },
+      sessionKey: "session-1",
+      agentId: "agent-1",
+      accountId: "default",
+    });
+    const row = readContainer(result).components[0];
+    if (row?.type !== ComponentType.ActionRow) {
+      throw new Error("Expected a Discord action row");
+    }
+    const select = expectDefined(row.components[0], "select component");
+    const entry = expectDefined(result.entries[0], "select entry");
+    expect(entry.id).toEqual(generatedId("sel"));
+
+    expect(select).toEqual({
+      type: componentType,
+      ...(type === "string" ? { options } : {}),
+      custom_id: `occomp:cid=${entry.id}`,
+      min_values: 0,
+      max_values: 2,
+    });
+    expect(result.entries).toEqual([
+      {
+        id: entry.id,
+        kind: "select",
+        label: defaultLabel,
+        callbackData: "select:callback",
+        callbackDataKind: "callback",
+        selectType: type,
+        ...(type === "string" ? { options: [{ value: "primary", label: "Primary" }] } : {}),
+        allowedUsers: ["user-1"],
         sessionKey: "session-1",
         agentId: "agent-1",
         accountId: "default",
-      });
-      const row = readContainer(result).components[0];
-      if (!(row instanceof Row)) {
-        throw new Error("Expected a Discord action row");
-      }
-      const select = expectDefined(row.components[0], "select component");
-      const entry = expectDefined(result.entries[0], "select entry");
-      expect(entry.id).toEqual(generatedId("sel"));
-
-      expect(select).toBeInstanceOf(constructor);
-      expect(select.serialize()).toEqual({
-        type: componentType,
-        ...(type === "string" ? { options } : {}),
-        custom_id: `occomp:cid=${entry.id}`,
-        min_values: 0,
-        max_values: 2,
-      });
-      expect(result.entries).toEqual([
-        {
-          id: entry.id,
-          kind: "select",
-          label: defaultLabel,
-          callbackData: "select:callback",
-          callbackDataKind: "callback",
-          selectType: type,
-          ...(type === "string" ? { options: [{ value: "primary", label: "Primary" }] } : {}),
-          allowedUsers: ["user-1"],
-          sessionKey: "session-1",
-          agentId: "agent-1",
-          accountId: "default",
-          reusable: false,
-          consumptionGroupId: generatedId("grp"),
-          consumptionGroupEntryIds: [entry.id],
-        },
-      ]);
-    },
-  );
+        reusable: false,
+        consumptionGroupId: generatedId("grp"),
+        consumptionGroupEntryIds: [entry.id],
+      },
+    ]);
+  });
 
   it("preserves modal identity, required values, and callback payload", async () => {
     const fields = [
@@ -222,7 +214,9 @@ describe("discord select components", () => {
           modal: { title: "Details", fields: [{ type: "text", label: "Name" }] },
         },
       });
-      const rows = readContainer(result).components.filter((component) => component instanceof Row);
+      const rows = readContainer(result).components.filter(
+        (component) => component.type === ComponentType.ActionRow,
+      );
       expect(rows.map((row) => row.components.length)).toEqual(expectedSizes);
       expect(rows.at(-1)?.components.at(-1)?.type).toBe(ComponentType.Button);
     },

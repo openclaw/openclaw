@@ -1,4 +1,3 @@
-import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
 import type { SessionRequestClient } from "./session-capability.ts";
 
@@ -20,6 +19,11 @@ export type SessionUsageQuery = {
   sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
   sortDirection?: "asc" | "desc";
 };
+
+/** Whole-history reads (one session's lifetime total) replace the calendar window. */
+type SessionUsageRequestQuery =
+  | SessionUsageQuery
+  | (Omit<SessionUsageQuery, "startDate" | "endDate"> & { range: "all" });
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
   const offsetFromUtcMinutes = -timezoneOffsetMinutes;
@@ -44,7 +48,7 @@ function buildSessionUsageDateParams(timeZone: "local" | "utc") {
 
 export function requestSessionUsage(
   client: SessionRequestClient,
-  query: SessionUsageQuery,
+  query: SessionUsageRequestQuery,
   options?: {
     key?: string;
     projection?: "overview";
@@ -55,8 +59,9 @@ export function requestSessionUsage(
 ): Promise<SessionsUsageResult> {
   const key = options?.key;
   const params = {
-    startDate: query.startDate,
-    endDate: query.endDate,
+    ...("range" in query
+      ? { range: query.range }
+      : { startDate: query.startDate, endDate: query.endDate }),
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
@@ -80,23 +85,4 @@ export function requestSessionUsage(
   return options?.signal
     ? client.request<SessionsUsageResult>("sessions.usage", params, { signal: options.signal })
     : client.request<SessionsUsageResult>("sessions.usage", params);
-}
-
-export function requestSessionUsageTimeSeries(
-  client: SessionRequestClient,
-  target: SessionUsageTarget,
-): Promise<SessionUsageTimeSeries | null> {
-  return client
-    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
-    .then((result) => result ?? null);
-}
-
-export function requestSessionUsageLogs(
-  client: SessionRequestClient,
-  target: SessionUsageTarget,
-): Promise<{ logs?: unknown }> {
-  return client.request<{ logs?: unknown }>("sessions.usage.logs", {
-    ...target,
-    limit: 1000,
-  });
 }

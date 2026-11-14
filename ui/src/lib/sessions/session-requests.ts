@@ -1,9 +1,7 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type {
-  SessionsDeleteResult,
   SessionsSetInvolvementParams,
   SessionsListParams,
-  SessionsPatchManyParams,
-  SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   expandSessionRowFacts,
@@ -15,11 +13,10 @@ import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts
 import type { SessionPatch } from "./patch.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionDeleteOptions,
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 /** Personal list choices share one RPC contract across all session menus. */
 export async function requestSessionInvolvement(
@@ -37,6 +34,17 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+/** User-facing session pickers (command palette, section editor) list the same sessions. */
+export const SESSION_SEARCH_SCOPE = {
+  includeGlobal: false,
+  includeUnknown: false,
+  configuredAgentsOnly: true,
+  excludeSubagents: true,
+  excludeCron: true,
+  excludeSystem: true,
+  excludeDock: true,
+} as const satisfies SessionListOptions;
+
 export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
   const normalizedAgentId = agentId?.trim();
   return {
@@ -45,21 +53,6 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
     source: "dashboard",
     excludeDock: true,
     hasBoard: true,
-    archivedFilter: "all",
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-  };
-}
-
-/** Progress cards resolve an explicit cross-session target independently of
- *  dashboard gallery membership: the Gateway filters hasBoard against each
- *  session's own board inventory, so a running target without its own board
- *  would disappear from a gallery-filtered roster and render as paused. */
-export function sessionProgressTargetQuery(agentId?: string | null): SessionListOptions {
-  const normalizedAgentId = agentId?.trim();
-  return {
-    ...DEFAULT_SESSION_LIST_QUERY,
-    source: "dashboard",
-    excludeDock: false,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
@@ -178,7 +171,7 @@ export async function requestSessionList(
 
 // Keep raw wire rows separate from locally reconciled/optimistic presentation.
 // Gateway publication identities retire them; eviction or a new client simply reads full rows.
-const sidebarWireRows = new WeakMap<
+const sessionWireRows = new WeakMap<
   SessionRequestClient,
   Map<string, { revision: string; sessions: SessionsListResult["sessions"] }>
 >();
@@ -187,17 +180,26 @@ export async function requestSessionListParams(
   client: SessionRequestClient,
   query: Readonly<SessionsListParams & { pageSize?: number }>,
   isCurrent: () => boolean,
+  options?: GatewayProtocolRequestOptions,
 ): Promise<SessionsListResult | null> {
   const { pageSize, ...params } = query;
   const read = async (request: SessionsListParams) => {
     const { source: _source, ...membership } = request;
     const key = JSON.stringify(membership);
-    const cache = sidebarWireRows.get(client);
-    const previous = request.rowMode === "sidebar" ? cache?.get(key) : undefined;
-    const result = await client.request<SessionsListResult | undefined>("sessions.list", {
-      ...request,
-      ...(previous ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${previous.revision}` } : {}),
-    });
+    const cache = sessionWireRows.get(client);
+    const conditional = request.rowMode !== undefined;
+    const previous = conditional ? cache?.get(key) : undefined;
+    const result = await client.request<SessionsListResult | undefined>(
+      "sessions.list",
+      {
+        ...request,
+        ...(previous ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${previous.revision}` } : {}),
+        ...(!previous && conditional && request.rowMode !== "sidebar"
+          ? { ifRowsRevision: "" }
+          : {}),
+      },
+      ...(options ? ([options] as const) : []),
+    );
     if (!result || !isCurrent()) {
       return null;
     }
@@ -222,14 +224,14 @@ export async function requestSessionListParams(
         return rows[index]!;
       });
     }
-    if (request.rowMode === "sidebar" && result.rowsRevision) {
+    if (conditional && result.rowsRevision) {
       const retained = cache ?? new Map();
       retained.delete(key);
       retained.set(key, { revision: result.rowsRevision, sessions });
       if (retained.size > 16) {
         retained.delete(retained.keys().next().value!);
       }
-      sidebarWireRows.set(client, retained);
+      sessionWireRows.set(client, retained);
     }
     return { ...list, sessions };
   };
@@ -287,36 +289,6 @@ export function requestSessionPatch(
   return patch.archived === true
     ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
     : client.request<SessionsPatchResult>("sessions.patch", params);
-}
-
-export function requestSessionPatchMany(
-  client: SessionRequestClient,
-  params: SessionsPatchManyParams,
-): Promise<SessionsPatchManyResult> {
-  return params.patch.archived === true
-    ? client.request<SessionsPatchManyResult>(
-        "sessions.patchMany",
-        params,
-        SESSION_ARCHIVE_REQUEST_OPTIONS,
-      )
-    : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
-}
-
-export function requestSessionDelete(
-  client: SessionRequestClient,
-  key: string,
-  options: SessionDeleteOptions = {},
-): Promise<SessionsDeleteResult> {
-  return client.request<SessionsDeleteResult>(
-    "sessions.delete",
-    {
-      ...buildSessionRequestParams(key, options.agentId),
-      deleteTranscript: options.deleteTranscript ?? true,
-      ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-      ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
-    },
-    SESSION_ARCHIVE_REQUEST_OPTIONS,
-  );
 }
 
 export function requestSessionReset(

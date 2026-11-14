@@ -2,8 +2,6 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -15,34 +13,11 @@ import type { ReplyPayload } from "../types.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplySource } from "./block-reply-source.types.js";
 import type { AcpBlockText, AcpDispatchDeliveryState } from "./dispatch-acp-delivery.types.js";
-import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
-import { prepareReplyPayloadForDispatcher } from "./reply-dispatcher.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
   () => import("../../tts/tts.runtime.js"),
 );
-
-export function prepareAcpDeliveryPayload(params: {
-  cfg: OpenClawConfig;
-  dispatcher: ReplyDispatcher;
-  kind: ReplyDispatchKind;
-  payload: ReplyPayload;
-  routed: boolean;
-  messaging?: ChannelMessagingAdapter;
-  accountId?: string;
-}) {
-  if (!params.routed) {
-    return prepareReplyPayloadForDispatcher(params.dispatcher, params.kind, params.payload);
-  }
-  return normalizeReplyPayloadOutcome(params.payload, {
-    transformReplyPayload: createChannelReplyTransform({
-      messaging: params.messaging,
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
-  });
-}
 
 export async function maybeApplyAcpTts(params: {
   preparedTtsPreferences: PreparedTtsPreferences;

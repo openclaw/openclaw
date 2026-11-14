@@ -37,11 +37,7 @@ const senderContext = {
 };
 
 function expectSenderMediaPolicy(opts: unknown) {
-  expect(opts).toMatchObject({
-    mediaAccess,
-    mediaLocalRoots: senderRoots,
-    mediaReadFile,
-  });
+  expect(opts).toMatchObject({ mediaAccess, mediaLocalRoots: senderRoots, mediaReadFile });
 }
 
 describe("Discord guild media actions forward the sender-scoped media policy", () => {
@@ -51,32 +47,20 @@ describe("Discord guild media actions forward the sender-scoped media policy", (
     }
   });
 
-  it("passes the policy to the emoji upload loader options", async () => {
+  it.each([
+    ["emoji-upload", { emojiName: "blob" }, discordGuildActionRuntime.uploadEmojiDiscord],
+    [
+      "sticker-upload",
+      { stickerName: "blob", stickerDesc: "blob", stickerTags: "blob" },
+      discordGuildActionRuntime.uploadStickerDiscord,
+    ],
+  ] as const)("passes the policy to %s loader options", async (action, params, upload) => {
     await handleDiscordMessageAction({
       ...senderContext,
-      action: "emoji-upload",
-      params: { guildId: "guild-1", emojiName: "blob", media: "/srv/openclaw/workspace/other.png" },
+      action,
+      params: { guildId: "guild-1", media: "/srv/openclaw/workspace/other.png", ...params },
     });
-
-    const call = vi.mocked(discordGuildActionRuntime.uploadEmojiDiscord).mock.calls[0];
-    expect(call?.[0]).toMatchObject({ mediaUrl: "/srv/openclaw/workspace/other.png" });
-    expectSenderMediaPolicy(call?.[1]);
-  });
-
-  it("passes the policy to the sticker upload loader options", async () => {
-    await handleDiscordMessageAction({
-      ...senderContext,
-      action: "sticker-upload",
-      params: {
-        guildId: "guild-1",
-        stickerName: "blob",
-        stickerDesc: "blob",
-        stickerTags: "blob",
-        media: "/srv/openclaw/workspace/other.png",
-      },
-    });
-
-    const call = vi.mocked(discordGuildActionRuntime.uploadStickerDiscord).mock.calls[0];
+    const call = vi.mocked(upload).mock.calls[0];
     expect(call?.[0]).toMatchObject({ mediaUrl: "/srv/openclaw/workspace/other.png" });
     expectSenderMediaPolicy(call?.[1]);
   });

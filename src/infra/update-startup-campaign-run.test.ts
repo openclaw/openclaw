@@ -67,6 +67,25 @@ vi.mock("./restart.js", async (importOriginal) => ({
 }));
 
 const campaigns = new Set<UpdateCampaignController>();
+const successor = {
+  kind: "managed-update-handoff",
+  handoffId: "auto-handoff-id",
+  installRoot: "/opt/openclaw",
+};
+
+function runAdmittedUpdate(runId: string, log = { info: vi.fn() }) {
+  return runAutoUpdateCommand(
+    {
+      runId,
+      channel: "beta",
+      mode: "npm",
+      root: "/opt/openclaw",
+      timeoutMs: 1_000,
+      restartDrainTimeoutMs: undefined,
+    },
+    log,
+  );
+}
 
 function doctorFacts(message: string) {
   return [{ check: "doctor", code: "doctor-failed", message }];
@@ -141,25 +160,15 @@ describe("automatic campaign handoff failure", () => {
   it("records the refusal in the failed phase even when later diagnostics are unavailable", async () => {
     const reason = "update-recovery-pending";
     const message = "Package publication recovery permissions are unsafe: activation mode 0750.";
-    const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+    const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
     start.mockImplementationOnce(async () => {
       await failWorkerWrite("diagnostic ledger is read-only", true);
       throw new UpdatePreMutationError(reason, message);
     });
-    const outcome = await runAutoUpdateCommand(
-      {
-        runId: run.runId,
-        channel: "beta",
-        mode: "npm",
-        root: "/opt/openclaw",
-        timeoutMs: 1_000,
-        restartDrainTimeoutMs: undefined,
-      },
-      { info: vi.fn() },
-    );
+    const outcome = await runAdmittedUpdate(runId);
     expect(outcome).toMatchObject({ status: "failed", result: { reason } });
     expect(outcome).toHaveProperty("message", expect.stringContaining(`${reason}: ${message}`));
-    finishUpdateRun(run.runId, { status: "failed", reason });
+    finishUpdateRun(runId, { status: "failed", reason });
     const recorded = expectDefined(listUpdateRuns()[0], "failed automatic update run");
     expect(recorded.steps).toContainEqual(
       expect.objectContaining({
@@ -302,7 +311,7 @@ describe("automatic campaign handoff failure", () => {
   it.each(["state", "diagnostics"] as const)(
     "cancels a rejected transfer when %s persistence fails",
     async (failure) => {
-      const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+      const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
       const log = { info: vi.fn() };
       cancel.mockResolvedValueOnce("restored-in-process");
       transfer.mockImplementationOnce(async () => {
@@ -310,22 +319,8 @@ describe("automatic campaign handoff failure", () => {
         throw new Error("pipe closed");
       });
 
-      const outcome = await runAutoUpdateCommand(
-        {
-          runId: run.runId,
-          channel: "beta",
-          mode: "npm",
-          root: "/opt/openclaw",
-          timeoutMs: 1_000,
-          restartDrainTimeoutMs: undefined,
-        },
-        log,
-      );
-      expect(cancel).toHaveBeenCalledExactlyOnceWith({
-        kind: "managed-update-handoff",
-        handoffId: "auto-handoff-id",
-        installRoot: "/opt/openclaw",
-      });
+      const outcome = await runAdmittedUpdate(runId, log);
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(outcome).toMatchObject({
         status: "failed",
         result: {
@@ -399,11 +394,7 @@ describe("automatic campaign handoff failure", () => {
           failureFacts: matchingObject({ code: "Error" }),
         }),
       );
-      expect(cancel).toHaveBeenCalledExactlyOnceWith({
-        kind: "managed-update-handoff",
-        handoffId: "auto-handoff-id",
-        installRoot: "/opt/openclaw",
-      });
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(restart).not.toHaveBeenCalled();
       const run = expectDefined(listUpdateRuns()[0], "finished campaign run");
       expect(run).toMatchObject({

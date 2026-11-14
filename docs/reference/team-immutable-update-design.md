@@ -38,10 +38,10 @@ controller.
 
 Slice 2 adds a versioned, explicitly enabled adoption record and a native
 activation/recovery owner. It reuses the suspension drain, native systemd
-lifecycle, restart health, and config audit owners. Activation journals pointer
+lifecycle and restart health owners. Activation journals pointer
 intent before publication, verifies the selected physical generation and stable
-service definition, and accepts only candidate-authored additive config writes
-with matching audit evidence and unchanged policy. Startup inspection remains a
+service definition, and accepts additive startup config writes with unchanged
+policy and file ownership without requiring optional audit receipts. Startup inspection remains a
 bounded pending outcome. Successful verification retires the record; safe
 rollback preserves it. `openclaw update recover --root <installation-root>`
 reconciles uncertain effects and verifies an already healthy candidate or
@@ -355,7 +355,7 @@ Main already has size-derived inspection budgets. In
 is `300 seconds + ceil(40 × family bytes / 32 MiB) seconds`: four copy/comparison
 passes with tenfold slow-hardware headroom. `update-candidate-state.sizes.ts`
 includes SQLite sidecars; aggregate inspection sums serial families.
-`update-finalization-budget.ts` combines state, step, observed startup, and plugin
+`update-finalization-budget.ts` combines state, step, and plugin
 work. Defaults of 20-minute runner, 30-minute step, and 45-minute automatic step
 in `update-run-timeouts.ts` are distinct from the private 2,400-second deadline.
 

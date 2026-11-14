@@ -318,19 +318,12 @@ export async function createTranscriptSummaryUpdates(
     };
     lane.live = owner;
     lane.generation++;
-    try {
-      const initial = await params.store.readSummarySnapshot(
-        params.session,
-        params.config.maxUtterances,
-      );
-      if (!initial || stopped || lane.live !== owner) {
-        throw new TranscriptsSummaryChangedError();
-      }
-      return owner;
-    } catch (error) {
+    await Promise.resolve();
+    if (stopped || lane.live !== owner) {
       await owner.stop();
-      throw error;
+      throw new TranscriptsSummaryChangedError();
     }
+    return owner;
   } finally {
     lane.pending--;
     if (!lane.pending && !lane.live && lanes.get(key) === lane) {

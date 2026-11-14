@@ -5,10 +5,8 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  acquireSessionActorStorage,
-  captureSessionActorStorageOwner,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import {
@@ -70,7 +68,6 @@ export async function setSessionReactionAsync(
     }
   }
   assertCurrent();
-  const input = structuredClone(reaction);
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   // Resolve the logical key without consulting a custom store's native registry.
@@ -96,7 +93,7 @@ export async function setSessionReactionAsync(
               (worker) =>
                 worker.execute({
                   type: "session.reaction.set",
-                  input: { sessionKey: logical.sessionKey, params: input },
+                  input: { sessionKey: logical.sessionKey, params: reaction },
                 }),
             ),
           );

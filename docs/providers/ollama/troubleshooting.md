@@ -132,6 +132,9 @@ sidebarTitle: "Troubleshooting"
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
 
+    If tool calls still arrive as text, try [llmman](/providers/llmman#advanced-configuration)
+    with its explicit native Ollama configuration and a model that supports tool calling.
+
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
@@ -141,9 +144,11 @@ sidebarTitle: "Troubleshooting"
     keep their configured behavior. Direct exposure does not enable a denied
     tool, enable memory, or configure a web-search provider.
 
-    OpenClaw stops after three consecutive identical failures for the same tool
-    and arguments, including repeated unknown tool IDs. This protection is always
-    active; enabling `tools.loopDetection` is not required.
+    After three consecutive identical failures for the same tool and arguments,
+    OpenClaw blocks that exact action and gives the model one chance to replan.
+    An unchanged retry ends the turn without executing the call again. Unknown
+    tool IDs also count. This protection is always active; enabling
+    `tools.loopDetection` is not required.
 
     Ollama 0.40's generic parser can mistake a chat-template marker for an
     advertised tool name. Tool Search uses the collision-free `dispatch_action`
@@ -157,10 +162,12 @@ sidebarTitle: "Troubleshooting"
     OpenAI-compatible chat-completions route. Other providers are unchanged.
     Custom Ollama templates with different markers may need separate diagnosis.
 
-    Check the arguments in the recorded error. If the model repeatedly invents
-    tool names or cannot use the exposed schemas, switch to a model with native
-    tool calling and start a new turn. Changed errors and successful retries
-    reset the count. See [Tool-loop detection](/tools/loop-detection).
+    Check the named tool's inputs or service. If a failed action may have partly
+    applied, inspect its state before choosing another action. If the model
+    repeatedly invents tool names or cannot use exposed schemas, consider a model
+    with native tool calling. Changed errors and successes reset the streak but
+    do not release an already blocked action. A committed new user message
+    starts a fresh recovery allowance. See [Tool-loop detection](/tools/loop-detection).
 
   </Accordion>
 
@@ -173,7 +180,8 @@ sidebarTitle: "Troubleshooting"
     Try a stronger model, request less output, or split the task into smaller
     turns. Native Ollama requests also send the resolved model output cap as
     `num_predict`; lower the model's `maxTokens` if generation runs too long.
-    Discovered local models default to 8,192 output tokens. Ollama Cloud models
+    Discovered local models default to 16,384 output tokens, half of the
+    32,768-token local context cap (less for smaller windows). Ollama Cloud models
     use their documented output limits, or their context window when a separate
     output limit is unavailable. Authored `maxTokens` and `params.num_predict`
     override those defaults. Set `params: { num_predict: -1 }` on a model entry

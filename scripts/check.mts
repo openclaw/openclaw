@@ -18,6 +18,7 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "test timeout race ratchet", args: ["check:test-timeout-race-ratchet"], usesBase: true },
   { name: "first-party mock export ratchet", args: ["check:test-mock-exports"], usesBase: true },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },
+  { name: "AGENTS.md bootstrap size", args: ["check:agents-md-size"] },
   { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
   { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
   {

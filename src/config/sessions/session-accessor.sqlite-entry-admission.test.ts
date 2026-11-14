@@ -1,10 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as sqlite from "../../infra/node-sqlite.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
@@ -35,6 +40,7 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -57,7 +63,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 });
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
 let queued = vi.spyOn(writerQueue, "runQueuedStoreWrite");
 
 beforeEach(() => {
@@ -140,26 +145,16 @@ function closeCold(f: ReturnType<typeof fixture>) {
   revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
+function requireSchemaRepair(databasePath: string) {
+  // Missing uniqueness still requires native verification before updater admission.
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec("DROP INDEX idx_agent_transcript_message_idempotency");
+}
+
 function nativeChecks(databasePath: string) {
   let parentChecks = 0;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-    const database = realOpen(pathname, options);
-    if (pathname !== databasePath || options?.readOnly) {
-      return database;
-    }
-    const prepare = database.prepare.bind(database);
-    database.prepare = (sql) => {
-      const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
-        const all = statement.all.bind(statement);
-        statement.all = () => {
-          parentChecks += 1;
-          return all();
-        };
-      }
-      return statement;
-    };
-    return database;
+  observeNativeSqliteIntegrityChecks(databasePath, () => {
+    parentChecks += 1;
   });
   return () => parentChecks;
 }
@@ -380,6 +375,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
+  requireSchemaRepair(f.databasePath);
   const gate = holdWorkerValidation(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
@@ -450,6 +446,7 @@ it.each(["dispose", "physical replacement"] as const)(
   async (mode) => {
     const f = fixture();
     closeCold(f);
+    requireSchemaRepair(f.databasePath);
     const gate = holdWorkerValidation(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -467,7 +464,18 @@ it.each(["dispose", "physical replacement"] as const)(
         fs.renameSync(replacementPath, f.databasePath);
       }
       gate.release.resolve();
-      await expect(operation).rejects.toThrow(/closed|revoked|replaced|changed/);
+      // Native retirement can wrap the typed admission refusal before returning its result.
+      await expect(operation).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof Error &&
+          (/closed|revoked|replaced|changed/.test(error.message) ||
+            collectNestedErrorCandidates(error).some(
+              (cause) =>
+                cause instanceof Error &&
+                cause.name === "SqliteWorkerError" &&
+                extractErrorCode(cause) === "closed",
+            )),
+      );
       expect(update).not.toHaveBeenCalled();
       expect(committed).not.toHaveBeenCalled();
       expect(loadSessionEntry(f.scope)).not.toHaveProperty("label");
@@ -495,6 +503,7 @@ it.each(["cancel", "revoke"] as const)(
         f.scope,
         () => {
           closeCold(f);
+          requireSchemaRepair(f.databasePath);
           return { sessionId: "uncommitted" };
         },
         {
@@ -587,6 +596,6 @@ it.each(["relative native reopen"] as const)(
       label: "retained selected root",
     });
     expect(env.OPENCLAW_STATE_DIR).toBe("state");
-    expect(fs.readdirSync(successor, { recursive: true })).toEqual([]);
+    expect(listDirectoryTreeStrictSync(successor).map((entry) => entry.relativePath)).toEqual([]);
   },
 );

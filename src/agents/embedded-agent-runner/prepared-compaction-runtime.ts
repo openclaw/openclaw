@@ -11,7 +11,7 @@ import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
@@ -235,7 +235,6 @@ export async function buildPreparedCompactionRuntime(
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
-    const runAbortController = new AbortController();
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
         ? resolvedWorkspace
@@ -254,6 +253,11 @@ export async function buildPreparedCompactionRuntime(
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
+      messageThreadId: params.messageThreadId,
+      memberRoleIds: params.memberRoleIds,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -307,7 +311,6 @@ export async function buildPreparedCompactionRuntime(
             oneShotCliRun: params.oneShotCliRun,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
-            abortSignal: runAbortController.signal,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             modelHasVision: effectiveModel.input?.includes("image") ?? false,
             modelCompat: extractModelCompat(effectiveModel),
@@ -427,6 +430,7 @@ export async function buildPreparedCompactionRuntime(
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
       customInlineButtonHint,
+      blind: params.sessionEntry?.blindPrompt,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,
@@ -516,8 +520,8 @@ export async function buildPreparedCompactionRuntime(
     const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
     const preparedTtsPreferences =
       promptMode === "full" ? await prepareTtsPreferences() : undefined;
-    const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+    const buildSystemPromptText = async () => {
+      const builtSystemPrompt = await buildConfiguredAgentSystemPrompt({
         preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,
@@ -568,7 +572,6 @@ export async function buildPreparedCompactionRuntime(
       effectiveModel,
       runtimePlan,
       runtimePlanModelContext,
-      runAbortController,
       effectiveTools,
       allowedToolNames,
       buildSystemPromptText,

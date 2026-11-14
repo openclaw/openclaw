@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { mountSettings, settingsAck, settingsRow } from "./chat-pane-settings.test-support.ts";
@@ -59,12 +60,13 @@ it.each([
         change === "speed"
           ? switchChatSetting(panes[0]!.state, { kind: "fastMode", value: "on" })
           : switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
+      assertRows({ ...initial, ...pendingFields });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: initial.key,
         ...(change === "speed" ? { fastMode: true } : { thinkingLevel: "off" }),
       });
-      assertRows({ ...initial, ...pendingFields });
       let authoritative = initial;
       if (unrelated) {
         rows[1] = { ...other, updatedAt: 2, label: "Unrelated publication" };
@@ -166,7 +168,6 @@ it.each(["qualified", "global"] as const)(
         expect(selectedChatSessionRow(pane.state)).toMatchObject(target);
       }
       operation = switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
-      expect(patch.mock.calls[0]?.[1]).toMatchObject({ key: target.key, thinkingLevel: "off" });
       const assertOwned = (thinkingLevel: string) => {
         expect(selectedChatSessionRow(main.state)).toMatchObject(primary);
         expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(primary)]);
@@ -181,6 +182,8 @@ it.each(["qualified", "global"] as const)(
         }
       };
       assertOwned("off");
+      await withSessionMutationOperations(() => undefined);
+      expect(patch.mock.calls[0]?.[1]).toMatchObject({ key: target.key, thinkingLevel: "off" });
       emitGatewayEvent("sessions.changed", {
         sessionKey: primary.key,
         agentId: "main",
@@ -302,8 +305,9 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
         assertRows({ key: initial.key, sessionId: initial.sessionId, thinkingLevel });
       assertThinking("high");
       first = switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
-      expect(patch).toHaveBeenCalledOnce();
       assertThinking("off");
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
       second = switchChatSetting(panes[1]!.state, { kind: "thinkingLevel", value: "low" });
       void second.then(
         () => {
@@ -313,8 +317,8 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
           secondSettled = true;
         },
       );
-      expect(patch).toHaveBeenCalledOnce();
       assertThinking("low");
+      expect(patch).toHaveBeenCalledOnce();
       if (outcome === "both-rejected") {
         firstReply.reject(new Error("Synthetic first settings rejection"));
       } else {

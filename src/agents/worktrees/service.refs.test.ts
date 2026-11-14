@@ -1,23 +1,19 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getRefsFullClusterLcns } from "../../../test/helpers/refs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { git } from "./git-fixture.test-support.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
-const execFileAsync = promisify(execFile);
 const refsRoot = process.env.OPENCLAW_TEST_REFS_ROOT;
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 describe.skipIf(process.platform !== "win32" || !refsRoot)(
   "managed ReFS worktrees (requires OPENCLAW_TEST_REFS_ROOT)",

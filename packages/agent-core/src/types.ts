@@ -5,6 +5,7 @@ import type {
   Message,
   Model,
   ModelThinkingLevel,
+  PreparedSystemPrompt,
   SimpleStreamOptions,
   StreamFn as LlmStreamFn,
   TextContent,
@@ -12,6 +13,7 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import type { Static, TSchema } from "typebox";
+import type { ToolInterruptions } from "./tool-interruption.js";
 
 /**
  * Stream function used by the agent loop.
@@ -78,6 +80,8 @@ export interface ToolLoopIntervention {
   detector: string;
   count: number;
   reason: string;
+  /** Model feedback for a recoverable intervention, distinct from terminal user copy. */
+  recoveryMessage?: string;
 }
 
 /** Bucketed feedback for an admitted call, not a veto or recovery attempt. */
@@ -88,6 +92,8 @@ export interface ToolLoopWarning {
 }
 
 export interface InternalBeforeToolBatchContext {
+  /** Agent-owned safety scope, including quarantined calls. */
+  toolLoopRecoveryState: Readonly<ToolLoopRecoveryState>;
   assistantMessage: AssistantMessage;
   calls: InternalToolBatchCall[];
   context: AgentContext;
@@ -185,13 +191,17 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
-/** @internal Mutable loop safety evidence shared by prompt retries in one Agent run. */
+/** @internal Loop safety for one accepted user input, including continuation and context updates. */
 export type ToolLoopRecoveryState = {
   criticalToolLoopSeen: boolean;
   repeatedToolError?: { signature: string; count: number };
+  /** Unrelated progress does not release these actions; committed user input does. */
+  blockedToolActions?: Map<string, ToolLoopIntervention>;
 };
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
+  /** @internal Call-scoped cancellation owned by the active Agent. */
+  toolInterruptions?: ToolInterruptions;
   /** @internal Host-resolved small-model repetition policy. */
   repetitionGuard?: (model: Model) => boolean;
   model: Model;
@@ -524,12 +534,15 @@ export interface AgentTool<
    * If omitted, the default execution mode applies.
    */
   executionMode?: ToolExecutionMode;
+  /** Abort settles all call-owned effects before execute resolves or rejects. */
+  interruptible?: true | ((args: unknown) => boolean);
 }
 
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {
   /** System prompt included with the request. */
   systemPrompt: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   /** Transcript visible to the model. */
   messages: AgentMessage[];
   /** Tools available for this run. */

@@ -93,11 +93,8 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     });
     const root = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(options.env));
     unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closed) => {
-        if (!closed || closed.key === root.admission.identity.key) {
-          await close();
-        }
-      },
+      admission: root.admission,
+      close,
     });
     reader = retainSessionHistoryWorkerDatabase(options, maintenanceLane);
   } catch (error) {

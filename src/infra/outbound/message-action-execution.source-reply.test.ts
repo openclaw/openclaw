@@ -8,6 +8,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { runMessageAction } from "./message-action-runner.js";
+import { registerSlackTextPlugin as registerSlackFixture } from "./message-action-runner.test-support.js";
 
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -40,16 +41,9 @@ function registerTextPlugin(
 }
 
 function registerSlackTextPlugin(accountIds = ["default"]) {
-  const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "m1", chatId: "C123" });
-  registerTextPlugin(
-    "slack",
-    {
-      messaging: { normalizeTarget: (target) => target.replace(/^channel:/, "") },
-      outbound: { deliveryMode: "direct", sendText },
-      threading: { threadAddressing: "message" },
-    },
-    accountIds,
-  );
+  registerSlackFixture(accountIds, undefined, "direct", {
+    normalizeTarget: (target) => target.replace(/^channel:/, ""),
+  });
 }
 
 type ActionInput = Parameters<typeof runMessageAction>[0];

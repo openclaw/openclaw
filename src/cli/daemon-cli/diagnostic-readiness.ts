@@ -32,7 +32,9 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
   localPortOverride?: number;
   serviceMode?: "native" | "external";
   onProgress?: (phase: string) => void;
+  signal?: AbortSignal;
 }): Promise<GatewayRestartSnapshot | undefined> {
+  opts.signal?.throwIfAborted();
   if (!(await isImplicitLocalGatewayTarget(opts))) {
     return undefined;
   }
@@ -67,6 +69,7 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
   let nativeCommand: Promise<GatewayServiceCommandConfig | null> | undefined;
   let nativeServiceAbsent = false;
   const deadline = createGatewayRestartDeadline({
+    signal: opts.signal,
     timeoutMs: Math.max(
       0,
       Math.min(
@@ -86,6 +89,7 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
           probeContext,
           probeHosts: LOOPBACK_PORT_PROBE_HOSTS,
           requirePluginHealth: false,
+          allowUnattributedDiagnosticProbe: true,
           waitForMissingService: false,
           onProgress: opts.onProgress,
           service: {

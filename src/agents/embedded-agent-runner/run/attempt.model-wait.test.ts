@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import {
   clearAgentRunContext,
@@ -13,60 +13,44 @@ import { makeAssistantMessageFixture } from "../../test-helpers/assistant-messag
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
-const cleanups: Array<() => void> = [];
+const runId = "model-wait-test";
+const model = makeProviderModelFixture({ id: "m", provider: "ollama", api: "ollama", baseUrl: "" });
+const starting = { phase: "starting_model" };
+const waiting = (reason: "response" | "slot") => ({ phase: "waiting_for_model", reason });
+let unsubscribe: (() => void) | undefined;
 afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
-  }
+  unsubscribe?.();
+  clearAgentRunContext(runId);
 });
 
 function harness() {
-  registerAgentRunContext("model-wait-test", {});
-  cleanups.push(() => clearAgentRunContext("model-wait-test"));
+  registerAgentRunContext(runId, {});
   const statuses: Array<Record<string, unknown>> = [];
   const delivered: Array<Record<string, unknown>> = [];
-  cleanups.push(
-    onAgentEvent((event) => {
-      if (event.runId === "model-wait-test" && event.stream === "run_status") {
-        statuses.push(event.data);
-      }
-    }),
-  );
-  const calls: Array<{
-    stream: ReturnType<typeof createAssistantMessageEventStream>;
-    report: NonNullable<NonNullable<Parameters<StreamFn>[2]>["onProviderWait"]>;
-  }> = [];
-  const source: StreamFn = (_model, _context, options) => {
-    const stream = createAssistantMessageEventStream();
-    calls.push({ stream, report: (reason) => options?.onProviderWait?.(reason) });
-    return stream;
-  };
+  unsubscribe = onAgentEvent((event) => {
+    if (event.runId === runId && event.stream === "run_status") {
+      statuses.push(event.data);
+    }
+  });
+  const source = vi.fn<StreamFn>();
   let callId = 0;
   const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(source, {
-    runId: "model-wait-test",
+    runId,
     provider: "ollama",
-    model: "local-model",
+    model: model.id,
     trace: createDiagnosticTraceContext(),
     nextCallId: () => `call-${++callId}`,
-    onAgentEvent: (event) => {
-      delivered.push(event.data);
-    },
+    onAgentEvent: ({ data }) => void delivered.push(data),
   });
   return {
     statuses,
     delivered,
-    calls,
     async start(signal?: AbortSignal) {
-      return await wrapped(
-        makeProviderModelFixture({
-          id: "local-model",
-          provider: "ollama",
-          api: "ollama",
-          baseUrl: "http://127.0.0.1:11434",
-        }),
-        { messages: [] },
-        { signal },
-      );
+      const stream = createAssistantMessageEventStream();
+      source.mockReturnValueOnce(stream);
+      const observed = await wrapped(model, { messages: [] }, { signal });
+      const options = expectDefined(source.mock.calls.at(-1), "started call")[2];
+      return { stream, observed, report: expectDefined(options?.onProviderWait, "wait reporter") };
     },
   };
 }
@@ -74,59 +58,41 @@ function harness() {
 it("clears wait on the first stream event and admits another wait on a later call", async () => {
   const h = harness();
   const first = await h.start();
-  const firstCall = expectDefined(h.calls[0], "first call");
-  firstCall.report("response");
-  expect(getAgentRunContext("model-wait-test")?.localModelWait).toEqual({ requestId: "call-1" });
-  firstCall.report("response");
-  firstCall.stream.push({ type: "start", partial: makeAssistantMessageFixture() });
-  const iterator = first[Symbol.asyncIterator]();
-  await iterator.next();
-  expect(getAgentRunContext("model-wait-test")?.localModelWait).toBeUndefined();
-  firstCall.report("slot");
-  firstCall.stream.end(makeAssistantMessageFixture());
-  await first.result();
+  first.report("response");
+  expect(getAgentRunContext(runId)?.localModelWait).toEqual({ requestId: "call-1" });
+  first.report("response");
+  first.stream.push({ type: "start", partial: makeAssistantMessageFixture() });
+  await first.observed[Symbol.asyncIterator]().next();
+  expect(getAgentRunContext(runId)?.localModelWait).toBeUndefined();
+  first.report("slot");
+  first.stream.end(makeAssistantMessageFixture());
+  await first.observed.result();
 
   const second = await h.start();
-  const secondCall = expectDefined(h.calls[1], "second call");
-  secondCall.report("slot");
-  firstCall.report("response");
-  secondCall.stream.end(makeAssistantMessageFixture());
-  await second.result();
+  second.report("slot");
+  first.report("response");
+  second.stream.end(makeAssistantMessageFixture());
+  await second.observed.result();
   await Promise.resolve();
 
-  expect(h.statuses).toEqual([
-    { phase: "waiting_for_model", reason: "response" },
-    { phase: "starting_model" },
-    { phase: "waiting_for_model", reason: "slot" },
-    { phase: "starting_model" },
-  ]);
+  expect(h.statuses).toEqual([waiting("response"), starting, waiting("slot"), starting]);
   expect(h.delivered).toEqual(h.statuses);
 });
 
-it.each(["abort", "failure", "completion"] as const)(
-  "clears a wait on %s without needing another stream event",
-  async (termination) => {
-    const h = harness();
-    const abort = new AbortController();
-    const result = await h.start(abort.signal);
-    const call = expectDefined(h.calls[0], "held call");
-    call.report("response");
-    if (termination === "abort") {
-      abort.abort();
-      expect(h.statuses.at(-1)).toEqual({ phase: "starting_model" });
-    }
-    call.stream.end(
-      makeAssistantMessageFixture({
-        stopReason: termination === "completion" ? "stop" : "error",
-        ...(termination === "completion" ? {} : { errorMessage: "synthetic failure" }),
-      }),
-    );
-    await result.result();
-    expect(getAgentRunContext("model-wait-test")?.localModelWait).toBeUndefined();
-    call.report("slot");
-    expect(h.statuses).toEqual([
-      { phase: "waiting_for_model", reason: "response" },
-      { phase: "starting_model" },
-    ]);
-  },
-);
+it.each(["abort", "failure", "completion"] as const)("clears %s waits", async (termination) => {
+  const h = harness();
+  const abort = new AbortController();
+  const call = await h.start(abort.signal);
+  call.report("response");
+  if (termination === "abort") {
+    abort.abort();
+    expect(h.statuses.at(-1)).toEqual(starting);
+  }
+  call.stream.end(
+    makeAssistantMessageFixture({ stopReason: termination === "completion" ? "stop" : "error" }),
+  );
+  await call.observed.result();
+  expect(getAgentRunContext(runId)?.localModelWait).toBeUndefined();
+  call.report("slot");
+  expect(h.statuses).toEqual([waiting("response"), starting]);
+});

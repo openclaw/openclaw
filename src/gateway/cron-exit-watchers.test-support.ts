@@ -1,102 +1,63 @@
 import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
-import type { ProcessScopeCleanupPolicy } from "../process/supervisor/types.js";
+import type { ProcessScopeCleanupPolicy, RunExit } from "../process/supervisor/types.js";
+import { runExit } from "./server-cron.process.test-support.js";
 
-type Deferred = {
-  resolve: (exit: { exitCode: number | null; reason: string }) => void;
-  reject: (err: unknown) => void;
-};
+type Exit = Pick<RunExit, "exitCode" | "reason">;
 
-/**
- * Minimal fake ProcessSupervisor: each spawn returns a run whose wait() is
- * controlled by the test, so we can deterministically drive "command exited".
- */
 export function makeFakeSupervisor(
   opts: { deferSpawn?: boolean; cleanup?: () => Promise<void> } = {},
 ) {
   const runs: {
     scopeKey?: string;
     runId: string;
-    deferred: Deferred;
-    waitPromise: Promise<unknown>;
-    cancelled: boolean;
+    deferred: ReturnType<typeof createDeferred<Exit>>;
   }[] = [];
-  const cancelledScopes: string[] = [];
+  const cancelled: string[] = [];
   const runCancels: string[] = [];
-  let counter = 0;
-  let releaseSpawn: (() => void) | undefined;
-  const spawnGate = opts.deferSpawn
-    ? new Promise<void>((res) => {
-        releaseSpawn = res;
-      })
-    : Promise.resolve();
+  const spawnGate = createDeferred();
+  if (!opts.deferSpawn) {
+    spawnGate.resolve();
+  }
   const supervisor = {
     acquireScopeCleanup: vi.fn(
       (scopeKey: string, _options: { processTree: ProcessScopeCleanupPolicy }) => {
         let closing: Promise<void> | undefined;
-        return () => {
-          if (!closing) {
-            closing = opts.cleanup
-              ? opts.cleanup()
-              : Promise.allSettled(
-                  runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.waitPromise),
-                ).then(() => undefined);
-          }
-          return closing;
-        };
+        return () =>
+          (closing ??= opts.cleanup
+            ? opts.cleanup()
+            : Promise.allSettled(
+                runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.deferred.promise),
+              ).then(() => undefined));
       },
     ),
     spawn: vi.fn(async (input: { scopeKey?: string }) => {
-      await spawnGate;
-      counter += 1;
-      const runId = `run-${counter}`;
-      const {
-        promise: waitPromise,
-        resolve: resolveWait,
-        reject: rejectWait,
-      } = createDeferred<{ exitCode: number | null; reason: string }>();
-      // Pre-attach a no-op catch so a test-driven rejection never escapes as an
-      // unhandled rejection if the run loses ownership before it awaits wait().
-      waitPromise.catch(() => {});
-      const entry = {
-        scopeKey: input.scopeKey,
-        runId,
-        deferred: { resolve: resolveWait, reject: rejectWait },
-        waitPromise,
-        cancelled: false,
-      };
-      runs.push(entry);
+      await spawnGate.promise;
+      const runId = `run-${runs.length + 1}`;
+      const deferred = createDeferred<Exit>();
+      // Ownership may be lost before wait(); keep controlled rejection handled.
+      deferred.promise.catch(() => {});
+      runs.push({ scopeKey: input.scopeKey, runId, deferred });
       return {
         runId,
         startedAtMs: 0,
-        wait: () =>
-          waitPromise.then((e) => ({
-            ...e,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          })),
+        wait: () => deferred.promise.then(runExit),
         cancel: () => {
-          entry.cancelled = true;
           runCancels.push(runId);
         },
       };
     }),
     cancelScope: vi.fn((scopeKey: string) => {
-      cancelledScopes.push(scopeKey);
+      cancelled.push(scopeKey);
     }),
   };
   return {
     supervisor,
     runs,
-    cancelled: cancelledScopes,
-    cancelledScopes,
+    cancelled,
     runCancels,
-    releaseSpawn: () => releaseSpawn?.(),
+    releaseSpawn: () => spawnGate.resolve(),
   };
 }
 

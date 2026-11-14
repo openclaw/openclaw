@@ -125,7 +125,7 @@ export function fingerprintConfigSnapshotAuthoredConfig(
 ): unknown {
   const key = loadConfigJournalFingerprintKey(params);
   // This slot is a diff baseline, not a data store; fingerprint every leaf.
-  return fingerprintConfigSnapshotLeaves(structuredClone(value), key);
+  return fingerprintConfigSnapshotLeaves(value, key);
 }
 
 function resolveConfigAuditStoreContext(
@@ -180,7 +180,7 @@ export async function readLatestConfigSnapshotAuditRecordAsync(
     );
     context.admission.assertCurrent();
     assertCurrent?.();
-    return result?.ok && result.type === "config.snapshot.read" ? result.snapshot : null;
+    return result?.snapshot ?? null;
   } catch {
     assertCurrent?.();
     return null;

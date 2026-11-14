@@ -5,6 +5,7 @@ import {
   createBaseWebSearchProviderContractFields,
   type CreateWebSearchProviderContractFieldsOptions,
 } from "./provider-web-search-contract-fields.js";
+export { WEB_SEARCH_QUERY_COUNT_PROPERTIES } from "./provider-web-search-schema.js";
 export {
   getScopedCredentialValue,
   resolveProviderWebSearchPluginConfig,

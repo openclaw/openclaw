@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { McpCatalogTool } from "../agents/agent-bundle-mcp-types.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { McpCatalogTool } from "../agents/agent-bundle-mcp-catalog.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { prepareMcpAppExtensionRuntime } from "./mcp-app-extension-runtime.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -53,10 +54,6 @@ vi.mock("../agents/harness/session-preparation.js", () => ({
 vi.mock("../agents/mcp-codex-tool-approval.js", () => ({
   requiresMcpCodexToolApproval: mocks.requiresApproval,
   resolveProjectedMcpCodexToolApprovalMode: () => undefined,
-}));
-vi.mock("../agents/mcp-tool-filter.js", () => ({
-  isMcpToolAllowed: () => true,
-  normalizeMcpToolFilter: () => undefined,
 }));
 vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
   getGatewayPluginMetadataSnapshot: () => undefined,
@@ -128,6 +125,91 @@ beforeEach(() => {
   });
 });
 describe("cold App request admission", () => {
+  it("joins an admitted late preparation before disposing setup, source, access and lease", async () => {
+    const started = createDeferred();
+    const finishSetup = createDeferred();
+    const joinLease = vi.fn(async () => {});
+    const lease = { runtime: { joinCleanup: joinLease }, releaseLease: vi.fn() };
+    mocks.prepare.mockImplementation(async () => {
+      started.resolve();
+      await finishSetup.promise;
+      return { preparation: { version: 1, purpose: "mcp-app" }, dispose: mocks.dispose };
+    });
+    mocks.native.mockImplementation(async ({ prepareSession }) => {
+      void prepareSession().catch(() => {});
+      await started.promise;
+      return lease;
+    });
+    let settled = false;
+    const pending = prepareMcpAppExtensionRuntime(options()).finally(() => {
+      settled = true;
+    });
+    const rejected = expect(pending).rejects.toThrow("session preparation is closed");
+    await started.promise;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(mocks.dispose).not.toHaveBeenCalled();
+    expect(mocks.releaseSource).not.toHaveBeenCalled();
+    expect(mocks.releaseAccess).not.toHaveBeenCalled();
+    finishSetup.resolve();
+    await rejected;
+    expect(mocks.dispose).toHaveBeenCalledOnce();
+    expect(mocks.releaseSource).toHaveBeenCalledOnce();
+    expect(mocks.releaseAccess).toHaveBeenCalledOnce();
+    expect(mocks.release).toHaveBeenCalledWith(lease);
+    expect(joinLease).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "joins failed setup cleanup and releases every sibling owner (acquireFailed=%s)",
+    async (acquireFailed) => {
+      const original = new Error("App acquisition failed");
+      const cleanup = new Error("Reader cleanup uncertain");
+      const finishCleanup = createDeferred();
+      const startedCleanup = createDeferred();
+      const joinLease = vi.fn(async () => {});
+      const lease = { runtime: { joinCleanup: joinLease }, releaseLease: vi.fn() };
+      mocks.dispose.mockImplementation(async () => {
+        startedCleanup.resolve();
+        await finishCleanup.promise;
+        throw cleanup;
+      });
+      mocks.native.mockImplementation(async ({ prepareSession }) => {
+        await prepareSession();
+        if (acquireFailed) {
+          throw original;
+        }
+        return lease;
+      });
+      const pending = prepareMcpAppExtensionRuntime(options());
+      const rejected = acquireFailed
+        ? expect(pending).rejects.toMatchObject({ errors: [original, cleanup] })
+        : expect(pending).rejects.toBe(cleanup);
+      await startedCleanup.promise;
+      expect(mocks.releaseSource).not.toHaveBeenCalled();
+      expect(mocks.releaseAccess).not.toHaveBeenCalled();
+      finishCleanup.resolve();
+      await rejected;
+      expect(mocks.releaseSource).toHaveBeenCalledOnce();
+      expect(mocks.releaseAccess).toHaveBeenCalledOnce();
+      expect(mocks.release).toHaveBeenCalledTimes(acquireFailed ? 0 : 1);
+      expect(joinLease).toHaveBeenCalledTimes(acquireFailed ? 0 : 1);
+    },
+  );
+
+  it("refuses a retained preparation callback after acquisition has closed", async () => {
+    let retainedPrepare: (() => Promise<unknown>) | undefined;
+    mocks.native.mockImplementation(async ({ prepareSession }) => {
+      retainedPrepare = prepareSession;
+      await prepareSession();
+      return { runtime: { getCatalog: mocks.catalog }, releaseLease: vi.fn() };
+    });
+    const active = await prepareMcpAppExtensionRuntime(options());
+    expect(() => retainedPrepare!()).toThrow("session preparation is closed");
+    expect(mocks.prepare).toHaveBeenCalledOnce();
+    await active.dispose();
+  });
+
   it.each(["launch", "view"])("keeps live authority through %s tool approval", async (kind) => {
     const tool: McpCatalogTool = {
       serverName: "demo",
@@ -171,19 +253,11 @@ describe("cold App request admission", () => {
   });
   it("selects the current harness before any historical model turn and admits its native setup", async () => {
     const active = await prepareMcpAppExtensionRuntime(options());
-    expect(mocks.selection).toHaveBeenCalledWith(expect.objectContaining({ sessionEntry: entry }));
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ownerPluginId: "codex",
-        sourceAuthority: { kind: "fixture" },
-        input: expect.objectContaining({
-          senderId: "alice",
-          sessionId: "session",
-          workspaceDir: "/workspace",
-          abortSignal: accessController.signal,
-        }),
-      }),
-    );
+    expect(mocks.prepare.mock.calls[0]?.[0]).toMatchObject({
+      ownerPluginId: "codex",
+      sourceAuthority: { kind: "fixture" },
+      input: { senderId: "alice", sessionId: "session" },
+    });
     expect(mocks.native).toHaveBeenCalledWith(
       expect.objectContaining({ appRequester: { kind: "gateway-profile", profileId: "alice" } }),
     );
@@ -207,21 +281,20 @@ describe("cold App request admission", () => {
     expect(mocks.releaseAccess).toHaveBeenCalledOnce();
     expect(mocks.releaseSource).toHaveBeenCalledOnce();
   });
-  it.each([{ agentHarnessId: "previous-harness" }])(
-    "keeps a retained App valid after ordinary turn observations %j",
-    async (observations) => {
-      const active = await prepareMcpAppExtensionRuntime(options());
-      // Use a fresh view borrow, independent of the completed setup lifetime.
-      accessController = new AbortController();
-      const view = active.retainViewAuthority([]);
-      entry = { ...entry, ...observations };
-      expect(active.assertCurrent).not.toThrow();
-      expect(view.assertCurrent).not.toThrow();
-      expect(mocks.native).toHaveBeenCalledOnce();
-      view.release();
-      await active.dispose();
-    },
-  );
+  it("keeps a retained App valid after ordinary turn observations", async () => {
+    const active = await prepareMcpAppExtensionRuntime(options());
+    // Use a fresh view borrow, independent of the completed setup lifetime.
+    accessController = new AbortController();
+    const view = active.retainViewAuthority([]);
+    entry = { ...entry, agentHarnessId: "previous-harness" };
+    expect(active.assertCurrent).not.toThrow();
+    expect(view.assertCurrent).not.toThrow();
+    expect(mocks.native).toHaveBeenCalledOnce();
+    accessController.abort(new Error("view revoked"));
+    expect(view.assertCurrent).toThrow("view revoked");
+    view.release();
+    await active.dispose();
+  });
   it.each([{ authProfileOverride: "other-profile" }, { sandboxMode: "off" as const }])(
     "continues to revoke changed authority %j",
     async (change) => {

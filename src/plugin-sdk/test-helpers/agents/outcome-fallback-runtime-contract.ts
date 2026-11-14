@@ -34,18 +34,3 @@ export function createContractRunResult(
     },
   };
 }
-
-export function createContractFallbackConfig() {
-  return {
-    agents: {
-      defaults: {
-        model: {
-          primary: `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel}`,
-          fallbacks: [
-            `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
-          ],
-        },
-      },
-    },
-  } as const;
-}

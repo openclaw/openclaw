@@ -171,16 +171,15 @@ it.each(["NONE", "INCREMENTAL"] as const)(
       expect(packed.dbSizeAfterBytes).toBeLessThan(cleanup.dbSizeAfterBytes);
       expect(compacted.totals.reclaimedBytes).toBeGreaterThan(0);
     }
-    {
-      using after = nodeSqlite.openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-      const afterSql = sessionSqlFixture(after);
-      expect(afterSql`PRAGMA auto_vacuum`.get()).toEqual({ auto_vacuum: 2 });
-      expect(afterSql`PRAGMA integrity_check`.get()).toEqual({ integrity_check: "ok" });
-      expect(afterSql`PRAGMA foreign_key_check`.all()).toEqual([]);
-      expect(afterSql`SELECT id, body FROM cleanup_payload ORDER BY id`.all()).toEqual(
-        Array.from({ length: 1000 }, (_, id) => ({ id, body: "keep" })),
-      );
-    }
+    expectDatabase(sqlitePath, {
+      "PRAGMA auto_vacuum": [{ auto_vacuum: 2 }],
+      "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+      "PRAGMA foreign_key_check": [],
+      "SELECT id, body FROM cleanup_payload ORDER BY id": Array.from({ length: 1000 }, (_, id) => ({
+        id,
+        body: "keep",
+      })),
+    });
     expect(readQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
     if (process.platform !== "win32") {
       expect(fs.statSync(sqlitePath).mode & 0o777).toBe(0o600);
@@ -443,19 +442,15 @@ it("imports zero legacy records without parsing canonical entry JSON", async () 
   agentSql`UPDATE session_nodes SET entry_valid = 1`.run();
   const sqlitePath = database.path;
   closeAgentHandles();
-  const parseSpy = vi.spyOn(JSON, "parse");
-  try {
-    const report = await runDoctorSessionSqlite({ env, mode: "import", store: storePath });
-    expect(report.totals).toMatchObject({
-      importedEntries: 0,
-      issues: 0,
-      legacyEntries: 0,
-      sqliteEntries: 1,
-    });
-    expect(parseSpy.mock.calls.some(([value]) => value === entryJson)).toBe(false);
-  } finally {
-    parseSpy.mockRestore();
-  }
+  using parseSpy = vi.spyOn(JSON, "parse");
+  const report = await runDoctorSessionSqlite({ env, mode: "import", store: storePath });
+  expect(report.totals).toMatchObject({
+    importedEntries: 0,
+    issues: 0,
+    legacyEntries: 0,
+    sqliteEntries: 1,
+  });
+  expect(parseSpy.mock.calls.some(([value]) => value === entryJson)).toBe(false);
   expectDatabase(sqlitePath, {
     "SELECT entry_json FROM session_nodes": [{ entry_json: entryJson }],
   });

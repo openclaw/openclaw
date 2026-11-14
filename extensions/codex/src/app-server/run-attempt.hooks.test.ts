@@ -14,10 +14,12 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createMockPluginRegistry,
   onTrustedInternalDiagnosticEvent,
+  withAdmittedSessionTurnForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import type { CodexAppServerClient } from "./client.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   assistantMessage,
@@ -27,14 +29,88 @@ import {
   createStartedThreadHarness,
   fastWait,
   mockCall,
+  queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
-  turnStartResult,
 } from "./run-attempt-test-harness.js";
 
 type ReplyBackend = Parameters<
-  NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
+  Parameters<Parameters<typeof withAdmittedSessionTurnForTest>[1]>[0]["attachBackend"]
 >[0];
+
+const complete = (harness: ReturnType<typeof createStartedThreadHarness>) =>
+  harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+const agentMessage = (id: string, text: string, extra: Record<string, string>) =>
+  itemNotification("item/completed", { id, type: "agentMessage", text, ...extra });
+const steeringRequests = (harness: ReturnType<typeof createStartedThreadHarness>) =>
+  harness.requests.filter(({ method }) => method === "turn/steer");
+
+async function startSteeringAttempt(
+  terminalReplyExpectation: ReturnType<typeof createTestParams>["terminalReplyExpectation"],
+) {
+  const params = { ...createTestParams(), terminalReplyExpectation, timeoutMs: 60_000 };
+  const harness = createStartedThreadHarness(async (method, _request, requestOptions) => {
+    if (method === "turn/steer") {
+      // Assert live transport authority at the physical write.
+      (requestOptions as Parameters<CodexAppServerClient["request"]>[2])?.assertCurrent?.();
+      return { turnId: "turn-1" };
+    }
+    return undefined;
+  });
+  const observed = await runWithObservedReplyTurn(params);
+  await observed.run.waitForTurnAccepted();
+  expect(observed.replyBackend()?.terminalReplyExpectation).toBe(terminalReplyExpectation);
+  return { params, harness, ...observed };
+}
+
+async function expectConsumed(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  accepted: ReturnType<typeof vi.fn>,
+  consumed: ReturnType<typeof vi.fn>,
+  text: string,
+  rejectUnrelated = false,
+) {
+  await vi.waitFor(() => expect(steeringRequests(harness)).toHaveLength(1), fastWait);
+  expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+  expect(consumed).not.toHaveBeenCalled();
+  const steer = steeringRequests(harness)[0];
+  expect(steer?.params).toMatchObject({
+    threadId: "thread-1",
+    expectedTurnId: "turn-1",
+    input: [{ type: "text", text }],
+  });
+  const clientId = (steer?.params as { clientUserMessageId?: string } | undefined)
+    ?.clientUserMessageId;
+  if (!clientId) {
+    throw new Error("Expected native input correlation identity");
+  }
+  const receipt = (id: string) =>
+    itemNotification("item/completed", {
+      id: `receipt-${id}`,
+      type: "userMessage",
+      clientId: id,
+    });
+  if (rejectUnrelated) {
+    await harness.notify(receipt(`${clientId}:unrelated`));
+    expect(consumed).not.toHaveBeenCalled();
+  }
+  await harness.notify(receipt(clientId));
+  await vi.waitFor(() => expect(consumed).toHaveBeenCalledExactlyOnceWith(), fastWait);
+  expect(steeringRequests(harness)).toHaveLength(1);
+}
+
+async function finishSteeringAttempt(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  run: ReturnType<typeof runCodexAppServerAttempt>,
+  turnSettled: Promise<unknown>,
+  text: string,
+) {
+  await harness.notify(agentMessage("final", text, { phase: "final_answer" }));
+  await complete(harness);
+  const result = await run;
+  await turnSettled;
+  return result;
+}
 
 function readTurnStartText(harness: ReturnType<typeof createStartedThreadHarness>): string {
   const request = harness.requests.find((entry) => entry.method === "turn/start");
@@ -47,6 +123,40 @@ function readTurnStartText(harness: ReturnType<typeof createStartedThreadHarness
   expect(text).toContain("[assistant]\nexisting context");
   expect(text).toMatch(/<\/conversation_context>\n\nCurrent user request:\nhello$/);
   return text;
+}
+
+// Runs the attempt inside its real controller turn, as a Gateway run would, and
+// observes how Codex uses that operation. The turn completes after the attempt.
+async function runWithObservedReplyTurn(params: ReturnType<typeof createParams>) {
+  const started = createDeferred<{
+    run: ReturnType<typeof runCodexAppServerAttempt>;
+    attachBackend: ReturnType<typeof vi.fn>;
+    detachBackend: ReturnType<typeof vi.fn>;
+    freezeAbort: ReturnType<typeof vi.fn>;
+  }>();
+  const turnSettled = withAdmittedSessionTurnForTest(
+    { sessionKey: params.sessionKey!, sessionId: params.sessionId },
+    async (operation) => {
+      const observed = {
+        attachBackend: vi.spyOn(operation, "attachBackend"),
+        detachBackend: vi.spyOn(operation, "detachBackend"),
+        freezeAbort: vi.spyOn(operation, "freezeAbort"),
+        run: runCodexAppServerAttempt(params),
+      };
+      started.resolve(observed);
+      await observed.run.catch(() => undefined);
+    },
+  );
+  void turnSettled.catch(started.reject);
+  const observed = await started.promise;
+  return {
+    ...observed,
+    turnSettled,
+    replyBackend: () =>
+      observed.attachBackend.mock.calls.at(-1)?.[0] as
+        | Pick<ReplyBackend, "cancel" | "isAbortable" | "terminalReplyExpectation">
+        | undefined,
+  };
 }
 
 function holdAgentEnd() {
@@ -67,29 +177,23 @@ function diagnosticParams(captureContent = false) {
   return params;
 }
 
-function heldAttempt(overrides: Partial<ReturnType<typeof createTestParams>> = {}) {
+async function heldAttempt(overrides: Partial<ReturnType<typeof createTestParams>> = {}) {
   const hooks = holdAgentEnd();
   const onAttemptAbort = vi.fn();
   const onAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
   const params = Object.assign(createTestParams(), { onAttemptAbort, onAgentEvent }, overrides);
-  let backend: ReplyBackend | undefined;
-  const freezeAbort = vi.fn(),
-    detachBackend = vi.fn();
-  params.replyOperation = {
-    attachBackend: (value: ReplyBackend) => {
-      backend = value;
-    },
-    detachBackend,
-    freezeAbort,
-  } as unknown as NonNullable<typeof params.replyOperation>;
   const harness = createStartedThreadHarness();
+  const { run, turnSettled, replyBackend, freezeAbort, detachBackend } =
+    await runWithObservedReplyTurn(params);
   return {
     ...hooks,
-    backend: { read: () => backend, freezeAbort, detachBackend },
+    backend: { read: replyBackend, freezeAbort, detachBackend },
     harness,
+    params,
     onAttemptAbort,
     onAgentEvent,
-    run: runCodexAppServerAttempt(params),
+    run,
+    turnSettled,
   };
 }
 
@@ -113,6 +217,76 @@ function captureDiagnostics(publicOnly = false) {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
+  it.each([
+    { terminalReplyExpectation: "required", control: false },
+    { terminalReplyExpectation: "required", control: true },
+    { terminalReplyExpectation: "optional", control: false },
+    { terminalReplyExpectation: "optional", control: true },
+    { terminalReplyExpectation: "result-required", control: false },
+    { terminalReplyExpectation: "result-required", control: true },
+    { terminalReplyExpectation: undefined, control: false },
+    { terminalReplyExpectation: undefined, control: true },
+  ] as const)(
+    "admits $terminalReplyExpectation input with control=$control",
+    async ({ terminalReplyExpectation, control }) => {
+      const { params, harness, run, turnSettled, attachBackend } =
+        await startSteeringAttempt(terminalReplyExpectation);
+      let result: Awaited<typeof run>;
+      const text = control ? "MATCHED_EXPECTATION" : "ORDINARY_HUMAN";
+      try {
+        const accepted = vi.fn<(value: boolean) => void>();
+        const consumed = vi.fn();
+        const options = {
+          debounceMs: 0,
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+          ...(control ? { allowPendingUserInputAnswer: false as const } : {}),
+        };
+        const matchingExpectation = terminalReplyExpectation ?? "required";
+        if (control) {
+          expect(attachBackend).toHaveBeenCalledOnce();
+          expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+          expect(params.toolAuthorityFingerprint).toEqual(expect.any(String));
+          expect(
+            queueActiveRunMessageForTest(params.sessionId, "REJECTED_EXPECTATION", {
+              ...options,
+              terminalReplyExpectation:
+                matchingExpectation === "optional" ? "required" : "optional",
+            }),
+          ).toBe(false);
+          expect(steeringRequests(harness)).toEqual([]);
+        }
+        // Human input strengthens the reply obligation; exact control input does not.
+        const eligible = control || terminalReplyExpectation !== "optional";
+        expect(
+          queueActiveRunMessageForTest(params.sessionId, text, {
+            ...options,
+            terminalReplyExpectation: control ? matchingExpectation : "required",
+            waitForTranscriptCommit: true,
+            onQueueAccepted: accepted,
+            onQueueSettled: consumed,
+          }),
+        ).toBe(eligible);
+        if (eligible) {
+          await expectConsumed(harness, accepted, consumed, text, control);
+        } else {
+          expect(steeringRequests(harness)).toEqual([]);
+          expect(accepted).not.toHaveBeenCalled();
+          expect(consumed).not.toHaveBeenCalled();
+        }
+      } finally {
+        result = await finishSteeringAttempt(
+          harness,
+          run,
+          turnSettled,
+          "SYNTHETIC_EXPECTATION_COMPLETE",
+        );
+      }
+      expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
+      expect(result.assistantTexts).toContain("SYNTHETIC_EXPECTATION_COMPLETE");
+    },
+  );
+
   it("observes each provider response once without changing whole-turn accounting", async () => {
     const { events, find } = captureDiagnostics();
     const harness = createStartedThreadHarness();
@@ -143,7 +317,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const { cacheWriteInputTokens: _cacheWrite, ...withoutCacheWrite } = usage;
     await harness.notify(response(3, withoutCacheWrite));
     await harness.notify(response(4, null));
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await complete(harness);
     expect((await run).attemptUsage).toMatchObject({
       input: 20,
       cacheRead: 9,
@@ -184,17 +358,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
     );
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        return {
-          turn: {
-            ...turnStartResult("turn-1", "completed").turn,
-            items: [{ id: "msg-1", type: "agentMessage", text: "hello back", status: "completed" }],
-          },
-        };
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness();
     const params = diagnosticParams(true);
     const sessionManager = openFileBackedSessionManagerForTest(params.sessionFile, {
       sessionId: "diagnostic-session-1",
@@ -205,7 +369,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     params.sessionKey = "agent:diagnostic:diagnostic-session-1";
     params.runId = "diagnostic-run-1";
     const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
+    await harness.notify(agentMessage("msg-1", "hello back", { status: "completed" }));
+    await complete(harness);
     await run;
     await vi.waitFor(() => expect(find("model.call.completed")).toBeDefined(), fastWait);
 
@@ -258,22 +424,16 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   });
 
   it("freezes native terminal success locally before agent_end", async () => {
-    const { agentEnd, releaseAgentEnd, harness, run, backend, onAgentEvent } = heldAttempt();
+    const { agentEnd, releaseAgentEnd, harness, run, turnSettled, backend, onAgentEvent } =
+      await heldAttempt();
     let settled = false;
     void run.then(() => {
       settled = true;
     });
 
     await harness.waitForMethod("turn/start");
-    await harness.notify(
-      itemNotification("item/completed", {
-        id: "msg-final-1",
-        type: "agentMessage",
-        text: "Done.",
-        status: "completed",
-      }),
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await harness.notify(agentMessage("msg-final-1", "Done.", { status: "completed" }));
+    await complete(harness);
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
     expect(settled).toBe(false);
 
@@ -291,36 +451,131 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(settled).toBe(true);
     expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({ success: true });
     expect(backend.freezeAbort).not.toHaveBeenCalled();
-    const terminalLifecycleEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter(
-        (event) =>
-          event.stream === "lifecycle" &&
-          (event.data.phase === "end" || event.data.phase === "error"),
-      );
+    const terminalLifecycleEvents = onAgentEvent.mock.calls.flatMap(([event]) =>
+      event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
+        ? [event.data]
+        : [],
+    );
     expect(terminalLifecycleEvents).toHaveLength(1);
-    expect(terminalLifecycleEvents[0]?.data).toMatchObject({ phase: "end" });
-    expect(terminalLifecycleEvents[0]?.data.aborted).toBeUndefined();
+    expect(terminalLifecycleEvents[0]).toMatchObject({ phase: "end" });
+    expect(terminalLifecycleEvents[0]?.aborted).toBeUndefined();
     expect(backend.detachBackend).toHaveBeenCalledWith(replyBackend);
+    await turnSettled;
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
+  });
+
+  it("keeps an already-persisted user request in agent_end observations", async () => {
+    const persistedUser = { role: "user" as const, content: "real user request", timestamp: 1 };
+    const { agentEnd, releaseAgentEnd, harness, run, turnSettled } = await heldAttempt({
+      prompt: "real user request",
+      suppressNextUserMessagePersistence: true,
+      userTurnTranscriptRecorder: {
+        message: persistedUser,
+        getAdmissionReceipt: () => undefined,
+        getPersistedMessage: () => persistedUser,
+      } as unknown as NonNullable<
+        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
+      >,
+    });
+    await run.waitForTurnAccepted();
+    await harness.notify(agentMessage("msg-final", "Done.", { status: "completed" }));
+    await complete(harness);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    const event = mockCall(agentEnd, "agent_end")[0] as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const observedUsers = event.messages.filter((message) => message.role === "user");
+    expect(observedUsers).toEqual([expect.objectContaining(persistedUser)]);
+    expect(event.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+
+    releaseAgentEnd();
+    await run;
+    await turnSettled;
+  });
+
+  it("keeps the persisted request when steering is present in agent_end observations", async () => {
+    let pendingRefresh = false;
+    const persistedUser = {
+      role: "user" as const,
+      content: "Remember alpha",
+      timestamp: 1,
+      idempotencyKey: "turn-1:user",
+    };
+    const { agentEnd, releaseAgentEnd, harness, params, run, turnSettled } = await heldAttempt({
+      prompt: "Remember alpha",
+      suppressNextUserMessagePersistence: true,
+      pluginRuntimeRefreshPending: () => pendingRefresh,
+      userTurnTranscriptRecorder: {
+        message: persistedUser,
+        getAdmissionReceipt: () => undefined,
+        getPersistedMessage: () => persistedUser,
+      } as unknown as NonNullable<
+        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
+      >,
+    });
+    await run.waitForTurnAccepted();
+    expect(
+      queueActiveRunMessageForTest(params.sessionId!, "Also beta", {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
+    await harness.waitForMethod("turn/steer");
+    const steer = harness.requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "steered-user-message",
+        type: "userMessage",
+        clientId: clientUserMessageId,
+      }),
+    );
+
+    pendingRefresh = true;
+    await harness.notify(agentMessage("msg-final-steer", "Done.", { status: "completed" }));
+    await complete(harness);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    const event = mockCall(agentEnd, "agent_end")[0] as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const observedUsers = event.messages.filter((message) => message.role === "user");
+    expect(observedUsers).toEqual([
+      expect.objectContaining(persistedUser),
+      expect.objectContaining({ role: "user", content: "Also beta" }),
+    ]);
+    expect(event.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+
+    releaseAgentEnd();
+    await run;
+    await turnSettled;
   });
 
   it.each(["client close", "failed turn"])(
     "keeps %s cancellable during agent_end",
     async (failure) => {
-      const { agentEnd, releaseAgentEnd, harness, run, backend, onAttemptAbort, onAgentEvent } =
-        heldAttempt();
+      const {
+        agentEnd,
+        releaseAgentEnd,
+        harness,
+        run,
+        turnSettled,
+        backend,
+        onAttemptAbort,
+        onAgentEvent,
+      } = await heldAttempt();
       await run.waitForTurnAccepted();
       if (failure === "client close") {
         harness.close();
       } else {
         await harness.notify(
-          turnCompleted({
-            id: "turn-1",
-            status: "failed",
-            items: [],
-            error: { message: "codex exploded" },
-          }),
+          turnCompleted({ id: "turn-1", status: "failed", error: { message: "codex exploded" } }),
         );
       }
       await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
@@ -338,6 +593,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         promptError,
       });
       expect(backend.freezeAbort).not.toHaveBeenCalled();
+      await turnSettled;
       if (failure === "client close") {
         expect(result.codexAppServerFailure).toMatchObject({
           kind: "client_closed_before_turn_completed",
@@ -376,7 +632,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const run = runCodexAppServerAttempt(params);
 
     await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await complete(harness);
     const result = await run;
 
     expect(readAttemptTerminal(result).promptError).toBeNull();

@@ -25,13 +25,20 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+} from "../state/openclaw-state-schema.test-support.js";
 import { VERSION } from "../version.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -96,6 +103,11 @@ it.each([
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
     await closeDatabases();
+    {
+      using predecessor = openNodeSqliteDatabase(shared);
+      restorePreTemplateStateIdentifiersForTest(predecessor);
+      addPreCutoverClientCredentialTablesForTest(predecessor);
+    }
     setSchemaVersion(shared, 19);
     executeSql(shared, "ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state");
     const readRows = (db: DatabaseSync) => ({
@@ -136,11 +148,12 @@ it.each([
     if (damage === "orphan") {
       await doctor;
       expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-      const migrationBackup = backupPaths(shared, "openclaw.sqlite.pre-startup-migration-").find(
-        (name) => name.endsWith(".bak"),
+      // Scoped archives retain source versions in metadata; inspect the full image here.
+      const migrationBackups = backupPaths(shared, "openclaw.sqlite.pre-startup-migration-").filter(
+        (name) => name.endsWith(".bak") && !name.endsWith(".scoped.bak"),
       );
-      expect(migrationBackup).toBeDefined();
-      expect(readDatabase(migrationBackup!).version).toBe(19);
+      expect(migrationBackups).toHaveLength(1);
+      expect(readDatabase(migrationBackups[0]!).version).toBe(19);
       expect(mocks.runContributions).toHaveBeenCalledOnce();
       expect(runtime.log).toHaveBeenCalledWith(
         expect.stringContaining("Removed 1 orphan session window(s)"),
@@ -228,7 +241,7 @@ it.each([
       } else {
         expect(failure).toMatchObject(refusal);
       }
-      expect(readFiles(files)).toEqual(bytes);
+      readFiles(files).forEach((data, i) => expect(data.equals(bytes[i]!), files[i]).toBe(true));
       expect(readDatabase(shared)).toEqual(before);
       expect(mocks.runContributions).not.toHaveBeenCalled();
     });
@@ -250,7 +263,14 @@ it.each([
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
     await closeOpenClawStateDatabaseAsync();
-    setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
+    // The restored credential tables belong to the schema before their local-owner cutover.
+    const sourceVersion = CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1;
+    {
+      using predecessor = new DatabaseSync(shared);
+      restorePreTemplateStateIdentifiersForTest(predecessor);
+      addPreCutoverClientCredentialTablesForTest(predecessor);
+    }
+    setSchemaVersion(shared, sourceVersion);
     mocks.runContributions.mockImplementation(async () => {
       const result = repairOpenClawStateDatabaseSchema({ env: state.env });
       expect(result.warnings).toEqual([]);
@@ -264,7 +284,7 @@ it.each([
       await closeOpenClawStateDatabaseAsync();
     }
     expect(readDatabase(shared)).toMatchObject({
-      version: OPENCLAW_STATE_SCHEMA_VERSION - (deferred ? 1 : 0),
+      version: deferred ? sourceVersion : OPENCLAW_STATE_SCHEMA_VERSION,
       captureSessions: deferred ? [] : [{ id: captureSessionId, mode: "cli" }],
     });
     if (deferred) {
@@ -410,7 +430,7 @@ it.each([
           migrated.prepare("SELECT value_json FROM cache_entries WHERE key='retained'").get(),
         ).toEqual({ value_json: '{"keep":true}' });
       } else {
-        expect(fs.readFileSync(agent)).toEqual(before[0]);
+        expect(fs.readFileSync(agent).equals(before[0]!), agent).toBe(true);
       }
     } finally {
       observe.mockRestore();

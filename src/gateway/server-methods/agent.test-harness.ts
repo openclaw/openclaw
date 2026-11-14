@@ -10,6 +10,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
@@ -18,7 +19,16 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  resetSessionControllerStateForTest,
+  rpcSourceTesting,
+} from "../../sessions/session-lifecycle-admission.test-support.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -55,19 +65,33 @@ export const REAL_PNG = Buffer.from(
 
 export const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 
+async function disposeTestSources() {
+  const sources = [...rpcSourceTesting.values()];
+  const owners = sources.flatMap((ref) =>
+    ref.input.claim?.operation ? [ref.input.claim.operation.ownerSettlement] : [],
+  );
+  for (const ref of sources) {
+    ref.input.claim?.operation?.complete();
+    if (ref.input.claim) {
+      releaseSessionControllerClaim(ref.input.claim);
+    }
+    retireSessionControllerInput(ref.input);
+  }
+  await Promise.allSettled(owners);
+  resetSessionControllerStateForTest();
+}
+
 export const makeContext = (session?: {
   agentId: string;
   row: GatewaySessionRow;
 }): GatewayRequestContext => {
   setRuntimeConfigSnapshot(resolveAgentTestConfig());
   const projection = createAgentTestSessionRowProjection(resolveAgentTestConfig, session);
-  return {
+  const context = {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
@@ -78,6 +102,7 @@ export const makeContext = (session?: {
     getRuntimeConfig: () => resolveAgentTestConfig(),
     ...bindSessionRowProjection({}, () => projection),
   } as unknown as GatewayRequestContext;
+  return context;
 };
 
 type AgentHandler = NonNullable<typeof agentHandlers.agent>;
@@ -129,6 +154,29 @@ export function expectRespondError(
   expect(mockCallArg(mock)).toBe(false);
   expect(mockCallArg(mock, 0, 1)).toBeUndefined();
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
+}
+
+export function createElevatedExecApprovalFixture(approvalId: string, count: 1 | 2 = 1) {
+  const bashElevated = {
+    enabled: true,
+    allowed: true,
+    defaultLevel: "on" as const,
+  };
+  const register = () =>
+    registerExecApprovalFollowupRuntimeHandoff({
+      approvalId,
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+  return {
+    bashElevated,
+    registration: register(),
+    secondRegistration: count === 2 ? register() : undefined,
+  };
+}
+
+export function mockTelegramSessionEntry(sessionId = "existing-session-id") {
+  mockMainSessionEntry({ sessionId, lastChannel: "telegram", lastTo: "123" });
 }
 
 export function mockMainSessionEntry(
@@ -242,7 +290,7 @@ function readLastAgentCommandCall(): AgentCommandCall | undefined {
   return call?.[0] as AgentCommandCall | undefined;
 }
 
-export function backendGatewayClient(): AgentHandlerArgs["client"] {
+export function backendGatewayClient(): NonNullable<AgentHandlerArgs["client"]> {
   return {
     connect: {
       minProtocol: 1,
@@ -255,7 +303,7 @@ export function backendGatewayClient(): AgentHandlerArgs["client"] {
       },
       scopes: ["operator.write"],
     },
-  } as AgentHandlerArgs["client"];
+  };
 }
 
 export function cronContinuationGatewayClient(): AgentHandlerArgs["client"] {
@@ -284,9 +332,8 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
   };
 }
 
-export function setupCronContinuationReleaseFixture() {
-  const sessionKey = "agent:main:cron:job-1:run:run-1";
-  const entry: SessionEntry = {
+export function readyCronContinuationEntry(): SessionEntry {
+  return {
     sessionId: "run-1",
     updatedAt: Date.now(),
     lifecycleRevision: "revision-1",
@@ -298,6 +345,11 @@ export function setupCronContinuationReleaseFixture() {
       basePersisted: true,
     },
   };
+}
+
+export function setupCronContinuationReleaseFixture() {
+  const sessionKey = "agent:main:cron:job-1:run:run-1";
+  const entry: SessionEntry = readyCronContinuationEntry();
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
     storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
@@ -428,6 +480,27 @@ export function mockSessionResetSuccess(params: {
   );
 }
 
+/** Observe the real effect request while a fixture holds its lifecycle mutation. */
+export async function observeAgentLifecycleAdmission(runId: string) {
+  const requested = createDeferredCore();
+  const lifecycle = await import("../../sessions/session-controller.lifecycle.js");
+  const beginEffect = lifecycle.beginSessionEffect;
+  let receipt: ReturnType<typeof beginEffect> | undefined;
+  const observer = vi.spyOn(lifecycle, "beginSessionEffect").mockImplementation((params) => {
+    const pending = beginEffect(params);
+    if (params.sourceInput?.protocolRunId === runId && !receipt) {
+      receipt = pending;
+      requested.resolve();
+    }
+    return pending;
+  });
+  return {
+    requested: requested.promise,
+    getReceipt: () => expectDefined(receipt, "Expected agent lifecycle admission receipt"),
+    restore: () => observer.mockRestore(),
+  };
+}
+
 export async function invokeAgent(
   params: AgentParams,
   options?: {
@@ -516,6 +589,7 @@ export async function invokeAgentIdentityGet(
 }
 
 export const describe0AfterEach0 = async () => {
+  await disposeTestSources();
   mocks.userTurnStorePath = undefined;
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
   await flushPendingSessionsChangedEvents();
@@ -552,6 +626,8 @@ export const describe0AfterEach0 = async () => {
 };
 
 async function resetIntegrationState() {
+  // Tests hold mocked commands indefinitely; retire their real selector claims between cases.
+  await disposeTestSources();
   await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   await resetSubagentRegistryForTests({ persist: false });

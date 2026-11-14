@@ -1,19 +1,25 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateChatPredictParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { captureRpcSourceScopeMatcher } from "../session-runtime-scope.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import { respondError } from "./response.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -37,12 +43,18 @@ function conversationText(messages: unknown[]): string | undefined {
               })
               .join("\n")
           : "";
-    return text.trim() ? [{ role: message.role, text: text.slice(0, 2_000) }] : [];
+    // A reply usually ends with its question or recommendation, so keep the end of long turns.
+    const trimmed = text.trim();
+    return trimmed ? [{ role: message.role, text: trimmed.slice(-2_000) }] : [];
   });
-  if (turns.at(-1)?.role !== "assistant" || !turns.some((turn) => turn.role === "user")) {
+  const lastReply = turns.at(-1);
+  if (lastReply?.role !== "assistant") {
     return undefined;
   }
-  return JSON.stringify(turns.slice(-8));
+  // The user's own messages carry the most signal per token. Earlier assistant text is
+  // mostly progress narration between tool calls, so only the final reply is kept.
+  const userTurns = turns.filter((turn) => turn.role === "user").slice(-16);
+  return userTurns.length ? JSON.stringify([...userTurns, lastReply]) : undefined;
 }
 
 export const chatPredictionHandlers: GatewayRequestHandlers = {
@@ -68,13 +80,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
     }
     // This is a human composer affordance, not an alternate agent tool or system inference route.
     if (!client?.connId || !sessionAccessAuthority) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Composer predictions require a connected composer with session write access.",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.FORBIDDEN,
+        "Composer predictions require a connected composer with session write access.",
       );
       return;
     }
@@ -82,13 +91,26 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
     let selection: Awaited<ReturnType<typeof prepareChatHistorySessionRead>>;
     let operator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     try {
-      const pending = context.chatAbortControllers.get(params.runId);
       const target = sessionAccessAuthority.target;
+      const projectedTarget = getSessionRowProjection(context)?.sharingTarget({
+        agentId: target.agentId,
+        key: target.sessionKey,
+      });
+      const resolveGatewayContext = context.resolveGatewayContext;
+      const pending = getRpcSourceForGateway(params.runId, resolveGatewayContext);
+      const pendingIdentity = pending && getRpcSourceIdentity(pending);
       if (
-        pending?.sessionId === target.sessionId &&
-        pending.sessionKey === target.sessionKey &&
-        chatRunBelongsToAgent(pending, target.agentId) &&
-        (pending.projectSessionTerminalPending || pending.projectSessionTerminalPersistence)
+        pending &&
+        projectedTarget &&
+        captureRpcSourceScopeMatcher({
+          storePath: projectedTarget.storePath,
+          resolveGatewayContext,
+        })(pending) &&
+        pendingIdentity?.sessionId === target.sessionId &&
+        pendingIdentity.sessionKey === target.sessionKey &&
+        chatRunBelongsToAgent(pendingIdentity, target.agentId) &&
+        (pending.adapter.projectSessionTerminalPending ||
+          pending.adapter.projectSessionTerminalPersistence)
       ) {
         // Successful finals precede their durable row update. Join that existing
         // owner before taking the history snapshot; a null reply is not retried.
@@ -124,7 +146,8 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
           current.lifecycleRunId ||
           resolveSessionWorkStartError(canonicalKey, current) ||
           resolveVisibleActiveSessionRunState({
-            context,
+            storePath,
+            resolveGatewayContext,
             requestedKey: params.sessionKey,
             canonicalKey,
             sessionId,
@@ -172,10 +195,11 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
           storePath,
           sessionAgentId: agentId,
           canonicalKey,
-          max: 12,
-          maxHistoryBytes: 24_000,
-          responseHistoryBytes: 24_000,
-          effectiveMaxChars: 2_000,
+          // Tool calls and results share this window; read past them to reach recent user turns.
+          max: 500,
+          maxHistoryBytes: 1_000_000,
+          responseHistoryBytes: 1_000_000,
+          effectiveMaxChars: 8_000,
           toolResultMaxChars: 0,
           offset: undefined,
           messageId: undefined,
@@ -197,13 +221,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
       });
       assertCurrent();
       if (!operator) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.FORBIDDEN,
-            "Composer predictions require an authenticated operator.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          "Composer predictions require an authenticated operator.",
         );
         return;
       }
@@ -229,13 +250,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
         respond(false, undefined, error.error);
       } else {
         // Provider errors may contain credentials or prompt details; never forward them.
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Composer predictions are unavailable for the selected model.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Composer predictions are unavailable for the selected model.",
         );
       }
     } finally {

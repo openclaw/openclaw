@@ -1,11 +1,11 @@
 import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { resetWorkboardConnectionState } from "../../lib/workboard/index.ts";
+import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createGatewaySession,
   createWorkboardCard,
@@ -17,6 +17,7 @@ import {
   createWorkboardRenderProps,
   renderInto,
   createWorkboardView,
+  openCardMenu,
   buttonByLabel,
   buttonByText,
   requireButton,
@@ -201,6 +202,51 @@ describe("WorkboardView", () => {
       await waitForFast(() => expect(state.cards[0]).toMatchObject(patch));
     },
   );
+
+  it("keeps inline save admission synchronous and preserves the draft after failure", async () => {
+    const card = createWorkboardCard({ notes: "Original notes" });
+    const pending = createDeferred<{ card: typeof card }>();
+    let attempts = 0;
+    const client = createWorkboardTestClient(() => {
+      attempts += 1;
+      return attempts === 1
+        ? pending.promise
+        : { card: { ...card, notes: "Edited notes", updatedAt: card.updatedAt + 1 } };
+    });
+    const { state, container, renderView } = createWorkboardView({
+      client,
+      onRequestUpdate: () => renderView(),
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+    const { owner, open } = await inlineEditor(container, "notes");
+    const input = await open();
+    input.value = "Edited notes";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    const save = textButton(owner, "Save");
+    save.click();
+    save.click();
+    requireButton(container, "Close").click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(attempts).toBe(1);
+    expect(state.detailCardId).toBe(card.id);
+    expect(input.isConnected).toBe(true);
+    await waitForFast(() => {
+      expect(input.disabled).toBe(true);
+      expect(save.disabled).toBe(true);
+      expect(textButton(owner, "Cancel").disabled).toBe(true);
+    });
+    pending.reject(new Error("Notes unavailable"));
+    await waitForFast(() => {
+      expect(state.error).toContain("Notes unavailable");
+      expect(save.disabled).toBe(false);
+    });
+    expect(input.value).toBe("Edited notes");
+    save.click();
+    await waitForFast(() => expect(state.cards[0]?.notes).toBe("Edited notes"));
+    expect(attempts).toBe(2);
+  });
 
   it("keeps notes selectable and opens the editor only on a plain click", async () => {
     const card = createWorkboardCard({ notes: "Copy me" });
@@ -550,9 +596,7 @@ describe("WorkboardView", () => {
     });
     const container = document.createElement("div");
     renderInto(container, props);
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(openCardMenu(container.querySelector(".workboard-card")!), "Edit card").click();
     renderInto(container, props);
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain("Edit card");
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain(
@@ -604,9 +648,7 @@ describe("WorkboardView", () => {
     expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
     renderInto(container, props);
     expect(container.querySelector("[data-test-dialog]")).toBeNull();
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(openCardMenu(container.querySelector(".workboard-card")!), "Edit card").click();
     renderInto(container, props);
     expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
       "Renamed",
@@ -640,6 +682,9 @@ describe("WorkboardView", () => {
       const { state, container, renderView } = createWorkboardView({ client });
       state.cards = operation === "create" ? [] : [card];
       renderView();
+      if (operation === "conflict") {
+        openCardMenu(container.querySelector(".workboard-card")!);
+      }
       expectDefined(
         operation === "create"
           ? buttonByText(container, "New card")
@@ -725,7 +770,10 @@ describe("WorkboardView", () => {
       const { state, container, renderView } = createWorkboardView({ client });
       state.cards = [card];
       renderView();
-      requireButton(container, "View details").click();
+      requireButton(
+        openCardMenu(container.querySelector(".workboard-card")!),
+        "View details",
+      ).click();
       if (interruption === "drawer close") {
         renderView();
       }
@@ -758,7 +806,10 @@ describe("WorkboardView", () => {
         expect(note.disabled).toBe(true);
         requireButton(container.querySelector(".workboard-detail")!, "Close").click();
         renderView();
-        requireButton(container, "View details").click();
+        requireButton(
+          openCardMenu(container.querySelector(".workboard-card")!),
+          "View details",
+        ).click();
         renderView();
         expect(state.detailCommentBody).toBe(` ${comment.body} `);
         pending.resolve(saved);
@@ -801,7 +852,7 @@ describe("WorkboardView", () => {
         ),
         "card to edit",
       );
-      requireButton(card, "Edit card").click();
+      requireButton(openCardMenu(card), "Edit card").click();
       renderView();
     };
     const typeNote = () => {

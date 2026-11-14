@@ -91,56 +91,68 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
 }
 
 describe("memory actor fork and cut", () => {
-  it("forks the latest in-process bindings and detaches copied transcript results", async () => {
-    const { parent, child, forkInput } = await fixture({
-      cliSessionBindings: {
-        claude: { sessionId: "cli-parent", resumeCheckpointId: "old-checkpoint", forceReuse: true },
-      },
-    });
-    const patch = mutateMemory(storage(parent), "session.entry.patch", {
-      operation: {
-        kind: "fields",
-        patch: {
-          cliSessionBindings: {
-            claude: {
-              sessionId: "cli-parent",
-              resumeCheckpointId: "new-checkpoint",
-              forceReuse: true,
+  it.each([false, true])(
+    "forks current bindings and child audience (preserve visibility=%s)",
+    async (preserveVisibility) => {
+      const { parent, child, acquire, forkInput } = await fixture({
+        cliSessionBindings: {
+          claude: {
+            sessionId: "cli-parent",
+            resumeCheckpointId: "old-checkpoint",
+            forceReuse: true,
+          },
+        },
+      });
+      await commitMemory(storage(child), "session.entry.create", {
+        entry: { ...forkInput.params.fallbackEntry, visibility: "draft" },
+      });
+      const patch = mutateMemory(storage(parent), "session.entry.patch", {
+        operation: {
+          kind: "fields",
+          patch: {
+            cliSessionBindings: {
+              claude: {
+                sessionId: "cli-parent",
+                resumeCheckpointId: "new-checkpoint",
+                forceReuse: true,
+              },
             },
           },
         },
-      },
-    });
-    const fork = mutateMemory(
-      storage(child),
-      "session.parentFork.commit",
-      forkInput,
-      forkAuthority,
-    );
-    committed(await patch);
-    const result = committed(await fork);
-    expect(result.status).toBe("forked");
-    assert(result.status === "forked", "Fork failed");
-    expect(result.sessionEntry).toMatchObject({
-      incognito: true,
-      forkSource: { sessionKey: parentKey, sessionId: "parent-session" },
-      cliSessionBindings: {
-        claude: {
-          sessionId: "cli-parent",
-          resumeCheckpointId: "new-checkpoint",
-          forkNextResume: true,
+      });
+      const fork = mutateMemory(
+        storage(child),
+        "session.parentFork.commit",
+        { ...forkInput, ...(preserveVisibility ? { patch: { preserveVisibility: true } } : {}) },
+        forkAuthority,
+      );
+      committed(await patch);
+      const result = committed(await fork);
+      expect(result.status).toBe("forked");
+      assert(result.status === "forked", "Fork failed");
+      expect(result.sessionEntry).toMatchObject({
+        incognito: true,
+        forkSource: { sessionKey: parentKey, sessionId: "parent-session" },
+        cliSessionBindings: {
+          claude: {
+            sessionId: "cli-parent",
+            resumeCheckpointId: "new-checkpoint",
+            forkNextResume: true,
+          },
         },
-      },
-    });
-    expect(result.sessionEntry.cliSessionBindings?.claude?.forceReuse).toBeUndefined();
-    const copied = await readMemory(storage(child), "session.parentFork.source", {});
-    expect(copied?.branchEntries).toHaveLength(4);
-    copied?.branchEntries.splice(0);
-    const source = await readMemory(storage(parent), "session.parentFork.source", {});
-    const reread = await readMemory(storage(child), "session.parentFork.source", {});
-    expect(source?.branchEntries).toHaveLength(4);
-    expect(reread?.branchEntries).toHaveLength(4);
-  });
+      });
+      expect(result.sessionEntry.cliSessionBindings?.claude?.forceReuse).toBeUndefined();
+      expect(result.sessionEntry.visibility).toBe(preserveVisibility ? "draft" : undefined);
+      const activeChild = await acquire(childKey);
+      const copied = await readMemory(storage(activeChild), "session.parentFork.source", {});
+      expect(copied?.branchEntries).toHaveLength(4);
+      copied?.branchEntries.splice(0);
+      const source = await readMemory(storage(parent), "session.parentFork.source", {});
+      const reread = await readMemory(storage(activeChild), "session.parentFork.source", {});
+      expect(source?.branchEntries).toHaveLength(4);
+      expect(reread?.branchEntries).toHaveLength(4);
+    },
+  );
 
   it("does not inherit CLI bindings without host fork support", async () => {
     const { child, forkInput } = await fixture({

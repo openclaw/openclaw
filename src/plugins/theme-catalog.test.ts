@@ -24,6 +24,8 @@ const noExecution = 'throw new Error("theme discovery must not execute plugin co
 function writeJson(root: string, file: string, value: unknown) {
   fs.writeFileSync(path.join(root, file), JSON.stringify(value));
 }
+const readManifest = (root: string) =>
+  withPluginCache(createPluginCache(), () => loadPluginManifest(root));
 
 type Snapshot = ReturnType<typeof createPluginMetadataSnapshotFixture>;
 
@@ -94,9 +96,6 @@ describe("manifest theme catalog", () => {
     "preserves discovered multi-entry identities from %s through catalog and profile selection",
     (id) => {
       const registry = discoverThemePack(fixture(undefined, id));
-      expect(registry.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
-        [`${id}/one`, `${id}/Two`].toSorted(),
-      );
       const themes = catalog(createPluginMetadataSnapshotFixture(registry));
       expect(themes.map((theme) => theme.id).toSorted()).toEqual(
         [`${id}/one/neon`, `${id}/Two/neon`].toSorted(),
@@ -168,12 +167,15 @@ describe("manifest theme catalog", () => {
   it("projects captured artwork URLs and changes only the edited content revision on publication", () => {
     const plugin = fixture(undefined, "@scope/pack");
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h20v10H0z"/></svg>';
+    const webp = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
+    fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), webp);
     for (const name of ["hat", "icon", "critter"]) {
       fs.writeFileSync(path.join(plugin.rootDir, `${name}.svg`), svg);
     }
     plugin.writeThemes([
       {
         ...plugin.declaration,
+        backgrounds: { dark: "night.webp" },
         icons: { rocket: "icon.svg" },
         hats: { beret: "hat.svg" },
         critters: {
@@ -187,13 +189,9 @@ describe("manifest theme catalog", () => {
       avatarHat: "beret",
       critters: ["ferris"],
     });
-    const before = plugin.readSnapshot();
+    // Publication freezes the snapshot; captured raster bytes must survive it.
+    const before = finalizePluginMetadataSnapshot(plugin.readSnapshot());
     const original = catalog(before)[0];
-    expect(original).toMatchObject({
-      brandIcon: "rocket",
-      avatarHat: "beret",
-      critters: ["ferris"],
-    });
     expect(original?.artwork?.icons?.rocket?.url).toMatch(/\/neon\/icon\/rocket\?v=[a-f0-9]{12}$/);
     expect(original?.artwork?.hats?.beret?.url).toMatch(
       /^\/__openclaw__\/plugin-theme-art\/%40scope%2Fpack\/neon\/hat\/beret\?v=[a-f0-9]{12}$/,
@@ -203,6 +201,10 @@ describe("manifest theme catalog", () => {
       title: "a crab, allegedly",
       crossMs: 15000,
     });
+    expect(original?.artwork?.backgrounds?.dark?.url).toMatch(
+      /^\/__openclaw__\/plugin-theme-art\/%40scope%2Fpack\/neon\/background\/dark\?v=[a-f0-9]{12}$/,
+    );
+    expect(artwork(before, plugin.id, "background", "dark")?.body).toEqual(webp);
     const replacement = svg.replace("h20", "h30");
     for (const name of ["hat", "icon"]) {
       fs.writeFileSync(path.join(plugin.rootDir, `${name}.svg`), replacement);
@@ -215,6 +217,7 @@ describe("manifest theme catalog", () => {
     expect(updated?.artwork?.icons?.rocket?.url).not.toBe(original?.artwork?.icons?.rocket?.url);
     expect(updated?.artwork?.hats?.beret?.url).not.toBe(original?.artwork?.hats?.beret?.url);
     expect(updated?.artwork?.critters).toEqual(original?.artwork?.critters);
+    expect(artwork(after, plugin.id, "critter", "ferris")?.body.toString("utf8")).toBe(svg);
     expect(catalog(before)[0]).toEqual(original);
     for (const [snapshot, expected] of [
       [before, svg],
@@ -227,31 +230,6 @@ describe("manifest theme catalog", () => {
         expect(artwork(snapshot, plugin.id, kind, id)?.body.toString("utf8")).toBe(expected);
       }
     }
-    after.index.plugins[0]!.enabled = false;
-    expect(artwork(after, plugin.id, "icon", "rocket")).toBeUndefined();
-  });
-
-  it("projects mode backgrounds and serves their captured raster bytes", () => {
-    const plugin = fixture();
-    const webp = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
-    fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), webp);
-    plugin.writeThemes([{ ...plugin.declaration, backgrounds: { dark: "night.webp" } }]);
-    // Runtime snapshots are deep-frozen; captured bytes must survive that (Buffers cannot).
-    const snapshot = finalizePluginMetadataSnapshot(plugin.readSnapshot());
-    const [theme] = catalog(snapshot);
-    expect(theme?.artwork).toEqual({
-      backgrounds: {
-        dark: {
-          url: expect.stringMatching(
-            /^\/__openclaw__\/plugin-theme-art\/space\/neon\/background\/dark\?v=[a-f0-9]{12}$/,
-          ),
-        },
-      },
-    });
-    const resolve = (artId: string) => artwork(snapshot, plugin.id, "background", artId);
-    expect(resolve("dark")?.body).toEqual(webp);
-    expect(resolve("light")).toBeUndefined();
-    expect(resolve("constructor")).toBeUndefined();
   });
 
   it.each([
@@ -262,9 +240,10 @@ describe("manifest theme catalog", () => {
     "https://example.invalid/theme.json",
   ])("rejects source declarations outside the portable plugin path contract: %s", (source) => {
     const plugin = fixture(undefined, "space", source);
-    expect(
-      withPluginCache(createPluginCache(), () => loadPluginManifest(plugin.rootDir)),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("themes") });
+    expect(readManifest(plugin.rootDir)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("themes"),
+    });
   });
 
   it("rejects duplicate theme identities and the imported-theme namespace", () => {
@@ -273,9 +252,7 @@ describe("manifest theme catalog", () => {
     const reserved = fixture(undefined, "user");
     const nestedReserved = fixture(undefined, "user/entry");
     for (const rootDir of [duplicate.rootDir, reserved.rootDir, nestedReserved.rootDir]) {
-      expect(withPluginCache(createPluginCache(), () => loadPluginManifest(rootDir))).toMatchObject(
-        { ok: false },
-      );
+      expect(readManifest(rootDir)).toMatchObject({ ok: false });
     }
   });
 

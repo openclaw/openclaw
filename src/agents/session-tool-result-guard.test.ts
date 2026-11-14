@@ -156,8 +156,10 @@ describe("installSessionToolResultGuard", () => {
         aggregated: "x".repeat(80_000),
         timedOut: false,
       },
+      warningText: "w".repeat(80_000),
       aggregateOutputDropped: true,
     });
+    expect(output.details).toMatchObject({ aggregated: "x".repeat(80_000) });
     const content = output.content[0];
     if (!content || content.type !== "text") {
       throw new Error("expected text result");
@@ -224,7 +226,7 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("clears disabled-synthesis pending state across replacement and dropped calls", () => {
-    const { sm, guard } = setup({ allowSyntheticToolResults: false, allowedToolNames: ["read"] });
+    const { sm, guard } = setup({ allowSyntheticToolResults: false });
     sm.appendMessage(call());
     sm.appendMessage(call("call_2"));
     expect(guard.getPendingIds()).toEqual(["call_2"]);
@@ -232,7 +234,6 @@ describe("installSessionToolResultGuard", () => {
       asAppendMessage({
         role: "assistant",
         content: [
-          { type: "toolCall", id: "unknown", name: "write", arguments: {} },
           { type: "toolCall", id: "missing-input", name: "read" },
           { type: "toolCall", id: "bad-name", name: "invalid name", arguments: {} },
         ],
@@ -257,10 +258,11 @@ describe("installSessionToolResultGuard", () => {
 
   it("consumes runtime attribution when a hook blocks the marker before the next user", () => {
     let writes = 0;
-    const { sm, guard } = setup({
+    const context = {
+      nextUserMessagePersistence: "runtime" as const,
       beforeMessageWriteHook: () => (writes++ === 0 ? { block: true } : undefined),
-    });
-    guard.setNextUserMessagePersistence("runtime");
+    };
+    const { sm } = setup({ captureMessageContext: () => context });
     sm.appendMessage(makeUserMessage("runtime-only marker", 1));
     sm.appendMessage(makeUserMessage("actual user", 2));
 

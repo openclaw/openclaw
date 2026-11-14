@@ -119,6 +119,17 @@ describe("native harness auth failover", () => {
       await state?.cleanup();
     }
   });
+  function createCodexAuthRunParams(): Parameters<typeof runHarness.runEmbeddedAgent>[0] {
+    return {
+      ...createOverflowRunParams(state),
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      agentHarnessId: "codex",
+      authProfileId: failedProfile,
+      authProfileIdSource: "auto",
+    };
+  }
+
   async function createNativeHostRunParams() {
     const params = {
       ...createOverflowRunParams(state),
@@ -312,16 +323,7 @@ describe("native harness auth failover", () => {
           makeAttemptResult({ promptError: failure, promptErrorSource: "precheck" }),
         );
       }
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentHarnessId: "codex",
-          authProfileId: failedProfile,
-          authProfileIdSource: "auto",
-        }),
-      ).rejects.toBe(failure);
+      await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     },
@@ -346,16 +348,7 @@ describe("native harness auth failover", () => {
     });
     mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
 
-    await expect(
-      runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        agentHarnessId: "codex",
-        authProfileId: failedProfile,
-        authProfileIdSource: "auto",
-      }),
-    ).rejects.toBe(failure);
+    await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(resolveModelFallbackError(failure)).toEqual({ kind: "coordination", error: failure });
@@ -377,16 +370,7 @@ describe("native harness auth failover", () => {
       const failure = new Error(message);
       mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
 
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentHarnessId: "codex",
-          authProfileId: failedProfile,
-          authProfileIdSource: "auto",
-        }),
-      ).rejects.toBe(failure);
+      await expect(runEmbeddedAgent(createCodexAuthRunParams())).rejects.toBe(failure);
       expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: failedProfile, reason: "auth" }),
       );

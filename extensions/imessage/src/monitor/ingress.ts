@@ -149,14 +149,12 @@ export function createIMessageDurableIngress(options: {
   runtime: Pick<RuntimeEnv, "error" | "log">;
   onDurableEnqueue?: (facts: IMessageIngressFacts) => void | Promise<void>;
   onDurableEnqueueFailure?: (rowid: number | null, error: unknown) => void | Promise<void>;
-  now?: () => number;
 }) {
   const queue =
     options.queue ??
     getIMessageRuntime().state.openChannelIngressQueue<IMessageIngressPayload>({
       accountId: options.accountId,
     });
-  const now = options.now ?? Date.now;
   const dispatchAdmissionQueue = new KeyedAsyncQueue();
   const priorityDispatchQueue = new KeyedAsyncQueue();
   const monitor = createChannelIngressMonitor<
@@ -247,7 +245,6 @@ export function createIMessageDurableIngress(options: {
       resolveNonRetryableFailure: resolveIMessageIngressNonRetryableFailure,
       onLog: (message) => options.runtime.log?.(`imessage ${message}`),
     },
-    now,
     onError: (error) =>
       options.runtime.error?.(`imessage: ingress drain failed: ${formatErrorMessage(error)}`),
   });

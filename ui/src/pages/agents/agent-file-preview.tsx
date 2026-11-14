@@ -1,12 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, flush, onSettled, type Accessor } from "solid-js";
-import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import { createMemo, createSignal, onSettled, type Accessor } from "solid-js";
+import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { listen } from "../../lib/reactive/listener.ts";
 
 type PreviewScope = readonly [agentId: string, fileName: string, loaded: boolean];
 
 // Prepare each newly selected file once, then park the rendered snapshot while
-// closed. The show event refreshes it before the modal takes focus.
+// closed. Opening refreshes the snapshot alongside the modal's presentation.
 export function AgentFilePreview<T>(props: {
   scope: PreviewScope;
   snapshot: () => T;
@@ -26,13 +26,11 @@ export function AgentFilePreview<T>(props: {
   const show = (event: Event) => {
     if (event.target === modal) {
       setOpen(true);
-      flush(); // The modal must focus the newly committed preview during overlay-show.
     }
   };
   const hide = (event: Event) => {
     if (event.target === modal) {
       setOpen(false);
-      flush();
     }
   };
   onSettled(() => {

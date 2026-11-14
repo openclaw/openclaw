@@ -1,40 +1,12 @@
 import { vi } from "vitest";
-import type { RunReplyAgentParams } from "./agent-runner-core.js";
-import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type {
   ReplyBackendHandle,
   ReplyBackendMessageInjectionV2,
-} from "./reply-run-registry.contracts.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+} from "../../sessions/session-controller.contracts.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
-
-export function createReplyParams(
-  followupRun: RunReplyAgentParams["followupRun"],
-  overrides: Partial<RunReplyAgentParams>,
-): RunReplyAgentParams {
-  return {
-    commandBody: followupRun.prompt,
-    transcriptCommandBody: followupRun.prompt,
-    followupRun,
-    queueKey: followupRun.run.sessionKey!,
-    sessionKey: followupRun.run.sessionKey,
-    defaultModel: followupRun.run.model,
-    sessionCtx: {},
-    resolvedQueue: { mode: "interrupt" },
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    typing: createMockTypingController(),
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "never",
-    ...overrides,
-  };
-}
 
 type SteerParams = Parameters<typeof runActiveReplySteer>[0];
 export function createSteerParams(
@@ -52,12 +24,10 @@ export function createSteerParams(
     sessionKey: key,
     sessionCtx: {},
     resolvedQueue: { mode: "steer", debounceMs: 0 },
-    restartRecoverySourceTurnId: undefined,
+    sourceTurnId: undefined,
     replyOperationRunState: undefined,
-    releaseAdmissionTicket() {},
     touchActiveSessionEntry: async () => {},
-    typing,
-    typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    typingSignals: createTypingSignaler({ typing, mode: "never" }),
     ...overrides,
   };
 }
@@ -71,6 +41,7 @@ export function attachSteerBackend(
   const { runId, cancel = vi.fn(), ...injection } = options;
   operation.attachBackend({
     kind: "embedded",
+    supportsTranscriptCommitWait: true,
     cancel,
     toolAuthorityFingerprint,
     messageInjectionV2: { version: 2, isAvailable: () => true, ...injection },

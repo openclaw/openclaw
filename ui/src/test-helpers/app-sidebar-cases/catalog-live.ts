@@ -38,9 +38,8 @@ function storedSession(
 }
 
 function expectPullRequest(row: Element | null | undefined, content: string) {
-  const badge = row?.querySelector(".session-row-badge--pull-request");
-  expect(badge?.hasAttribute("title")).toBe(false);
-  expect(badge?.closest("openclaw-tooltip")).toMatchObject({ content });
+  const badge = row?.querySelector<HTMLElement>(".session-row-badge--pull-request");
+  expect(badge?.title).toBe(content);
 }
 
 function catalogHost(
@@ -58,9 +57,7 @@ function expectRunIndicators(section: Element | null, rowSelector: string, activ
   expect(dom.all(`${rowSelector} .sidebar-session-indicator .session-glyph__ring`)).toHaveLength(
     active ? 1 : 0,
   );
-  expect(dom.all(".sidebar-recent-sessions__head .session-run-spinner")).toHaveLength(
-    active ? 1 : 0,
-  );
+  expect(dom.all(".sidebar-recent-sessions__head .session-run-spinner")).toHaveLength(0);
 }
 
 describe("AppSidebar session catalog pagination", () => {
@@ -150,7 +147,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
     expect(local?.textContent).not.toContain("Gateway Mac");
     expect(local?.textContent).toContain("Local plan");
-    expectPullRequest(local, "#111751, #111772 · Merged");
+    expectPullRequest(local, "2 pull requests · #111751, #111772 · Merged");
     expect(local?.textContent).not.toContain("Remote review");
     expect(remote?.textContent).toContain("Build Node");
     expect(remote?.textContent).toContain("Remote review");

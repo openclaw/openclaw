@@ -7,19 +7,14 @@ export type GatewayStartupPluginPlan = {
   pluginIds: readonly string[];
 };
 
-type GenerationProviderContractKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders";
-type VoiceProviderContractKey =
-  | "speechProviders"
-  | "realtimeTranscriptionProviders"
-  | "realtimeVoiceProviders";
 export type ConfiguredGenerationProviderIds = Record<
-  GenerationProviderContractKey,
+  "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders",
   ReadonlySet<string>
 >;
-export type ConfiguredVoiceProviderIds = Record<VoiceProviderContractKey, ReadonlySet<string>>;
+export type ConfiguredVoiceProviderIds = Record<
+  "speechProviders" | "realtimeTranscriptionProviders" | "realtimeVoiceProviders",
+  ReadonlySet<string>
+>;
 
 export function isConfigActivationValueEnabled(value: unknown): boolean {
   return value !== false && !(isRecord(value) && value.enabled === false);

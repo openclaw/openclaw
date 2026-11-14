@@ -1,10 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
+import { jsonScannedValue } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  readJsonPredicateScalar,
+  scanJsonObjectFields,
+} from "../../state/json-predicate-fields.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
@@ -69,66 +73,11 @@ export function readSessionWorktreeOwnerFactsInDatabase(
         "window.session_id as retained_session_id",
         "pending.session_key as pending_key",
       ])
-      .select((eb) => {
-        const jsonType = (field: string) =>
-          eb.fn<string>("json_type", [eb.ref("node.entry_json"), eb.val(`$.${field}`)]);
-        return [
-          eb("node.entry_json", "=", "{}").as("placeholder"),
-          // kysely-allow-raw: JSON tokens preserve opaque revision strings without SQLite UTF-8 conversion.
-          sql<string | null>`${eb.ref("node.entry_json")} -> '$.lifecycleRevision'`.as(
-            "lifecycle_revision_json",
-          ),
-          eb
-            .fn<string | null>("json_extract", [eb.ref("node.entry_json"), eb.val("$.worktree")])
-            .as("worktree_json"),
-          eb
-            .or([
-              eb.exists(
-                eb
-                  .selectFrom(
-                    // kysely-allow-raw: SQLite paths select the first duplicate member; logical JSON reads select the last.
-                    sql<{ key: string }>`json_each(${eb.ref("node.entry_json")})`.as("field"),
-                  )
-                  .select("field.key")
-                  .where("field.key", "in", [
-                    "updatedAt",
-                    "archivedAt",
-                    "lastInteractionAt",
-                    "lifecycleRevision",
-                    "worktree",
-                  ])
-                  .groupBy("field.key")
-                  .having((fields) => fields.fn.countAll(), ">", 1),
-              ),
-              eb(jsonType("lifecycleRevision"), "!=", "text"),
-              eb(jsonType("worktree"), "!=", "object"),
-              eb(jsonType("archivedAt"), "not in", ["integer", "real"]),
-              eb(jsonType("lastInteractionAt"), "not in", ["integer", "real"]),
-              eb(
-                eb.fn<number>("json_extract", [eb.ref("node.entry_json"), eb.val("$.updatedAt")]),
-                "is not",
-                eb.ref("node.updated_at"),
-              ),
-              eb(
-                eb.fn<number | null>("json_extract", [
-                  eb.ref("node.entry_json"),
-                  eb.val("$.archivedAt"),
-                ]),
-                "is not",
-                eb.ref("node.archived_at"),
-              ),
-              eb(
-                eb.fn<number | null>("json_extract", [
-                  eb.ref("node.entry_json"),
-                  eb.val("$.lastInteractionAt"),
-                ]),
-                "is not",
-                eb.ref("node.last_interaction_at"),
-              ),
-            ])
-            .as("invalid_metadata"),
-        ];
-      })
+      .select((eb) => [
+        eb("node.entry_json", "=", "{}").as("placeholder"),
+        // Scan original text so unselected deep JSON cannot disappear during dialect projection.
+        "node.entry_json as metadata_json",
+      ])
       .where("node.session_key", "in", sqliteStringSet(sessionKeys)),
   ).rows;
   return rows.flatMap((row) => {
@@ -140,13 +89,39 @@ export function readSessionWorktreeOwnerFactsInDatabase(
     ) {
       return [];
     }
-    if (row.entry_valid !== 1 || row.pending_key !== null || row.invalid_metadata) {
+    const fields = scanJsonObjectFields(row.metadata_json, [
+      "updatedAt",
+      "archivedAt",
+      "lastInteractionAt",
+      "lifecycleRevision",
+      "worktree",
+    ]);
+    const revision = fields.first.get("lifecycleRevision");
+    const worktree = fields.first.get("worktree");
+    const invalidOptionalNumber = (key: "archivedAt" | "lastInteractionAt") => {
+      const token = fields.first.get(key);
+      return token !== undefined && token.kind !== "number";
+    };
+    if (
+      row.entry_valid !== 1 ||
+      row.pending_key !== null ||
+      !fields.valid ||
+      fields.maximumDepth > 1000 ||
+      fields.duplicateKeys.size > 0 ||
+      (revision !== undefined && revision.kind !== "string") ||
+      (worktree !== undefined && worktree.kind !== "object") ||
+      invalidOptionalNumber("archivedAt") ||
+      invalidOptionalNumber("lastInteractionAt") ||
+      jsonScannedValue(fields.first.get("updatedAt"), "numeric") !== row.updated_at ||
+      jsonScannedValue(fields.first.get("archivedAt")) !== row.archived_at ||
+      jsonScannedValue(fields.first.get("lastInteractionAt")) !== row.last_interaction_at
+    ) {
       throw canonicalSessionKeyMigrationRequiredError(
         `invalid persisted session row requires repair for ${row.session_key}`,
       );
     }
-    const lifecycleRevision: unknown =
-      row.lifecycle_revision_json === null ? undefined : JSON.parse(row.lifecycle_revision_json);
+    // The raw token retains opaque UTF-16 code units that SQLite scalar extraction replaces.
+    const lifecycleRevision = readJsonPredicateScalar(revision);
     if (lifecycleRevision !== undefined && typeof lifecycleRevision !== "string") {
       throw new Error("Session lifecycle revision metadata requires repair");
     }
@@ -161,7 +136,7 @@ export function readSessionWorktreeOwnerFactsInDatabase(
             ? {}
             : { lastInteractionAt: row.last_interaction_at }),
           ...(lifecycleRevision === undefined ? {} : { lifecycleRevision }),
-          ...(row.worktree_json === null ? {} : { worktree: readWorktree(row.worktree_json) }),
+          ...(worktree === undefined ? {} : { worktree: readWorktree(worktree.text) }),
         },
       },
     ];

@@ -5,17 +5,9 @@ import path from "node:path";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/remote-log-tailing-runtime.ts";
-
-function artifactBase(argv: readonly string[]): string {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
 
 function logLine(message: string): string {
   return `${JSON.stringify({
@@ -73,6 +65,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
   try {
     const gateway = await gatewayOwner.start({
       repoRoot,
+      initializeCurrentRuntimeState: true,
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(repoRoot, "dist", "index.js")],
@@ -154,7 +147,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
         "--interval",
         "50",
         "--limit",
-        "1",
+        "200",
         "--max-bytes",
         "4096",
       ],
@@ -169,17 +162,31 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       stderr += String(chunk);
     });
     const followOutput = await withOwnedFollowChild(child, async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
-      await appendFile(logPath, logLine("qa-follow-line"));
       const deadline = Date.now() + 10_000;
-      while (!stdout.includes("qa-follow-line") && Date.now() < deadline) {
+      const records = () =>
+        stdout
+          .split("\n")
+          .slice(0, -1)
+          .map((line) => JSON.parse(line) as { type?: string; message?: string });
+      while (!records().some((record) => record.type === "meta") && Date.now() < deadline) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 50);
         });
       }
-      if (!stdout.includes("qa-follow-line")) {
+      if (!records().some((record) => record.type === "meta")) {
+        throw new Error(`follow did not receive initial snapshot: ${stderr}`);
+      }
+      // Each poll logs its admitted connection; the window must also retain the appended record.
+      await appendFile(logPath, logLine("qa-follow-line"));
+      while (
+        !records().some((record) => record.message === "qa-follow-line") &&
+        Date.now() < deadline
+      ) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!records().some((record) => record.message === "qa-follow-line")) {
         throw new Error(`follow did not receive appended record: ${stderr}`);
       }
       return stdout;
@@ -192,7 +199,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
 
 async function main() {
   const repoRoot = process.cwd();
-  const outputRoot = artifactBase(process.argv.slice(2));
+  const outputRoot = parseQaArtifactBase(process.argv.slice(2));
   const startedAt = Date.now();
   const writer = createQaScriptEvidenceWriter({
     artifactBase: outputRoot,

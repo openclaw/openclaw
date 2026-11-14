@@ -88,8 +88,22 @@ export const SessionMembersListResultSchema = closedObject({
   allowedVisibilities: Type.Array(SessionVisibilitySchema),
 });
 
+export const SessionMemberPermissionLevelSchema = stringLiteralUnion(["read", "suggest", "send"]);
+
+export const SessionMemberPermissionSchema = closedObject({
+  identityId: NonEmptyString,
+  level: SessionMemberPermissionLevelSchema,
+  options: Type.Array(SessionMemberPermissionLevelSchema, {
+    minItems: 1,
+    maxItems: 2,
+    uniqueItems: true,
+  }),
+});
+
 export const SessionMembersListEvidenceResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  /** Current profile-policy participation; independent of connection/login state. */
+  permissions: Type.Optional(Type.Array(SessionMemberPermissionSchema)),
   publicShare: Type.Optional(SessionPublicShareSchema),
   owner: Type.Optional(SessionSharingIdentitySchema),
   members: Type.Array(SessionMemberEvidenceSchema),
@@ -149,6 +163,8 @@ export type SessionMembersListParams = Static<typeof SessionMembersListParamsSch
 export type SessionMember = Static<typeof SessionMemberSchema>;
 export type SessionMemberEvidence = Static<typeof SessionMemberEvidenceSchema>;
 export type SessionMembersListResult = Static<typeof SessionMembersListResultSchema>;
+export type SessionMemberPermission = Static<typeof SessionMemberPermissionSchema>;
+export type SessionMemberPermissionLevel = Static<typeof SessionMemberPermissionLevelSchema>;
 export type SessionMembersListEvidenceResult = Static<
   typeof SessionMembersListEvidenceResultSchema
 >;

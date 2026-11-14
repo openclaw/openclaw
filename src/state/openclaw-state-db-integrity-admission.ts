@@ -144,7 +144,7 @@ export function assertOpenClawStateRuntimeIntegrity(
   };
   return () => {
     if (database.isTransaction) {
-      stageSqliteTransactionState(database, { stage() {}, rollback() {}, commit: publish });
+      stageSqliteTransactionState(database, { commit: publish });
     } else {
       publish();
     }

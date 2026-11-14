@@ -109,21 +109,6 @@ export function respondApprovalStorageUnavailable(params: {
   );
 }
 
-export async function registerPendingApprovalRecord<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  record: ExecApprovalRecord<TPayload>;
-  timeoutMs: number;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-}): Promise<{ decision: Promise<ExecApprovalDecision | null> } | undefined> {
-  try {
-    return await params.manager.register(params.record, params.timeoutMs);
-  } catch (err) {
-    respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });
-    return undefined;
-  }
-}
-
 export function buildRequestedApprovalEvent<
   TPayload extends ApprovalTurnSourceFields,
   TKind extends ChannelApprovalKind,
@@ -687,6 +672,10 @@ export async function handleApprovalResolve<
     return;
   }
 
+  // The guarded decision is durable. Later session changes cannot undo it,
+  // and this acknowledgment discloses no approval details to reauthorize.
+  params.respond(true, { ok: true }, undefined);
+
   const resolvedEvent: ResolvedApprovalEvent<TPayload> = {
     id: resolved.approvalId,
     decision: params.decision,
@@ -702,12 +691,6 @@ export async function handleApprovalResolve<
   });
   if (params.approvalKind !== "system-agent") {
     params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
-  }
-
-  if (params.authority.isCurrent()) {
-    params.respond(true, { ok: true }, undefined);
-  } else {
-    respondUnknownOrExpiredApproval(params.respond);
   }
 
   const followUps = [

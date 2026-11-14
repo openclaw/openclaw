@@ -1,4 +1,5 @@
 import { deserialize, serialize } from "node:v8";
+import { getPostgresPool } from "../postgres-sync/pool.js";
 import type { SqliteWorkerStoreOptions } from "../sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
@@ -15,16 +16,6 @@ import { observeDatabaseRequest } from "./observation.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 type EngineStoreOptions = SqliteWorkerStoreOptions & { existingOnly?: false; target?: never };
-
-function observeScope<Operations extends SqliteWorkerOperations>(
-  scope: Pick<SqliteWorkerStore<Operations>, "execute">,
-  input: DatabaseEngineInput,
-): Pick<SqliteWorkerStore<Operations>, "execute"> {
-  return {
-    execute: (command, options) =>
-      observeDatabaseRequest(input ? "postgres" : "sqlite", () => scope.execute(command, options)),
-  };
-}
 
 class EngineWorkerStore<
   Operations extends SqliteWorkerOperations,
@@ -64,14 +55,17 @@ class EngineWorkerStore<
     command: { type: Key; input: Operations[Key]["input"] },
     options?: { signal?: AbortSignal },
   ): Promise<Operations[Key]["output"]> {
-    if (!this.closed && isSqliteWorkerStoreAvailable(this.store)) {
-      return observeScope(this.store, this.input).execute(command, options);
+    let store = this.store;
+    let captured = command;
+    if (this.closed || !isSqliteWorkerStoreAvailable(store)) {
+      const payload = serialize(command);
+      store = await this.current();
+      captured = deserialize(payload);
     }
-    const payload = serialize(command);
-    const store = await this.current();
-    const captured: typeof command = deserialize(payload);
     // Never replay a command: a failed worker may have committed before losing its reply.
-    return observeScope(store, this.input).execute(captured, options);
+    return observeDatabaseRequest(this.input ? "postgres" : "sqlite", () =>
+      store.execute(captured, options),
+    );
   }
 
   close(): Promise<void> {
@@ -91,6 +85,10 @@ export async function openEngineWorkerStore<Operations extends SqliteWorkerOpera
   options: EngineStoreOptions,
   input: DatabaseEngineInput,
 ): Promise<SqliteWorkerStore<Operations>> {
+  // Explicit family input can precede the process's configured engine selection.
+  if (input) {
+    getPostgresPool();
+  }
   const captured = {
     ...options,
     moduleUrl: new URL(options.moduleUrl),
@@ -114,7 +112,12 @@ export async function runEngineStoreOperation<Operations extends SqliteWorkerOpe
   const current: SqliteWorkerStore<Operations> =
     store instanceof EngineWorkerStore ? await store.current() : store;
   const observed = (scope: Pick<SqliteWorkerStore<Operations>, "execute">) =>
-    operation(observeScope(scope, input));
+    operation({
+      execute: (command, options) =>
+        observeDatabaseRequest(input ? "postgres" : "sqlite", () =>
+          scope.execute(command, options),
+        ),
+    });
   if (input && writes) {
     return runSqliteWorkerStoreWrite(current, observed, assertCurrent ?? (() => {}), [
       databasePath,

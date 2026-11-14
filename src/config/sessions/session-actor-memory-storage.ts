@@ -79,14 +79,14 @@ function errorFacts(error: unknown) {
     : { name: "Error", message: "Session actor storage command failed" };
 }
 
-/** Storage and phase commands share this owner's FIFO; every operation below is synchronous. */
+/** Storage, phase commands, and companion settlement share this owner's FIFO. */
 export function createSessionActorMemoryStorage(options: {
   agentId: string;
   path: string;
   target: SessionActorTarget;
   sessions: Map<string, SessionActorMemoryRecord>;
   current(): SessionActorMemoryState;
-  enqueue<T>(run: () => T): Promise<T>;
+  enqueue<T>(run: () => T | Promise<T>): Promise<T>;
   guards: SessionActorExecutorGuards;
   acquire(this: void, sessionKey: string, lifetime?: SessionActorLifetime): Promise<SessionActor>;
   prepareInstall(state: SessionActorMemoryState): void;
@@ -98,12 +98,12 @@ export function createSessionActorMemoryStorage(options: {
     const before = options.current();
     let conversations: SessionActorMemoryConversationOwner | undefined;
     const changed = new Map<string, SessionActorMemoryState | undefined>();
-    const authorized = new Set<string>();
+    const authorized = new Map<string, SessionActorMemoryState>();
     const authorize = (sessionKey: string, state: SessionActorMemoryState | undefined) => {
       if (state && !authorized.has(sessionKey)) {
         // Synchronous work uses one effect-policy check against the authoritative preimage.
         authority.authorize("commit", structuredClone(state.hot));
-        authorized.add(sessionKey);
+        authorized.set(sessionKey, state);
       }
     };
     const get = (sessionKey: string) => {
@@ -185,6 +185,12 @@ export function createSessionActorMemoryStorage(options: {
     return {
       context,
       changed,
+      reauthorize: () => {
+        options.guards.assertAccepted();
+        for (const preimage of authorized.values()) {
+          authority.authorize("commit", structuredClone(preimage.hot));
+        }
+      },
       installConversations: () => {
         if (conversations) {
           options.installConversations(conversations);
@@ -210,11 +216,15 @@ export function createSessionActorMemoryStorage(options: {
       return options.enqueue(() => readCurrent(query, authority));
     },
     mutate(command, authority, observer) {
-      return options.enqueue(() => {
+      return options.enqueue(async () => {
         type Value = SessionActorStorageWrites[typeof command.type]["output"];
+        let outcome: SessionActorStorageOutcome<Value>;
         try {
           options.guards.assertAccepted();
-          const { context, changed, installConversations } = transaction(authority, true);
+          const { context, changed, reauthorize, installConversations } = transaction(
+            authority,
+            true,
+          );
           // SAFETY: mutate() receives the matching input for its command discriminator.
           const selected = command as SessionActorStorageCommand;
           const result = mutateSessionActorMemoryStorage(context, selected, authority);
@@ -236,8 +246,6 @@ export function createSessionActorMemoryStorage(options: {
             }
             changes.push({ sessionKey, before: previous?.hot, after: state?.hot });
           }
-          // No await follows admission; a callback's reentrant close may race this accepted install.
-          authority.assertCurrent();
           // Detach before installation: an uncloneable result cannot leave a partial commit.
           const committed = structuredClone({
             kind: "committed" as const,
@@ -245,7 +253,12 @@ export function createSessionActorMemoryStorage(options: {
             changes,
             ...(context.entryPatchEffects ? { entryPatchEffects: context.entryPatchEffects } : {}),
           });
-          observer?.beforeCommit?.(structuredClone(committed));
+          if (observer?.beforeCommit) {
+            await observer.beforeCommit(structuredClone(committed));
+            // Companion I/O can outlive permission; check the original preimage at the effect.
+            reauthorize();
+          }
+          authority.assertCurrent();
           for (const [sessionKey, state] of changed) {
             const previous = sessions.get(sessionKey);
             if (!state) {
@@ -268,7 +281,7 @@ export function createSessionActorMemoryStorage(options: {
             }
           }
           installConversations();
-          const outcome: SessionActorStorageOutcome<Value> = committed;
+          outcome = committed;
           try {
             if (target.database.kind !== "memory") {
               throw new Error("Memory storage lost its owner");
@@ -281,10 +294,11 @@ export function createSessionActorMemoryStorage(options: {
           } catch (error) {
             outcome.failure = errorFacts(error);
           }
-          return outcome;
         } catch (error) {
-          return { kind: "rolled-back", error: errorFacts(error) };
+          outcome = { kind: "rolled-back", error: errorFacts(error) };
         }
+        await observer?.settled?.(outcome);
+        return outcome;
       });
     },
   };

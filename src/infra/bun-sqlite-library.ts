@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
-import { getEmbeddedStandaloneRuntimeRoot } from "../../cli-invocation.mjs";
+import { resolveStandaloneSidecarRoot } from "../../cli-invocation.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
+import { probeBunSqliteLibrary } from "./bun-sqlite-library-probe.js";
+import { PROCESS_MACHINE_IDENTITY_KEY } from "./current-machine-identity.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
@@ -18,7 +20,7 @@ export type SqliteLibrarySelection =
       extensionLoadingSupported: true;
     };
 
-type SelectionOptions = { explicitPath?: string };
+type SelectionOptions = { explicitPath?: string; standaloneRoot?: string };
 type LibraryProbe = { version: string; extensionLoadingSupported: boolean };
 const WORKER_SELECTION_KEY = "openclaw.bunSqliteLibrarySelection";
 const WORKER_CAPABILITIES_KEY = "openclaw.sqliteRuntimeCapabilities";
@@ -116,40 +118,6 @@ function createCapabilities(select: () => unknown) {
   };
 }
 
-// Bun is optional: describe only the FFI symbols used at this native boundary.
-type BunFfi = {
-  FFIType: { cstring: number; i32: number };
-  dlopen: (
-    path: string,
-    symbols: Record<string, { args: number[]; returns: number }>,
-  ) => {
-    symbols: {
-      sqlite3_libversion: () => { toString(): string };
-      sqlite3_compileoption_used: (option: Buffer) => number;
-    };
-    close: () => void;
-  };
-};
-
-function probeLibrary(path: string): LibraryProbe {
-  const require = createRequire(import.meta.url);
-  // SAFETY: Called only on Bun; this models its FFI module and the two requested SQLite symbols.
-  const { dlopen, FFIType } = require("bun:ffi") as BunFfi;
-  const library = dlopen(path, {
-    sqlite3_libversion: { args: [], returns: FFIType.cstring },
-    sqlite3_compileoption_used: { args: [FFIType.cstring], returns: FFIType.i32 },
-  });
-  try {
-    return {
-      version: String(library.symbols.sqlite3_libversion()),
-      extensionLoadingSupported:
-        library.symbols.sqlite3_compileoption_used(Buffer.from("OMIT_LOAD_EXTENSION\0")) === 0,
-    };
-  } finally {
-    library.close();
-  }
-}
-
 function selectLibrary(path: string): void {
   const require = createRequire(import.meta.url);
   // SAFETY: Called only on macOS Bun, whose Database exposes the process-wide library selector.
@@ -177,7 +145,7 @@ function createSelector() {
         : { source: "runtime" };
       return selection;
     }
-    const standaloneRoot = getEmbeddedStandaloneRuntimeRoot();
+    const standaloneRoot = options.standaloneRoot ?? resolveStandaloneSidecarRoot();
     const bundled =
       override === undefined && standaloneRoot !== undefined
         ? posix.join(standaloneRoot, "lib/libsqlite3.dylib")
@@ -201,10 +169,10 @@ function createSelector() {
       let probe: LibraryProbe;
       let present = true;
       try {
-        // dlopen decides loadability: Apple's SQLite lives in the dyld shared cache with no
+        // Loading decides availability: Apple's SQLite lives in the dyld shared cache with no
         // file on disk, so a stat-first check would hide its real defect (OMIT_LOAD_EXTENSION).
         try {
-          probe = probeLibrary(path);
+          probe = probeBunSqliteLibrary(path);
         } catch (error) {
           present = existsSync(path);
           throw present ? error : new Error("missing file", { cause: error });
@@ -268,41 +236,14 @@ function selectionError(path: string, error: unknown, bundled = false): Error {
   );
 }
 
-function inheritedSelection(): SqliteLibrarySelection | undefined {
-  const value: unknown = getEnvironmentData(WORKER_SELECTION_KEY);
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const source = "source" in value ? value.source : undefined;
-    if (source === "runtime") {
-      return { source: "runtime" };
-    }
-    const path = "path" in value ? value.path : undefined;
-    const version = "version" in value ? value.version : undefined;
-    const extensionLoadingSupported =
-      "extensionLoadingSupported" in value ? value.extensionLoadingSupported : undefined;
-    if (
-      (source === "env" || source === "bundled" || source === "discovered") &&
-      typeof path === "string" &&
-      typeof version === "string" &&
-      extensionLoadingSupported === true
-    ) {
-      return {
-        source,
-        path,
-        version,
-        extensionLoadingSupported: true,
-      };
-    }
-  }
-  throw new Error("Invalid inherited SQLite library selection");
-}
-
 function createRuntimeSelector(): ReturnType<typeof createSelector> {
   const isBun = Boolean(process.versions.bun);
   const sharedLibrary = isBun && process.platform === "darwin";
-  const inherited = sharedLibrary && !isMainThread ? inheritedSelection() : undefined;
+  let inherited: SqliteLibrarySelection | undefined;
+  if (sharedLibrary && !isMainThread) {
+    // SAFETY: Only this selector publishes the chosen fact; workers inherit Node's structured clone.
+    inherited = getEnvironmentData(WORKER_SELECTION_KEY) as SqliteLibrarySelection | undefined;
+  }
   const select = createSelector();
   let published = false;
   return (options?: SelectionOptions) => {
@@ -350,6 +291,7 @@ export function captureSqliteWorkerEnvironmentData(
     // Opaque owner facts include absence, which clears a retained carrier's previous snapshot.
     [SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY)],
     [SQLITE_DATABASE_ADMISSIONS_KEY, databaseAdmissions],
+    [PROCESS_MACHINE_IDENTITY_KEY, getEnvironmentData(PROCESS_MACHINE_IDENTITY_KEY)],
   ];
 }
 

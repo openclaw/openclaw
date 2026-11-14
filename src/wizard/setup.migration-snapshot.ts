@@ -30,13 +30,7 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
 const IMPORT_BLOCKING_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
 
 export class SetupTargetLockedError extends Error {
-  readonly code = "setup_target_locked";
-
-  constructor(
-    public readonly holderPid: number | undefined,
-    profile: string | undefined,
-    cause: unknown,
-  ) {
+  constructor(holderPid: number | undefined, profile: string | undefined, cause: unknown) {
     const target = profile ? `profile ${profile}` : "the current profile";
     const owner = holderPid === undefined ? "" : ` (pid ${holderPid})`;
     super(

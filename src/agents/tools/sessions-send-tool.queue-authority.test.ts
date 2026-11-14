@@ -35,12 +35,15 @@ import {
   resolveDelegationCapability,
 } from "../delegation-capability.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-  type EmbeddedAgentQueueMessageOptions,
+import type {
+  EmbeddedAgentQueueHandle,
+  EmbeddedAgentQueueMessageOptions,
 } from "../embedded-agent-runner/runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../embedded-agent-runner/runs.test-support.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "../openclaw-tools.sessions-steering.test-support.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -56,37 +59,31 @@ import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 registerAgentSessionLoopTestLifecycle();
+const inactiveCaller = "agent tool caller authority is no longer active";
 
 describe("sessions_send direct queue source authority", () => {
   it.each([
-    "live",
-    "revoked",
-    "unscoped",
-    "send-revoked",
-    "send-live",
-    "peer-revoked",
-    "peer-live",
-    "ask-revoked",
-    "settle-live",
-    "settle-wildcard",
-    "settle-revoked",
-    "settle-reassigned",
+    ["live", null],
+    ["revoked", inactiveCaller],
+    ["unscoped", "guarded_injection_unsupported"],
+    ["send-revoked", "tools.agentToAgent.send"],
+    ["send-live", null],
+    ["peer-revoked", "Session communication state changed before admission."],
+    ["peer-live", null],
+    ["ask-revoked", "authority"],
+    ["settle-live", null],
+    ["settle-wildcard", null],
+    ["settle-revoked", inactiveCaller],
+    ["settle-reassigned", inactiveCaller],
   ] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
-    async (source) => {
+    async (source, error) => {
       const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
       await withOpenClawTestState(stateOptions, async (state) => {
         const crossAgent = source.startsWith("send-");
         const peerPolicy = source.startsWith("peer-");
         const asks = peerPolicy || source === "ask-revoked";
-        const rejected =
-          source === "revoked" ||
-          source === "send-revoked" ||
-          source === "peer-revoked" ||
-          source === "ask-revoked" ||
-          source === "settle-revoked" ||
-          source === "settle-reassigned" ||
-          source === "unscoped";
+        const rejected = error !== null;
         const targetAgentId = crossAgent ? "worker" : "main";
         const cfg = {
           agents: {
@@ -98,7 +95,7 @@ describe("sessions_send direct queue source authority", () => {
         setRuntimeConfigSnapshot(cfg);
         setActivePluginRegistry(createSessionConversationTestRegistry());
         const requesterSessionKey = "agent:main:dashboard:queue-source";
-        const sessionKey = `agent:${targetAgentId}:cron:queue-target:run:active`;
+        const sessionKey = `agent:${targetAgentId}:dashboard:queue-target`;
         const sessionId = "queue-target-session";
         for (const [key, id] of [
           [requesterSessionKey, "queue-source-session"],
@@ -129,6 +126,7 @@ describe("sessions_send direct queue source authority", () => {
         const queued = vi.spyOn(session.agent, "admitSteeringMessage");
         const preparation = createDeferredCore();
         const resumePreparation = createDeferredCore();
+        const acceptedInput = createDeferredCore();
         const queueMessage = async (
           text: string,
           options?: EmbeddedAgentQueueMessageOptions,
@@ -147,7 +145,15 @@ describe("sessions_send direct queue source authority", () => {
           await steerActiveSessionWithOptionalDeliveryWait(
             session,
             text,
-            options,
+            {
+              ...options,
+              onQueueAccepted: (accepted) => {
+                options?.onQueueAccepted?.(accepted);
+                if (accepted) {
+                  acceptedInput.resolve();
+                }
+              },
+            },
             sessionKey,
             () => {
               assertCurrent?.();
@@ -162,8 +168,7 @@ describe("sessions_send direct queue source authority", () => {
           isCompacting: () => false,
           abort: () => {},
           sourceReplyDeliveryMode: "message_tool_only",
-          // Exercise the delivery owner's retry without transcript-commit waiting.
-          supportsTranscriptCommitWait: false,
+          supportsTranscriptCommitWait: true,
           ...(source === "unscoped"
             ? { messageInjection: { isAvailable: () => true, queueMessage } }
             : {
@@ -174,7 +179,7 @@ describe("sessions_send direct queue source authority", () => {
                 },
               }),
         };
-        setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, targetAgentId);
+        await setSessionsSendTestActiveRun(sessionId, handle, sessionKey, requesterSessionKey, cfg);
         const instance = createOperationalRunInstanceRef("queue-source-run");
         const authority = claimAgentRunDelegatedAuthority(instance);
         // Resolution is read-only; the real queue and SQLite transcript perform every effect.
@@ -306,21 +311,22 @@ describe("sessions_send direct queue source authority", () => {
           }
           tool = available;
         }
-        const send = () => tool.execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
-        const pending =
-          source === "unscoped" || crossAgent
-            ? send()
-            : withGatewayToolCallerIdentity(
-                {
-                  agentId: "main",
-                  sessionKey: requesterSessionKey,
+        const send = () =>
+          tool.execute("source-send", { sessionKey, message, mode: "steer", timeoutSeconds: 0 });
+        const pending = withGatewayToolCallerIdentity(
+          {
+            ...createSessionsSendTestCaller(requesterSessionKey),
+            ...(source === "unscoped" || crossAgent
+              ? {}
+              : {
                   gatewayContextResolver: () => context,
                   operationalRunInstance: instance,
                   approvalAuthority: authority,
                   receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-                },
-                send,
-              );
+                }),
+          },
+          send,
+        );
         try {
           if (asks) {
             const questionId = await Promise.race([
@@ -383,29 +389,8 @@ describe("sessions_send direct queue source authority", () => {
             await revokePeer();
           }
           resumePreparation.resolve();
-          const result = await pending;
-          if (rejected) {
-            expect(result.details).toMatchObject({
-              status: source === "ask-revoked" ? "forbidden" : "error",
-            });
-            expect(JSON.stringify(result)).toContain(
-              source === "ask-revoked"
-                ? "authority"
-                : source === "send-revoked"
-                  ? "tools.agentToAgent.send"
-                  : source === "unscoped"
-                    ? "guarded_injection_unsupported"
-                    : "Message injection authority is no longer current",
-            );
-            expect(queued).not.toHaveBeenCalled();
-          } else {
-            expect(result.details).toMatchObject({
-              status: "accepted",
-              targetDisposition: "steered",
-            });
-            expect(queued).toHaveBeenCalledOnce();
-          }
-          // Acceptance transfers ownership: closing the sender cannot withdraw accepted guidance.
+          await Promise.race([acceptedInput.promise, pending]);
+          // Receiver custody survives sender closure while the durable ACK waits for consumption.
           releaseAgentRunDelegatedAuthority(authority);
           if (crossAgent) {
             revokeSend();
@@ -418,6 +403,20 @@ describe("sessions_send direct queue source authority", () => {
               createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
           );
           await session.prompt("Consume accepted guidance.");
+          const result = await pending;
+          if (rejected) {
+            expect(result.details).toMatchObject({
+              status: source === "ask-revoked" ? "forbidden" : "error",
+            });
+            expect(JSON.stringify(result)).toContain(error);
+            expect(queued).not.toHaveBeenCalled();
+          } else {
+            expect(result.details).toMatchObject({
+              status: "accepted",
+              targetDisposition: "steered",
+            });
+            expect(queued).toHaveBeenCalledOnce();
+          }
           const reopened = await SessionManager.openAsync(target, state.workspaceDir);
           const delivered = reopened
             .buildSessionContext()

@@ -65,6 +65,24 @@ async function startGatewayServerWithSdkHost(
       waitForRequestRuntime: gatewayKernel.ensureRequestRuntimeReady,
       updateCanary: opts.updateCanary,
       onListening: opts.gatewayStateOwner?.markListening,
+      deferHookWake: async (request) => {
+        const owner = gatewayKernel.kernel.getReloadState().cronState;
+        const defer = owner.deferHookWake;
+        if (!defer) {
+          throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
+        }
+        const commitGuard = () => {
+          request.commitGuard();
+          if (
+            gatewayKernel.lifecycle.closePreludeStarted ||
+            gatewayKernel.kernel.getReloadState().cronState !== owner
+          ) {
+            throw new Error("Scheduled Hook wake owner changed; retry the request");
+          }
+        };
+        commitGuard();
+        return await defer({ ...request, commitGuard });
+      },
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {
@@ -113,7 +131,7 @@ async function startGatewayServerWithSdkHost(
   } catch (err) {
     // Failed startup must release work whose normal timer was never armed.
     releasePostReadyWork();
-    return await rethrowGatewayStartupError(err, closeOnStartupFailure);
+    return await rethrowGatewayStartupError(err, () => closeOnStartupFailure(err));
   } finally {
     if (stopStartingTailscale) {
       signal?.removeEventListener("abort", stopStartingTailscale);
@@ -143,12 +161,13 @@ async function startGatewayServerWithSdkHost(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        closePromise = sdkResourceHost
-          .run(async () => {
+        closePromise = gatewayKernel
+          .runClose(async () => {
             const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
             await runGatewayCloseSteps({
               owner: gatewayKernel,
+              exitAfterClose: optsLocal?.exitAfterClose,
               close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {

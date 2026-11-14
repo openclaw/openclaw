@@ -1,27 +1,34 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import {
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
   publishStateRuntimeSchemaAdmission,
 } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  type OpenClawStateDatabase,
+} from "./openclaw-state-db-contract.js";
 import {
   assertCurrentStateRuntimeSchema,
   assertNoLegacyStateRuntimeRepair,
 } from "./openclaw-state-db-fast-path.js";
+import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js";
 import {
   assertOpenClawStateRuntimeIntegrity,
   type OpenClawStateIntegrityPolicy,
 } from "./openclaw-state-db-integrity-admission.js";
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
+import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -32,6 +39,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 function assertExistingOpenClawStateRuntimeMetadata(
   database: DatabaseSync,
   pathname: string,
+  context: SqliteSchemaErrorContext,
 ): number {
   if (getStateRuntimeSchemaAdmission(database)) {
     const version = getStateSchemaVersionAdmission(database)?.userVersion;
@@ -39,7 +47,13 @@ function assertExistingOpenClawStateRuntimeMetadata(
       return version;
     }
   }
-  const version = assertSupportedStateSchemaVersion(database, pathname);
+  const version = assertSupportedStateSchemaVersion(
+    database,
+    pathname,
+    undefined,
+    undefined,
+    context,
+  );
   if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
@@ -77,6 +91,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
   integrityPolicy?: OpenClawStateIntegrityPolicy,
+  context: SqliteSchemaErrorContext = "runtime",
 ): void {
   const admitted = getStateRuntimeSchemaAdmission(database)
     ? getAdmittedSqliteSchemaFacts(database)
@@ -93,10 +108,10 @@ export function assertExistingOpenClawStateRuntimeSchema(
     return;
   }
   let publishIntegrity: (() => void) | undefined;
-  runSqliteDeferredTransactionSync(
+  runSqliteReadSnapshotSync(
     database,
     () => {
-      const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname);
+      const userVersion = assertExistingOpenClawStateRuntimeMetadata(database, pathname, context);
       const currentCookie = readSqliteSchemaCookie(database);
       if (typeof currentCookie !== "number") {
         throw new Error(
@@ -118,4 +133,25 @@ export function assertExistingOpenClawStateRuntimeSchema(
   );
   publishIntegrity?.();
   publishStateRuntimeSchemaAdmission(database, true);
+}
+
+export function assertStateDatabaseSchemaAdmission(database: OpenClawStateDatabase): void {
+  if (isExistingOpenClawStateSchema(database.path, database.db)) {
+    const location = readTrackedStateDatabaseIdentity(database.db)?.canonicalPath;
+    if (!location) {
+      throw new Error(
+        "Existing shared-state schema admission requires a filesystem-backed database.",
+      );
+    }
+    if (!isExistingOpenClawStateSchema(location, database.db)) {
+      throw new Error(
+        "Existing shared-state schema admission requires its selected physical database.",
+      );
+    }
+    if (isPostgresSqlConnection(database.db)) {
+      assertSupportedStateSchemaVersion(database.db, database.path);
+      return;
+    }
+    assertExistingOpenClawStateRuntimeSchema(database.db, database.path);
+  }
 }

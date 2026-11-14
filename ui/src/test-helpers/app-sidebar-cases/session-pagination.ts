@@ -19,9 +19,6 @@ describe("AppSidebar gateway session pagination", () => {
     const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     const firstResult = createSessionState("main", ["agent:main:before-remote-change"]).result;
     const changedResult = createSessionState("main", ["agent:main:after-remote-change"]).result;
-    if (!firstResult || !changedResult) {
-      throw new Error("expected filtered session results");
-    }
     harness.list.mockResolvedValue(firstResult);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
@@ -63,9 +60,6 @@ describe("AppSidebar gateway session pagination", () => {
       const offset = options?.offset ?? 0;
       const limit = options?.limit ?? pageSize;
       const sessions = createSessionState("main", keys.slice(offset, offset + limit)).result;
-      if (!sessions) {
-        throw new Error("expected a paginated filtered session result");
-      }
       const nextOffset = offset + sessions.sessions.length;
       const hasMore = nextOffset < keys.length;
       return {
@@ -108,9 +102,6 @@ describe("AppSidebar gateway session pagination", () => {
     const statusFilter = "archived";
     const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     const result = createSessionState("main", ["agent:main:current-archive"]).result;
-    if (!result) {
-      throw new Error("expected a scoped session result");
-    }
     const pendingPage = deferred<typeof result>();
     harness.list.mockImplementation(async () => await pendingPage.promise);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -143,9 +134,6 @@ describe("AppSidebar gateway session pagination", () => {
     const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     const mainResult = createSessionState("main", ["agent:main:stale-archive"]).result;
     const researchResult = createSessionState("research", ["agent:research:current"]).result;
-    if (!mainResult || !researchResult) {
-      throw new Error("expected scoped session results");
-    }
     const pendingMain = deferred<typeof mainResult>();
     harness.list.mockImplementation(async (options) =>
       options?.agentId === "research" ? researchResult : await pendingMain.promise,
@@ -185,9 +173,6 @@ describe("AppSidebar gateway session pagination", () => {
     const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     const staleResult = createSessionState("main", ["agent:main:before-reconnect"]).result;
     const freshResult = createSessionState("main", ["agent:main:after-reconnect"]).result;
-    if (!staleResult || !freshResult) {
-      throw new Error("expected reconnect session results");
-    }
     const pendingPage = deferred<typeof staleResult>();
     harness.list
       .mockImplementationOnce(async () => await pendingPage.promise)
@@ -222,9 +207,6 @@ describe("AppSidebar gateway session pagination", () => {
     const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     const firstResult = createSessionState("main", keys.slice(0, 60)).result;
     const nextResult = createSessionState("main", keys.slice(60)).result;
-    if (!firstResult || !nextResult) {
-      throw new Error("expected paginated session results");
-    }
     const firstPage = {
       ...firstResult,
       count: 60,
@@ -270,11 +252,8 @@ describe("AppSidebar gateway session pagination", () => {
   it("loads the 51st active session through the canonical paginated refresh", async () => {
     const keys = Array.from({ length: 51 }, (_, index) => `agent:main:session-${index}`);
     const harness = createSessionsHarness("main", keys.slice(0, 50));
-    const initialResult = harness.sessions.state.result;
+    const initialResult = harness.result;
     const nextResult = createSessionState("main", keys.slice(50)).result;
-    if (!initialResult || !nextResult) {
-      throw new Error("expected paginated session results");
-    }
     const firstPage = {
       ...initialResult,
       count: 50,
@@ -342,10 +321,7 @@ describe("AppSidebar gateway session pagination", () => {
   it("derives the active page offset when the Gateway omits its optional cursor", async () => {
     const keys = Array.from({ length: 51 }, (_, index) => `agent:main:session-${index}`);
     const harness = createSessionsHarness("main", keys.slice(0, 50));
-    const initialResult = harness.sessions.state.result;
-    if (!initialResult) {
-      throw new Error("expected an active paginated session result");
-    }
+    const initialResult = harness.result;
     harness.publishList({
       agentId: "main",
       result: {
@@ -371,10 +347,7 @@ describe("AppSidebar gateway session pagination", () => {
 
   it("does not turn an explicit terminal session cursor into another page", async () => {
     const harness = createSessionsHarness("main", ["agent:main:session-0"]);
-    const initialResult = harness.sessions.state.result;
-    if (!initialResult) {
-      throw new Error("expected a terminal paginated session result");
-    }
+    const initialResult = harness.result;
     harness.publishList({
       agentId: "main",
       result: {
@@ -403,9 +376,6 @@ describe("AppSidebar gateway session pagination", () => {
     const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
     const firstResult = createSessionState("main", keys.slice(0, 60)).result;
     const nextResult = createSessionState("main", keys.slice(60)).result;
-    if (!firstResult || !nextResult) {
-      throw new Error("expected paginated archived session results");
-    }
     const archived = statusFilter === "archived";
     const firstPage = {
       ...firstResult,
@@ -453,9 +423,6 @@ describe("AppSidebar gateway session pagination", () => {
       const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
       const firstResult = createSessionState("main", keys.slice(0, 60)).result;
       const nextResult = createSessionState("main", keys.slice(60)).result;
-      if (!firstResult || !nextResult) {
-        throw new Error("expected paginated session results");
-      }
       const archived = statusFilter === "archived";
       const firstPage = {
         ...firstResult,

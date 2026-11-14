@@ -2,6 +2,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import * as worker from "./code-mode-executor.js";
 import { resolveCodeModeConfig } from "./code-mode-runtime.js";
@@ -23,9 +24,8 @@ it("continues headless after a checkpoint and actual tool reply exactly once", a
     return jsonResult({ value: 1 });
   });
   const result = await runCodeModeScriptHeadless({
-    ctx: createHeadlessCodeModeHarness([tool]),
+    ctx: createHeadlessCodeModeHarness([tool], { codeMode: { timeoutMs: 10_000 } }),
     code: 'text("before"); await yield_control(); const reply = await reply_once({}); text("after"); return reply.value;',
-    overrides: { timeoutMs: 10_000 },
   });
   expect(result, JSON.stringify(result)).toMatchObject({
     status: "completed",
@@ -37,6 +37,83 @@ it("continues headless after a checkpoint and actual tool reply exactly once", a
     ],
   });
   expect(tool.execute).toHaveBeenCalledOnce();
+});
+
+it("checkpoints headless under pressure without canceling or replaying its tool reply", async () => {
+  const started = createDeferred<AbortSignal | undefined>();
+  const release = createDeferred();
+  const checkpoint = createDeferred();
+  const pressure = new AbortController();
+  let injected = false;
+  let resumes = 0;
+  const runWorker = worker.runCodeModeExecutor;
+  const workerSpy = vi
+    .spyOn(worker, "runCodeModeExecutor")
+    .mockImplementation(async (input, options) => {
+      if (input.kind === "resume") {
+        resumes++;
+      }
+      const inline = options.inlineHost;
+      if (!inline) {
+        return await runWorker(input, options);
+      }
+      return await runWorker(input, {
+        ...options,
+        inlineHost: {
+          ...inline,
+          onBoundary: async (boundary, context) => {
+            const inject =
+              !injected &&
+              boundary.pendingRequests.some((request) => request.method === "callValue");
+            if (inject) {
+              injected = true;
+            }
+            const command = await inline.onBoundary(
+              boundary,
+              inject ? { ...context, yieldSignal: pressure.signal } : context,
+            );
+            if (inject) {
+              expect(command.kind).toBe("checkpoint");
+              checkpoint.resolve();
+            }
+            return command;
+          },
+        },
+      });
+    });
+  const tool = pluginToolWithExecute(
+    "held_reply",
+    "Return one held reply",
+    async (_id, _input, signal) => {
+      started.resolve(signal);
+      await release.promise;
+      return jsonResult({ value: "once" });
+    },
+  );
+  const execution = runCodeModeScriptHeadless({
+    ctx: createHeadlessCodeModeHarness([tool]),
+    code: "const reply = await held_reply({}); text(reply.value); return reply.value;",
+  });
+  try {
+    const effectSignal = expectDefined(await started.promise, "effect signal");
+    pressure.abort();
+    await checkpoint.promise;
+    expect(effectSignal.aborted).toBe(false);
+    expect(tool.execute).toHaveBeenCalledOnce();
+    release.resolve();
+    expect(await execution).toMatchObject({
+      status: "completed",
+      value: "once",
+      toolCallCount: 1,
+      output: [{ type: "text", text: "once" }],
+    });
+    expect(tool.execute).toHaveBeenCalledOnce();
+    expect(effectSignal.aborted).toBe(false);
+    expect(resumes).toBe(1);
+  } finally {
+    release.resolve();
+    await execution.finally(() => workerSpy.mockRestore());
+  }
 });
 
 it.each(["headless", "interactive"] as const)(
@@ -102,9 +179,8 @@ it.each(["headless", "interactive"] as const)(
     try {
       if (mode === "headless") {
         const result = await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness([tool]),
+          ctx: createHeadlessCodeModeHarness([tool], { codeMode: { timeoutMs: 10_000 } }),
           code,
-          overrides: { timeoutMs: 10_000 },
         });
         expect(result, JSON.stringify(result)).toMatchObject({
           status: "completed",

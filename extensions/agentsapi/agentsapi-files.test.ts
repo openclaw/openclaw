@@ -119,11 +119,20 @@ describe("Agents API input attachment custody", () => {
     const full = await save(bytes);
     const extra = await save("x");
     const fact = { path: full.path, sizeBytes: 1 };
-    expect(decodedFiles(await prepare([fact, fact]))).toEqual([bytes, bytes]);
+    const complete = decodedFiles(await prepare([fact, fact]));
+    expect(complete).toHaveLength(2);
+    for (const [index, file] of complete.entries()) {
+      expect(file.equals(bytes), `complete attachment ${index + 1}`).toBe(true);
+    }
 
     const smaller = await save(bytes.subarray(1));
     const partial = await prepare([fact, { path: extra.path }, fact, { path: smaller.path }]);
-    expect(decodedFiles(partial)).toEqual([bytes, Buffer.from("x"), bytes.subarray(1)]);
+    const accepted = decodedFiles(partial);
+    const expected = [bytes, Buffer.from("x"), bytes.subarray(1)];
+    expect(accepted).toHaveLength(expected.length);
+    for (const [index, expectedBytes] of expected.entries()) {
+      expect(accepted[index]!.equals(expectedBytes), `partial attachment ${index + 1}`).toBe(true);
+    }
     expect(
       JSON.parse(partial.mappingText.split("\n")[1]!).map(
         ({ attachment }: { attachment: number }) => attachment,

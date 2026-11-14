@@ -5,6 +5,7 @@ import {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkAudioInputBudget } from "./audio-input-budget.ts";
@@ -27,6 +28,8 @@ import {
   type RealtimeTalkTransportStartResult,
 } from "./shared.ts";
 
+registerChatComposerEnglish();
+
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
 const BARGE_IN_CONSECUTIVE_SPEECH_FRAMES = 2;
@@ -34,12 +37,6 @@ const AUDIO_APPEND_LIVENESS_TIMEOUT_MS = 30_000;
 const RELAY_CLOSE_TIMEOUT_MS = 8_000;
 const MAX_PENDING_ACTIVATION_EVENTS = 32;
 const MAX_PENDING_ACTIVATION_EVENT_BYTES = 256 * 1024;
-
-function estimateRelayEventBytes(event: GatewayRelayEvent): number {
-  // Gateway events already crossed the JSON boundary. Browser strings may use
-  // two bytes per code unit; avoid allocating a second encoded copy here.
-  return JSON.stringify(event).length * 2;
-}
 
 // Owns the Gateway event subscription and browser media; stopLocal releases both.
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
@@ -319,7 +316,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.stopLocal();
       return;
     }
-    const eventBytes = estimateRelayEventBytes(event);
+    // Gateway events already crossed the JSON boundary. Browser strings may use
+    // two bytes per code unit; avoid allocating a second encoded copy here.
+    const eventBytes = JSON.stringify(event).length * 2;
     if (
       this.pendingActivationEvents.length >= MAX_PENDING_ACTIVATION_EVENTS ||
       eventBytes > MAX_PENDING_ACTIVATION_EVENT_BYTES - this.pendingActivationEventBytes
@@ -344,8 +343,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     const closesRelay = event.type === "close";
     try {
-      if (event.talkEvent) {
-        this.ctx.callbacks.onTalkEvent?.(event.talkEvent);
+      const lifecycleType = event.talkEvent?.type;
+      if (lifecycleType === "session.ready" || lifecycleType === "session.closed") {
+        this.ctx.callbacks.onTalkEvent?.({ type: lifecycleType });
       }
       switch (event.type) {
         case "ready":

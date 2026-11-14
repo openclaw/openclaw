@@ -1,4 +1,4 @@
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { CapturedSessionActorStorageOwner } from "./session-actor-storage-binding.js";
@@ -78,12 +78,7 @@ export async function prepareMemorySessionGeneration(
   return {
     assertCurrent,
     assertDeliveryCurrent() {
-      if (
-        isSessionLifecycleMutationActive(source.path, [
-          input.sessionKey,
-          input.sessionId ?? undefined,
-        ])
-      ) {
+      if (isSessionMutationActive(source.path, [input.sessionKey, input.sessionId ?? undefined])) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       assertCurrent();

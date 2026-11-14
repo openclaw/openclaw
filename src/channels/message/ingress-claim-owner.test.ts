@@ -1,5 +1,5 @@
-// Claim-owner liveness: PID/starttime identity and lease freshness.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as pidAlive from "../../shared/pid-alive.ts";
 import {
   INGRESS_CLAIM_LEASE_MS,
   INGRESS_CLAIM_PROCESS_ID,
@@ -7,6 +7,12 @@ import {
   isIngressCorruptClaimOwnedByOtherLiveProcess,
   processPidFromOwnerId,
 } from "./ingress-claim-owner.js";
+
+const claim = (ownerId: string, claimedAt = Date.now()) => ({
+  claim: { ownerId, token: "test-auth-token", claimedAt },
+});
+const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
+afterEach(() => vi.restoreAllMocks());
 
 describe("ingress claim owner", () => {
   it("parses process pid from owner id", () => {
@@ -16,83 +22,42 @@ describe("ingress claim owner", () => {
   });
 
   it("does not treat stale claims with reused pids as live-owned", () => {
-    const now = Date.now();
     expect(
-      isIngressClaimOwnedByOtherLiveProcess({
-        claim: {
-          ownerId: `${process.pid}:1:other-process`,
-          token: "test-auth-token",
-          claimedAt: now - INGRESS_CLAIM_LEASE_MS - 1,
-        },
-      }),
+      isIngressClaimOwnedByOtherLiveProcess(
+        claim(`${process.pid}:1:other-process`, Date.now() - INGRESS_CLAIM_LEASE_MS - 1),
+      ),
     ).toBe(false);
   });
 
   it("does not treat a fresh foreign claim as live-owned when its pid is only a thread of this process", () => {
-    const now = Date.now();
     // Incident shape: dead owner PID 9 is reused as a Linux TID of the new process.
     // process.kill(9, 0) succeeds, but starttime no longer matches the claim owner.
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        {
-          claim: {
-            ownerId: "9:1000:dead-owner",
-            token: "test-auth-token",
-            claimedAt: now,
-          },
-        },
-        {
-          processExists: (pid) => pid === 9,
-          readProcessStartTime: (pid) => (pid === 9 ? 2000 : null),
-        },
-      ),
-    ).toBe(false);
+    using kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    vi.spyOn(pidAlive, "getProcessStartTime").mockReturnValue(2000);
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(2000);
+    expect(isIngressClaimOwnedByOtherLiveProcess(claim("9:1000:dead-owner"))).toBe(false);
+    expect(kill).toHaveBeenCalledWith(9, 0);
   });
 
   it("treats fresh claims with other live process instances as live-owned", () => {
-    const now = Date.now();
-    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        {
-          claim: {
-            ownerId: `${liveOwnerPid}:5555:other-process`,
-            token: "test-auth-token",
-            claimedAt: now,
-          },
-        },
-        {
-          processExists: (pid) => pid === liveOwnerPid,
-          readProcessStartTime: (pid) => (pid === liveOwnerPid ? 5555 : null),
-        },
-      ),
-    ).toBe(true);
+    using kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    vi.spyOn(pidAlive, "getProcessStartTime").mockReturnValue(5555);
+    vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(5555);
+    expect(isIngressClaimOwnedByOtherLiveProcess(claim(`${liveOwnerPid}:5555:other-process`))).toBe(
+      true,
+    );
+    expect(kill).toHaveBeenCalledWith(liveOwnerPid, 0);
   });
 
   it("keeps existence-based lease protection for fresh legacy two-part owner ids", () => {
-    const now = Date.now();
-    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
     // Rolling upgrade: a live pre-starttime worker still holds pid:uuid claims.
     // Stealing them while the owner process exists would double-dispatch.
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        {
-          claim: {
-            ownerId: `${liveOwnerPid}:legacy-owner`,
-            token: "test-auth-token",
-            claimedAt: now,
-          },
-        },
-        {
-          processExists: () => true,
-          readProcessStartTime: () => 1,
-        },
-      ),
-    ).toBe(true);
+    using kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    expect(isIngressClaimOwnedByOtherLiveProcess(claim(`${liveOwnerPid}:legacy-owner`))).toBe(true);
+    expect(kill).toHaveBeenCalledWith(liveOwnerPid, 0);
   });
 
   it("treats fresh corrupt claims owned by this process as still live", () => {
-    const now = Date.now();
     expect(
       isIngressCorruptClaimOwnedByOtherLiveProcess({
         id: "e1",
@@ -100,11 +65,7 @@ describe("ingress claim owner", () => {
         accountId: "default",
         queueName: "q",
         reason: "corrupt_payload",
-        claim: {
-          token: "test-auth-token",
-          ownerId: INGRESS_CLAIM_PROCESS_ID,
-          claimedAt: now,
-        },
+        ...claim(INGRESS_CLAIM_PROCESS_ID),
       }),
     ).toBe(true);
   });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { expandPathTokens, parsePathPattern } from "../secrets/target-registry-pattern.js";
 
 const FETCH_KEY = "plugins.entries.firecrawl.config.webFetch.apiKey";
 const SEARCH_KEY = "plugins.entries.firecrawl.config.webSearch.apiKey";
@@ -49,7 +50,6 @@ function webProvider(
     credentialPath,
     getConfiguredCredentialValue: (config?: unknown) => readPath(config, credentialPath),
     getConfiguredCredentialFallback: (): undefined => undefined,
-    getCredentialValue: (): undefined => undefined,
   };
 }
 
@@ -63,35 +63,14 @@ vi.mock("../secrets/target-registry.js", () => ({
   ),
   discoverConfigSecretTargetsByIds: vi.fn((config: unknown, targetIds?: Iterable<string>) => {
     const allowed = targetIds ? new Set(targetIds) : null;
-    const matches = (pattern: string, path: string): boolean => {
-      const patternSegments = pattern.split(".");
-      const pathSegments = path.split(".");
-      if (patternSegments.length !== pathSegments.length) {
-        return false;
-      }
-      return patternSegments.every(
-        (segment, index) => segment === "*" || segment === pathSegments[index],
-      );
-    };
-    const collectPaths = (node: unknown, segments: string[], prefix: string[] = []): string[] => {
-      const [segment, ...rest] = segments;
-      if (!segment) {
-        return node === undefined ? [] : [prefix.join(".")];
-      }
-      if (!node || typeof node !== "object" || Array.isArray(node)) {
-        return [];
-      }
-      if (segment === "*") {
-        return Object.entries(node).flatMap(([key, value]) =>
-          collectPaths(value, rest, [...prefix, key]),
-        );
-      }
-      return collectPaths((node as Record<string, unknown>)[segment], rest, [...prefix, segment]);
-    };
     return REGISTRY_IDS.filter((id) => !allowed || allowed.has(id)).flatMap((id) =>
-      collectPaths(config, id.split("."))
-        .filter((path) => matches(id, path))
-        .map((path) => ({ entry: { id }, path, pathSegments: path.split(".") })),
+      expandPathTokens(config, parsePathPattern(id))
+        .filter(({ value }) => value !== undefined)
+        .map(({ segments }) => ({
+          entry: { id },
+          path: segments.join("."),
+          pathSegments: segments,
+        })),
     );
   }),
 }));
@@ -105,8 +84,6 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
         path: SEARCH_KEY,
         value: readPath(params.config, SEARCH_KEY),
       }),
-      getCredentialValue: (fetchConfig?: { firecrawl?: { apiKey?: unknown } }) =>
-        fetchConfig?.firecrawl?.apiKey,
     },
     {
       ...webProvider("other-fetch", "webFetch", 100),
@@ -127,7 +104,6 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
       getConfiguredCredentialValue: (config?: unknown) =>
         readPath(config, "plugins.entries.brave.config.webSearch.apiKey") ??
         readPath(config, "tools.web.search.apiKey"),
-      getCredentialValue: (searchConfig?: { apiKey?: unknown }) => searchConfig?.apiKey,
     },
     {
       ...webProvider("firecrawl", "webSearch", 60),
@@ -141,11 +117,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
             };
       },
     },
-    {
-      ...webProvider("exa", "webSearch", 65),
-      getCredentialValue: (searchConfig?: { exa?: { apiKey?: unknown } }) =>
-        searchConfig?.exa?.apiKey,
-    },
+    webProvider("exa", "webSearch", 65),
     {
       ...webProvider("gemini", "webSearch", 20),
       getConfiguredCredentialValue: (): undefined => undefined,
@@ -310,29 +282,19 @@ describe("command secret target ids", () => {
     },
   );
 
-  it("uses Firecrawl web fetch credentials as search fallback targets", () => {
+  it.each([
+    [true, "firecrawl-key"],
+    [false, secretRef("FIRECRAWL_API_KEY")],
+  ] as const)("scopes Firecrawl search fallback (enabled=%s)", (enabled, apiKey) => {
     const scoped = getCapabilityWebSearchCommandSecretTargets(
-      webConfig("firecrawl", firecrawlWebKey("webFetch", "firecrawl-key")) as never,
+      webConfig("firecrawl", firecrawlWebKey("webFetch", apiKey), enabled) as never,
     );
-
+    expect(scoped.targetIds.has(FETCH_KEY)).toBe(enabled);
     expectScope(scoped, {
-      targetIds: [FETCH_KEY, SEARCH_KEY],
+      ...(enabled ? { targetIds: [FETCH_KEY, SEARCH_KEY] } : {}),
       allowedPaths: undefined,
-      forcedActivePaths: [FETCH_KEY],
+      forcedActivePaths: enabled ? [FETCH_KEY] : undefined,
     });
-  });
-
-  it("does not force search fallback refs when web search is disabled", () => {
-    const scoped = getCapabilityWebSearchCommandSecretTargets(
-      webConfig(
-        "firecrawl",
-        firecrawlWebKey("webFetch", secretRef("FIRECRAWL_API_KEY")),
-        false,
-      ) as never,
-    );
-
-    expect(scoped.targetIds.has(FETCH_KEY)).toBe(false);
-    expectScope(scoped, { allowedPaths: undefined, forcedActivePaths: undefined });
   });
 
   it("limits auto-detect wildcard fallback paths to the concrete configured path", () => {
@@ -417,27 +379,22 @@ describe("command secret target ids", () => {
     expect(ids.has("gateway.remote.password")).toBe(true);
   });
 
-  it("does not coerce missing accountId to default when channel is scoped", () => {
-    const scoped = getScopedChannelsCommandSecretTargets({
-      config: discordAccounts({ "Ops Team": "DISCORD_OPS" }) as never,
-      channel: "discord",
-    });
-
-    expectScope(scoped, {
-      allowedPaths: undefined,
-      targetIds: ["channels.discord.accounts.*.token", "channels.discord.token"],
-    });
-  });
-
-  it("scopes a missing accountId to the channel default when requested", () => {
-    const scoped = getScopedChannelsCommandSecretTargets({
-      config: discordAccounts({ "Ops Team": "DISCORD_OPS", chat: "DISCORD_CHAT" }) as never,
-      channel: "discord",
-      defaultAccountWhenMissing: true,
-    });
-
-    expect(scoped.allowedPaths).toEqual(new Set(["channels.discord.accounts.Ops Team.token"]));
-  });
+  it.each([false, true])(
+    "uses a default channel account only when requested (%s)",
+    (defaultAccountWhenMissing) => {
+      const scoped = getScopedChannelsCommandSecretTargets({
+        config: discordAccounts({ "Ops Team": "DISCORD_OPS", chat: "DISCORD_CHAT" }) as never,
+        channel: "discord",
+        defaultAccountWhenMissing,
+      });
+      expectScope(scoped, {
+        targetIds: ["channels.discord.accounts.*.token", "channels.discord.token"],
+        allowedPaths: defaultAccountWhenMissing
+          ? ["channels.discord.accounts.Ops Team.token"]
+          : undefined,
+      });
+    },
+  );
 
   it("unions only the selected broadcast channel/account routes", () => {
     const scoped = getScopedChannelsCommandSecretTargets({

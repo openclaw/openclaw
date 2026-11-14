@@ -2,16 +2,30 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentSelectionRequiredError, listAgentIds } from "../../agents/agent-scope-config.js";
 import type { DoctorSqliteMaintenanceAuthority } from "../../commands/doctor-sqlite-maintenance-lock.js";
+import { rewriteDoctorSessionEntries } from "../../commands/doctor/shared/session-entry-rewrite.js";
+import { scanDoctorSessionEntriesTolerant } from "../../config/sessions/session-accessor.js";
 import { loadExactSessionEntryReadOnlyResult } from "../../config/sessions/session-accessor.sqlite-entry-availability.js";
 import { readExactSessionEntryRowValidated } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
+  getSessionKysely,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { parseSqliteSessionEntryRecord } from "../../config/sessions/session-entry-json.js";
+import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-store-config.js";
 import { resolvePersistedSessionStoreOwner } from "../../config/sessions/session-store-owner.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
+import {
+  hasLegacyAcpMigrationCompletion,
+  prepareLegacyAcpMigrationSource,
+  recordLegacyAcpMigrationCompletion,
+} from "../../infra/legacy-acp-migration-source.js";
 import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
@@ -30,6 +44,10 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
+  isSameOpenClawAgentDatabasePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import {
   openExistingOpenClawStateDatabaseReadOnly,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -46,19 +64,31 @@ import {
   selectAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
-import { repairEmbeddedAcpSessionMetaForDoctor } from "./session-meta-migration-embedded.js";
-import { legacyAcpSessionKeyCandidates } from "./session-meta-migration-keys.js";
+import {
+  legacyAcpSessionKeyCandidates,
+  selectAcpMigrationRowForStoreEntry,
+} from "./session-meta-migration-keys.js";
 import type { AcpSessionRow } from "./session-meta-read.types.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
-import { bindAcpSessionIdentity } from "./session-meta-write.kernel.js";
+import { bindAcpSessionIdentity, bindAcpSessionMeta } from "./session-meta-write.kernel.js";
+
+function sameEmbeddedAcpSource(current: SessionEntry | undefined, expected: SessionEntry): boolean {
+  return (
+    current !== undefined &&
+    current.sessionId === expected.sessionId &&
+    current.lifecycleRevision === expected.lifecycleRevision &&
+    current.sessionStartedAt === expected.sessionStartedAt &&
+    current.updatedAt === expected.updatedAt &&
+    isDeepStrictEqual(current.acp, expected.acp)
+  );
+}
 
 type DoctorAcpScope = { config: OpenClawConfig; env: NodeJS.ProcessEnv; pluginId: string };
 
 export type AcpSessionKeyRepairReport = {
   found: number;
   repaired: number;
-  scannedRows: number;
   warnings: string[];
   backups?: string[];
 };
@@ -79,7 +109,6 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
   const result: AcpSessionKeyRepairReport = {
     found: 0,
     repaired: 0,
-    scannedRows: 0,
     warnings: [],
   };
   if (params.apply && !params.authority) {
@@ -105,7 +134,6 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
     } finally {
       database.walMaintenance.close();
     }
-    result.scannedRows = rows.length;
     const candidateAgentIds = [
       ...new Set([...listAgentIds(params.cfg), ...targets.map((target) => target.agentId)]),
     ];
@@ -304,7 +332,205 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
       }
     }
   }
-  const embedded = await repairEmbeddedAcpSessionMetaForDoctor({ ...params, targets });
+  /** Import embedded SQLite metadata before retiring the source field. Receipts prevent replay after closure. */
+  const embeddedInput = { ...params, targets };
+  const embeddedReport: { found: number; repaired: number; backups: string[]; warnings: string[] } =
+    {
+      found: 0,
+      repaired: 0,
+      backups: [],
+      warnings: [],
+    };
+  for (const target of embeddedInput.targets) {
+    embeddedInput.authority?.assertCurrent();
+    const scope = { agentId: target.agentId, storePath: target.storePath, env: embeddedInput.env };
+    const entries = new Map<string, SessionEntry>();
+    try {
+      const identity = readDatabasePathIdentitySync(target.sqlitePath);
+      scanDoctorSessionEntriesTolerant(scope, ({ entry, sessionKey, recoveredFromProjections }) => {
+        if (!recoveredFromProjections && entry.acp != null) {
+          entries.set(sessionKey, entry);
+        }
+      });
+      embeddedReport.found += entries.size;
+      if (!embeddedInput.apply || !entries.size) {
+        continue;
+      }
+      const authority = embeddedInput.authority;
+      if (!authority) {
+        throw new Error("Embedded ACP repair requires Doctor maintenance authority.");
+      }
+      const assertEmbeddedSourceCurrent = () => {
+        authority.assertCurrent();
+        assertExistingDatabaseIdentity(target.sqlitePath, identity.key, identity.birthtime);
+      };
+      assertEmbeddedSourceCurrent();
+      const backup = await createVerifiedSqliteSnapshot({
+        sourcePath: target.sqlitePath,
+        targetPath: `${target.sqlitePath}.pre-acp-metadata-migration-${randomUUID()}.bak`,
+        preserveRowIds: true,
+        transform: sanitizeOpenClawStateLeaseRows,
+        validate: (snapshot) => {
+          for (const [sessionKey, entry] of entries) {
+            const row = executeSqliteQueryTakeFirstSync(
+              snapshot,
+              getSessionKysely(snapshot)
+                .selectFrom("session_nodes")
+                .select(["session_key", "entry_json", "current_session_id", "updated_at"])
+                .where("session_key", "=", sessionKey),
+            );
+            if (
+              !sameEmbeddedAcpSource(
+                row ? (parseSqliteSessionEntryRecord(row) ?? undefined) : undefined,
+                entry,
+              )
+            ) {
+              throw new Error(
+                "Embedded ACP backup does not match the planned source; source retained.",
+              );
+            }
+          }
+        },
+        beforePublish: assertEmbeddedSourceCurrent,
+      });
+      embeddedReport.backups.push(backup.path);
+      assertEmbeddedSourceCurrent();
+      for (const [sessionKey, entry] of entries) {
+        try {
+          const meta = entry.acp;
+          if (meta == null) {
+            continue;
+          }
+          const owner = resolveSessionStorePathForAcp({
+            cfg: embeddedInput.cfg,
+            env: embeddedInput.env,
+            sessionKey,
+            agentId:
+              parseAgentSessionKey(sessionKey)?.agentId ??
+              (isPerAgentSessionStoreConfig(embeddedInput.cfg.session?.store)
+                ? target.agentId
+                : undefined),
+          });
+          const ownerScope = resolveSqliteScope({
+            agentId: owner.agentId,
+            storePath: owner.storePath,
+            sessionKey: owner.storeSessionKey,
+            env: embeddedInput.env,
+          });
+          if (
+            owner.storeSessionKey !== sessionKey ||
+            !isSameOpenClawAgentDatabasePath(
+              resolveOpenClawAgentSqlitePath(toDatabaseOptions(ownerScope)),
+              target.sqlitePath,
+            )
+          ) {
+            throw new Error(
+              "Embedded ACP session owner does not match its source store; source retained.",
+            );
+          }
+          const resolved = resolveSqliteScope({ ...scope, sessionKey });
+          const source = prepareLegacyAcpMigrationSource({
+            sourcePath: target.sqlitePath,
+            sourceSessionKey: sessionKey,
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            meta,
+            sourceEntry: {
+              sessionId: entry.sessionId,
+              sessionStartedAt: entry.sessionStartedAt,
+              updatedAt: entry.updatedAt,
+            },
+          });
+          const canonicalKey = buildAcpDatabaseSessionKey(sessionKey, owner.agentId);
+          const normalized = bindAcpSessionMeta({
+            sessionKey: canonicalKey,
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            meta,
+            updatedAt: entry.updatedAt,
+          });
+          const imported = withOpenClawAgentDatabaseReadOnly((agentDatabase) => {
+            runOpenClawStateWriteTransaction(
+              (shared) => {
+                assertEmbeddedSourceCurrent();
+                const current = readExactSessionEntryRowValidated(
+                  agentDatabase,
+                  resolved.sessionKey,
+                )?.entry;
+                if (!sameEmbeddedAcpSource(current, entry)) {
+                  throw new Error(
+                    "Embedded ACP source changed during Doctor repair; source retained.",
+                  );
+                }
+                if (hasLegacyAcpMigrationCompletion(shared.db, source)) {
+                  return;
+                }
+                const canonical = selectAcpSessionRow(shared.db, canonicalKey);
+                if (
+                  !canonical &&
+                  selectAcpMigrationRowForStoreEntry(
+                    shared.db,
+                    sessionKey,
+                    owner.agentId,
+                    embeddedInput.cfg,
+                    entry,
+                  )
+                ) {
+                  throw new Error(
+                    "Unresolved legacy ACP aliases remain; embedded metadata retained.",
+                  );
+                }
+                if (
+                  canonical &&
+                  (canonical.session_id !== (entry.lifecycleRevision ?? entry.sessionId) ||
+                    canonical.updated_at !== normalized.updated_at ||
+                    !isDeepStrictEqual(
+                      rowToAcpSessionMeta(canonical),
+                      rowToAcpSessionMeta(normalized),
+                    ))
+                ) {
+                  throw new Error(
+                    "Stored ACP metadata conflicts with embedded metadata; both sources retained.",
+                  );
+                }
+                assertEmbeddedSourceCurrent();
+                if (!canonical) {
+                  upsertAcpSessionMetaRow(shared.db, normalized);
+                }
+                recordLegacyAcpMigrationCompletion(shared.db, source, Date.now());
+              },
+              { env: embeddedInput.env },
+            );
+          }, toDatabaseOptions(resolved));
+          if (!imported.found) {
+            throw new Error(`Embedded ACP owner became unavailable: ${imported.reason}`);
+          }
+          assertEmbeddedSourceCurrent();
+          embeddedReport.repaired += rewriteDoctorSessionEntries({
+            scope,
+            integrityCheck: embeddedInput.integrityCheck ?? "quick",
+            sessionKeys: [sessionKey],
+            updateDeliveryProjection: false,
+            transform(current) {
+              assertEmbeddedSourceCurrent();
+              if (!sameEmbeddedAcpSource(current, entry)) {
+                throw new Error("Embedded ACP source changed after import; source retained.");
+              }
+              const { acp: _acp, ...next } = current;
+              return next;
+            },
+          });
+        } catch (error) {
+          authority.assertCurrent();
+          embeddedReport.warnings.push(`${sessionKey}: ${String(error)}`);
+        }
+      }
+    } catch (error) {
+      embeddedInput.authority?.assertCurrent();
+      embeddedReport.warnings.push(`${target.sqlitePath}: ${String(error)}`);
+    }
+  }
+  const embedded = embeddedReport;
   result.found += embedded.found;
   result.repaired += embedded.repaired;
   result.warnings.push(...embedded.warnings);

@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadPrivateQaCliModule } from "./private-qa-cli.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 const mocks = vi.hoisted(() => ({ resolvePackageRoot: vi.fn<() => string>() }));
 vi.mock("../../infra/openclaw-root.js", () => ({
@@ -11,6 +12,14 @@ vi.mock("../../infra/openclaw-root.js", () => ({
 
 describe("private-qa-cli", () => {
   let root: string;
+
+  async function registerPrivateQa(program: Command) {
+    const qa = getSubCliEntriesCore().find((entry) => entry.name === "qa");
+    if (!qa) {
+      throw new Error("Expected private QA descriptor");
+    }
+    await qa.register(program, [], { purpose: "runtime" });
+  }
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-private-qa-"));
@@ -25,7 +34,7 @@ describe("private-qa-cli", () => {
   });
 
   it.each([".git", "pnpm-workspace.yaml"])(
-    "loads the private QA artifact from a source checkout marked by %s",
+    "registers the private QA artifact from a source checkout marked by %s",
     async (marker) => {
       fs.writeFileSync(path.join(root, marker), "");
       fs.mkdirSync(path.join(root, "src"));
@@ -33,24 +42,17 @@ describe("private-qa-cli", () => {
       fs.mkdirSync(artifactDirectory, { recursive: true });
       fs.writeFileSync(
         path.join(artifactDirectory, "qa-lab.js"),
-        'export const isQaLabCliAvailable = () => true; export const registerQaLabCli = () => "registered";',
+        'export const registerQaLabCli = (program) => program.command("fixture-qa");',
       );
 
-      const module = await loadPrivateQaCliModule();
-      expect(module.isQaLabCliAvailable).toBeTypeOf("function");
-      expect(module.registerQaLabCli).toBeTypeOf("function");
+      const program = new Command();
+      await registerPrivateQa(program);
+      expect(program.commands.map((command) => command.name())).toEqual(["fixture-qa"]);
     },
   );
 
-  it("rejects non-source package roots even when private QA is enabled", () => {
-    expect(() => loadPrivateQaCliModule()).toThrow(
-      "Private QA CLI is only available from an OpenClaw source checkout.",
-    );
-  });
-
-  it("rejects when the private QA env flag is disabled", () => {
-    vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", undefined);
-    expect(() => loadPrivateQaCliModule()).toThrow(
+  it("rejects non-source package roots even when private QA is enabled", async () => {
+    await expect(registerPrivateQa(new Command())).rejects.toThrow(
       "Private QA CLI is only available from an OpenClaw source checkout.",
     );
   });

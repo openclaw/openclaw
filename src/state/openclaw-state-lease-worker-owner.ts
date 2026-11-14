@@ -42,6 +42,7 @@ type WorkerLeasesScope = Omit<WorkerLeaseScope, "identity"> & {
 type RetainedLeaseScope = {
   identity: OpenClawStateLeaseIdentity;
   databasePath: string;
+  sourceIdentity?: DatabasePathIdentity;
   assertCurrent(this: void): void;
   retainSettlement(settled: Promise<SqliteWorkerOperationSettlement>): void;
   settleNative(
@@ -129,6 +130,15 @@ function createLeaseAdmissionFactory(
     const expiryRequired = purpose === "write" || purpose === "verify" || purpose === "renew";
     return {
       nativeLocations: [...new Set(scopes.map((scope) => scope.databasePath))],
+      ...(firstScope.sourceIdentity?.key.startsWith("file:")
+        ? {
+            databaseIdentity: {
+              databasePath: firstScope.databasePath,
+              key: firstScope.sourceIdentity.key,
+              birthtime: firstScope.sourceIdentity.birthtime,
+            },
+          }
+        : {}),
       admission: createSqliteWorkerOperationAdmission(
         (request, grant) => {
           assertCurrent();
@@ -230,6 +240,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   const assertSourceCurrent = params.sourceContext
     ? captureLeaseWorkerSource(params.sourceContext)
     : undefined;
+  const sourceIdentity = params.sourceIdentity && Object.freeze({ ...params.sourceIdentity });
   const pending = new Set<Promise<unknown>>();
   const settlements = new Set<Promise<unknown>>();
   let accepting = true;
@@ -280,9 +291,10 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   };
   const owner: WorkerLeaseOwner = {
     identity: params.identity,
-    sourceIdentity: params.sourceIdentity
-      ? Object.freeze({ ...params.sourceIdentity })
-      : params.sourceContext && Object.freeze({ ...params.sourceContext.admission.identity }),
+    get sourceIdentity() {
+      // First creation publishes its physical file through the original retained admission.
+      return sourceIdentity ?? params.sourceContext?.admission.identity;
+    },
     sourceContext: params.sourceContext,
     assertSourceCurrent() {
       if (!assertSourceCurrent) {
@@ -305,6 +317,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
       return {
         identity: params.identity,
         databasePath: params.databasePath,
+        sourceIdentity: owner.sourceIdentity,
         assertCurrent() {
           assertCurrent(purpose);
           assertCaller?.();
@@ -362,6 +375,13 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
     await Promise.allSettled(settlements);
   };
   return {
+    // Draining stops new effects; retained scopes still own their native settlement.
+    assertCurrent(this: void) {
+      assertCurrent("write");
+      if (!accepting) {
+        throw new Error("State lease worker operation differs from its live owner");
+      }
+    },
     bind(lease: OpenClawStateWorkerLeaseContext) {
       if (closed || boundLease) {
         throw new Error("State lease worker owner is already bound or closed");

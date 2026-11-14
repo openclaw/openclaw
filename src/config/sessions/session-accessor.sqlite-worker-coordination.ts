@@ -34,6 +34,7 @@ export async function withSqliteMutationWorkerCoordination<T>(
   operationId: number,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
   assertRequestCurrent?: () => void,
+  nativeLocations?: readonly string[],
 ): Promise<T> {
   const worker = transport.channel;
   const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
@@ -49,6 +50,7 @@ export async function withSqliteMutationWorkerCoordination<T>(
       },
       "retained",
       assertRequestCurrent,
+      nativeLocations,
     );
   } finally {
     worker.off("error", preparingError);
@@ -63,6 +65,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
   settleFailure: () => Promise<void>,
   mode: "retained" | "reconciliation" = "retained",
   assertRequestCurrent?: () => void,
+  nativeLocations?: readonly string[],
 ): Promise<T> {
   const identity = context.admission.identity.key;
   if (mode === "reconciliation") {
@@ -116,7 +119,9 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
     });
   }
   const releaseService = admission
-    ? retainSqliteWriteAdmissionService([context.admission.databasePath], () => admission.service())
+    ? retainSqliteWriteAdmissionService(nativeLocations ?? [context.admission.databasePath], () =>
+        admission.service(),
+      )
     : undefined;
   try {
     return await run({

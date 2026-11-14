@@ -1,32 +1,17 @@
 .session-menu > .oc-menu {
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-  min-width: 224px;
+  min-width: 220px;
   max-width: 264px;
 }
 
 .session-menu__panel {
-  --oc-overlay-distance: 0px;
-
-  min-width: 224px;
+  min-width: 220px;
   max-width: min(264px, calc(100dvw - 16px));
-}
-
-.session-menu__panel .oc-menu-item__icon {
-  margin-inline-end: 0;
 }
 
 .session-menu__panel .oc-menu-item--submenu > .oc-menu-item__label {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-
-.session-menu__panel > .session-menu__item {
-  padding: 0 8px;
+  gap: 6px;
 }
 
 /* Contributed dropdown rows share the menu typography without renderer-specific classes. */
@@ -39,13 +24,12 @@
 .sidebar-session-sort-menu__item {
   --oc-menu-item-padding-inline: 8px;
 
-  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 0 8px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--menu-item-radius);
   background: transparent;
@@ -53,8 +37,12 @@
   text-align: left;
 }
 
+:where(.session-menu__item) + :where(.session-menu__item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 .row.session-menu__label {
-  gap: 8px;
+  gap: 6px;
 }
 
 .session-menu__status {
@@ -71,18 +59,37 @@
   white-space: normal;
 }
 
-.session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
-.session-menu__item[aria-expanded="true"],
-.session-menu__item:focus-visible,
-.sidebar-session-sort-menu__item:hover,
-.sidebar-session-sort-menu__item:focus-visible {
+/* Canonical Menu rows own their states; keep these rules for plain session rows
+   without changing their specificity or depending on stylesheet load order. */
+.session-menu__item:where(:not(.oc-menu-item)):hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item:where(:not(.oc-menu-item))[aria-expanded="true"],
+.session-menu__item:where(:not(.oc-menu-item)):focus-visible,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):hover,
+.sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):focus-visible {
   background: var(--bg-hover);
 }
 
-.session-menu__item:disabled,
-.session-menu__item[aria-disabled="true"] {
-  opacity: 0.42;
-  cursor: not-allowed;
+/* Plain choice rows follow the menu's own hover and selected fills. */
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item)):disabled,
+.session-menu__item:where(:not(.oc-menu-item))[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .session-menu__item--destructive,
@@ -96,8 +103,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   flex: 0 0 auto;
 }
 
@@ -117,8 +124,22 @@
   font-size: 10px;
 }
 
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
 .session-menu__icon svg,
 .session-menu__check svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -132,146 +153,7 @@
   cursor: pointer;
 }
 
-@supports (corner-shape: superellipse(1.5)) {
-  .session-menu {
-    --menu-radius: calc(10px * var(--openclaw-corner-radius-scale));
-    --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
-  }
-
-  .session-menu > .oc-menu {
-    corner-shape: superellipse(1.5);
-  }
-}
-
-/* Keep search available while scrolling the complete directory. */
-.people-menu__search {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 6px 8px;
-  background: var(--bg-elevated);
-}
-
-.people-menu__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-}
-
-.people-menu__status {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.people-menu__submenu + .oc-menu {
-  width: min(320px, calc(100vw - 24px));
-  max-height: min(420px, 60vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.session-menu__advanced + .oc-menu {
-  width: min(340px, calc(100vw - 24px));
-}
-
-.session-menu__communication {
-  padding: 2px 8px;
-}
-
-.session-menu__communication-heading {
-  margin: 4px 0 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: var(--control-ui-font-weight-semibold);
-}
-
-.session-menu__communication-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 36px;
-  font-size: calc(13px * var(--control-ui-text-scale));
-}
-
-.session-menu__communication-picker {
-  display: flex;
-  flex: 0 0 auto;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--menu-item-radius);
-  background: var(--bg);
-}
-
-.session-menu__communication-choice {
-  padding: 3px 7px;
-  border: 0;
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: calc(12px * var(--control-ui-text-scale));
-  cursor: var(--cursor-action);
-}
-
-.session-menu__communication-choice[aria-pressed="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.session-menu__communication-choice:focus-visible {
+.chat-controls__speed-option:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-.session-menu__communication-choice:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-
-.session-menu .oc-menu-item[role="menuitemradio"] > .oc-menu-item__check {
-  display: none;
-}
-
-.session-menu__snooze-picker {
-  width: 300px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text);
-  box-shadow: var(--shadow-lg);
-}
-
-.session-menu__snooze-picker .field {
-  display: grid;
-  gap: 8px;
-}
-
-.session-menu__snooze-picker input {
-  width: 100%;
-  min-width: 0;
-}
-
-.session-menu__snooze-picker p {
-  margin: 10px 0;
-  font-size: 12px;
-}
-
-.session-menu__snooze-picker [role="alert"] {
-  color: var(--danger);
-}
-
-.session-menu__snooze-buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
 }

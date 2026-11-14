@@ -56,8 +56,8 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
 }
 
 export type GuidedOnboardingHandoff =
-  | { workspace: string; next: "browser" }
-  | { workspace: string; next: "foreground-gateway"; agentId?: string }
+  | { next: "browser" }
+  | { next: "foreground-gateway"; agentId?: string }
   | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
   | { workspace: string; next: "chat"; agentName?: string };
 

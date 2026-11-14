@@ -11,7 +11,12 @@ import {
   selectChromeMcpOption,
   takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
-import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import {
+  buildAiSnapshotFromChromeMcpSnapshot,
+  flattenChromeMcpSnapshotToAriaResult,
+  type ChromeMcpSnapshotNode,
+} from "./chrome-mcp.snapshot.js";
+import { REDACTED_FIELD_VALUE } from "./sensitive-field-values.js";
 import { getFreePort } from "./test-port.js";
 
 async function act(routes: ReturnType<typeof fixture.mcpRoutes>, body: Record<string, unknown>) {
@@ -20,20 +25,45 @@ async function act(routes: ReturnType<typeof fixture.mcpRoutes>, body: Record<st
 }
 
 function snapshotRef(root: ChromeMcpSnapshotNode, role: string, name: string): string {
-  const nodes = [root];
-  while (nodes.length) {
-    const node = nodes.pop()!;
-    if (node.role?.toLowerCase() === role && node.name === name && node.id) {
-      return node.id;
-    }
-    nodes.push(...(node.children ?? []));
+  const node = flattenChromeMcpSnapshotToAriaResult(root).nodes.find(
+    (candidate) => candidate.role === role && candidate.name === name,
+  );
+  if (!node?.ref) {
+    throw new Error(`Snapshot has no ${role} named "${name}"`);
   }
-  throw new Error(`Snapshot has no ${role} named "${name}"`);
+  return node.ref;
 }
 
 describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
   "pinned Chrome MCP in Chromium",
   () => {
+    it("redacts sensitive field values while preserving a benign input", async () => {
+      await fixture.withMcpBrowser(async ({ page, profile, profileName }) => {
+        await page.setContent(`<!doctype html>
+        <input aria-label="Email" autocomplete="username" value="visible@example.test">
+        <input aria-label="Code" autocomplete="one-time-code" value="123456">
+        <input aria-label="Card" autocomplete="cc-number" value="4242424242424242">
+        <input aria-label="Security code" autocomplete="cc-csc" value="123">`);
+        const [tab] = await listChromeMcpTabs(profileName, profile, { timeoutMs: 30_000 });
+        const root = await takeChromeMcpSnapshot({
+          profileName,
+          profile,
+          targetId: tab!.targetId,
+          timeoutMs: 10_000,
+        });
+        const nodes = flattenChromeMcpSnapshotToAriaResult(root).nodes;
+        const value = (name: string) => nodes.find((node) => node.name === name)?.value;
+
+        expect(value("Email")).toBe("visible@example.test");
+        expect(value("Code")).toBe(REDACTED_FIELD_VALUE);
+        expect(value("Card")).toBe(REDACTED_FIELD_VALUE);
+        expect(value("Security code")).toBe(REDACTED_FIELD_VALUE);
+        const ai = buildAiSnapshotFromChromeMcpSnapshot({ root }).snapshot;
+        expect(ai).toContain("visible@example.test");
+        expect(ai).not.toMatch(/123456|4242424242424242|value="123"/);
+      });
+    }, 120_000);
+
     it("preserves native input, option values, and operation outcomes", async () => {
       await fixture.withMcpBrowser(async ({ page, profile, profileName }) => {
         await page.setContent(`<!doctype html>
@@ -220,24 +250,18 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         const snapshot = await takeChromeMcpSnapshot(target);
         const topRef = snapshotRef(snapshot, "button", "Top 0");
         const frameRef = snapshotRef(snapshot, "button", "Frame 0");
-        const cssArgs =
-          (ref: string) => (session: Parameters<typeof resolveChromeMcpSnapshotRef>[0]) => ({
+        const styles = (ref: string) =>
+          callTargetTool(target, "get_css_styles", (session) => ({
             uid: resolveChromeMcpSnapshotRef(session, target.targetId, ref).uid,
             pageSize: 10,
             pageIdx: 0,
-          });
+          }));
 
-        await expect(
-          callTargetTool(target, "get_css_styles", cssArgs(topRef)),
-        ).resolves.toBeDefined();
-        await expect(callTargetTool(target, "get_css_styles", cssArgs(frameRef))).rejects.toThrow(
-          /detached or no longer exists/,
-        );
+        await expect(styles(topRef)).resolves.toBeDefined();
+        await expect(styles(frameRef)).rejects.toThrow(/detached or no longer exists/);
 
         await page.goto(replacementUrl);
-        await expect(callTargetTool(target, "get_css_styles", cssArgs(topRef))).rejects.toThrow(
-          /no longer exists/,
-        );
+        await expect(styles(topRef)).rejects.toThrow(/no longer exists/);
       });
     }, 120_000);
 

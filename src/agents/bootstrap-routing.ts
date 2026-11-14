@@ -17,8 +17,12 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
 }
 
-/** Inputs that decide whether this run should inject workspace bootstrap context. */
-type WorkspaceBootstrapRoutingInput = {
+/**
+ * Resolves workspace bootstrap routing after checking pending state and
+ * loaded bootstrap files. Content can prove bootstrap is pending; callers
+ * decide whether that content also proves the run can complete file changes.
+ */
+export async function resolveWorkspaceBootstrapRouting(params: {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
   bootstrapFilesProvideAccess?: boolean;
   bootstrapContextRunKind?: BootstrapContextRunKind;
@@ -31,24 +35,12 @@ type WorkspaceBootstrapRoutingInput = {
   hasBootstrapFileAccess: boolean;
   /** Bootstrap files loaded for this run, when the run has read them already. */
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
-};
-
-/** Bootstrap placement decision consumed by system/runtime context assembly. */
-type WorkspaceBootstrapRouting = {
+}): Promise<{
   bootstrapMode: BootstrapMode;
   /** Routing withholds no workspace bootstrap content. Readability is checked after loading. */
   deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
-};
-
-/**
- * Resolves workspace bootstrap routing after checking pending state and
- * loaded bootstrap files. Content can prove bootstrap is pending; callers
- * decide whether that content also proves the run can complete file changes.
- */
-export async function resolveWorkspaceBootstrapRouting(
-  params: WorkspaceBootstrapRoutingInput,
-): Promise<WorkspaceBootstrapRouting> {
+}> {
   const hasBootstrapContent =
     params.bootstrapFiles?.some(
       (file) =>

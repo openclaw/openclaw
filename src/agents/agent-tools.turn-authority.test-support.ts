@@ -15,7 +15,7 @@ export async function expectOwnerGated(tools: readonly GateableTool[], ...names:
   }
 }
 
-export async function expectGated(tools: readonly GateableTool[], name: string, reason: string) {
+async function expectGated(tools: readonly GateableTool[], name: string, reason: string) {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) {
     return;

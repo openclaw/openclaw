@@ -184,12 +184,35 @@ ln -s /Applications "$DMG_SOURCE/Applications"
 
 # Let -srcfolder account for filesystem overhead; du plus fixed slack can
 # underallocate bundles containing many small runtime files.
-hdiutil create \
-  -volname "$DMG_VOLUME_NAME" \
-  -srcfolder "$DMG_SOURCE" \
-  -ov \
-  -format UDRW \
-  "$DMG_RW_PATH"
+create_dmg_image() {
+  local attempt=1
+  local status=0
+  local stderr_path="$DMG_TEMP/create.stderr"
+  while true; do
+    if hdiutil create \
+      -volname "$DMG_VOLUME_NAME" \
+      -srcfolder "$DMG_SOURCE" \
+      -ov \
+      -format UDRW \
+      "$DMG_RW_PATH" 2>"$stderr_path"; then
+      cat "$stderr_path" >&2
+      rm -f "$stderr_path"
+      return 0
+    else
+      status=$?
+    fi
+    cat "$stderr_path" >&2
+    if [[ "$attempt" -ge 3 ]] || ! grep -Fq "Resource busy" "$stderr_path"; then
+      return "$status"
+    fi
+    echo "WARN: hdiutil create reported Resource busy; retrying ($attempt/2)" >&2
+    rm -f "$DMG_RW_PATH"
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+  done
+}
+
+create_dmg_image
 
 DMG_ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse)"
 MOUNTED=1

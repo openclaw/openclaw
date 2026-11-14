@@ -29,7 +29,10 @@ import {
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "./sqlite-transaction.js";
 
 const AGENT_SCHEMA = `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`;
 
@@ -411,7 +414,6 @@ describe("admitted SQLite schema facts", () => {
     expect(revision()).not.toBe(before);
     expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
     const tracking = {
-      kind: "transcript-index",
       statusTable: "local_status",
       pendingTable: "local_pending",
       pendingIndex: "local_pending_state",
@@ -503,6 +505,57 @@ describe("admitted SQLite schema facts", () => {
     expect(read()).toEqual(["fourth"]);
     observation.expectNone(/data_version/iu);
   });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "keeps ended schema pins local until their transaction ends, sibling catalog published=%s, local TEMP DDL=%s",
+    (publishCatalog, localTempDdl) => {
+      const filename = databaseFile("sqlite-ended-schema-pin-");
+      // A cold writer publishes the DDL generation before admitting its new catalog.
+      const writer = openDatabase(
+        "PRAGMA journal_mode=WAL; CREATE TABLE original(id)",
+        false,
+        filename,
+      );
+      const reader = openDatabase("", true, filename);
+      runSqliteDeferredTransactionSync(reader, () => {
+        runSqliteSchemaReadSnapshotSync(reader, () => {
+          expect(tableExists(reader, "original")).toBe(true);
+        });
+        writer.exec("CREATE TABLE newly_committed(value); INSERT INTO newly_committed VALUES (42)");
+        if (publishCatalog) {
+          admitSqliteSchema(writer);
+        }
+        // The inner pin ended, but the outer native transaction still holds the old catalog.
+        expect(
+          reader.prepare("SELECT name FROM sqlite_schema WHERE name = 'newly_committed'").all(),
+        ).toEqual([]);
+        expect(tableExists(reader, "newly_committed")).toBe(false);
+        if (localTempDdl) {
+          reader.exec("CREATE TEMP TABLE local_tmp(value)");
+        }
+        // Consecutive pins also retain the outer catalog without an admission between them.
+        for (let pin = 0; pin < 2; pin++) {
+          runSqliteSchemaReadSnapshotSync(reader, () => {
+            expect(tableExists(reader, "newly_committed")).toBe(false);
+          });
+        }
+        expect(tableExists(reader, "newly_committed")).toBe(false);
+      });
+
+      const sibling = openDatabase("", true, filename);
+      for (const database of [reader, sibling]) {
+        expect(database.prepare("SELECT value FROM newly_committed").all()).toEqual([
+          { value: 42 },
+        ]);
+        expect(tableExists(database, "newly_committed")).toBe(true);
+      }
+    },
+  );
 
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {
     const { filename, database: writer } = openFile(undefined, true, true);

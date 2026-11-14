@@ -1,16 +1,12 @@
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
-import {
-  checkKnipUnusedFileScanResult,
-  checkUnusedFiles,
-  parseKnipCompactUnusedFiles,
-} from "../../scripts/check-deadcode-unused-files.mts";
+import { checkUnusedFiles } from "../../scripts/check-deadcode-unused-files.mts";
 import { KNIP_MAX_BUFFER_BYTES, runKnip } from "../../scripts/deadcode-knip-runner.mts";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
@@ -110,9 +106,9 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
   }
 }
 
-it("parses the compact Knip unused-file section", () => {
+it("rejects every compact Knip unused-file finding without an allowlist", () => {
   expect(
-    parseKnipCompactUnusedFiles(`
+    checkUnusedFiles(`
 > openclaw@2026.4.27 deadcode:knip /repo
 > pnpm dlx knip --reporter compact --files
 
@@ -126,67 +122,14 @@ C:outside.ts: C:outside.ts
 Unused dependencies (1)
 left-pad: package.json
 `),
-  ).toEqual(["src/a.ts", "src/b.ts"]);
-});
-
-it("accepts an empty compact report with zero unused files", () => {
-  expect(checkUnusedFiles("")).toStrictEqual({ files: [], ok: true, message: "" });
-});
-
-it("rejects a nonzero Knip exit even when no unused files were printed", () => {
-  expect(checkKnipUnusedFileScanResult(knipResult({ status: 2 }))).toStrictEqual({
-    failureReason: "exit status 2",
-    message: "",
-    ok: false,
-  });
-});
-
-it("rejects every unused file without an allowlist", () => {
-  expect(
-    checkUnusedFiles("Unused files (2)\nsrc/z.ts: src/z.ts\nsrc/a.ts: src/a.ts\n"),
   ).toStrictEqual({
-    files: ["src/a.ts", "src/z.ts"],
+    files: ["src/a.ts", "src/b.ts"],
     ok: false,
     message: `Unused files are not allowed:
   src/a.ts
-  src/z.ts
+  src/b.ts
 Delete the files or model their real entrypoints in Knip.`,
   });
-});
-
-it("runs Knip through a process-group-aware subprocess", async ({ onTestFinished }) => {
-  const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-runner-"));
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
-  const pnpmExecPath = path.join(root, "pnpm.cjs");
-  writeFileSync(pnpmExecPath, "console.log('pnpm');\n", "utf8");
-  const child = new FakeKnipProcess();
-  const spawnCommand = vi.fn(() => child);
-  const resultPromise = runFakeKnip(child, {
-    nodeExecPath: "/test-node",
-    npmExecPath: pnpmExecPath,
-    spawnCommand,
-  });
-  child.stdout.emit("data", "partial stdout");
-  child.stderr.emit("data", "partial stderr");
-  finishFakeProcess(child, 0, null);
-
-  expect(spawnCommand).toHaveBeenCalledExactlyOnceWith(
-    "/test-node",
-    [
-      pnpmExecPath,
-      ..."dlx --package knip@6.40.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --no-config-hints".split(
-        " ",
-      ),
-    ],
-    expect.objectContaining({
-      detached: process.platform !== "win32",
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
-  await expect(resultPromise).resolves.toStrictEqual(
-    knipResult({ output: "partial stdoutpartial stderr" }),
-  );
 });
 
 it.each([

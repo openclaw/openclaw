@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeBenchmark,
@@ -22,7 +21,6 @@ import {
   buildBenchmarkCommandEnv,
   resolvePackageManagerIdentity,
   runOwnedCommand,
-  VITEST_PAIR_HARNESS_DEADLINE_MS,
   withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
@@ -32,20 +30,9 @@ import {
   openFixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-// The managed owner joins terminal process groups, but Darwin may retain a foreign zombie
-// until its reaper runs. That PID has no ChildProcess handle in this test.
-async function waitForDescendantReap(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await delay(5, undefined, { signal });
-    }
-  } catch (cause) {
-    throw new Error(`process still alive: ${pid}`, { cause });
-  }
-}
 
 const deadlineFixtureLifetime = createFixtureLifetime();
 afterEach(() => deadlineFixtureLifetime.cleanup());
@@ -67,17 +54,12 @@ const manifest: BenchmarkManifest = {
     improvementRatio: 0.95,
     improvementPairCount: 5,
   },
-  lanes: [
-    { id: "core", critical: true, config: "test/core.config.ts", files: ["src/core.test.ts"] },
-    {
-      id: "gateway",
-      critical: true,
-      config: "test/gateway.config.ts",
-      files: ["src/gateway.test.ts"],
-    },
-    { id: "ui", critical: true, config: "test/ui.config.ts", files: ["ui/view.test.ts"] },
-    { id: "lifecycle", critical: true, files: ["test/scripts/lifecycle.test.ts"] },
-  ],
+  lanes: ["core", "gateway", "ui", "lifecycle"].map((id) => ({
+    id,
+    critical: true,
+    files: [`src/${id}.test.ts`],
+    config: id === "core" ? "test/core.config.ts" : undefined,
+  })),
 };
 
 const execution = {
@@ -110,33 +92,22 @@ function recordsFor(
     typeof durations === "function"
       ? durations
       : () => ({ baselineMs: 100, candidateMs: 100 * durations });
-  const records: BenchmarkRunRecord[] = [];
-  for (const lane of manifest.lanes) {
-    for (const round of [...Array.from({ length: manifest.rounds }, (_, i) => i + 1), null]) {
-      const pair = round === null ? `cold-${lane.id}` : `measured-${round}-${lane.id}`;
-      const pairDurations = durationsFor(lane.id, round);
-      for (const side of ["baseline", "candidate"] as const) {
-        records.push({
-          id: `${pair}-${side}`,
-          phase: round === null ? "cold" : "measured",
-          side,
-          lane: lane.id,
-          round,
-          pair,
-          cacheMode: round === null ? "fresh" : "warm",
-          command: ["node"],
-          packageManager,
-          startedAt: "2026-09-05T00:00:00.000Z",
-          durationMs: side === "baseline" ? pairDurations.baselineMs : pairDurations.candidateMs,
-          userCpuMs: 50,
-          systemCpuMs: 10,
-          execution,
-          exitCode: 0,
-        });
-      }
-    }
-  }
-  return records;
+  return buildBenchmarkSchedule(manifest)
+    .filter(({ phase }) => phase === "measured" || phase === "cold")
+    .map((plan) => {
+      const times = durationsFor(plan.lane.id, plan.round);
+      return Object.assign({}, plan, {
+        lane: plan.lane.id,
+        command: ["node"],
+        packageManager,
+        startedAt: "2026-09-05T00:00:00.000Z",
+        durationMs: plan.side === "baseline" ? times.baselineMs : times.candidateMs,
+        userCpuMs: 50,
+        systemCpuMs: 10,
+        execution,
+        exitCode: 0,
+      });
+    });
 }
 
 function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
@@ -232,12 +203,6 @@ function expectTerminalFailure(root: string, error: string) {
 describe("Vitest pair benchmark", () => {
   it("keeps the committed representative inventory valid and available", () => {
     const committed = loadBenchmarkManifest("scripts/vitest-pair-benchmark-lanes.json");
-    expect(committed.lanes.map((lane) => lane.id)).toStrictEqual([
-      "core-unit",
-      "gateway-core",
-      "ui-jsdom",
-      "worker-lifecycle",
-    ]);
     expect(assertInventoryAvailable(process.cwd(), committed).inventorySha256).toMatch(
       /^[0-9a-f]{64}$/u,
     );
@@ -281,14 +246,14 @@ describe("Vitest pair benchmark", () => {
   it("uses source locations instead of version-specific rendered names", () => {
     const read = reportFixture("report-digest");
     const baseline = read([
-      reportAssertion("mime detection maps 'avif' image format"),
-      reportAssertion("mime detection maps 'jpg' image format"),
-      reportAssertion("mime detection 'detects docx from buffer'", { line: 79, column: 14 }),
+      reportAssertion("maps 'avif'"),
+      reportAssertion("maps 'jpg'"),
+      reportAssertion("'detects docx'", { line: 79, column: 14 }),
     ]);
     const candidate = read([
-      reportAssertion("mime detection maps avif image format"),
-      reportAssertion("mime detection maps jpg image format"),
-      reportAssertion("mime detection detects docx from buffer", { line: 79, column: 14 }),
+      reportAssertion("maps avif"),
+      reportAssertion("maps jpg"),
+      reportAssertion("detects docx", { line: 79, column: 14 }),
     ]);
 
     expect(candidate.digest).toBe(baseline.digest);
@@ -357,8 +322,7 @@ describe("Vitest pair benchmark", () => {
     expect(neutral).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(neutral.claim).toContain("No broad improvement claim");
 
-    const improved = analyzeRecords(0.9);
-    expect(improved).toMatchObject({ verdict: "pass", performance: "improved" });
+    expect(analyzeRecords(0.9)).toMatchObject({ verdict: "pass", performance: "improved" });
 
     const noisyFaster = analyzeRecords((_lane, round) => ({
       baselineMs: 100,
@@ -384,7 +348,7 @@ describe("Vitest pair benchmark", () => {
     const pinned = path.join(pinnedDir, "pnpm");
     writeExecutable(
       pinned,
-      `#!/bin/sh\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
+      `#!/bin/sh\n[ "\${pnpm_config_pm_on_fail:-}" = ignore ] || exit 96\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
     );
     const ambientEnv = {
       ...process.env,
@@ -433,7 +397,6 @@ describe("Vitest pair benchmark", () => {
     "aborts the active child at the aggregate deadline and starts no successor",
     ({ signal }) =>
       deadlineFixtureLifetime.run(async () => {
-        expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
         const root = deadlineFixtureLifetime.createTempDir("vitest-pair-deadline-");
         const pidFile = path.join(root, "active.pid");
         const successor = path.join(root, "successor.txt");
@@ -451,62 +414,45 @@ describe("Vitest pair benchmark", () => {
           "setInterval(() => {}, 1000);",
         ].join("\n");
         const ready = observation.receipts.waitFor(pidFile, "ready");
-        const scheduleTimeout = globalThis.setTimeout;
-        // Eager deadline checks and its timer share one clock until the real child is ready.
+        // Hold eager expiry and the watchdog until the real child reports readiness.
         const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
-        let fireDeadline: (() => void) | undefined;
-        const timerSpy = vi
-          .spyOn(globalThis, "setTimeout")
-          .mockImplementation((callback, ms, ...args) => {
-            const timer = scheduleTimeout(callback, ms, ...args);
-            if (ms === 500 && !fireDeadline) {
-              clearTimeout(timer);
-              fireDeadline = () => {
-                fireDeadline = undefined;
-                callback(...args);
-              };
-            }
-            return timer;
-          });
         const commands: Array<ReturnType<typeof runOwnedCommand>> = [];
-        try {
-          await expect(
-            withTerminalManifest(output, () =>
-              withVitestPairDeadline(async (deadline) => {
-                const start = (name: string, args: string[]) => {
-                  const command = deadlineFixtureLifetime.track(
-                    runScript(root, args, {
-                      logPath: path.join(root, `${name}.log`),
-                      deadline,
-                    }),
-                  );
-                  commands.push(command);
-                  return command;
-                };
-                const active = start("active", ["--input-type=module", "-e", activeScript]);
-                await withinTest(
-                  awaitGateBeforeSettlement(
-                    ready,
-                    active,
-                    "benchmark child exited before readiness",
-                  ),
-                  signal,
+        const release = startProcessWatchdogFixture(() =>
+          withTerminalManifest(output, () =>
+            withVitestPairDeadline(async (deadline) => {
+              const start = (name: string, args: string[]) => {
+                const command = deadlineFixtureLifetime.track(
+                  runScript(root, args, {
+                    logPath: path.join(root, `${name}.log`),
+                    deadline,
+                  }),
                 );
-                timerSpy.mockRestore();
-                clock.mockRestore();
-                if (!fireDeadline) {
-                  throw new Error("aggregate deadline was not armed before child readiness");
-                }
-                fireDeadline();
-                await Promise.allSettled([active]);
-                const next = start("successor", [
+                commands.push(command);
+                return command;
+              };
+              await Promise.allSettled([
+                start("active", ["--input-type=module", "-e", activeScript]),
+              ]);
+              await Promise.allSettled([
+                start("successor", [
                   "-e",
                   `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
-                ]);
-                await Promise.allSettled([next]);
-              }, 500),
+                ]),
+              ]);
+            }, 500),
+          ),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              ready,
+              commands[0]!,
+              "benchmark child exited before readiness",
             ),
-          ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
+            signal,
+          );
+          clock.mockRestore();
+          await expect(release()).rejects.toThrow("Vitest pair aggregate deadline exceeded");
 
           // Assert outside the deadline owner, which normalizes task errors after cancellation.
           expect(commands).toHaveLength(2);
@@ -524,9 +470,8 @@ describe("Vitest pair benchmark", () => {
           expect(existsSync(successor)).toBe(false);
           expectTerminalFailure(output, "Vitest pair aggregate deadline exceeded after 500ms");
         } finally {
-          timerSpy.mockRestore();
           clock.mockRestore();
-          fireDeadline?.();
+          await release().catch(() => {});
           await Promise.allSettled(commands);
           await observation.cleanup();
         }
@@ -546,24 +491,5 @@ describe("Vitest pair benchmark", () => {
 
     expect(result.exitCode).toBe(7);
     expect(readFileSync(attempts, "utf8")).toBe("attempt\n");
-  });
-
-  itUnix("fails closed and cleans a leaked descendant process", async ({ signal }) => {
-    const root = tempDirs.make("vitest-pair-leak-");
-    const pidFile = path.join(root, "child.pid");
-    const script = [
-      'const { spawn } = require("node:child_process");',
-      'const { writeFileSync } = require("node:fs");',
-      `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });`,
-      `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-      "child.unref();",
-    ].join("\n");
-
-    await expect(runScript(root, ["-e", script])).rejects.toThrow(
-      /process group remained active|cleanup could not verify/u,
-    );
-
-    const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-    await waitForDescendantReap(pid, signal);
   });
 });

@@ -16,22 +16,6 @@ function readModule(modules: QrTerminalModules, x: number, y: number): boolean {
   return Boolean(modules.data[y * modules.size + x]);
 }
 
-function compactBlock(top: boolean, bottom: boolean): string {
-  return top ? (bottom ? "█" : "▀") : bottom ? "▄" : " ";
-}
-
-function renderCompactTerminalQr(modules: QrTerminalModules): string {
-  const lines: string[] = [];
-  for (let y = -COMPACT_MARGIN_MODULES; y < modules.size + COMPACT_MARGIN_MODULES; y += 2) {
-    let line = TERMINAL_BLACK_ON_WHITE;
-    for (let x = -COMPACT_MARGIN_MODULES; x < modules.size + COMPACT_MARGIN_MODULES; x += 1) {
-      line += compactBlock(readModule(modules, x, y), readModule(modules, x, y + 1));
-    }
-    lines.push(`${line}${TERMINAL_RESET}`);
-  }
-  return lines.join("\n");
-}
-
 /** Renders QR text for terminal display, with an optional compact half-block mode. */
 export async function renderQrTerminal(
   input: string,
@@ -40,7 +24,18 @@ export async function renderQrTerminal(
   const qrCode = await loadQrCodeRuntime();
   if (opts.small === true) {
     // Avoid qrcode's small terminal mode so we control quiet-zone size and ANSI reset placement.
-    return renderCompactTerminalQr(qrCode.create(input).modules);
+    const modules = qrCode.create(input).modules;
+    const lines: string[] = [];
+    for (let y = -COMPACT_MARGIN_MODULES; y < modules.size + COMPACT_MARGIN_MODULES; y += 2) {
+      let line = TERMINAL_BLACK_ON_WHITE;
+      for (let x = -COMPACT_MARGIN_MODULES; x < modules.size + COMPACT_MARGIN_MODULES; x += 1) {
+        const top = readModule(modules, x, y);
+        const bottom = readModule(modules, x, y + 1);
+        line += top ? (bottom ? "█" : "▀") : bottom ? "▄" : " ";
+      }
+      lines.push(`${line}${TERMINAL_RESET}`);
+    }
+    return lines.join("\n");
   }
   return await qrCode.toString(input, {
     small: false,

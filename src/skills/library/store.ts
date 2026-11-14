@@ -15,11 +15,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -45,6 +44,11 @@ export type SkillLibraryAuthority = {
   profileId?: string;
   namespace?: "personal";
   scopes: readonly string[];
+  /**
+   * The host verified a current OpenClaw ID owner device whose account is linked to
+   * `profileId`: that profile's named role does not cap the owner's scopes.
+   */
+  ownerDevice?: boolean;
   getConfig: () => OpenClawConfig;
   /** Must revalidate the admitted run/placement and request owner, synchronously at commit. */
   assertCurrent: () => void;
@@ -63,7 +67,10 @@ export type SkillLibraryDatabase = Pick<
 >;
 export const skillLibraryDb = (db: EngineConnection) =>
   getNodeSqliteKysely<SkillLibraryDatabase>(db);
-const ensured = new WeakMap<EngineConnection, SqliteSchemaFacts>();
+const ensured = new WeakMap<
+  EngineConnection,
+  NonNullable<ReturnType<typeof getAdmittedSqlSchemaFacts>>
+>();
 const ensureSkillLibrarySchemaInDatabase = createSqliteSchemaEnsurer(
   () => getOpenClawStateFeatureSchemaSql("skill_library_entries"),
   {
@@ -81,20 +88,24 @@ export function ensureSkillLibrarySchema(
   admit: (stage: "transaction" | "commit") => void,
 ): void {
   const database = openOpenClawStateDatabase(options);
-  const facts = getAdmittedSqliteSchemaFacts(database.db);
+  const facts = getAdmittedSqlSchemaFacts(database.db);
   if (facts && ensured.get(database.db) === facts) {
     return;
   }
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
       admit("transaction");
-      ensureSkillLibrarySchemaInDatabase(transactionDb);
+      if (isPostgresSqlConnection(transactionDb)) {
+        ensureStatePostgresFragment(transactionDb, "skill_library_entries");
+      } else {
+        ensureSkillLibrarySchemaInDatabase(transactionDb);
+      }
       admit("commit");
     },
     { ...options, database },
     { operationLabel: "skills.library.schema" },
   );
-  const initialized = getAdmittedSqliteSchemaFacts(database.db);
+  const initialized = getAdmittedSqlSchemaFacts(database.db);
   if (initialized) {
     ensured.set(database.db, initialized);
   }
@@ -152,16 +163,19 @@ export function resolveSkillLibraryActor(db: EngineConnection, authority: SkillL
 
 /** Apply the same role ceiling to current worker rows or the Gateway's committed profile facts. */
 export function resolveSkillLibraryActorFromProfile(
-  authority: Pick<SkillLibraryAuthority, "scopes">,
+  authority: Pick<SkillLibraryAuthority, "scopes" | "profileId" | "ownerDevice">,
   config: OpenClawConfig,
   profile: { id: string; role: string | null; githubLogin: string | null } | undefined,
 ) {
-  const ceiling = resolveOperatorRolePolicyForAssignment(
-    profile?.id,
-    profile?.role ?? null,
-    config,
-    profile?.githubLogin ?? null,
-  )?.scopes;
+  const ceiling =
+    authority.ownerDevice === true && profile !== undefined && profile.id === authority.profileId
+      ? undefined
+      : resolveOperatorRolePolicyForAssignment(
+          profile?.id,
+          profile?.role ?? null,
+          config,
+          profile?.githubLogin ?? null,
+        )?.scopes;
   const permits = (scope: "operator.read" | "operator.write" | "operator.admin") =>
     authorizeOperatorScopesForRequiredScope(scope, [...authority.scopes]).allowed &&
     (!ceiling || authorizeOperatorScopesForRequiredScope(scope, ceiling).allowed);

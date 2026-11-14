@@ -1,3 +1,4 @@
+import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import {
   acceptGatewayDeviceSourceAuthority,
   bindGatewayDeviceRevocation,
@@ -62,7 +63,7 @@ export async function retainTalkClientRunAuthority(
         context: params.context,
         hasCurrentClientAuthority: committedSource,
         runId,
-        entry: params.context.chatAbortControllers.get(runId),
+        entry: getRpcSourceForGateway(runId, params.context.resolveGatewayContext),
       });
       const assertSourceCurrent = () => {
         retained.authority?.assertCurrent();

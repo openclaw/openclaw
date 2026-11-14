@@ -1,10 +1,11 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeMenusWithin, Menu, type MenuHandle } from "../../components/solid/menu.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SessionPicker } from "./picker.tsx";
+import { pickerParams } from "./where-chip.test-support.ts";
 
 afterEach(cleanupSolid);
 
@@ -74,6 +75,16 @@ describe("new session picker focus", () => {
       let outside!: HTMLButtonElement;
       const view = mountSolid(() => {
         const [open, setOpen] = createSignal(false);
+        const { params } = pickerParams(true);
+        vi.spyOn(params.place.browser, "popoverOpen").mockImplementation(() => open());
+        vi.spyOn(params.place.browser, "popoverCallbacks").mockReturnValue({
+          get popoverOpen() {
+            return open();
+          },
+          onPopoverShow: () => setOpen(true),
+          onPopoverHide: () => setOpen(false),
+          onPopoverAfterHide: () => {},
+        });
         return (
           <>
             <button
@@ -88,16 +99,7 @@ describe("new session picker focus", () => {
               label="Project"
               value="Workspace"
               icon={<span />}
-              state={{
-                submitting: false,
-                pendingPlacement: false,
-                get popoverOpen() {
-                  return open();
-                },
-                onPopoverShow: () => setOpen(true),
-                onPopoverHide: () => setOpen(false),
-                onPopoverAfterHide: () => {},
-              }}
+              params={params}
               ref={(handle) => {
                 popover = handle;
               }}

@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
@@ -23,6 +24,7 @@ import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
   registerCodexTestSessionIdentity,
+  createCodexTestBindingStore,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
@@ -224,14 +226,53 @@ export async function writeSupervisedTestBinding(
   });
 }
 
-function compactionParams(tempDir: string, sessionFile: string) {
+export function compactionParams(
+  tempDir: string,
+  sessionFile: string,
+  overrides: Partial<CompactTestParams> = {},
+): CompactTestParams {
   return {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
     trigger: "manual",
-  } satisfies CompactTestParams;
+    ...overrides,
+  };
+}
+
+export async function recoveredCompactionBinding(
+  tempDir: string,
+  sessionKey: string,
+  options: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
+) {
+  const current = {
+    kind: "session" as const,
+    agentId: "main",
+    sessionKey,
+    sessionId: "after-compaction",
+  };
+  const previous = { ...current, sessionId: "before-compaction" };
+  const scope = {
+    agentId: "main",
+    sessionKey,
+    storePath: path.join(tempDir, "admitted", "sessions.json"),
+  };
+  await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+  await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+  const bindingStore = createCodexTestBindingStore();
+  const binding = { threadId: "thread-1", cwd: tempDir, ...options };
+  await bindingStore.mutate(previous, { kind: "set", binding });
+  return { current, scope, bindingStore, binding };
+}
+
+export function compactionItemEvent(
+  method: "item/started" | "item/completed",
+  turnId: string,
+  itemId = "compact-item-1",
+  threadId = "thread-1",
+): CodexServerNotification {
+  return { method, params: { threadId, turnId, item: { id: itemId, type: "contextCompaction" } } };
 }
 
 export function createSandboxedCompactionParams(tempDir: string, sessionFile: string) {
@@ -267,10 +308,6 @@ export function requireCompactResult(result: CompactResult | undefined): Compact
     throw new Error("expected compaction result");
   }
   return result;
-}
-
-export function compactDetails(result: CompactResult): Record<string, unknown> {
-  return (result.result?.details ?? {}) as Record<string, unknown>;
 }
 
 export async function flushAsyncTasks(iterations = 3): Promise<void> {
@@ -362,15 +399,8 @@ export function createFakeCodexCompactionClient(
   };
   const completeCompaction = (threadId = "thread-1"): void => {
     emitTurn(threadId, { id: "compact-turn-1", threadId, status: "inProgress" });
-    for (const method of ["item/started", "item/completed"]) {
-      emit({
-        method,
-        params: {
-          threadId,
-          turnId: "compact-turn-1",
-          item: { id: "compact-item-1", type: "contextCompaction" },
-        },
-      });
+    for (const method of ["item/started", "item/completed"] as const) {
+      emit(compactionItemEvent(method, "compact-turn-1", "compact-item-1", threadId));
     }
     emitTurn(threadId, { id: "compact-turn-1", status: "completed", items: [] });
   };

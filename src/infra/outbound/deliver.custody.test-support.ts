@@ -1,26 +1,28 @@
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, beforeEach, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  runOutboundDelivery,
+  runOutboundDeliveryInternal,
+  runStructuredOutboundDeliveryInternal,
+} from "./deliver-queue.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 export function createDeliveryBarrier() {
-  const entered = createDeferred();
-  const released = createDeferred();
+  const gate = createEnteredGate();
   return {
-    entered: entered.promise,
-    hold: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-    release: released.resolve,
+    entered: gate.entered,
+    hold: gate.wait,
+    release: gate.release,
     wait: (operation: Promise<unknown>) =>
-      awaitGateBeforeSettlement(entered.promise, operation, "Operation settled before the barrier"),
+      awaitGateBeforeSettlement(gate.entered, operation, "Operation settled before the barrier"),
   };
 }
 
@@ -29,10 +31,9 @@ export function useDeliveryCleanup(after?: () => void) {
   const pending: Promise<unknown>[] = [];
   const unsubscribe: Array<() => void> = [];
   afterEach(async () => {
-    release
-      .splice(0)
-      .toReversed()
-      .forEach((dispose) => dispose());
+    for (const dispose of release.splice(0).toReversed()) {
+      dispose();
+    }
     await Promise.allSettled(pending.splice(0));
     unsubscribe.splice(0).forEach((dispose) => dispose());
     after?.();
@@ -52,11 +53,6 @@ export function useDeliveryCleanup(after?: () => void) {
 }
 
 export function useOutboundRuntime() {
-  let runtime: typeof import("./deliver.js");
-  let queue: typeof import("./deliver-queue.js");
-  beforeAll(async () => {
-    [runtime, queue] = await Promise.all([import("./deliver.js"), import("./deliver-queue.js")]);
-  });
   afterEach(() => {
     vi.restoreAllMocks();
     resetPluginRuntimeStateForTest();
@@ -64,24 +60,17 @@ export function useOutboundRuntime() {
     vi.unstubAllEnvs();
   });
   return {
-    deliver: (params: Parameters<typeof runtime.deliverOutboundPayloads>[0]) =>
-      runtime.deliverOutboundPayloads(params),
-    internal: (params: Parameters<typeof runtime.deliverOutboundPayloadsInternal>[0]) =>
-      runtime.deliverOutboundPayloadsInternal(params),
-    structured: (params: Parameters<typeof runtime.deliverStructuredOutboundPayloadsInternal>[0]) =>
-      runtime.deliverStructuredOutboundPayloadsInternal(params),
-    run: (params: Parameters<typeof queue.runOutboundDeliveryInternal>[0]) =>
-      queue.runOutboundDeliveryInternal(params),
+    deliver: runOutboundDelivery,
+    internal: runOutboundDeliveryInternal,
+    structured: runStructuredOutboundDeliveryInternal,
+    run: runOutboundDeliveryInternal,
   };
 }
 
 export function useOutboundFixture() {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  const runtime = useOutboundRuntime();
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-  });
-  return { ...runtime, tmpDir: fixtures.tmpDir };
+  const { tmpDir } = installDeliveryQueueTmpDirHooks();
+  beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir()));
+  return { ...useOutboundRuntime(), tmpDir };
 }
 
 export function matrixDeliveryResult(messageId: string, kind: "text" | "media" = "text") {
@@ -95,16 +84,9 @@ export function matrixDeliveryResult(messageId: string, kind: "text" | "media" =
 }
 
 export function installQueueTestPlugin(overrides: Partial<ChannelPlugin> = {}) {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-          ...overrides,
-        },
-      },
-    ]),
-  );
+  const plugin = {
+    ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
+    ...overrides,
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
 }

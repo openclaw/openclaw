@@ -1,7 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import { firstHeaderValue } from "./http-header-value.js";
 import {
   hasForwardedRequestHeaders,
@@ -31,7 +34,21 @@ export type GatewayTailscaleIngressEndpoint = {
 export type GatewayIngressTransport =
   | { kind: "ordinary" }
   | { kind: "remote-forwarded"; context: RemoteControlUiIngressContext }
-  | { kind: "managed-tailscale"; mode: GatewayTailscaleIngressMode };
+  | { kind: "managed-tailscale"; mode: GatewayTailscaleIngressMode }
+  | OpenClawIdTunnelIngressTransport;
+
+/**
+ * A request relayed by the supervised OpenClaw ID tunnel child. Only the
+ * private ingress listener assigns it, after checking the per-boot proxy token;
+ * the peer key comes from the QUIC handshake, never from a client header.
+ */
+type OpenClawIdTunnelIngressTransport = {
+  kind: "openclaw-id-tunnel";
+  /** Authenticated device endpoint key W, `iroh:<hex>`. */
+  peerKey: string;
+  /** Synthetic per-device address; never loopback. */
+  clientIp: string;
+};
 
 export type VerifiedTailscaleIngressIdentity = {
   login: string;
@@ -65,6 +82,7 @@ export type GatewayIngressAttribution =
       verifyIdentity: () => Promise<VerifiedTailscaleIngressIdentity | undefined>;
     })
   | (AttributedGatewayIngress & { kind: "tailscale-funnel" })
+  | (AttributedGatewayIngress & { kind: "openclaw-id-tunnel"; peerKey: string })
   | {
       kind: "unattributable-proxy";
       reason: typeof PROXY_ATTRIBUTION_REQUIRED_REASON;
@@ -96,7 +114,10 @@ export function markGatewayIngressTransport(
         existing.context !== transport.context) ||
       (existing.kind === "managed-tailscale" &&
         transport.kind === "managed-tailscale" &&
-        existing.mode !== transport.mode)
+        existing.mode !== transport.mode) ||
+      (existing.kind === "openclaw-id-tunnel" &&
+        transport.kind === "openclaw-id-tunnel" &&
+        existing.peerKey !== transport.peerKey)
     ) {
       throw new Error("Gateway ingress transport was already assigned");
     }
@@ -244,6 +265,7 @@ function resolveManagedTailscaleIngress(params: {
 function resolveGatewayIngressAttribution(params: {
   req: IncomingMessage;
   trustedProxies?: string[];
+  trustedProxy?: Pick<GatewayTrustedProxyConfig, "userHeader" | "requiredHeaders">;
   allowRealIpFallback?: boolean;
   tailscaleWhois?: TailscaleWhoisLookup;
 }): GatewayIngressAttribution {
@@ -265,18 +287,54 @@ function resolveGatewayIngressAttribution(params: {
     });
   }
 
+  if (transport.kind === "openclaw-id-tunnel") {
+    // Relayed traffic is never direct loopback, whatever the socket says.
+    return Object.freeze({
+      kind: "openclaw-id-tunnel",
+      clientIp: transport.clientIp,
+      peerKey: transport.peerKey,
+      rateLimit: Object.freeze({
+        subject: Object.freeze({ key: `openclaw-id:${transport.peerKey}` }),
+        resetOnSuccess: true as const,
+      }),
+    });
+  }
+
   if (transport.kind === "managed-tailscale") {
     return resolveManagedTailscaleIngress({
       req,
       mode: transport.mode,
       remoteAddress,
-      tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+      tailscaleWhois:
+        params.tailscaleWhois ??
+        (async (ip) => {
+          const { readTailscaleWhoisIdentity } = await import("../infra/tailscale.js");
+          return readTailscaleWhoisIdentity(ip);
+        }),
     });
   }
 
   const hasProxyHeaders = hasForwardedRequestHeaders(req);
   const hasTailscaleHeaders = hasTailscaleOwnedHeaders(req);
-  if (isLoopbackAddress(remoteAddress) && !hasProxyHeaders && !hasTailscaleHeaders) {
+  // With OpenClaw ID on, identity evidence also disqualifies locality (its link
+  // ceremony is local-only), even when a proxy omitted its client-address headers.
+  // Header presence can deny locality, never establish it. Off, nothing changes.
+  const hasIdentityHeaders =
+    isOpenClawIdEnabled(getRuntimeConfigSnapshot()?.gateway?.openclawId) &&
+    [
+      "cf-access-authenticated-user-email",
+      "cf-access-jwt-assertion",
+      "remote-user",
+      "x-remote-user",
+      params.trustedProxy?.userHeader,
+      ...(params.trustedProxy?.requiredHeaders ?? []),
+    ].some((name) => name && req.headers[name.trim().toLowerCase()] !== undefined);
+  if (
+    isLoopbackAddress(remoteAddress) &&
+    !hasProxyHeaders &&
+    !hasTailscaleHeaders &&
+    !hasIdentityHeaders
+  ) {
     return attributed("direct-local", remoteAddress);
   }
   if (isTrustedProxyAddress(remoteAddress, params.trustedProxies)) {
@@ -297,7 +355,7 @@ function resolveGatewayIngressAttribution(params: {
   }
   // Tailscale-owned headers grant managed semantics only on the dedicated listener.
   // An explicitly trusted ordinary proxy remains generic; every other source fails closed.
-  if (hasProxyHeaders || hasTailscaleHeaders) {
+  if (hasProxyHeaders || hasTailscaleHeaders || hasIdentityHeaders) {
     return unattributableProxy(remoteAddress);
   }
   return attributed("direct-remote", remoteAddress);

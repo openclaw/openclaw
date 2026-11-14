@@ -1,5 +1,4 @@
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
-import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { SetTuiActivityStatus } from "./tui-activity-status.js";
@@ -19,7 +18,7 @@ export type CommandHandlerContext = {
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
   setSession: (key: string, agentId?: string) => Promise<void>;
-  refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
+  refreshAgents: (ownsRefresh?: () => boolean) => Promise<boolean>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: SetTuiActivityStatus;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;

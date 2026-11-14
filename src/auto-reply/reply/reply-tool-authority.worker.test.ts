@@ -5,11 +5,18 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createSteeredCliMessageInjection } from "../../agents/cli-runner/execute-plugin.steered-transcript.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import * as capabilityReads from "../../agents/subagents/spawn/subagent-session-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -25,7 +32,15 @@ import { bindSessionRowProjection } from "../../gateway/session-row-projection-a
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import * as sessionReaders from "../../gateway/session-utils-store-worker.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeAgentWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
+import {
+  acknowledgeReplySessionTransition,
+  captureReplyOperationSessionReader,
+  getReplyOperationSessionReader,
+} from "../../sessions/session-controller.session-reader.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -34,23 +49,17 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
-import { waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import {
-  acknowledgeReplySessionTransition,
-  captureReplyOperationSessionReader,
-  getReplyOperationSessionReader,
-} from "./reply-run-registry.state.js";
+import { MessageInjectionAuthorityError } from "./message-injection-authority.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
 } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
 });
 
@@ -105,7 +114,7 @@ async function prepareEmbedded(
     };
     return {
       admission,
-      submit: (effect: () => Promise<string>) =>
+      submit: (effect: (prepared: { toolAuthorityFingerprint?: string }) => Promise<string>) =>
         withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, attempt, undefined, effect),
     };
   } catch (error) {
@@ -217,11 +226,7 @@ it.each(["main", "policy", "borrowed"] as const)(
         }
         discovery.mockClear();
         await expect(
-          operation.projectToolAuthorityFingerprintAsync({
-            senderIsOwner: run.run.senderIsOwner === true,
-            disableTools: false,
-            traceAuthorized: false,
-          }),
+          operation.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay(run)),
         ).resolves.toBeUndefined();
         calls.expectIdle();
         expect(discovery).not.toHaveBeenCalled();
@@ -270,6 +275,7 @@ it.each(["execution", "separate"] as const)(
       if (admitted.status !== "owned") {
         throw new Error("Fixture requires retained reply admission");
       }
+      const controller = getSessionControllerEntryForOperation(admitted.operation);
       const run = makeRun({
         workspaceDir: state.workspaceDir,
         sessionKey: executionKey,
@@ -323,14 +329,14 @@ it.each(["execution", "separate"] as const)(
           );
         }
         admitted.operation.complete();
-        await waitForReplyRunSuccessorAdmission(executionKey, null);
+        await waitForReplyRunSuccessorAdmission(executionKey, null, { target: controller.target });
         discovery.mockClear();
         await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
         expect(discovery).not.toHaveBeenCalled();
       } finally {
         independent.close();
         admitted.operation.complete();
-        await waitForReplyRunSuccessorAdmission(executionKey, null);
+        await waitForReplyRunSuccessorAdmission(executionKey, null, { target: controller.target });
       }
     });
   },
@@ -338,6 +344,7 @@ it.each(["execution", "separate"] as const)(
 
 it.each([
   "unrelated deletion",
+  "model fallback",
   "revoked policy",
   "reassigned session",
   "deleted requester",
@@ -408,14 +415,15 @@ it.each([
                       { env: state.env },
                     );
                   } else {
-                    await patchSessionEntryCore(scope, () =>
-                      change === "revoked policy"
-                        ? { inheritedToolDeny: ["exec"] }
-                        : {
-                            sessionId: "replacement-requester",
-                            spawnedBy: "agent:main:other-parent",
-                          },
-                    );
+                    const patches = {
+                      "model fallback": { model: "fallback", modelProvider: "fallback" },
+                      "revoked policy": { inheritedToolDeny: ["exec"] },
+                      "reassigned session": {
+                        sessionId: "replacement-requester",
+                        spawnedBy: "agent:main:other-parent",
+                      },
+                    } satisfies Record<typeof change, Partial<SessionEntry>>;
+                    await patchSessionEntryCore(scope, () => patches[change]);
                   }
                   interleaved = true;
                 }
@@ -424,14 +432,10 @@ it.each([
             );
             const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
               isInboundUserMessage: true,
-              toolAuthorityOverlay: {
-                senderIsOwner: run.run.senderIsOwner === true,
-                disableTools: false,
-                traceAuthorized: false,
-              },
+              toolAuthorityOverlay: toolAuthorityOverlay(run),
             });
             expect(interleaved).toBe(true);
-            if (change === "unrelated deletion") {
+            if (change === "unrelated deletion" || change === "model fallback") {
               expect(result).toEqual({ status: "accepted" });
               expect(queueMessage).toHaveBeenCalledOnce();
             } else {
@@ -444,6 +448,129 @@ it.each([
         releaseIngress?.();
         snapshot.close();
         projection.dispose();
+      }
+    });
+  },
+);
+
+it.each(["current", "revoked policy", "reassigned session"] as const)(
+  "dispatches a refreshed child turn only with current authority: %s",
+  async (change) => {
+    await withState(async (state, config) => {
+      setRuntimeConfigSnapshot(config);
+      const sessionKey = "agent:main:subagent:follow-up";
+      const sessionId = "follow-up";
+      const scope = { agentId: "main", sessionKey };
+      await seed(sessionKey, {
+        sessionId,
+        spawnedBy: "agent:main:main",
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "exec"],
+        inheritedToolDeny: [],
+      });
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const source = new AbortController();
+      const { admission, submit } = await prepareEmbedded(state, config, "child-follow-up", {
+        abortSignal: source.signal,
+        sessionKey,
+        sessionId,
+        sessionFile: state.statePath("follow-up.jsonl"),
+        senderId: "child-requester",
+      });
+      const submitNative = vi.fn();
+      let nativeQueueEntered = false;
+      try {
+        await capabilityReads.withPreparedSessionCapabilityRead(
+          () => {
+            const store = capabilityReads.createSubagentSessionStore(storePath, "main");
+            expect(store.get(sessionKey)?.sessionId).toBe(sessionId);
+            return (async () => {
+              // The child inherits stale capability facts before host preparation, not
+              // just before a replay of an already-prepared authority snapshot.
+              await patchSessionEntryCore(scope, () => ({ inheritedToolDeny: ["write"] }));
+              await expect(
+                submit(async (prepared) => {
+                  const handle = createEmbeddedRunHandle({
+                    runId: "child-follow-up",
+                    toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                  });
+                  handle.messageInjectionV2 = createSteeredCliMessageInjection({
+                    cwd: state.workspaceDir,
+                    signal: source.signal,
+                    assertCurrent: () => source.signal.throwIfAborted(),
+                    getInjection: () => ({
+                      isAvailable: () => true,
+                      async queueMessage(text, withCurrent) {
+                        nativeQueueEntered = true;
+                        // The host already projected the refreshed child's policy. A
+                        // native queue wait must not carry it past a later revocation.
+                        if (change !== "current") {
+                          await patchSessionEntryCore(scope, () =>
+                            change === "revoked policy"
+                              ? { inheritedToolDeny: ["exec"] }
+                              : {
+                                  sessionId: "replacement-child",
+                                  spawnedBy: "agent:main:other-parent",
+                                },
+                          );
+                        }
+                        // Real host adapter owns final worker-backed admission; only
+                        // native transport I/O is substituted by the fixture.
+                        await withCurrent(() => submitNative(text));
+                      },
+                    }),
+                  });
+                  const sessionFile = state.statePath("follow-up.jsonl");
+                  const attachment = attachActiveEmbeddedRun(
+                    sessionId,
+                    handle,
+                    sessionKey,
+                    sessionFile,
+                    "main",
+                  );
+                  expect(attachment).toBeDefined();
+                  try {
+                    const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
+                      isInboundUserMessage: true,
+                      toolAuthorityOverlay: {
+                        messageProvider: "webchat",
+                        senderId: "child-requester",
+                        senderIsOwner: true,
+                        disableTools: false,
+                        traceAuthorized: false,
+                      },
+                    });
+                    expect(result).toEqual(
+                      change === "current"
+                        ? { status: "accepted" }
+                        : { status: "failed", error: expect.any(MessageInjectionAuthorityError) },
+                    );
+                    expect(nativeQueueEntered).toBe(true);
+                    if (change === "current") {
+                      expect(submitNative).toHaveBeenCalledExactlyOnceWith("continue");
+                    } else {
+                      expect(submitNative).not.toHaveBeenCalled();
+                    }
+                    return "checked";
+                  } finally {
+                    detachActiveEmbeddedRun(
+                      sessionId,
+                      handle,
+                      sessionKey,
+                      sessionFile,
+                      "run_completed",
+                      attachment,
+                    );
+                  }
+                }),
+              ).resolves.toBe("checked");
+            })();
+          },
+          { retain: true },
+        );
+      } finally {
+        admission.close();
       }
     });
   },

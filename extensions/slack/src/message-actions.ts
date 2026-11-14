@@ -33,12 +33,13 @@ export function listSlackMessageActions(
   const actions: ChannelMessageActionName[] = ["send"];
   for (const [gate, enabledActions] of [
     ["reactions", ["react", "reactions"]],
+    ["channels", ["channel-create"]],
     ["messages", ["conversation-open", "read", "edit", "delete", "download-file", "upload-file"]],
     ["pins", ["pin", "unpin", "list-pins"]],
     ["memberInfo", ["member-info"]],
     ["emojiList", ["emoji-list"]],
   ] as const) {
-    if (gates.some((isEnabled) => isEnabled(gate))) {
+    if (gates.some((isEnabled) => isEnabled(gate, gate === "channels" ? false : undefined))) {
       actions.push(...enabledActions);
     }
   }

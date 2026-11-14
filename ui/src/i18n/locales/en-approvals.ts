@@ -1,0 +1,170 @@
+import type { TranslationMap } from "../lib/types.ts";
+import { en } from "./en.ts";
+
+const enApprovals = {
+  execApproval: {
+    watcherApprovalScope:
+      "Approval applies to this saved watcher. Source changes or reactivation may require approval again.",
+    startWatcher: "Start watching",
+    saveWatcher: "Save watcher change",
+    cancelWatcher: "Cancel",
+    scope: en.execApproval.scope,
+    expiresIn: "expires in {time}",
+    expired: "expired",
+    execApprovalNeeded: "Command approval needed",
+    runCommand: "Run this command?",
+    pluginApprovalNeeded: "Plugin approval needed",
+    requestedBySession: "Approval requested by session {session}",
+    pending: "{count} pending",
+    morePending: "{count} more pending",
+    reviewRequest: "Review approval from {agent}: {command}",
+    decisionRequest: "{decision}: {command}",
+    allowOnce: "Allow once",
+    alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
+    alwaysAllowForDay: "Always allow ({days} day)",
+    alwaysAllowForDays: "Always allow ({days} days)",
+    reviewOnly: en.execApproval.reviewOnly,
+    viewOnly: "View only",
+    offline: "Disconnected",
+    decisionUnconfirmed:
+      "Couldn’t confirm your decision. Refresh to check its status before trying again.",
+    deny: "Deny",
+    details: "Details",
+    requestDetails: "Request details",
+    agentRunCommand: "{agent} wants to run a command",
+    inSession: "in “{session}”",
+    agentStartWatcher: "{agent} wants to start “{name}”",
+    agentChangeWatcher: "{agent} wants to change “{name}”",
+    labels: {
+      host: "Runs on",
+      thisComputer: "This computer",
+      sandbox: "Sandbox",
+      node: "Device",
+      session: "Session",
+      directory: "Directory",
+      resolved: "Resolved",
+      security: "Security",
+      scope: "Scope",
+      lastError: "Last error",
+      ask: "Ask",
+    },
+  },
+  approvalPage: {
+    brandName: "OpenClaw",
+    eyebrow: "Admin approval",
+    loadingTitle: "Loading approval…",
+    loadingDescription: "Checking the current approval state with the Gateway.",
+    unavailableTitle: "Couldn’t load approval",
+    unavailableDescription: "Check the approval link and your access, then try again.",
+    connectionErrorTitle: "Disconnected",
+    connectionErrorDescription: "Reconnect to review this approval and record a decision.",
+    retry: "Try again",
+    execTitle: "Command approval",
+    watcherTitle: "Watcher approval: {name}",
+    watcherChangeTitle: "Watcher change: {name}",
+    watcherLifetime:
+      "If saved and enabled, this watcher runs after you leave this session, until stopped. It is configured to restart automatically after interruptions.",
+    watcherAllowed:
+      "This proposal was approved. Approval alone does not confirm that the change was saved or the watcher started. Check its current status in Automations.",
+    watcherNotCreated: "This proposal did not create a watcher.",
+    watcherNotChanged:
+      "This proposal did not save the change. It did not stop or change the existing watcher.",
+    pending: "Waiting for your decision",
+    pendingDescription: "Review the request carefully. The first answer from any surface wins.",
+    approvedHere: "Approved here",
+    deniedHere: "Denied here",
+    resolvedElsewhere: "Resolved elsewhere",
+    resolvedElsewhereDescription:
+      "Another surface or an earlier attempt recorded the decision first.",
+    approved: "Approved",
+    denied: "Denied",
+    expired: "Expired",
+    cancelled: "Canceled",
+    allowedOnceDescription: "The operation was approved for this request only.",
+    allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
+    deniedDescription: "The operation was denied and will not continue.",
+    expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
+    cancelledDescription: "This approval request was canceled and can no longer be used.",
+    summaryLabel: "Summary",
+    commandLabel: "Command",
+    requestLabel: "Request details",
+    nodeLabel: "Device",
+    expiresLabel: "Expires",
+    resolvedLabel: "Resolved",
+    actionsLabel: "Approval decisions",
+    resolvingDecision: "Recording {decision}…",
+    safeToClose: "The decision is recorded. You can close this page.",
+    openControlUi: "Open Control UI",
+  },
+  standingGrants: {
+    title: "Standing grants",
+    description:
+      "Always allow on an automation approval creates a standing grant for that exact command. Revoking it makes the next occurrence ask again.",
+    historyTitle: "Approval history",
+    empty: "No standing grants yet. Choose Always allow on an automation approval to create one.",
+    stateUntilRevoked: "Until revoked",
+    stateExpiresIn: "Expires in {count}d",
+    stateExpired: "Expired",
+    stateRevoked: "Revoked",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    columns: {
+      uses: "Uses",
+    },
+  },
+  approvalHistory: {
+    loading: "Loading approval history…",
+    loadingMore: "Loading…",
+    loadMore: "Load more",
+    empty: "No resolved approvals in the last 30 days.",
+    retention: "Approval history is a rolling 30-day window.",
+    offline: "Reconnect to load approval history.",
+    invalidResponse: "Couldn’t load approval history. Try again.",
+    unknown: "Unknown",
+    notApplicable: "N/A",
+    fields: {
+      kind: "Kind",
+      source: "Source",
+      session: "Session",
+      resolver: "Resolver",
+      reason: "Reason",
+    },
+    kinds: {
+      exec: "Command",
+      plugin: "Plugin",
+      systemAgent: "System agent",
+    },
+    statuses: {
+      allowed: "Allowed",
+      denied: "Denied",
+      expired: "Expired",
+      cancelled: "Canceled",
+    },
+    decisions: {
+      allowOnce: "Allow once",
+      allowAlways: "Always allow",
+    },
+    reasons: {
+      user: "User decision",
+      timeout: "Timed out",
+      malformedVerdict: "Malformed verdict",
+      noRoute: "No route",
+      runAborted: "Reply stopped",
+      gatewayRestart: "Gateway restart",
+      storageCorrupt: "Storage corrupt",
+    },
+  },
+} satisfies TranslationMap;
+
+export const registerApprovalsEnglish = Object.assign(
+  () => {
+    Object.assign(en.approvalPage, enApprovals.approvalPage);
+    Object.assign(en.standingGrants, enApprovals.standingGrants);
+    Object.assign(en.approvalHistory, enApprovals.approvalHistory);
+    const { labels, ...execApproval } = enApprovals.execApproval;
+    Object.assign(en.execApproval, execApproval);
+    Object.assign(en.execApproval.labels, labels);
+  },
+  { catalog: enApprovals },
+);

@@ -1,16 +1,11 @@
 import { existsSync } from "node:fs";
-import { constants } from "node:sqlite";
-import { beforeEach, expect, it } from "vitest";
+import { constants, StatementSync } from "node:sqlite";
+import { beforeEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type { DB } from "./openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -27,12 +22,12 @@ import {
   readUserModelAuthProfile,
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
+  type UserProfileAuthLink,
 } from "./user-model-accounts.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { captureUserProfileModelAccountLinksAuthority } from "./user-profile-events.js";
 import { linkEmail, mergeProfiles, setAvatar } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
-import type { UserProfilesDatabase } from "./user-profiles.types.js";
 import { useUserStateFixture } from "./user-state.test-support.js";
 
 const stateOptions = useUserStateFixture("user-model-accounts-");
@@ -45,17 +40,11 @@ function hasPrivateAccountState(profileId: string): boolean {
   const { db } = openOpenClawStateDatabase(options);
   return (
     tableExists(db, "secret_store_entries") &&
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-        .selectFrom("secret_store_entries")
-        .select("name")
-        .where("scope_kind", "=", "identity")
-        .where("scope_id", "=", profileId)
-        .where((eb) =>
-          eb.or([eb("name", "=", "model-accounts"), eb("name", "like", "model-account:%")]),
-        ),
-    ) !== undefined
+    db
+      .prepare(`SELECT name FROM secret_store_entries
+      WHERE scope_kind = 'identity' AND scope_id = ?
+        AND (name = 'model-accounts' OR name LIKE 'model-account:%')`)
+      .get(profileId) !== undefined
   );
 }
 
@@ -80,18 +69,10 @@ function connect(
   ownerProfileId: string,
   credential: AuthProfileCredential,
   assertCurrent = () => {},
+  replacement?: ReturnType<typeof readSelectedUserModelAccount>,
 ) {
-  return connectUserModelAccount({ ownerProfileId, credential, assertCurrent }, options);
-}
-
-function connectToken(ownerProfileId: string, token = "synthetic-personal-token") {
   return connectUserModelAccount(
-    {
-      ownerProfileId,
-      credential: tokenCredential(token),
-      replacement: readSelectedUserModelAccount(ownerProfileId, "anthropic", options),
-      assertCurrent() {},
-    },
+    { ownerProfileId, credential, assertCurrent, replacement },
     options,
   );
 }
@@ -109,7 +90,13 @@ function owner(email = "alice@example.test") {
       setUserProfileAuthLink({ profileId: id, provider, authProfileId }, options),
     connect: (credential: AuthProfileCredential, assertCurrent?: () => void) =>
       connect(id, credential, assertCurrent),
-    token: (token?: string) => connectToken(id, token),
+    token: (token?: string) =>
+      connect(
+        id,
+        tokenCredential(token),
+        undefined,
+        readSelectedUserModelAccount(id, "anthropic", options),
+      ),
     read: (authProfileId: string) => readUserModelAuthProfile(authProfileId, options),
     update: (authProfileId: string, mutate: Parameters<typeof updateUserModelAuthProfile>[1]) =>
       updateUserModelAuthProfile(authProfileId, mutate, options),
@@ -153,22 +140,38 @@ it("reads current linked credentials together after in-process refresh and unlin
   });
 });
 
-it("refreshes cached default links after committed link and merge writes", async () => {
+it("reads one-statement default links and refreshes cached links after committed writes", async () => {
   const alice = owner();
   const bob = owner("bob@example.test");
   const { authProfileId } = alice.token();
-  await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([
-    expect.objectContaining({ provider: "anthropic", authProfileId }),
-  ]);
+  const { db } = openOpenClawStateDatabase(options);
+  const expectLinks = async (profileId: string, expected: UserProfileAuthLink[]) => {
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    const exec = vi.spyOn(requireNativeSqliteDatabase(db), "exec");
+    try {
+      expect(
+        readUserModelAccountCommand(db, { type: "userModelAccounts.links", profileId }),
+      ).toEqual({
+        type: "userModelAccounts.links",
+        links: expected,
+      });
+      expect(observation.queries).toHaveLength(1);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      observation.restore();
+      exec.mockRestore();
+    }
+    await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual(expected);
+  };
+  const linked = [{ provider: "anthropic", authProfileId, updatedAt: expect.any(Number) }];
+  await expectLinks(alice.id, linked);
   alice.clear("anthropic");
-  await expect(listUserProfileAuthLinksAsync(alice.id, options)).resolves.toEqual([]);
+  await expectLinks(alice.id, []);
   alice.link("anthropic", authProfileId);
-  await expect(listUserProfileAuthLinksAsync(bob.id, options)).resolves.toEqual([]);
+  await expectLinks(bob.id, []);
   mergeProfiles(alice.id, bob.id, options);
   for (const profileId of [alice.id, bob.id]) {
-    await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual([
-      expect.objectContaining({ provider: "anthropic", authProfileId }),
-    ]);
+    await expectLinks(profileId, linked);
   }
 });
 
@@ -226,12 +229,9 @@ it.each(["direct", "merged", "missing target", "unflattened chain"])(
           ? ensureProfileForEmail("owner-successor@example.test", options).id
           : "missing-profile";
       // Simulate damaged persisted lineage; only the merge writer may flatten it.
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<UserProfilesDatabase>(db)
-          .updateTable("user_profiles")
-          .set({ merged_into: successor })
-          .where("id", "=", kind === "missing target" ? source.id : target.id),
+      db.prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?").run(
+        successor,
+        kind === "missing target" ? source.id : target.id,
       );
     }
     requireNativeSqliteDatabase(db).setAuthorizer((action, table, column) =>

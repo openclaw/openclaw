@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -32,6 +33,7 @@ import type { GatewayRequestHandler, RespondFn } from "../../server-methods/type
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 import { captureGatewayRpcReceivedAt, createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 import { GatewayRequestStartTimeoutError } from "./request-start.js";
@@ -110,9 +112,43 @@ describe("authenticated Gateway RPC diagnostics", () => {
     setDiagnosticsEnabledForProcess(false);
     await fixture.dispatch();
     expect(monitor.drain().stalls).toEqual([
-      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250 },
+      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250, startedAt: 0, endedAt: 250 },
     ]);
     expect(fixture.events).toEqual([]);
+  });
+
+  it.each([
+    ["openclaw-control-ui", "control-ui"],
+    ["webchat-ui", "control-ui"],
+    ["webchat", "control-ui"],
+    ["openclaw-browser-copilot", "control-ui"],
+    ["openclaw-macos", "macos"],
+    ["openclaw-ios", "ios"],
+    ["openclaw-watchos", "ios"],
+    ["openclaw-android", "android"],
+    ["cli", "cli"],
+    ["openclaw-tui", "cli"],
+    ["node-host", "node"],
+    ["openclaw-worker", "node"],
+    ["gateway-client", "other"],
+    ["openclaw-linux", "other"],
+    ["test", "other"],
+  ] as const)("attributes ordinary RPCs from %s as %s", async (id, clientKind) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}));
+    const client = createOperatorWsClient({ clientInfo: { id, mode: "backend" } });
+    client.connect.client.displayName = "private-display-name";
+    client.connect.client.instanceId = "private-instance";
+    client.connect.client.platform = "private-platform";
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "health", params: {} },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.find((event) => event.phase === "received")).toMatchObject({
+      method: "health",
+      clientKind,
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
   });
 
   it.each([
@@ -813,6 +849,32 @@ describe("authenticated Gateway RPC diagnostics", () => {
     expect(JSON.stringify(fixture.events)).not.toContain("synthetic handler failure");
   });
 
+  it("captures payload-free RPC timings for channel subscribers with diagnostics disabled", async () => {
+    const events: unknown[] = [];
+    const source = channel("openclaw.gateway.rpc");
+    const listener = (event: unknown) => events.push(event);
+    source.subscribe(listener);
+    onTestFinished(() => source.unsubscribe(listener));
+    const fixture = createRequest(({ respond }) => respond(true, { private: "response content" }));
+    setDiagnosticsEnabledForProcess(false);
+    expect(captureGatewayRpcReceivedAt()).toEqual(expect.any(Number));
+    await fixture.dispatch();
+    expect(fixture.send).toHaveBeenCalledOnce();
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: "health.received" }),
+        expect.objectContaining({
+          operation: "health.response",
+          durationMs: expect.any(Number),
+        }),
+        expect.objectContaining({ operation: "health.handler", admissionMs: expect.any(Number) }),
+        expect.objectContaining({ operation: "health.dispatch", durationMs: expect.any(Number) }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("private");
+    expect(JSON.stringify(events)).not.toContain("response content");
+  });
+
   it.each(["disabled", "trusted-filtered"] as const)(
     "takes no clocks or registry lookups when diagnostics are %s or uninterested",
     (mode) => {
@@ -897,8 +959,6 @@ describe("Gateway observation response ordering", () => {
       extraHandlers: { "agent.wait": agentHandlers["agent.wait"]! },
       buildRequestContext: () => ({
         dedupe: new Map(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
         getRuntimeConfig: () => ({}),
       }),
     });
@@ -906,12 +966,7 @@ describe("Gateway observation response ordering", () => {
       markGatewayRestartDraining("stop (SIGTERM)");
     });
     await fixture.dispatcher.dispatch(
-      {
-        type: "req",
-        id: "completed",
-        method: "agent.wait",
-        params: { runId: "missing-completed", timeoutMs: 0 },
-      },
+      requestFrame("completed", "agent.wait", { runId: "missing-completed", timeoutMs: 0 }),
       createOperatorWsClient(),
     );
     await shutdown;

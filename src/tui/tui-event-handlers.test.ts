@@ -1,32 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
-import {
-  createTuiProgramStatusReporter,
-  type SetTuiActivityStatus,
-} from "./tui-activity-status.js";
 import { createTuiCommandHandlersHarness } from "./tui-command-handlers-test-support.js";
-import { createEventHandlers } from "./tui-event-handlers.js";
 import {
-  createMockBtwPresenter,
-  createMockChatLog,
-  makeTuiState,
-} from "./tui-event-test-support.js";
+  createTuiEventHandlersHarness as createHarness,
+  textEvent,
+  type ChatEventOverrides,
+} from "./tui-event-handlers-test-support.js";
 import { expectUnused, expectCall, textMessage, clearMocks } from "./tui-handler-test-support.js";
 import {
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
 } from "./tui-session-projection.js";
 import { getPendingSubmitAcceptedRunId, type TuiPendingSubmit } from "./tui-submit-state.js";
-import type {
-  AgentEvent,
-  BtwEvent,
-  ChatEvent,
-  SessionChangedEvent,
-  SessionMessageEvent,
-  TuiHistoryLoadResult,
-  TuiStateAccess,
-} from "./tui-types.js";
+import type { BtwEvent, ChatEvent, TuiHistoryLoadResult } from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 function sendingSubmit(runId: string, draftText = "pending"): TuiPendingSubmit {
@@ -37,25 +24,6 @@ function acceptedSubmit(runId: string, draftText: string | null = "pending"): Tu
   return { phase: "accepted", runId, draftText };
 }
 
-const settleHistory = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-
-type ChatEventOverrides = Partial<ChatEvent> & { stopReason?: unknown };
-
-function makeChatEvent(state: TuiStateAccess, overrides: ChatEventOverrides = {}): ChatEvent {
-  return { runId: "run-1", sessionKey: state.currentSessionKey, state: "delta", ...overrides };
-}
-
-function textEvent(
-  runId: string,
-  text: string,
-  state: ChatEvent["state"] = "delta",
-): ChatEventOverrides {
-  return { runId, state, message: { content: [{ type: "text", text }] } };
-}
-
 function contentEvent(
   runId: string,
   content: string,
@@ -64,92 +32,16 @@ function contentEvent(
   return { runId, state, message: { content } };
 }
 
-function makeAgentEvent(overrides: Partial<AgentEvent> = {}): AgentEvent {
-  return { runId: "run-1", stream: "lifecycle", data: { phase: "start" }, ...overrides };
-}
-
-const createHarness = (
-  params?: Partial<TuiStateAccess> & {
-    localMode?: boolean;
-    refreshSessionInfo?: () => Promise<void>;
-    streamingWatchdogMs?: number;
-  },
-  loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
-    loaded: true,
-    runOutcome: { state: "completed" },
-  })),
-) => {
-  const { localMode, refreshSessionInfo, streamingWatchdogMs, ...overrides } = params ?? {};
-  const state = makeTuiState({ activeChatRunId: "run-1", ...overrides });
-  const programStates: string[] = [];
-  const programStatus = createTuiProgramStatusReporter({
-    setProgramStatus: ({ state: programState }) => programStates.push(programState),
-  });
-  const localRunIds = new Set<string>();
-  const localBtwRunIds = new Set<string>();
-  const context = {
-    state,
-    chatLog: createMockChatLog(),
-    btw: createMockBtwPresenter(),
-    tui: { requestRender: vi.fn() },
-    setActivityStatus: vi.fn<SetTuiActivityStatus>((activityStatus, runOutcome) => {
-      programStatus.update({ activityStatus, isConnected: state.isConnected, runOutcome });
-    }),
-    updateFooter: vi.fn(),
-    loadHistory,
-    noteLocalRunId: (runId: string) => {
-      localRunIds.add(runId);
-    },
-    noteLocalBtwRunId: (runId: string) => {
-      localBtwRunIds.add(runId);
-    },
-    forgetLocalRunId: localRunIds.delete.bind(localRunIds),
-    isLocalRunId: localRunIds.has.bind(localRunIds),
-    clearLocalRunIds: localRunIds.clear.bind(localRunIds),
-    forgetLocalBtwRunId: localBtwRunIds.delete.bind(localBtwRunIds),
-    isLocalBtwRunId: localBtwRunIds.has.bind(localBtwRunIds),
-    clearLocalBtwRunIds: localBtwRunIds.clear.bind(localBtwRunIds),
-  };
-  const rawHandlers = createEventHandlers({
-    ...context,
-    localMode,
-    refreshSessionInfo,
-    streamingWatchdogMs,
-  });
-  onTestFinished(rawHandlers.dispose);
-  const handlers = {
-    ...rawHandlers,
-    handleChatEvent: (event: ChatEventOverrides) =>
-      rawHandlers.handleChatEvent(makeChatEvent(state, event)),
-    handleAgentEvent: (event: Partial<AgentEvent>) =>
-      rawHandlers.handleAgentEvent(makeAgentEvent(event)),
-    handleSessionsChangedEvent: (event: Partial<SessionChangedEvent> = {}) =>
-      rawHandlers.handleSessionsChangedEvent({ sessionKey: state.currentSessionKey, ...event }),
-    handleSessionMessageEvent: (event: Partial<SessionMessageEvent> = {}) =>
-      rawHandlers.handleSessionMessageEvent({ sessionKey: state.currentSessionKey, ...event }),
-  };
-  const { chatLog: log, setActivityStatus: status, tui, ...rest } = context;
-  return {
-    ...rest,
-    ...handlers,
-    log,
-    status,
-    programStates,
-    render: tui.requestRender,
-    runId: overrides.activeChatRunId ?? "run-1",
-    text: (runId: string, text: string, phase: ChatEvent["state"] = "delta") =>
-      handlers.handleChatEvent(textEvent(runId, text, phase)),
-    chat: (runId: string, event: Omit<ChatEventOverrides, "runId"> = {}) =>
-      handlers.handleChatEvent({ runId, ...event }),
-    agent: (
-      runId: string,
-      data: AgentEvent["data"] = { phase: "start" },
-      event: Omit<Partial<AgentEvent>, "runId" | "data"> = {},
-    ) => handlers.handleAgentEvent({ runId, data, ...event }),
-  };
-};
-
 describe("tui-event-handlers: handleAgentEvent", () => {
+  it.each([true, false])(
+    "reports actual explicit followup starts only in local=%s mode",
+    (localMode) => {
+      const h = createHarness({ localMode });
+      h.agent(h.runId, { phase: "start", explicitFollowup: true });
+      expect(h.log.addSystem.mock.calls).toEqual(localMode ? [["Your followup has started."]] : []);
+    },
+  );
+
   it("retires a gap-recovery run only after authoritative history reports completion", async () => {
     const h = createHarness({ activeChatRunId: "run-gap" });
     h.loadHistory.mockResolvedValueOnce({
@@ -158,18 +50,18 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
     h.reconcileHistoryAfterGap();
     expect(h.state.sessionProjection?.hasTransportGap).toBe(true);
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.loadHistory).toHaveBeenCalledTimes(1);
     expect(h.state.activeChatRunId).toBe(h.runId);
     expect(h.status).not.toHaveBeenCalledWith("idle");
     h.reconcileHistoryAfterGap();
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.state.activeChatRunId).toBeNull();
     expect(h.status).toHaveBeenCalledWith("idle", "completed");
     expect(h.programStates).toEqual(["done"]);
     h.dispose();
     h.reconcileHistoryAfterGap();
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.loadHistory).toHaveBeenCalledTimes(3);
     expect(h.state.activeChatRunId).toBeNull();
   });
@@ -187,7 +79,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
             : { state: outcome },
       });
       h.reconcileHistoryAfterGap();
-      await settleHistory();
+      await nextEventLoopTurn();
       expect(h.state.activeChatRunId).toBeNull();
       expect(h.programStates).toEqual(["working", outcome === "failed" ? "error" : "idle"]);
     },
@@ -684,7 +576,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.render).toHaveBeenCalledTimes(1);
     h.agent("run-old", { phase: "start", toolCallId: "tc-old", name: "exec" }, { stream: "tool" });
     expect(h.log.startTool).not.toHaveBeenCalled();
-    await settleHistory();
+    await nextEventLoopTurn();
     expect(h.programStates).toEqual(["done", "working", "idle"]);
   });
 
@@ -725,9 +617,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         h.handleSessionsChangedEvent({ reason: "new", sessionId: "replacement" });
       }
       history.resolve({ loaded: true, runOutcome: { state: "completed" } });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(h.log.addSystem).not.toHaveBeenCalled();
     },
   );
@@ -1266,7 +1156,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       h.handleSessionsChangedEvent({ runId: h.runId, phase: "end" });
       expect(h.loadHistory).toHaveBeenCalledTimes(1);
       h.text(h.runId, "keep this visible", "final");
-      await settleHistory();
+      await nextEventLoopTurn();
       expect(h.loadHistory).toHaveBeenCalledTimes(1);
       expectCall(h.log.finalizeAssistant, ["keep this visible", h.runId, []], "once");
     });

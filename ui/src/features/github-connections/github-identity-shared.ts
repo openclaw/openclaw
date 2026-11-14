@@ -26,17 +26,15 @@ export type SharedRequestOwner = RequestOwner & {
   target: Extract<GitHubConnectionOwner, { kind: "shared" }>;
 };
 
-type AuthorizationPresentation = ToolsGitHubAuthorizeStartResult & {
-  phase: "code" | "pending" | "network_error" | "cancelling" | "finishing" | "cancel_error";
-  displayExpiresAtMs: number;
-  slowedDown?: boolean;
-  message?: string;
-};
-
 export type GitHubAuthorizationState =
   | { phase: "idle" }
   | { phase: "starting" | "cancelling" }
-  | AuthorizationPresentation
+  | (ToolsGitHubAuthorizeStartResult & {
+      phase: "code" | "pending" | "network_error" | "cancelling" | "finishing" | "cancel_error";
+      displayExpiresAtMs: number;
+      slowedDown?: boolean;
+      message?: string;
+    })
   | {
       phase: "access_denied" | "expired" | "incorrect_device_code" | "failed";
       message?: string;

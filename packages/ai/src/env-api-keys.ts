@@ -23,12 +23,8 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   loadNodeHelpersSync();
 }
 
-function getProcessEnv(): NodeJS.ProcessEnv | undefined {
-  return typeof process === "undefined" ? undefined : process.env;
-}
-
 function getEnvValue(key: string): string | undefined {
-  return getProcessEnv()?.[key]?.trim() || undefined;
+  return (typeof process === "undefined" ? undefined : process.env)?.[key]?.trim() || undefined;
 }
 
 let cachedVertexAdcCredentialsExists: true | null = null;

@@ -5,9 +5,10 @@ import { configureAiTransportHost, getAiTransportHost } from "../../packages/ai/
 import { streamOpenAICodexResponses } from "../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { streamOpenAIResponses } from "../../packages/ai/src/providers/openai-responses.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../packages/ai/src/transports/openai-responses-client.js";
-import type { Context, Model } from "../../packages/ai/src/types.js";
+import type { Context } from "../../packages/ai/src/types.js";
 import { prepareTranscriptMessageAppendForWorker } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { parseSessionEntries } from "./sessions/session-manager-codec.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const originalHost = getAiTransportHost();
 afterEach(() => {
@@ -15,18 +16,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const model = {
+const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-5.6-luna",
   name: "Synthetic reasoning replay",
   api: "openai-responses",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
-  maxTokens: 4_096,
-} satisfies Model<"openai-responses">;
+});
 const managed = createOpenAIResponsesTransportStreamFn();
 const options = { apiKey: "synthetic-test-key" };
 const nativeToken = [
@@ -88,12 +86,9 @@ it.each(streams)(
     const virtualFetch: typeof fetch = async (input, init) => {
       const outgoing = new Request(input, init);
       const body = Buffer.from(await outgoing.arrayBuffer());
-      const request: unknown = JSON.parse(
-        (outgoing.headers.get("content-encoding") === "zstd"
-          ? zstdDecompressSync(body)
-          : body
-        ).toString("utf8"),
-      );
+      const bytes =
+        outgoing.headers.get("content-encoding") === "zstd" ? zstdDecompressSync(body) : body;
+      const request: unknown = JSON.parse(bytes.toString("utf8"));
       if (!isRecord(request)) {
         throw new Error("SDK request body is not a JSON object");
       }
@@ -129,10 +124,7 @@ it.each(streams)(
     const firstContext = {
       messages: [{ role: "user", content: "Run the synthetic probe.", timestamp: 1 }],
     } satisfies Context;
-    const call = async (context: Context) => {
-      const result = fixture.call(context);
-      return await (await result).result();
-    };
+    const call = async (context: Context) => (await fixture.call(context)).result();
     const assistant = await call(firstContext);
     expect(assistant.errorMessage).toBeUndefined();
     expect(assistant.stopReason).toBe("toolUse");

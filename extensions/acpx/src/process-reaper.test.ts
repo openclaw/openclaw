@@ -110,21 +110,8 @@ function cleanupPendingLease() {
   });
 }
 
-function skippedResult(skippedReason: string, inspectedPids: number[] = []) {
-  return { inspectedPids, terminatedPids: [], skippedReason };
-}
-
-async function expectReaped(
-  killed: ReturnType<typeof cleanupDeps>["killed"],
-  inspectedPids: number[],
-  terminatedPids: number[],
-) {
-  const result = await reapStaleOpenClawOwnedAcpxOrphans({ wrapperRoot: WRAPPER_ROOT });
-  expect(result.skippedReason).toBeUndefined();
-  expect(result.inspectedPids).toEqual(inspectedPids);
-  expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual(
-    terminatedPids,
-  );
+function skippedResult(skippedReason: string) {
+  return { terminatedPids: [], skippedReason };
 }
 
 describe("process reaper", () => {
@@ -171,7 +158,7 @@ describe("process reaper", () => {
       expectedLeaseId: "lease-1",
       expectedGatewayInstanceId: "gateway-1",
     });
-    expect(result).toEqual(skippedResult("not-openclaw-owned", [113]));
+    expect(result).toEqual(skippedResult("not-openclaw-owned"));
     expect(killed).toStrictEqual([]);
   });
 
@@ -187,7 +174,7 @@ describe("process reaper", () => {
       { pid: 122, ppid: 120, command: "node adapter-child.js" },
     ]);
     const result = await cleanupPendingLease();
-    expect(result).toMatchObject({ inspectedPids: [120, 122] });
+    expect(result.skippedReason).toBeUndefined();
     expect(killed.slice(0, 2)).toEqual([
       { pid: 122, signal: "SIGTERM" },
       { pid: 120, signal: "SIGTERM" },
@@ -200,9 +187,7 @@ describe("process reaper", () => {
       { pid: 130, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
       { pid: 131, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
     ]);
-    await expect(cleanupPendingLease()).resolves.toEqual(
-      skippedResult("ambiguous-root", [130, 131]),
-    );
+    await expect(cleanupPendingLease()).resolves.toEqual(skippedResult("ambiguous-root"));
     expect(killed).toEqual([]);
     runExecMock.mockRejectedValueOnce(new Error("ps unavailable"));
     await expect(cleanupPendingLease()).resolves.toMatchObject({
@@ -221,38 +206,19 @@ describe("process reaper", () => {
     expect(killProcess).not.toHaveBeenCalled();
   });
 
-  it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
-    const { killed } = cleanupDeps([{ pid: 250, ppid: 1, command: "node unrelated.js" }]);
-
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 250,
-      rootCommand: CODEX_WRAPPER_COMMAND,
-      wrapperRoot: WRAPPER_ROOT,
-    });
-
-    expect(result).toEqual({
-      inspectedPids: [250],
-      terminatedPids: [],
-      skippedReason: "not-openclaw-owned",
-    });
+  it.each([
+    ["unrelated reused pid", "node unrelated.js", CODEX_WRAPPER_COMMAND],
+    ["adapter replacing a wrapper", PLUGIN_DEPS_CODEX_COMMAND, CODEX_WRAPPER_COMMAND],
+    ["non-owned recorded tree", "node server.js", "node server.js"],
+  ])("does not kill %s", async (_name, command, rootCommand) => {
+    const { killed } = cleanupDeps([{ pid: 250, ppid: 1, command }]);
+    await expect(cleanupTree(250, { rootCommand })).resolves.toEqual(
+      skippedResult("not-openclaw-owned"),
+    );
     expect(killed).toStrictEqual([]);
   });
 
-  it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
-    const { killed } = cleanupDeps([{ pid: 260, ppid: 1, command: PLUGIN_DEPS_CODEX_COMMAND }]);
-    const result = await cleanupTree(260);
-    expect(result).toEqual(skippedResult("not-openclaw-owned", [260]));
-    expect(killed).toStrictEqual([]);
-  });
-
-  it("skips non-owned recorded process trees", async () => {
-    const { killed } = cleanupDeps([{ pid: 300, ppid: 1, command: "node server.js" }]);
-    const result = await cleanupTree(300, { rootCommand: "node server.js" });
-    expect(result.skippedReason).toBe("not-openclaw-owned");
-    expect(killed).toStrictEqual([]);
-  });
-
-  it("reaps stale OpenClaw-owned wrapper and adapter orphans on startup", async () => {
+  it("reaps owned wrapper and packaged/local adapter trees without claiming native or leased processes", async () => {
     const { killed } = cleanupDeps([
       { pid: 400, ppid: 1, command: CODEX_WRAPPER_COMMAND },
       { pid: 401, ppid: 400, command: PLUGIN_DEPS_CODEX_COMMAND },
@@ -263,25 +229,17 @@ describe("process reaper", () => {
       { pid: 406, ppid: 1, command: "node /tmp/other/codex-acp-wrapper.mjs" },
       { pid: 407, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
       { pid: 408, ppid: 1, command: "node /tmp/owner's-unrelated-script.mjs" },
-    ]);
-    await expectReaped(killed, [400, 401, 402, 403, 404, 405], [402, 401, 400, 404, 403, 405]);
-  });
-
-  it("reaps plugin-local Codex ACP adapter orphans when the generated wrapper is already gone", async () => {
-    const { killed } = cleanupDeps([
       { pid: 500, ppid: 1, command: LOCAL_NODE_MODULES_CODEX_COMMAND },
       { pid: 501, ppid: 500, command: LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND },
-    ]);
-    await expectReaped(killed, [500, 501], [501, 500]);
-  });
-
-  it("reaps packaged Codex app-server orphans without claiming native plugin processes", async () => {
-    const { killed } = cleanupDeps([
       { pid: 510, ppid: 1, command: PLUGIN_DEPS_CODEX_APP_SERVER_COMMAND },
       { pid: 511, ppid: 510, command: PLUGIN_DEPS_CODEX_PLATFORM_COMMAND },
       { pid: 512, ppid: 1, command: LOCAL_CODEX_APP_SERVER_COMMAND },
     ]);
-    await expectReaped(killed, [510, 511], [511, 510]);
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({ wrapperRoot: WRAPPER_ROOT });
+    expect(result.skippedReason).toBeUndefined();
+    expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual([
+      402, 401, 400, 404, 403, 405, 501, 500, 511, 510,
+    ]);
   });
 
   it("keeps startup scans quiet when process listing is unavailable", async () => {

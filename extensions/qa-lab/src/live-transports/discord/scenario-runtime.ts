@@ -12,9 +12,9 @@ import {
   matchesDiscordScenarioReply,
   waitForDiscordMessageDeleted,
   waitForDiscordMessageText,
-  waitForDiscordVoiceState,
   writeDiscordStatusReactionEvidence,
 } from "./discord-live.runtime.js";
+import { waitForDiscordVoiceState } from "./discord-live.voice.js";
 import { runDiscordTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -50,6 +50,7 @@ export async function runDiscordScenario(
       throw new Error("Discord voice auto-join scenario did not resolve a voice channel.");
     }
     await waitForDiscordVoiceState({
+      expectation: "joined",
       token: environment.runtimeEnv.sutBotToken,
       guildId: environment.runtimeEnv.guildId,
       channelId: voiceChannel.id,
@@ -85,9 +86,6 @@ export async function runDiscordScenario(
   const observation = {
     token: environment.runtimeEnv.driverBotToken,
     channelId: environment.runtimeEnv.channelId,
-    observedMessages: environment.observedMessages,
-    observationScenarioId: scenario.id,
-    observationScenarioTitle: scenario.title,
   };
   if (run.kind === "progress-draft-lifecycle") {
     const deadline = Date.now() + scenario.timeoutMs;
@@ -102,8 +100,6 @@ export async function runDiscordScenario(
         ...observation,
         afterSnowflake: sent.id,
         timeoutMs: remainingMs(),
-        triggerMessageId: sent.id,
-        triggerTimestamp: sent.timestamp,
         predicate: (message) =>
           message.senderId === environment.sutIdentity.id &&
           message.text.includes(run.progressLabel) &&
@@ -120,8 +116,6 @@ export async function runDiscordScenario(
         ...observation,
         afterSnowflake: draft.message.messageId,
         timeoutMs: remainingMs(),
-        triggerMessageId: sent.id,
-        triggerTimestamp: sent.timestamp,
         predicate: (message) =>
           message.senderId === environment.sutIdentity.id && message.text.includes(finalText),
       });
@@ -202,8 +196,6 @@ export async function runDiscordScenario(
       ...observation,
       afterSnowflake: sent.id,
       timeoutMs: replyTimeoutMs,
-      triggerMessageId: sent.id,
-      triggerTimestamp: sent.timestamp,
       predicate: (message) =>
         matchesDiscordScenarioReply({
           channelId: environment.runtimeEnv.channelId,

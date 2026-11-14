@@ -41,6 +41,7 @@ export type GatewayRestartSnapshot = {
   gatewayBuildId?: string | null;
   probeError?: string;
   authenticationError?: string;
+  protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   unavailablePlugins?: UnavailablePluginHealthSummary[];
@@ -52,7 +53,6 @@ export type GatewayRestartSnapshot = {
     expected: string;
     actual: string | null;
   };
-  expectedBuildId?: string;
   buildIdMismatch?: {
     expected: string;
     actual: string | null;

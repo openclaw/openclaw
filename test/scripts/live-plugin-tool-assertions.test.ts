@@ -175,11 +175,6 @@ it("reads Code Mode exec evidence from the canonical SQLite transcript", () => {
   expect(result).toMatchObject({ status: 0, stderr: "" });
 });
 
-it("rejects markers that only appear as raw transcript text", () => {
-  const root = makeTranscriptRoot({ "session.jsonl": "e2e_slug_probe\nlive-plugin-slug" });
-  expectFailure(runAssertion(root), "missing causal tool-result evidence");
-});
-
 it("rejects split transcript evidence across unrelated files", () => {
   const { call, nested, result: outerResult } = deferredToolTranscript();
   const root = makeTranscriptRoot({
@@ -229,9 +224,9 @@ it("rejects oversized agent output before parsing it", () => {
   expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_AGENT_OUTPUT");
 });
 
-it("does not dump session transcript contents when a transcript check fails", () => {
+it("rejects raw transcript markers without dumping session contents", () => {
   const root = makeTranscriptRoot({
-    "session.jsonl": `DO_NOT_DUMP_SESSION_CONTENT${"x".repeat(70 * 1024)}\n`,
+    "session.jsonl": `${toolName}\n${slug}\nDO_NOT_DUMP_SESSION_CONTENT${"x".repeat(70 * 1024)}\n`,
   });
 
   const result = runAssertion(root);

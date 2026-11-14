@@ -4,14 +4,8 @@ import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
 } from "../../../plugins/tool-metadata.js";
-import {
-  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
-  findClientToolNameConflicts,
-  toClientToolDefinitions,
-  toToolDefinitions,
-} from "../../agent-tool-definition-adapter.js";
+import { toClientToolDefinitions, toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -19,6 +13,7 @@ import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
+import { resolveToolLoopDetectionConfig } from "../../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import {
   collectReplaySafeToolNames,
@@ -27,19 +22,28 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
+import { bindToolUsageIds } from "../../tool-usage-bindings.js";
+import { isToolUsageRecordingEnabled } from "../../tool-usage-recorder.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
+  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   collectRegisteredToolNames,
+  findClientToolNameConflicts,
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "config" | "sessionId" | "sessionKey" | "runId" | "onToolOutcome" | "allocateToolOutcomeOrdinal"
+  >;
   catalogToolHookContext: Parameters<typeof toToolDefinitions>[1];
   codeModeControlsEnabledForRun: boolean;
   deferredDirectoryToolsCallable: boolean;
   effectiveTools: AgentTool[];
+  /** Applies the session tool pin each time the surface is built, including permission refreshes. */
+  pinTools?: (tools: AgentTool[]) => AgentTool[];
   replaySafetyOptions: Parameters<typeof isAgentToolReplaySafe>[1];
   sandboxSessionKey?: string;
   sessionAgentId: string;
@@ -101,6 +105,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       )
     : [];
   const buildSurface = () => {
+    const effectiveTools = params.pinTools?.(params.effectiveTools) ?? params.effectiveTools;
     // Raw names gate trusted local media passthrough; normalized aliases are insufficient.
     const builtinToolNames = new Set<string>();
     const trustedLocalMediaToolNames = new Set<string>();
@@ -132,7 +137,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     // the same name must never be mistaken for one at tool completion. The marked
     // controls exist only on the post-catalog `effectiveTools` surface.
     const codeModeExecToolNames = new Set(
-      params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
+      effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
     );
     // Only a tool author can opt a tool into delivering its result as the source reply.
     // Names are policy-normalized because completion and terminal hooks compare them so.
@@ -175,6 +180,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       enabled:
         params.codeModeControlsEnabledForRun || (search.enabled && search.mode !== "directory"),
       catalogRef: params.toolSearchCatalogRef,
+      selection: params.codeModeControlsEnabledForRun ? undefined : search,
     });
     clientToolDefs = clientToolSearch.tools;
     if (clientToolSearch.compacted) {
@@ -187,11 +193,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     }
 
     const customTools = toToolDefinitions(
-      params.effectiveTools,
+      effectiveTools,
       params.catalogToolHookContext,
       params.getToolAbortSignal?.(),
     );
     const allCustomTools = [...customTools, ...clientToolDefs];
+    const toolUsageIdsByName = isToolUsageRecordingEnabled(params.attempt)
+      ? bindToolUsageIds(
+          params.deferredDirectoryToolsCallable ? params.uncompactedEffectiveTools : effectiveTools,
+          clientToolDefs.map((tool) => tool.name),
+        )
+      : undefined;
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
     return {
       allCustomTools,
@@ -204,6 +216,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       codeModeExecToolNames,
       sourceReplyCapableToolNames,
       sideEffectToolOwners,
+      toolUsageIdsByName,
       sessionToolAllowlist,
       trustedLocalMediaToolNames,
     };
@@ -235,6 +248,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
         replaceSet(current[key], next[key]);
       }
       replaceSet(current.replaySafeTools, next.replaySafeTools);
+      if (current.toolUsageIdsByName) {
+        current.toolUsageIdsByName.clear();
+        for (const [name, id] of next.toolUsageIdsByName ?? []) {
+          current.toolUsageIdsByName.set(name, id);
+        }
+      }
       current.sideEffectToolOwners.clear();
       for (const [name, owner] of next.sideEffectToolOwners) {
         current.sideEffectToolOwners.set(name, owner);

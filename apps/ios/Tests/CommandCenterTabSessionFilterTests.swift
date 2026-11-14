@@ -5,8 +5,27 @@ import Testing
 
 struct CommandCenterTabSessionFilterTests {
     @Test func `cached browsing scopes remain available offline while archives require a connection`() {
-        #expect(SessionStatusScope.available(isConnected: false) == [.active, .snoozed])
-        #expect(SessionStatusScope.available(isConnected: true) == [.active, .snoozed, .archived])
+        #expect(SessionStatusScope.available(isConnected: false) == [.active, .snoozed, .automations])
+        #expect(SessionStatusScope.available(isConnected: true) == [.active, .snoozed, .automations, .archived])
+    }
+
+    @Test func `automation scope preserves selection without leaking archived sessions into active`() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:cron:daily"},
+          {"key":"agent:main:cron:archived","archived":true},
+          {"key":"conversation"}
+        ]
+        """.utf8))
+        func keys(_ scope: SessionStatusScope, selected: String? = nil) -> [String] {
+            entries.filter { scope.includes($0, at: now, currentSessionKey: selected) }.map(\.key)
+        }
+        #expect(keys(.active) == ["conversation"])
+        #expect(keys(.active, selected: "agent:main:cron:daily") == ["agent:main:cron:daily", "conversation"])
+        #expect(keys(.active, selected: "agent:main:cron:archived") == ["conversation"])
+        #expect(keys(.automations) == ["agent:main:cron:daily"])
+        #expect(keys(.archived) == ["agent:main:cron:archived"])
     }
 
     @Test func `status scopes separate future snoozes and archives while expired snoozes return to active`() throws {

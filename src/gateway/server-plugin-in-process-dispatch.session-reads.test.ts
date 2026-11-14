@@ -15,6 +15,7 @@ import {
   dispatchGatewayMethodInProcessRaw,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
@@ -86,12 +87,7 @@ async function withSyntheticReader(
         dispatch: (method) =>
           withOperatorToolGatewayAuthority(
             {
-              authenticatedUserProfile: {
-                profileId: reader.id,
-                displayName: "Synthetic reader",
-                hasAvatar: false,
-                updatedAt: 1,
-              },
+              authenticatedUserProfile: gatewayProfile(reader.id, "Synthetic reader"),
               operatorRoleActor: { kind: "operator", profileId: reader.id },
               scopes: ["operator.read"],
             },
@@ -182,12 +178,7 @@ it.each(methods)("honors role revocation during projection readiness on %s", (me
   withSyntheticReader(async ({ readerId, dispatch, blockCatalog }) => {
     const gate = blockCatalog();
     const pending =
-      method === "sessions.list"
-        ? dispatch(method).then(
-            () => undefined,
-            (error: unknown) => error,
-          )
-        : undefined;
+      method === "sessions.list" ? dispatch(method).catch((error: unknown) => error) : undefined;
     try {
       await gate.entered;
       if (pending) {

@@ -20,25 +20,53 @@ type TerminalInputOverrides = Omit<
   runParams?: Partial<TerminalInput["runParams"]>;
   retryState?: Partial<TerminalInput["retryState"]>;
   sessionPromptState?: Partial<TerminalInput["sessionPromptState"]>;
+  assistant?: Parameters<typeof assistantAttempt>[0];
+  attemptOverrides?: Parameters<typeof assistantAttempt>[1];
 };
 
 export function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {}) {
-  return buildEmbeddedRunnerAssistant({
-    content: [{ type: "text", text: "" }],
+  return textAssistant("", overrides);
+}
+
+export function textAssistant(
+  text: string,
+  overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {},
+) {
+  return buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }], ...overrides });
+}
+
+export function assistantAttempt(
+  assistant: ReturnType<typeof buildEmbeddedRunnerAssistant> | undefined,
+  overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {},
+) {
+  return makeEmbeddedRunnerAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
     ...overrides,
   });
 }
 
-export function makeTerminalInput(overrides: TerminalInputOverrides = {}): TerminalInput {
-  const assistant = overrides.attemptAssistant ?? emptyAssistant();
+type Resolution = Awaited<ReturnType<typeof resolveEmbeddedRunTerminal>>;
+export function expectComplete(
+  result: Resolution,
+): asserts result is Extract<Resolution, { action: "complete" }> {
+  expect(result.action).toBe("complete");
+  if (result.action !== "complete") {
+    throw new Error("expected terminal resolution to complete");
+  }
+}
+
+export function makeTerminalInput(input: TerminalInputOverrides = {}): TerminalInput {
+  const { assistant: suppliedAssistant, attemptOverrides, ...overrides } = input;
+  const assistant = suppliedAssistant ?? overrides.attemptAssistant ?? emptyAssistant();
   const attempt =
     overrides.attempt ??
-    makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    ("assistant" in input
+      ? assistantAttempt(suppliedAssistant, attemptOverrides)
+      : makeEmbeddedRunnerAttempt({
+          lastAssistant: assistant,
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        }));
   const profileStore = { version: 1, profiles: {} };
   const runParams = {
     sessionId: "session:terminal-resolution",
@@ -63,16 +91,7 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
       assistant: resolveCurrentAttemptAssistant(attempt),
     }),
     payloadsWithToolMedia: [],
-    recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
-    finalAssistantVisibleText: undefined,
-    finalAssistantRawText: undefined,
-    agentMeta: {
-      sessionId: runParams.sessionId,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    },
-    attemptToolSummary: undefined,
-    failureSignal: undefined,
+    agentMeta: { sessionId: runParams.sessionId, provider: "openai", model: "gpt-5.6-luna" },
     attemptCompactionCount: 0,
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
     sessionPromptState: {
@@ -95,7 +114,6 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     modelTransportId: "gpt-5.6-luna",
     modelTransportApi: "openai-responses",
     requestTransportOverrides: "none",
-    authProfileId: undefined,
     profileFailureStore: profileStore,
     attemptAuthProfileStore: profileStore,
     apiKeyInfo: null,
@@ -113,6 +131,10 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     ...overrides,
     prepared: {
       payloads: [],
+      recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
+      finalAssistantRawText: undefined,
+      attemptToolSummary: undefined,
+      failureSignal: undefined,
       replyDeliveryState: "missing",
       sourceReplyDeliveryState: "missing",
       timedOutDuringPrompt: false,
@@ -131,6 +153,11 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
       ...base,
       ...overrides,
       ...overrides.prepared,
+      payloadsForVisibleCompletion:
+        overrides.prepared?.payloadsForVisibleCompletion ??
+        overrides.payloadsForVisibleCompletion ??
+        overrides.payloadsWithToolMedia ??
+        [],
       finalAssistantVisibleText:
         overrides.prepared?.finalAssistantVisibleText ?? overrides.finalAssistantVisibleText ?? "",
     },
@@ -140,13 +167,28 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
   };
 }
 
-export async function resolveTerminalText(
-  overrides: TerminalInputOverrides,
-): Promise<string | undefined> {
-  const resolved = await resolveEmbeddedRunTerminal(makeTerminalInput(overrides));
-  expect(resolved.action).toBe("complete");
-  if (resolved.action !== "complete") {
-    throw new Error("expected terminal resolution to complete");
-  }
+export function resolveTerminal(overrides: TerminalInputOverrides) {
+  return resolveEmbeddedRunTerminal(makeTerminalInput(overrides));
+}
+
+export async function resolveTerminalText(overrides: TerminalInputOverrides) {
+  const resolved = await resolveTerminal(overrides);
+  expectComplete(resolved);
   return resolved.result.payloads?.[0]?.text;
+}
+
+export function compactionAssistantFixture(id: string) {
+  return buildEmbeddedRunnerAssistant({
+    stopReason: "length",
+    providerReplay: {
+      v: 1,
+      type: "openai-responses-compaction",
+      id,
+      data: "opaque-compaction",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "base-url-hash",
+    },
+  });
 }

@@ -9,6 +9,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
@@ -21,11 +22,6 @@ import {
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
   setLastTtsAttempt,
-  setSummarizationEnabled,
-  setTtsEnabled,
-  setTtsMaxLength,
-  setTtsPersona,
-  setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
 import type { ReplyPayload } from "../types.js";
@@ -83,9 +79,12 @@ function ttsUsage(): CommandHandlerResult {
   );
 }
 
-function updateTtsPreference(update: () => void, reply: string): CommandHandlerResult {
+async function updateTtsPreference(
+  update: () => Promise<void>,
+  reply: string,
+): Promise<CommandHandlerResult> {
   try {
-    update();
+    await update();
     return stopWithText(reply);
   } catch (error) {
     log.warn(`TTS preference update failed: ${formatErrorMessage(error)}`);
@@ -311,7 +310,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
     if (action === "on" || action === "off") {
       const enabled = action === "on";
       return updateTtsPreference(
-        () => setTtsEnabled(prefsPath, enabled),
+        () => updateTtsPrefsAsync(prefsPath, { auto: enabled ? "always" : "off" }),
         enabled ? "🔊 TTS enabled." : "🔇 TTS disabled.",
       );
     }
@@ -370,7 +369,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
 
       const nextProvider = resolvedProvider.id;
       return updateTtsPreference(
-        () => setTtsProvider(prefsPath, nextProvider),
+        () => updateTtsPrefsAsync(prefsPath, { provider: nextProvider }),
         `✅ TTS provider set to ${nextProvider}.`,
       );
     }
@@ -399,7 +398,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       const requested = args.toLowerCase();
       if (requested === "off" || requested === "none" || requested === "default") {
         return updateTtsPreference(
-          () => setTtsPersona(prefsPath, null),
+          () => updateTtsPrefsAsync(prefsPath, { persona: null }),
           "✅ TTS persona disabled.",
         );
       }
@@ -411,7 +410,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         );
       }
       return updateTtsPreference(
-        () => setTtsPersona(prefsPath, persona.id),
+        () => updateTtsPrefsAsync(prefsPath, { persona: persona.id }),
         `✅ TTS persona set to ${persona.id}.`,
       );
     }
@@ -432,7 +431,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         return stopWithText("❌ Limit must be between 100 and 4096 characters.");
       }
       return updateTtsPreference(
-        () => setTtsMaxLength(prefsPath, next),
+        () => updateTtsPrefsAsync(prefsPath, { maxLength: next }),
         `✅ TTS limit set to ${next} characters.`,
       );
     }
@@ -454,7 +453,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         return ttsUsage();
       }
       return updateTtsPreference(
-        () => setSummarizationEnabled(prefsPath, requested === "on"),
+        () => updateTtsPrefsAsync(prefsPath, { summarize: requested === "on" }),
         requested === "on" ? "✅ TTS auto-summary enabled." : "❌ TTS auto-summary disabled.",
       );
     }

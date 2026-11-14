@@ -16,11 +16,11 @@ import {
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { TRANSCRIPT_INSERT_BATCH_SIZE, transcriptEventJsonSql } from "./transcript-payload.js";
-
-export type TranscriptIdentityInsertRow = NonNullable<
-  ReturnType<typeof readTranscriptEventIdentity>
-> & { seq: number; createdAt: number };
+import {
+  TRANSCRIPT_INSERT_BATCH_SIZE,
+  transcriptEventJsonSql,
+  type TranscriptIdentityInsertRow,
+} from "./transcript-payload.js";
 
 export function createTranscriptIdentityInserter(
   database: OpenClawAgentDatabase,

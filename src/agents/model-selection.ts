@@ -121,9 +121,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   cfg?: OpenClawConfig;
   defaultProvider: string;
   loadCatalog: () => Promise<ModelCatalogEntry[]>;
-  aliasIndex?: ModelAliasIndex;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
   preserveAuthProfile?: boolean;
 }): Promise<string | undefined> {
   const rawModel = normalizeOptionalString(params.raw);
@@ -142,9 +139,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
     cfg: params.cfg,
     raw: split.model,
     defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!resolved) {
     return rawModel;
@@ -224,12 +218,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      includeAgentPrimary: params.includeAgentPrimary,
-      modelRuntime: params.modelRuntime,
-    });
+    resolveSubagentConfiguredModelSelection(params);
   if (!raw) {
     return undefined;
   }

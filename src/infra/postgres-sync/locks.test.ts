@@ -1,38 +1,25 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { getEnvironmentData, Worker } from "node:worker_threads";
-import { Client } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  resolveRuntimeWorkerThreadExecArgv,
-  resolveRuntimeWorkerUrl,
-} from "../runtime-worker-url.js";
+  conformanceWorkerResult,
+  createConformanceWorker,
+} from "../database-engine/conformance.test-support.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
   readSqliteDatabaseWriteTokenForPath,
-  type SqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
 import { postgresLockTestEntrypoint } from "./locks-runtime.test-support.js";
+import type { PostgresLockWorkerInput } from "./locks-worker.test-support.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { connection, client: admin, directories, prefix } = usePostgresTestHarness("locks");
 type Event = "ready" | "admission" | "statement" | "read" | "done";
 type Message = { event: Event; before?: string; after?: string; value?: number; error?: string };
 
-function launch(options: {
-  path: string;
-  schema: string;
-  storeId: string;
-  id: string;
-  mode: "single" | "worker" | "deferred";
-  admissions: SqliteDatabaseAdmissions;
-  holdAdmission?: boolean;
-  holdStatement?: boolean;
-  holdRead?: boolean;
-}) {
+function launch(options: Omit<PostgresLockWorkerInput, "connection" | "gates">) {
   const gates = new Int32Array(new SharedArrayBuffer(16));
   const events = {
     ready: Promise.withResolvers<Message>(),
@@ -42,39 +29,24 @@ function launch(options: {
     done: Promise.withResolvers<Message>(),
   };
   const url = resolveRuntimeWorkerUrl(postgresLockTestEntrypoint);
-  const worker = new Worker(url, {
-    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-    workerData: { ...options, connection, gates: gates.buffer },
-  });
-  const fail = (error: Error) => {
-    for (const event of Object.values(events)) {
-      event.reject(error);
-    }
-  };
+  const worker = createConformanceWorker(
+    url,
+    { ...options, connection, gates: gates.buffer },
+    { connection: connection! },
+  );
+  const fail = (error: Error) => Object.values(events).forEach((event) => event.reject(error));
   // Some events intentionally remain unobserved in the other scenario.
   for (const event of Object.values(events)) {
     void event.promise.catch(() => {});
   }
-  worker.on("message", (message: Message) => {
-    if (message.error) {
-      fail(new Error(message.error));
-    } else {
-      events[message.event].resolve(message);
-    }
-  });
+  worker.on("message", (message: Message) =>
+    message.error ? fail(new Error(message.error)) : events[message.event].resolve(message),
+  );
   worker.on("error", fail);
-  const exited = new Promise<void>((resolve, reject) => {
-    worker.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`PostgreSQL regression worker exited ${code}`));
-      }
-    });
-  });
+  const exited = conformanceWorkerResult<Message>(worker, "PostgreSQL regression");
   void exited.catch(() => {});
   return {
-    events,
+    wait: (event: Event) => events[event].promise,
     exited,
     release(index: number) {
       Atomics.store(gates, index, 1);
@@ -84,13 +56,8 @@ function launch(options: {
 }
 
 describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
-  const admin = new Client({ connectionString: connection });
   const workers: ReturnType<typeof launch>[] = [];
   const anchors: ReturnType<typeof openNodeSqliteDatabase>[] = [];
-  const schemas: string[] = [];
-  beforeAll(async () => {
-    await admin.connect();
-  });
   afterEach(async () => {
     await admin.query("ROLLBACK");
     await admin.query("SELECT pg_advisory_unlock_all()");
@@ -104,19 +71,25 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     for (const anchor of anchors.splice(0)) {
       anchor.close();
     }
-    for (const schema of schemas.splice(0)) {
-      await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+  });
+
+  const rows = async (sql: string) => (await admin.query(sql)).rows;
+  async function lockIsFree(key: string) {
+    const result = await admin.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
+      [key],
+    );
+    const acquired = result.rows[0]?.acquired;
+    if (acquired) {
+      await admin.query("SELECT pg_advisory_unlock($1::bigint)", [key]);
     }
-  });
-  afterAll(async () => {
-    await admin.end();
-  });
+    return acquired;
+  }
 
   async function fixture() {
     const storeId = randomUUID();
-    const schema = `openclaw_lock_test_${storeId.replaceAll("-", "")}`;
-    schemas.push(schema);
-    const databasePath = path.join(tempDirs.make("postgres-locks-"), "anchor.sqlite");
+    const schema = `${prefix}_${storeId.replaceAll("-", "")}`;
+    const databasePath = path.join(directories.make("postgres-locks-"), "anchor.sqlite");
     const anchor = openNodeSqliteDatabase(databasePath);
     // Final close revokes the shared admission; retain its owner until the workers exit.
     anchors.push(anchor);
@@ -139,25 +112,22 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     const before = readSqliteDatabaseWriteTokenForPath(identity.path);
     const writer = launch({ ...identity, mode: "single", id: "second", holdStatement: true });
     workers.push(writer);
-    await writer.events.ready.promise;
+    await writer.wait("ready");
     writer.release(0);
     await admin.query("COMMIT");
-    await writer.events.statement.promise;
+    await writer.wait("statement");
     // This is a live lock check while the actual statement callback is gated, not a timing guess.
-    const lock = await admin.query<{ acquired: boolean }>(
-      "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
-      [identity.key],
-    );
-    expect(lock.rows[0]?.acquired).toBe(false);
+    expect(await lockIsFree(identity.key)).toBe(false);
     writer.release(2);
-    const committed = await writer.events.done.promise;
+    const committed = await writer.wait("done");
     expect(before).toBeDefined();
     expect(readSqliteDatabaseWriteTokenForPath(identity.path)).not.toBe(before);
     expect(committed.before).toBeDefined();
     expect(committed.after).not.toBe(committed.before);
-    expect(
-      (await admin.query(`SELECT id FROM "${identity.schema}".events ORDER BY id`)).rows,
-    ).toEqual([{ id: "first" }, { id: "second" }]);
+    expect(await rows(`SELECT id FROM "${identity.schema}".events ORDER BY id`)).toEqual([
+      { id: "first" },
+      { id: "second" },
+    ]);
   });
 
   it("admits concurrent worker writers before locking, so host admission cannot deadlock them", async () => {
@@ -165,39 +135,30 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     const first = launch({ ...identity, mode: "worker", id: "first", holdAdmission: true });
     const second = launch({ ...identity, mode: "worker", id: "second" });
     workers.push(first, second);
-    await Promise.all([first.events.ready.promise, second.events.ready.promise]);
+    await Promise.all([first.wait("ready"), second.wait("ready")]);
     first.release(0);
-    await first.events.admission.promise;
-    const lock = await admin.query<{ acquired: boolean }>(
-      "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
-      [identity.key],
-    );
-    const freeDuringAdmission = lock.rows[0]?.acquired === true;
-    if (freeDuringAdmission) {
-      await admin.query("SELECT pg_advisory_unlock($1::bigint)", [identity.key]);
-    }
+    await first.wait("admission");
+    const freeDuringAdmission = await lockIsFree(identity.key);
     // Old order holds the lock here. Drain it before asserting, rather than hanging on the cycle.
     if (!freeDuringAdmission) {
       first.release(1);
     }
     second.release(0);
-    const secondCommit = await second.events.done.promise;
+    const secondCommit = await second.wait("done");
     const afterSecondCommit = readSqliteDatabaseWriteTokenForPath(identity.path);
     first.release(1);
-    const firstCommit = await first.events.done.promise;
+    const firstCommit = await first.wait("done");
     expect(freeDuringAdmission).toBe(true);
-    expect(secondCommit.before).toBeDefined();
-    expect(secondCommit.after).toBeDefined();
+    expect(secondCommit).toMatchObject({ before: expect.any(String), after: expect.any(String) });
     expect(secondCommit.after).not.toBe(secondCommit.before);
     expect(afterSecondCommit).toBe(secondCommit.after);
-    expect(firstCommit.before).toBeDefined();
-    expect(firstCommit.after).toBeDefined();
+    expect(firstCommit).toMatchObject({ before: expect.any(String), after: expect.any(String) });
     expect(firstCommit.after).not.toBe(firstCommit.before);
     expect(firstCommit.after).not.toBe(secondCommit.after);
     expect(readSqliteDatabaseWriteTokenForPath(identity.path)).toBe(firstCommit.after);
-    expect(
-      (await admin.query(`SELECT count(*)::int AS count FROM "${identity.schema}".events`)).rows,
-    ).toEqual([{ count: 2 }]);
+    expect(await rows(`SELECT count(*)::int AS count FROM "${identity.schema}".events`)).toEqual([
+      { count: 2 },
+    ]);
   });
 
   it("locks deferred transactions before reading so concurrent increments cannot lose updates", async () => {
@@ -214,28 +175,19 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     });
     const second = launch({ ...identity, mode: "deferred", id: "second" });
     workers.push(first, second);
-    await Promise.all([first.events.ready.promise, second.events.ready.promise]);
+    await Promise.all([first.wait("ready"), second.wait("ready")]);
     first.release(0);
-    await first.events.statement.promise;
-    const lock = await admin.query<{ acquired: boolean }>(
-      "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
-      [identity.key],
-    );
-    const lockedBeforeRead = lock.rows[0]?.acquired === false;
-    if (!lockedBeforeRead) {
-      await admin.query("SELECT pg_advisory_unlock($1::bigint)", [identity.key]);
-    }
+    await first.wait("statement");
+    const lockedBeforeRead = (await lockIsFree(identity.key)) === false;
     first.release(2);
-    const firstRead = await first.events.read.promise;
+    const firstRead = await first.wait("read");
     second.release(0);
-    await second.events.admission.promise;
+    await second.wait("admission");
     first.release(3);
-    await Promise.all([first.events.done.promise, second.events.done.promise]);
+    await Promise.all([first.wait("done"), second.wait("done")]);
     expect(lockedBeforeRead).toBe(true);
     expect(firstRead.value).toBe(0);
-    expect((await second.events.read.promise).value).toBe(1);
-    expect((await admin.query(`SELECT value FROM "${identity.schema}".counter`)).rows).toEqual([
-      { value: 2 },
-    ]);
+    expect((await second.wait("read")).value).toBe(1);
+    expect(await rows(`SELECT value FROM "${identity.schema}".counter`)).toEqual([{ value: 2 }]);
   });
 });

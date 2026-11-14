@@ -2,27 +2,30 @@
 
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { showInputDialog } from "./input-dialog.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { showInputDialog } from "./input-dialog.tsx";
 
 let restoreDialogPolyfill: () => void;
 
-function findButton(label: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll("button")].find(
+const findButton = (label: string) =>
+  [...document.body.querySelectorAll("button")].find(
     (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${label} button`);
-  }
-  return button;
+  )!;
+const dialogInput = () =>
+  document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')!;
+const dialog = () => document.body.querySelector("openclaw-modal-dialog");
+const alert = () => document.querySelector('[role="alert"]');
+const expectSaving = () => waitForSolid(() => expect(dialogInput().disabled).toBe(true));
+async function open(options: Parameters<typeof showInputDialog>[0]) {
+  const closed = showInputDialog(options);
+  return { closed, ...(await getRenderedModalDialog(document.body)) };
 }
 
-function dialogInput(): HTMLInputElement {
-  const input = document.body.querySelector('openclaw-modal-dialog input[name="value"]');
-  if (!(input instanceof HTMLInputElement)) {
-    throw new Error("Expected text input");
-  }
-  return input;
+async function enter(value = "Client work") {
+  await type(value);
+  submitForm();
 }
 
 async function type(value: string) {
@@ -55,24 +58,35 @@ describe("showInputDialog", () => {
     restoreDialogPolyfill();
   });
 
-  it("treats modal dismissal as cancellation", async () => {
-    const result = showInputDialog({ title: "Rename session" });
-    const { modal } = await getRenderedModalDialog(document.body);
-
-    modal.dispatchEvent(new CustomEvent("modal-cancel"));
-
-    await expect(result).resolves.toBeNull();
+  it.each(["dismissal", "owner abort"])("cancels and removes the dialog on %s", async (reason) => {
+    const controller = new AbortController();
+    const { closed, modal } = await open({ title: "Rename session", signal: controller.signal });
+    if (reason === "dismissal") {
+      modal.dispatchEvent(new CustomEvent("modal-cancel"));
+    } else {
+      controller.abort();
+    }
+    await expect(closed).resolves.toBeNull();
+    expect(dialog()).toBeNull();
   });
 
-  it("removes the dialog and cancels when its owner aborts", async () => {
-    const controller = new AbortController();
-    const result = showInputDialog({ title: "Rename session", signal: controller.signal });
-    await getRenderedModalDialog(document.body);
-
-    controller.abort();
-
-    await expect(result).resolves.toBeNull();
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  it("allows an explicitly admitted offline submit and updates admission with the Gateway", async () => {
+    const harness = createGatewayHarness(null, false);
+    const submit = vi.fn().mockResolvedValue(null);
+    const { closed } = await open({
+      title: "Rename session",
+      gateway: harness.gateway,
+      canSubmit: () => harness.gateway.snapshot.phase === "offline",
+      submit,
+    });
+    await type("Notes");
+    expect(findButton("Save").disabled).toBe(true);
+    harness.update({ phase: "offline" });
+    flush();
+    expect(findButton("Save").disabled).toBe(false);
+    submitForm();
+    await expect(closed).resolves.toBe("Notes");
+    expect(submit).toHaveBeenCalledExactlyOnceWith("Notes");
   });
 
   it("rejects a reentrant input request instead of stacking or replaying it", async () => {
@@ -87,108 +101,110 @@ describe("showInputDialog", () => {
     await expect(first).resolves.toBeNull();
   });
 
-  it("holds a required field closed until it has a non-blank value, then trims it", async () => {
-    const submit = vi.fn().mockResolvedValue(null);
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
-
-    expect(findButton("Create group").disabled).toBe(true);
-    await type("   ");
-    expect(findButton("Create group").disabled).toBe(true);
-    submitForm();
-    expect(submit).not.toHaveBeenCalled();
-
-    await type("  Client work  ");
-    expect(dialogInput().value).toBe("  Client work  ");
-    expect(findButton("Create group").disabled).toBe(false);
-    submitForm();
-
-    await closed;
-    expect(submit).toHaveBeenCalledExactlyOnceWith("Client work");
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
-  it("holds a rename closed on the name it started from", async () => {
-    const closed = showInputDialog({
-      title: 'Rename group "Research"',
-      label: "Group name",
-      defaultValue: "Research",
-      requireValue: true,
-      requireChange: true,
-    });
-    await getRenderedModalDialog(document.body);
-
-    // The starting name is a no-op rename, so it never reaches the Gateway;
-    // whitespace around it is the same name once trimmed.
-    expect(findButton("Save").disabled).toBe(true);
-    await type("  Research  ");
-    expect(findButton("Save").disabled).toBe(true);
-    submitForm();
-    expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
-
-    await type("Projects");
-    expect(findButton("Save").disabled).toBe(false);
-    submitForm();
-
-    await expect(closed).resolves.toBe("Projects");
-  });
+  it.each([undefined, "Research"])(
+    "blocks blank/unchanged values (initial=%s), then trims",
+    async (initial) => {
+      const submit = vi.fn().mockResolvedValue(null);
+      const { closed } = await open({
+        ...REQUIRED,
+        defaultValue: initial,
+        requireChange: initial !== undefined,
+        submit,
+      });
+      const button = findButton("Create group");
+      expect(button.disabled).toBe(true);
+      await enter(`  ${initial ?? ""}  `);
+      expect(button.disabled).toBe(true);
+      expect(submit).not.toHaveBeenCalled();
+      expect(dialog()).not.toBeNull();
+      await type("  Client work  ");
+      expect(dialogInput().value).toBe("  Client work  ");
+      expect(button.disabled).toBe(false);
+      submitForm();
+      await expect(closed).resolves.toBe("Client work");
+      expect(submit).toHaveBeenCalledExactlyOnceWith("Client work");
+      expect(dialog()).toBeNull();
+    },
+  );
 
   it("submits once while an attempt is in flight and blocks dismissal until it settles", async () => {
-    let settle!: (message: string | null) => void;
-    const submit = vi.fn().mockReturnValue(
-      new Promise<string | null>((resolve) => {
-        settle = resolve;
-      }),
-    );
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    const { modal } = await getRenderedModalDialog(document.body);
+    const pending = Promise.withResolvers<string | null>();
+    const submit = vi.fn().mockReturnValue(pending.promise);
+    const { closed, modal } = await open({ ...REQUIRED, submit });
 
-    await type("Client work");
-    submitForm();
+    await enter();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
-    flush();
-    expect(dialogInput().disabled).toBe(true);
+    await expectSaving();
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
     modal.dispatchEvent(cancelEvent);
     expect(cancelEvent.defaultPrevented).toBe(true);
-    expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(dialog()).not.toBeNull();
 
-    settle(null);
+    pending.resolve(null);
     await closed;
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(dialog()).toBeNull();
   });
 
-  it.each(["synchronous", "asynchronous"])(
+  it("keeps the successor editable after an aborted submission fails late", async () => {
+    const controller = new AbortController();
+    const pending = Promise.withResolvers<string | null>();
+    const submit = vi.fn(() => pending.promise);
+    const { closed } = await open({ ...REQUIRED, signal: controller.signal, submit });
+    await enter();
+    await expectSaving();
+
+    controller.abort();
+    await expect(closed).resolves.toBeNull();
+    const { closed: successor } = await open({ title: "Next prompt" });
+    await type("Still editable");
+    pending.reject(new Error("retired operation failed"));
+    await waitForSolid(() => {
+      expect(dialogInput()).toMatchObject({ value: "Still editable", disabled: false });
+      expect(alert()).toBeNull();
+    });
+    expect(submit).toHaveBeenCalledExactlyOnceWith("Client work");
+    findButton("Save").click();
+    await expect(successor).resolves.toBe("Still editable");
+  });
+
+  it.each(["synchronous", "asynchronous", "validation"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
+      const retry = Promise.withResolvers<string | null>();
       const submit = vi
-        .fn((): Promise<string | null> => Promise.resolve(null))
+        .fn(() => retry.promise)
         .mockImplementationOnce(() => {
           const error = new Error("gateway exploded");
           if (mode === "synchronous") {
             throw error;
           }
-          return Promise.reject(error);
+          return mode === "validation" ? Promise.resolve(error.message) : Promise.reject(error);
         });
-      const closed = showInputDialog({ ...REQUIRED, submit });
-      await getRenderedModalDialog(document.body);
+      const { closed } = await open({ ...REQUIRED, submit });
 
       await type("Client work");
+      const input = dialogInput();
       submitForm();
-      await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-      await Promise.resolve();
+      await waitForSolid(() => expect(document.body.textContent).toContain("gateway exploded"));
 
-      expect(document.body.textContent).toContain("gateway exploded");
-      expect(dialogInput().disabled).toBe(false);
-      expect(dialogInput().value).toBe("Client work");
+      expect(dialogInput()).toBe(input);
+      expect(dialogInput()).toMatchObject({ disabled: false, value: "Client work" });
+      expect(input.getAttribute("aria-invalid")).toBe("true");
       expect(findButton("Create group").disabled).toBe(false);
       expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
-      await closed;
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      submitForm();
+      expect(submit).toHaveBeenCalledTimes(2);
+      await expectSaving();
+      expect(dialogInput()).toBe(input);
+      expect(input.hasAttribute("aria-invalid")).toBe(false);
+      expect(alert()).toBeNull();
+      retry.resolve(null);
+      await expect(closed).resolves.toBe("Client work");
+      expect(dialog()).toBeNull();
     },
   );
 });

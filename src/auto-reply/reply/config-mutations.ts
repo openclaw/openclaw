@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/** Config mutation helpers used by chat commands that edit OpenClaw config. */
 import type { ChannelAllowlistAdapter } from "../../channels/plugins/types.adapters.js";
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../config/config-paths.js";
 import {

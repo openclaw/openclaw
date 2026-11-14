@@ -84,11 +84,7 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
         cfg: params.cfg,
         channel: params.command.channel,
         originChannelId: channelId,
-        originAccountId: resolveChannelAccountId({
-          cfg: params.cfg,
-          ctx: params.ctx,
-          command: params.command,
-        }),
+        originAccountId: resolveChannelAccountId(params),
         gatewayClientScopes: params.ctx.GatewayClientScopes,
         target: resolveConfigWriteTargetFromPath(parsedWritePath),
       });

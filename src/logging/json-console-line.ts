@@ -30,7 +30,7 @@ export function formatConsoleDiagnosticLine(params: { level: LogLevel; message: 
 }
 
 /** Preserves human diagnostic blocks while serializing the whole block as one JSONL record. */
-export function formatConsoleDiagnosticBlock(params: { level: LogLevel; message: string }): string {
+export function formatConsoleDiagnosticBlock(params: { message: string }): string {
   const override = loggingState.overrideSettings as { consoleStyle?: unknown } | null;
   const style = override?.consoleStyle ?? readLoggingConfig()?.consoleStyle;
   if (style !== "json") {
@@ -38,7 +38,7 @@ export function formatConsoleDiagnosticBlock(params: { level: LogLevel; message:
   }
   const trailingNewline = params.message.endsWith("\n") ? "\n" : "";
   return `${formatJsonConsoleLine({
-    level: params.level,
+    level: "error",
     message: stripVTControlCharacters(params.message).trimEnd(),
   })}${trailingNewline}`;
 }

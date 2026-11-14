@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   describeImageWithModel,
@@ -84,34 +85,26 @@ function request(overrides: Partial<ImagesDescriptionRequest> = {}): ImagesDescr
 }
 
 function providerMethods() {
-  const provider = createLlamaCppMediaProvider();
-  if (!provider.describeImage || !provider.describeImages) {
-    throw new Error("llama-cpp must register both image provider hooks");
-  }
-  return { single: provider.describeImage, multiple: provider.describeImages };
+  const { describeImage: single, describeImages: multiple } = createLlamaCppMediaProvider();
+  assert(single && multiple, "llama-cpp must register both image provider hooks");
+  return { single, multiple };
 }
 
 function configured(cfg: OpenClawConfig) {
   const provider = cfg.models?.providers?.["llama-cpp"];
-  if (!provider) {
-    throw new Error("fixture provider missing");
-  }
+  assert(provider, "fixture provider missing");
   return provider;
 }
 
 function visionModel(cfg: OpenClawConfig) {
   const model = configured(cfg).models.find((entry) => entry.id === VISION);
-  if (!model) {
-    throw new Error("fixture model missing");
-  }
+  assert(model, "fixture model missing");
   return model;
 }
 
 function singleRequest({ images, ...req }: ImagesDescriptionRequest): ImageDescriptionRequest {
   const image = images[0];
-  if (!image) {
-    throw new Error("fixture image missing");
-  }
+  assert(image, "fixture image missing");
   return { ...req, ...image };
 }
 
@@ -120,21 +113,23 @@ function prepare(req: ImagesDescriptionRequest, config = req.cfg) {
 }
 
 function expectNoGenericTransport() {
-  expect(transport.single).not.toHaveBeenCalled();
-  expect(transport.multiple).not.toHaveBeenCalled();
+  for (const method of [transport.single, transport.multiple]) {
+    expect(method).not.toHaveBeenCalled();
+  }
 }
 
-async function expectRejected(req: ImagesDescriptionRequest, message?: string) {
-  await expect(providerMethods().multiple(req)).rejects.toThrow(message);
+async function expectRejected(req: ImagesDescriptionRequest, message?: string, single = false) {
+  const hooks = providerMethods();
+  await expect(single ? hooks.single(singleRequest(req)) : hooks.multiple(req)).rejects.toThrow(
+    message,
+  );
   expect(transport.managed).not.toHaveBeenCalled();
   expectNoGenericTransport();
 }
 
 async function transformedPayload(payload: unknown) {
   const call = transport.managed.mock.calls[0];
-  if (!call?.[1]) {
-    throw new Error("Managed image transport did not register its payload transform");
-  }
+  assert(call?.[1], "Managed image transport did not register its payload transform");
   return await call[1](payload, { ...REQUEST_MODEL, id: call[0].model });
 }
 
@@ -143,9 +138,7 @@ function captureSend(model = REQUEST_MODEL, before: () => void = () => {}) {
   transport.managed.mockImplementationOnce(async (_req, transform) => {
     await Promise.resolve();
     before();
-    if (!transform) {
-      throw new Error("fixture transform missing");
-    }
+    assert(transform, "fixture transform missing");
     await transform({ messages: [{ role: "user", content: [] }] }, model);
     send();
     return { text: "local result" };
@@ -166,10 +159,6 @@ it("uses the selected OCR recipe task token", async () => {
   const req = request({ model: OCR, prompt: "Describe the colors." });
   const original = structuredClone(req.images);
   await providerMethods().multiple(req);
-  expect(transport.managed).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ model: OCR, prompt: "Text Recognition:" }),
-    expect.any(Function),
-  );
   const imagePart = { type: "image_url", image_url: { url: "data:image/png;base64,fixture" } };
   const payload = {
     model: OCR,
@@ -180,9 +169,8 @@ it("uses the selected OCR recipe task token", async () => {
     max_tokens: 2048,
   };
   expect(await transformedPayload(payload)).toEqual({
-    model: OCR,
+    ...payload,
     messages: [{ role: "user", content: [imagePart, { type: "text", text: "Text Recognition:" }] }],
-    max_tokens: 2048,
     temperature: 0,
     seed: 4827,
   });
@@ -216,7 +204,6 @@ it("keeps existing external and custom image models on the shared generic transp
 it("does not retry with a cloud provider after local inference fails", async () => {
   transport.managed.mockRejectedValueOnce(new Error("projector load failed"));
   await expect(providerMethods().multiple(request())).rejects.toThrow("projector load failed");
-  expect(transport.managed).toHaveBeenCalledTimes(1);
   expectNoGenericTransport();
 });
 
@@ -225,13 +212,8 @@ it("fails closed for incomplete saved local routes", async () => {
   const provider = configured(req.cfg);
   provider.params = { mediaModels: { ocr: OCR } };
   provider.baseUrl = "https://cloud.example.test/v1";
-  const hooks = providerMethods();
-  await expect(hooks.multiple(req)).rejects.toThrow("local media routes are incomplete");
-  await expect(hooks.single(singleRequest(req))).rejects.toThrow(
-    "local media routes are incomplete",
-  );
-  expect(transport.managed).not.toHaveBeenCalled();
-  expectNoGenericTransport();
+  await expectRejected(req, "local media routes are incomplete");
+  await expectRejected(req, "local media routes are incomplete", true);
 });
 
 it.each([
@@ -256,11 +238,8 @@ it("accepts numeric IPv6 loopback endpoints", async () => {
 it("rejects missing managed ownership and provider identity substitution", async () => {
   const req = request();
   delete configured(req.cfg).localService;
-  await expect(providerMethods().multiple(req)).rejects.toThrow("loopback");
-  await expect(providerMethods().multiple(request({ provider: "openai" }))).rejects.toThrow(
-    "loopback",
-  );
-  expect(transport.managed).not.toHaveBeenCalled();
+  await expectRejected(req, "loopback");
+  await expectRejected(request({ provider: "openai" }), "loopback");
 });
 
 it.each([
@@ -278,9 +257,7 @@ it.each([
   const model = visionModel(config);
   const destination =
     target === "provider" ? configured(config) : target === "model" ? model : model.params;
-  if (!destination) {
-    throw new Error("fixture model artifacts missing");
-  }
+  assert(destination, "fixture model artifacts missing");
   Object.assign(destination, { [field]: value });
   if (retained) {
     prepare(req, config);

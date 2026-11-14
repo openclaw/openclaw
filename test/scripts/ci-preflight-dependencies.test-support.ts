@@ -3,27 +3,15 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const cleanEnv = (exclude: RegExp) =>
+  Object.fromEntries(Object.entries(process.env).filter(([key]) => !exclude.test(key)));
+
 export function exportPreflightHarness(directory: string): string {
   const workspace = path.join(directory, "workspace");
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith("GIT_")) {
-      delete env[key];
-    }
-  }
+  const env = cleanEnv(/^GIT_/i);
   execFileSync("git", ["init", "--quiet", workspace], { env });
-  execFileSync(
-    "git",
-    [
-      `--git-dir=${path.join(workspace, ".git")}`,
-      `--work-tree=${process.cwd()}`,
-      "add",
-      "--",
-      ".github/actions",
-      "scripts",
-    ],
-    { env },
-  );
+  const gitPaths = [`--git-dir=${path.join(workspace, ".git")}`, `--work-tree=${process.cwd()}`];
+  execFileSync("git", [...gitPaths, "add", "--", ".github/actions", "scripts"], { env });
   const result = spawnSync(
     "python3",
     ["-I", "-S", ".github/actions/git-owner/owner.py", "--policy", "-"],
@@ -47,12 +35,7 @@ ci_git_owner.checkout_harness(os.environ["WORKFLOW_SHA"])
   return path.join(workspace, ".ci-harness");
 }
 
-/** Execute the workflow's native Node manifest with runtime dependencies forbidden. */
-export function runDependencyFreePreflight(
-  entrypoint: URL,
-  directory: string,
-  nodeExecPath: string,
-) {
+export function runDependencyFreePreflight(entrypoint: URL, directory: string, node: string) {
   const preload = path.join(directory, "preflight-import-guard.mjs");
   const output = path.join(directory, "github-output.txt");
   writeFileSync(
@@ -75,19 +58,13 @@ registerHooks({
 });
 `,
   );
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("OPENCLAW_CI_") || key === "NODE_OPTIONS" || key === "NODE_PATH") {
-      delete env[key];
-    }
-  }
-  const result = spawnSync(nodeExecPath, ["--import", preload, fileURLToPath(entrypoint)], {
+  const result = spawnSync(node, ["--import", preload, fileURLToPath(entrypoint)], {
     cwd: process.cwd(),
     encoding: "utf8",
     timeout: 30_000,
     killSignal: "SIGKILL",
     env: {
-      ...env,
+      ...cleanEnv(/^(?:OPENCLAW_CI_|NODE_OPTIONS$|NODE_PATH$)/),
       GITHUB_OUTPUT: output,
       GITHUB_EVENT_NAME: "workflow_dispatch",
       GITHUB_RUN_ATTEMPT: "1",
@@ -98,13 +75,8 @@ registerHooks({
       OPENCLAW_CI_RUN_NODE: "false",
       OPENCLAW_CI_RUN_WINDOWS: "true",
       OPENCLAW_CI_RUN_UI_TESTS: "true",
-      // Exercise real planner and codec imports without a repository-wide PR
-      // owner graph. Changed-owner selection has separate integration coverage.
       OPENCLAW_CI_CHANGED_PATHS_JSON: "[]",
     },
   });
-  return {
-    result,
-    manifest: existsSync(output) ? readFileSync(output, "utf8") : "",
-  };
+  return { result, manifest: existsSync(output) ? readFileSync(output, "utf8") : "" };
 }

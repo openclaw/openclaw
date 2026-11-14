@@ -1,6 +1,6 @@
 import { writeSessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
 import { readSessionEntrySelectionSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { prepareSessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-replacement-publication.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
@@ -21,7 +21,6 @@ export function mutateAcpSessionEntryInWorker(
   options: OpenClawAgentDatabaseOptions,
   input: AcpSessionEntryMutationInput,
   admit: (stage: "transaction" | "commit", publication?: unknown) => void,
-  ownReceipt = true,
 ): AcpSessionEntryMutationResult {
   assertCanonicalSessionKeyWrite(input.sessionKey, input.agentId);
   return runOpenClawAgentWriteTransaction(
@@ -42,9 +41,7 @@ export function mutateAcpSessionEntryInWorker(
       const base = existing ?? (mutation.kind === "touch" ? mutation.fallbackEntry : undefined);
       if (!base) {
         const result = { entry: null };
-        if (ownReceipt) {
-          deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
-        }
+        deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
         admit("commit");
         return result;
       }
@@ -74,9 +71,7 @@ export function mutateAcpSessionEntryInWorker(
           )
         : undefined;
       const result = { entry: changed.entry, ...(publication ? { publication } : {}) };
-      if (ownReceipt) {
-        deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
-      }
+      deferSqliteWorkerCommitReceipt(database.db, { kind: "acp-entry-mutation", result });
       admit("commit", publication);
       return result;
     },

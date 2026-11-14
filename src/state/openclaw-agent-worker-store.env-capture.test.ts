@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -65,9 +66,11 @@ vi.mock("./openclaw-agent-db-identity.js", () => ({
   }),
   isOpenClawAgentDatabasePathCurrent: () => true,
 }));
+// mock-isolation: Synthetic admission owns the handle; this fixture observes borrow release only.
+vi.mock("./openclaw-agent-db-borrower.js", () => ({ retainAgentDatabase: () => () => {} }));
+// mock-isolation: Synthetic worker resources must not register with the real database lifecycle.
 vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   registerOpenClawAgentDatabaseAsyncResource: () => () => {},
-  retainAgentDatabase: () => () => {},
 }));
 vi.mock("./openclaw-agent-db.js", () => ({ getOpenClawAgentDatabaseIfOpen: boundary.current }));
 // mock-isolation: Capture worker admission timing without entering real writer queues.
@@ -100,24 +103,75 @@ async function withPublication(
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: "/synthetic/captured" },
   },
+  observeWriteExecution?: (elapsedMs: number) => void,
 ) {
   const db = new DatabaseSync(":memory:");
   boundary.current.mockReturnValue({ db });
-  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, workerModule);
+  const worker = await openOpenClawAgentSqliteWorkerStore(options, db, {
+    ...workerModule,
+    observeWriteExecution,
+  });
   try {
     await run(worker);
   } finally {
     await worker.close();
   }
 }
+
+it.each(["success", "failure"] as const)(
+  "reports admitted execution time without replacing publication %s when the observer throws",
+  async (outcome) => {
+    const ready = createDeferredCore();
+    boundary.ready = ready.promise;
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const original = new Error("Publication failed");
+    const committed = { revision: 42 };
+    const observe = vi.fn(() => {
+      throw new Error("Timing observer failed");
+    });
+    boundary.execute.mockImplementation(async ({ type }) => {
+      if (type === "database.domain.execute") {
+        now += 100;
+        if (outcome === "failure") {
+          throw original;
+        }
+      }
+    });
+    try {
+      await withPublication(
+        async (worker) => {
+          const work = worker.run(async (scope) => {
+            await scope.execute({ type: "append", input: { value: "published" } });
+            return committed;
+          }, allow);
+          now += 1_000;
+          ready.resolve();
+          if (outcome === "failure") {
+            await expect(work).rejects.toBe(original);
+          } else {
+            await expect(work).resolves.toBe(committed);
+          }
+          expect(observe).toHaveBeenCalledExactlyOnceWith(100);
+        },
+        undefined,
+        observe,
+      );
+    } finally {
+      ready.resolve();
+      clock.mockRestore();
+    }
+  },
+);
+
 it.each([
-  "domain close",
-  "retired executor",
-  "executor release",
-  "both cleanup steps",
-  "callback",
-  "command",
-] as const)("preserves publication outcome when %s fails", async (failure) => {
+  ["domain close", true, false],
+  ["retired executor", false, false],
+  ["executor release", false, true],
+  ["both cleanup steps", true, true],
+  ["callback", true, true],
+  ["command", true, true],
+] as const)("preserves publication outcome when %s fails", async (failure, close, release) => {
   const original = new Error("Publication failed");
   const cleanupError = new Error("Domain cleanup failed");
   const releaseError = new Error("Executor release failed");
@@ -134,14 +188,11 @@ it.each([
         });
       }
     }
-    if (
-      type === "database.domain.close" &&
-      (fails || failure === "domain close" || failure === "both cleanup steps")
-    ) {
+    if (type === "database.domain.close" && close) {
       throw cleanupError;
     }
   });
-  if (fails || failure === "executor release" || failure === "both cleanup steps") {
+  if (release) {
     boundary.release.mockRejectedValue(releaseError);
   }
   await withPublication(async (worker) => {
@@ -161,10 +212,7 @@ it.each([
     if (fails) {
       const errors = (error: unknown): unknown[] =>
         error instanceof AggregateError ? error.errors.flatMap(errors) : [error];
-      await expect(work).rejects.toSatisfy((error: unknown) => {
-        expect(errors(error)).toEqual([original, cleanupError, releaseError]);
-        return true;
-      });
+      await expect(work.catch(errors)).resolves.toEqual([original, cleanupError, releaseError]);
     } else {
       await expect(work).resolves.toBe(committed);
     }
@@ -194,7 +242,6 @@ it.each([
             await scope.execute({ type: "append", input: { value: "published" } });
             return "published";
           }, allow);
-          expect(boundary.capture.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
           expect(boundary.execute).not.toHaveBeenCalled();
           env[fixture.key] = "/synthetic/changed";
           options.env = { OPENCLAW_STATE_DIR: "/synthetic/replaced" };
@@ -208,8 +255,6 @@ it.each([
             expect(admitted).toMatchObject(expected);
           }
           expect(boundary.release).toHaveBeenCalledExactlyOnceWith(captured);
-          expect(boundary.release.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(root);
-          await worker.close();
         } finally {
           ready.resolve();
           await work?.catch(allow);

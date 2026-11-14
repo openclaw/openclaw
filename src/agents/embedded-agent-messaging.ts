@@ -1,10 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 import {
-  CHANNEL_MESSAGE_ACTION_NAMES,
-  type ChannelMessageActionName,
-} from "../channels/plugins/types.public.js";
+  isMessageToolSendActionName,
+  resolveChannelMessageActionFacts,
+} from "../channels/plugins/message-action-names.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { shouldApplyCrossContextMarker } from "../infra/outbound/outbound-policy.js";
 
 export { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
@@ -15,26 +15,6 @@ const CORE_MESSAGING_TOOLS = new Set([
   "conversations_turn",
   "message",
 ]);
-const MESSAGE_TOOL_READ_ONLY_ACTIONS = new Set([
-  "read",
-  "reactions",
-  "list-pins",
-  "permissions",
-  "thread-list",
-  "search",
-  "sticker-search",
-  "member-info",
-  "role-info",
-  "emoji-list",
-  "channel-info",
-  "channel-list",
-  "voice-status",
-  "event-list",
-  "download-file",
-]);
-const MESSAGE_TOOL_MUTATION_ACTIONS = new Set<string>(
-  CHANNEL_MESSAGE_ACTION_NAMES.filter((action) => !MESSAGE_TOOL_READ_ONLY_ACTIONS.has(action)),
-);
 const MESSAGE_TOOL_CONVERSATION_CREATE_ACTIONS = new Set([
   "thread-create",
   "topic-create",
@@ -102,8 +82,9 @@ export function isMessagingToolDeliveryAction(
   }
   if (toolName === "message") {
     const action = normalizeOptionalString(args.action) ?? "";
+    const facts = resolveChannelMessageActionFacts(action);
     return (
-      MESSAGE_TOOL_MUTATION_ACTIONS.has(action) || isMessageToolConversationCreateActionName(action)
+      (facts !== undefined && !facts.readOnly) || isMessageToolConversationCreateActionName(action)
     );
   }
   const providerId = normalizeChannelId(toolName);

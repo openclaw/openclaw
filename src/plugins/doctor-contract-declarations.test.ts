@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
@@ -17,6 +18,15 @@ const sourceManifestEnv: NodeJS.ProcessEnv = {
   OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
   OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
 };
+const records = () => loadBundledPluginManifestRegistry({ env: sourceManifestEnv }).plugins;
+const artifact = (record: ReturnType<typeof records>[number]) =>
+  resolvePluginDoctorContractArtifact({ ...record, sourcePreferred: true })?.modulePath;
+// Use Vitest's transform once per artifact; production loading has its own tests.
+async function contract(artifactPath: string) {
+  return coercePluginDoctorContractModule(
+    await vi.importActual<Parameters<typeof coercePluginDoctorContractModule>[0]>(artifactPath),
+  );
+}
 
 describe("provider rename descriptors", () => {
   it("accepts descriptor-only config repairs and default exports", () => {
@@ -39,94 +49,43 @@ describe("provider rename descriptors", () => {
 
 describe("bundled plugin doctor contract declarations", () => {
   it("matches every resolvable artifact's coerced doctor surfaces", async () => {
-    const mismatches = (
-      await Promise.all(
-        loadBundledPluginManifestRegistry({ env: sourceManifestEnv }).plugins.map(
-          async (record) => {
-            const pluginMismatches: string[] = [];
-            const artifactPath = resolvePluginDoctorContractArtifact({
-              ...record,
-              sourcePreferred: true,
-            })?.modulePath;
-            if (!artifactPath) {
-              return pluginMismatches;
-            }
-            const declaration = record.doctorContract;
-            if (!declaration) {
-              pluginMismatches.push(`${record.id}: missing doctorContract declaration`);
-              return pluginMismatches;
-            }
-            // This test owns declaration parity, not plugin-loader behavior. Let
-            // Vitest transform each real artifact once instead of creating a Jiti
-            // loader per plugin; dedicated loader tests cover production loading.
-            const mod = (await vi.importActual(artifactPath)) as Parameters<
-              typeof coercePluginDoctorContractModule
-            >[0];
-            const { summary } = coercePluginDoctorContractModule(mod);
-            for (const surface of DOCTOR_CONTRACT_SURFACES) {
-              if (
-                surface === "sessionRouteStateOwners" &&
-                record.sessionRouteStateOwners !== undefined
-              ) {
-                if (summary.sessionRouteStateOwners) {
-                  pluginMismatches.push(
-                    `${record.id}: bundled owner metadata must use the manifest`,
-                  );
-                }
-                continue;
-              }
-              const value = declaration[surface];
-              const declared =
-                value === true || (surface === "stateMigrations" && Array.isArray(value));
-              if (declared !== summary[surface]) {
-                pluginMismatches.push(
-                  `${record.id}:${surface} declared=${String(declared)} actual=${String(summary[surface])}`,
-                );
-              }
-            }
-            return pluginMismatches;
-          },
-        ),
-      )
-    ).flat();
-
-    expect(mismatches).toStrictEqual([]);
+    await Promise.all(
+      records().map(async (record) => {
+        const artifactPath = artifact(record);
+        if (!artifactPath) {
+          return;
+        }
+        const declaration = expectDefined(record.doctorContract, record.id);
+        const { summary } = await contract(artifactPath);
+        for (const surface of DOCTOR_CONTRACT_SURFACES) {
+          const value = declaration[surface];
+          const declared =
+            surface === "sessionRouteStateOwners" && record.sessionRouteStateOwners !== undefined
+              ? false
+              : value === true || (surface === "stateMigrations" && Array.isArray(value));
+          expect(summary[surface], `${record.id}:${surface}`).toBe(declared);
+        }
+      }),
+    );
   }, 600_000);
 
   it("declares every state migration identity and phase in module order", async () => {
-    const mismatches = (
-      await Promise.all(
-        loadBundledPluginManifestRegistry({ env: sourceManifestEnv }).plugins.map(
-          async (record) => {
-            const declaration = record.doctorContract?.stateMigrations;
-            if (!Array.isArray(declaration)) {
-              return [];
-            }
-            const artifactPath = resolvePluginDoctorContractArtifact({
-              ...record,
-              sourcePreferred: true,
-            })?.modulePath;
-            if (!artifactPath) {
-              return [`${record.id}: missing Doctor contract artifact`];
-            }
-            const mod = (await vi.importActual(artifactPath)) as Parameters<
-              typeof coercePluginDoctorContractModule
-            >[0];
-            const actual = coercePluginDoctorContractModule(mod).stateMigrations.map((migration) =>
-              Object.assign(
-                { id: migration.id },
-                migration.doctorOnly === true ? { doctorOnly: true as const } : {},
-                migration.phase ? { phase: migration.phase } : {},
-              ),
-            );
-            return JSON.stringify(declaration) === JSON.stringify(actual)
-              ? []
-              : [`${record.id}: declared state migration descriptors do not match the artifact`];
-          },
-        ),
-      )
-    ).flat();
-
-    expect(mismatches).toStrictEqual([]);
+    await Promise.all(
+      records().map(async (record) => {
+        const declaration = record.doctorContract?.stateMigrations;
+        if (!Array.isArray(declaration)) {
+          return;
+        }
+        const artifactPath = expectDefined(artifact(record), `${record.id}: missing artifact`);
+        const actual = (await contract(artifactPath)).stateMigrations.map((migration) =>
+          Object.assign(
+            { id: migration.id },
+            migration.doctorOnly === true ? { doctorOnly: true as const } : {},
+            migration.phase ? { phase: migration.phase } : {},
+          ),
+        );
+        expect(JSON.stringify(actual), record.id).toBe(JSON.stringify(declaration));
+      }),
+    );
   }, 600_000);
 });

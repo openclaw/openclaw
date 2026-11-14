@@ -24,7 +24,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
 import { createBoardHarness } from "./server-methods/board.test-support.js";
-import { createProgressCardHandlers } from "./server-methods/progress-card.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -48,7 +48,7 @@ it("keeps global boards and progress under each owner's canonical row across reo
   const { invoke, handlers, broadcast } = createBoardHarness(undefined, {}, boardStore, {
     getRuntimeConfig: () => cfg,
   });
-  Object.assign(handlers, createProgressCardHandlers());
+  Object.assign(handlers, progressCardHandlers);
 
   for (const agentId of ["main", "work"]) {
     const database = openOpenClawAgentDatabase({ agentId });
@@ -170,7 +170,7 @@ it("keeps retained global progress separate from an ordinary qualified global ro
   const { invoke, handlers } = createBoardHarness(undefined, {}, boardStore, {
     getRuntimeConfig: () => cfg,
   });
-  Object.assign(handlers, createProgressCardHandlers());
+  Object.assign(handlers, progressCardHandlers);
   const targets = [
     { sessionKey: "global", agentId: "main" },
     { sessionKey: "global", agentId: "work" },

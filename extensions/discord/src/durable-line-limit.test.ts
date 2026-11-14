@@ -46,6 +46,7 @@ async function runDurableLineLimitScenario(params: {
   const apiUrlBefore = process.env.DISCORD_API_URL;
   vi.stubEnv("DISCORD_API_URL", undefined);
   let messageCount = 0;
+  const replyToId = params.webhook && !params.replyToIdSource ? undefined : "fixture-reply";
   const loopback = await createDiscordLoopbackRest({
     respond: ({ method }) =>
       method === "GET"
@@ -82,7 +83,7 @@ async function runDurableLineLimitScenario(params: {
       accountId: params.accountId,
       threadId: params.webhook ? "789" : undefined,
       identity: params.webhook ? { ...persona } : undefined,
-      replyToId: "fixture-reply",
+      replyToId,
       replyToMode: params.replyToMode,
       payloads: [
         {
@@ -113,7 +114,7 @@ async function runDurableLineLimitScenario(params: {
     const posted = posts.map((request) => JSON.parse(request.body) as PostedMessage);
     const chunks = posted.map((body) => body.content ?? "");
     const replies = posted.map((body) => body.message_reference?.message_id);
-    if (params.webhook) {
+    if (params.webhook && !replyToId) {
       expect(posts.every((request) => request.path?.includes("/webhooks/fixture-webhook/"))).toBe(
         true,
       );
@@ -121,6 +122,8 @@ async function runDurableLineLimitScenario(params: {
       for (const body of posted) {
         expect(body).toMatchObject({ username: persona.name, avatar_url: persona.avatarUrl });
       }
+    } else {
+      expect(posts.every((request) => request.path?.includes("/channels/789/messages"))).toBe(true);
     }
     return { chunks, replies };
   } finally {
@@ -157,7 +160,9 @@ describe.each([false, true])("durable Discord transport webhook=%s", (webhook) =
     expect(chunks.join(""), JSON.stringify(chunks)).toBe(
       Array.from({ length: 30 }, () => `<@${userId}>`).join(" "),
     );
-    expect(replies).toEqual(chunks.map((_, index) => (index === 0 ? "fixture-reply" : undefined)));
+    expect(replies).toEqual(
+      chunks.map((_, index) => (!webhook && index === 0 ? "fixture-reply" : undefined)),
+    );
   });
 
   it("preserves fenced code and character limits through durable delivery", async () => {

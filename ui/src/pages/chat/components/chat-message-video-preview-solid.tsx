@@ -1,10 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, createSignal, untrack, useContext } from "solid-js";
+import { Show, createSignal, onSettled, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export type VideoPreviewProps = {
   key: string;
@@ -24,101 +27,103 @@ export function MessageVideoPreview(props: VideoPreviewProps): JSX.Element {
 
 function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
   const presented = useContext(ContentPresentation);
-  const [posterUrl, setPosterUrl] = createSignal<string>();
   const [failed, setFailed] = createSignal(false);
-  let controller: AbortController | undefined;
-  let currentPoster: string | undefined;
-  let visible = false;
-  let element!: HTMLDivElement;
-  const release = () => {
-    controller?.abort();
-    controller = undefined;
-    if (currentPoster) {
-      URL.revokeObjectURL(currentPoster);
-    }
-    currentPoster = undefined;
-  };
-  const requestPoster = () => {
-    if (!presented() || !visible || controller || failed()) {
-      return;
-    }
-    const request = new AbortController();
-    controller = request;
-    void requestVideoPoster({
-      key: props.key,
-      src: props.src,
-      width: 400,
-      height: 225,
-      signal: request.signal,
-    }).then((blob) => {
-      // Hiding, parking, or disposal aborts this request through release().
-      if (request.signal.aborted) {
+  let button!: HTMLButtonElement;
+  function VideoPoster(childProps: {
+    getTarget: () => HTMLElement;
+    onFailed: () => void;
+  }): JSX.Element {
+    const [posterUrl, setPosterUrl] = createSignal<string>();
+    let active = true;
+    let controller: AbortController | undefined;
+    let currentPoster: string | undefined;
+    const release = () => {
+      controller?.abort();
+      controller = undefined;
+      if (currentPoster) {
+        URL.revokeObjectURL(currentPoster);
+      }
+      currentPoster = undefined;
+    };
+    const requestPoster = () => {
+      if (!active || controller) {
         return;
       }
-      if (blob) {
-        currentPoster = URL.createObjectURL(blob);
-        setPosterUrl(currentPoster);
-      } else {
-        setFailed(true);
-      }
-    });
-  };
-  createEffect(presented, (active) => {
-    setPosterUrl(undefined);
-    if (!active) {
-      return undefined;
-    }
-    // Observer setup can admit synchronously; only presentation drives this effect.
-    const stopObserving = untrack(() =>
-      observeChatAttachmentViewport(
-        element,
-        () => {
-          visible = true;
-          requestPoster();
-        },
-        () => {
-          visible = false;
-          release();
-          setPosterUrl(undefined);
-        },
-      ),
-    );
-    return () => {
-      stopObserving();
-      visible = false;
-      release();
+      const request = new AbortController();
+      controller = request;
+      void requestVideoPoster({
+        key: props.key,
+        src: props.src,
+        width: 400,
+        height: 225,
+        signal: request.signal,
+      }).then((blob) => {
+        // Hiding, parking, or disposal aborts this request through release().
+        if (request.signal.aborted) {
+          return;
+        }
+        if (blob) {
+          currentPoster = URL.createObjectURL(blob);
+          setPosterUrl(currentPoster);
+        } else {
+          childProps.onFailed();
+        }
+      });
     };
-  });
+    onSettled(() => {
+      const stopObserving = observeChatAttachmentViewport(
+        childProps.getTarget(),
+        requestPoster,
+        () => {
+          if (active) {
+            release();
+            setPosterUrl(undefined);
+          }
+        },
+      );
+      return () => {
+        active = false;
+        stopObserving();
+        release();
+      };
+    });
+    return (
+      <Show
+        when={posterUrl()}
+        fallback={<span class="chat-message-image chat-video-preview__placeholder" />}
+      >
+        {(url) => (
+          <img
+            class="chat-message-image"
+            src={url()}
+            alt={props.label}
+            onError={() => {
+              release();
+              childProps.onFailed();
+            }}
+          />
+        )}
+      </Show>
+    );
+  }
+
   return (
-    <div
-      class="chat-video-preview__content"
-      ref={(value) => {
-        element = value;
-      }}
-    >
+    <div class="chat-video-preview__content">
       <Show when={!failed()} fallback={props.fallback}>
         <button
+          ref={(element) => {
+            button = element;
+          }}
           type="button"
           class="chat-message-image-button"
           aria-label={`${t("chat.attachments.open")}: ${props.label}`}
           onClick={() => props.onOpen()}
         >
           <Show
-            when={posterUrl()}
+            when={presented()}
             fallback={<span class="chat-message-image chat-video-preview__placeholder" />}
           >
-            {(url) => (
-              <img
-                class="chat-message-image"
-                src={url()}
-                alt={props.label}
-                onError={() => {
-                  release();
-                  setPosterUrl(undefined);
-                  setFailed(true);
-                }}
-              />
-            )}
+            <VideoPoster getTarget={() => button} onFailed={() => setFailed(true)} />
           </Show>
           <span class="chat-video-preview__play" aria-hidden="true">
             <Icon name="play" />

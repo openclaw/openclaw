@@ -6,9 +6,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
+import { ignoreUnresolvedPluginLink } from "./update-candidate-plugin-tree-links.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
@@ -49,7 +52,8 @@ async function fixture(hardlink = false, beforePlan?: (source: string) => Promis
         candidateRoot,
         assertCurrent: () => {},
       }),
-    copy: () => copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
+    copy: (onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void) =>
+      copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot, onCodeLink }),
   };
 }
 
@@ -347,31 +351,11 @@ it.each(["uid", "gid"] as const)("refuses changed inventoried ownership (%s)", a
   await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
 });
 
-it.skipIf(process.platform !== "linux")(
-  "verifies bytes when Linux reports ctime as birthtime without statx",
-  async () => {
-    const advanceCtime = createFileMutationClock();
-    // Compose with the clock implementations; the spies themselves are replaced below.
-    const lstat = vi.mocked(fs.lstat).getMockImplementation()!;
-    const lstatSync = vi.mocked(fsSync.lstatSync).getMockImplementation()!;
-    const fstatSync = vi.mocked(fsSync.fstatSync).getMockImplementation()!;
-    const fallbackBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats | undefined>(
-      stat: T,
-    ): T => {
-      if (stat && "birthtimeNs" in stat) {
-        stat.birthtimeNs = stat.ctimeNs;
-      }
-      return stat;
-    };
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) =>
-      fallbackBirthtime(await lstat(...args)),
-    );
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
-      fallbackBirthtime(lstatSync(...args)),
-    );
-    vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
-      fallbackBirthtime(fstatSync(...args)),
-    );
+it.each(["linux", "android"] as const)(
+  "verifies bytes when %s reports ctime as birthtime without statx",
+  async (platform) => {
+    mockProcessPlatform(platform);
+    const advanceCtime = createFileMutationClock({ birthtimeFromCtime: true });
     for (const change of ["link", "content", "birthtime"] as const) {
       const f = await fixture(false, async (source) => {
         await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
@@ -667,3 +651,40 @@ it.each(["node_modules.openclaw-update-operator.tmp"])(
     ).rejects.toThrow("Cannot privately copy plugin dependency");
   },
 );
+
+it.each([
+  { code: "ENOENT", link: "missing-target" },
+  { code: "ENOTDIR", link: path.join("blocker", "nested") },
+  { code: "ELOOP", link: "plugin-link" },
+] as const)(
+  "carries a plugin link that resolves with $code through inventory and copied-link identity",
+  async ({ code, link }) => {
+    const file = (source: string) => path.join(source, "plugin-link");
+    const f = await fixture(false, async (source) => {
+      if (code === "ENOTDIR") {
+        await fs.writeFile(path.join(source, "blocker"), "not a directory");
+      }
+      await fs.symlink(link, file(source));
+      let resolution: unknown;
+      try {
+        fsSync.realpathSync(file(source));
+      } catch (error) {
+        resolution = error;
+      }
+      expect(hasNodeErrorCode(resolution, code)).toBe(true);
+    });
+    const unresolved: Array<{ path: string; link: string }> = [];
+    await f.copy((fact) => {
+      if (fact.target === null) {
+        unresolved.push({ path: fact.path, link: fact.link });
+      }
+    });
+    expect(unresolved).toEqual([{ path: path.join(f.destination, "plugin-link"), link }]);
+  },
+);
+
+it("rethrows a plugin link failure that is not an unresolved link", () => {
+  expect(() =>
+    ignoreUnresolvedPluginLink(Object.assign(new Error("EACCES"), { code: "EACCES" })),
+  ).toThrow("EACCES");
+});

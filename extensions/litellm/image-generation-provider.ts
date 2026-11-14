@@ -81,14 +81,14 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         size: req.size ?? DEFAULT_SIZE,
       },
     }),
-    // LiteLLM's /v1/images/edits is multipart (OpenAI's edits schema): the
-    // reference image must be an uploaded file part, not a JSON field — a JSON
-    // body fails before the request reaches the provider.
+    // LiteLLM requires multipart uploads; Gemini edits reject even explicit n=1.
     buildEditRequest: ({ req, inputImages, model, count }) => {
       const form = new FormData();
       form.set("model", model);
       form.set("prompt", req.prompt);
-      form.set("n", String(count));
+      if (count > 1) {
+        form.set("n", String(count));
+      }
       form.set("size", req.size ?? DEFAULT_SIZE);
       // OpenAI-compatible edits take repeated `image[]` parts when more than one
       // reference is supplied, and a single `image` part otherwise.

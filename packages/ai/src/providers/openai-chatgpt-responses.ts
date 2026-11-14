@@ -1,4 +1,3 @@
-import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import {
@@ -55,7 +54,13 @@ import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseRetryAfterSeconds,
 } from "../transports/transport-utils.js";
-import type { AssistantMessage, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type {
+  AssistantMessage,
+  Model,
+  ModelRequestHeaders,
+  SimpleStreamOptions,
+  StreamFunction,
+} from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
   createAssistantMessageDiagnostic,
@@ -73,6 +78,7 @@ import {
   getFirstStreamEventTimeoutMs,
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
+import { buildBaseCodexHeaders } from "./openai-chatgpt-request-headers.js";
 import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events.js";
 import {
   CodexProtocolError,
@@ -80,7 +86,8 @@ import {
   resolveCodexUrl,
 } from "./openai-chatgpt-responses-protocol.js";
 import {
-  buildRequestBody,
+  buildHookedRequestBody,
+  CODEX_TOOL_CALL_PROVIDERS,
   type OpenAICodexResponsesOptions,
 } from "./openai-chatgpt-responses-request.js";
 import {
@@ -98,7 +105,6 @@ import {
   isWebSocketReusable,
   isWebSocketSessionExpired,
   scheduleSessionWebSocketExpiry,
-  setOwnedWebSocketSession,
   type CachedWebSocketConnection,
   type OpenAICodexWebSocketRuntimeState,
   type RequestBody,
@@ -119,22 +125,7 @@ type DynamicImport = (specifier: string) => Promise<unknown>;
 
 const dynamicImport: DynamicImport = (specifier) => import(specifier);
 
-type ProcessWithOsBuiltinModule = typeof process & {
-  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-    return null;
-  }
-  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const os = loadNodeOs();
-
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
-const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
 // Only registered server/transport-unavailability closes may authorize retry or
 // settled-turn finalization; peer policy/protocol rejections must fail closed.
@@ -256,26 +247,8 @@ export const streamOpenAICodexResponses: StreamFunction<
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
       const accountId = extractOpenAICodexAccountId(apiKey);
-      const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
-        let body = buildRequestBody(
-          model,
-          context,
-          CODEX_TOOL_CALL_PROVIDERS,
-          options,
-          replayMode,
-          Boolean(v2Compaction),
-        );
-        const restoreUsers = v2Compaction?.preserveUsers(body.input ?? []);
-        const nextBody = await options?.onPayload?.(body, model);
-        if (nextBody !== undefined) {
-          body = nextBody as RequestBody;
-        }
-        if (restoreUsers) {
-          body.input = [...restoreUsers(body.input ?? []), { type: "compaction_trigger" }];
-          v2Compaction?.assertReplayFits(body.input, model);
-        }
-        return body;
-      };
+      const buildBody = (replayMode: OpenAIResponsesReplayMode) =>
+        buildHookedRequestBody({ model, context, options, replayMode, v2Compaction });
       let semanticAttempt: ResponsesEncryptedContentAttempt<RequestBody> = {
         kind: "initial",
         request: await buildBody("checkpoint"),
@@ -284,10 +257,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         commitResponsesEncryptedContentAttempt(attempt, (checkpoint) =>
           suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
         );
-      const observePromptEgress = createResponsesPromptEgressObserver(
-        options,
-        context.systemPrompt,
-      );
+      const observePromptEgress = createResponsesPromptEgressObserver(options, context);
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
@@ -950,8 +920,6 @@ async function acquireWebSocket(
   }
 
   const cached = state.sessionCache.get(sessionId);
-  // Update the expected lease after our own cleanup before awaiting a new connection.
-  let expectedCacheValue: CachedWebSocketConnection | undefined = cached;
   if (cached) {
     if (cached.idleTimer) {
       clearTimeout(cached.idleTimer);
@@ -960,11 +928,9 @@ async function acquireWebSocket(
     if (!cached.busy && !matchesCodexWebSocketAuthority(cached.authority, authority)) {
       closeWebSocketSilently(cached.socket, 1000, "authority_changed");
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketSessionExpired(cached)) {
       closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
       cached.busy = true;
       return lease(cached.socket, cached);
@@ -976,20 +942,22 @@ async function acquireWebSocket(
     if (!isWebSocketReusable(cached.socket)) {
       closeWebSocketSilently(cached.socket);
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     }
   }
 
   const socket = await connectWebSocket(authority, signal);
+  // A concurrent winner keeps the cache; this socket then remains transient.
+  if (state.sessionCache.has(sessionId)) {
+    return lease(socket);
+  }
   const entry: CachedWebSocketConnection = {
     socket,
     authority,
     busy: true,
     createdAt: Date.now(),
   };
-  // A concurrent winner keeps the cache; this socket then remains transient.
-  const ownsCache = setOwnedWebSocketSession(state, sessionId, entry, expectedCacheValue);
-  return lease(socket, ownsCache ? entry : undefined);
+  state.sessionCache.set(sessionId, entry);
+  return lease(socket, entry);
 }
 
 function extractWebSocketError(event: unknown): Error {
@@ -1406,29 +1374,9 @@ function createCodexRequestId(): string {
   throw new Error("Secure random request id generation is unavailable");
 }
 
-function buildBaseCodexHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
-  token: string,
-): Headers {
-  const headers = new Headers(initHeaders);
-  for (const [key, value] of Object.entries(additionalHeaders || {})) {
-    headers.set(key, value);
-  }
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("chatgpt-account-id", accountId);
-  headers.set("originator", "openclaw");
-  const userAgent = os
-    ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
-    : "openclaw (browser)";
-  headers.set("User-Agent", userAgent);
-  return headers;
-}
-
 function buildSSEHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
+  initHeaders: ModelRequestHeaders | undefined,
+  additionalHeaders: ModelRequestHeaders | undefined,
   accountId: string,
   token: string,
   sessionId?: string,

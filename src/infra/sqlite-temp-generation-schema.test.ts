@@ -10,7 +10,6 @@ describe("connection-local tracking installation", () => {
   it("skips absent trigger drops and preserves transcript writes after reinstall and rollback", () => {
     const database = openDatabase("CREATE TABLE original (session_id TEXT, id INTEGER)");
     const schema: SqliteTempTrackingSchema = {
-      kind: "transcript-index",
       statusTable: "local_status",
       pendingTable: "local_pending",
       pendingIndex: "local_pending_state",
@@ -19,6 +18,7 @@ describe("connection-local tracking installation", () => {
     const observed = observeHostDataSql();
     try {
       installSqliteTempTrackingSchema(database, schema);
+      expect(database.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 1 });
       expect(observed.queries.filter((sql) => /\bDROP TRIGGER\b/iu.test(sql))).toEqual([]);
     } finally {
       observed.restore();
@@ -32,7 +32,17 @@ describe("connection-local tracking installation", () => {
     expectPending(["first"]);
     database.exec("DELETE FROM temp.local_pending");
 
+    database.exec(`UPDATE temp.local_status SET sibling_write_revision = 7,
+      schema_version = 42, complete = 1, after_session = 'cursor', completed_traversals = 9`);
     installSqliteTempTrackingSchema(database, schema);
+    expect(database.prepare("SELECT * FROM temp.local_status").get()).toEqual({
+      id: 1,
+      sibling_write_revision: -1,
+      schema_version: 42,
+      complete: 1,
+      after_session: "cursor",
+      completed_traversals: 9,
+    });
     database.exec("BEGIN; UPDATE original SET session_id = 'rolled-back'; ROLLBACK");
     expectPending([]);
     database.exec("UPDATE original SET session_id = 'second'");

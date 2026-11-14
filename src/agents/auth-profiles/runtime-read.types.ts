@@ -42,4 +42,5 @@ export type PreparedAuthProfileStoreReads = {
   ) => Promise<AuthProfileStore>;
   assertCurrent: () => void;
   materializePersonalProfile: (store: AuthProfileStore) => Promise<AuthProfileStore>;
+  readFreshStore: () => Promise<AuthProfileStore>;
 };

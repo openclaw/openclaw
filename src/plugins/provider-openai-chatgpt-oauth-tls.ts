@@ -1,4 +1,3 @@
-/** TLS helpers for ChatGPT OAuth provider discovery in plugin runtime code. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";

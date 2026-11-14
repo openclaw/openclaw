@@ -191,12 +191,13 @@ it.each([
 });
 
 it.each([
-  { consumer: "openai-chat-tools", supported: false, authorized: false },
-  { consumer: "openai-chat-tools", supported: false, authorized: true },
-  { consumer: "openai-chat-tools", supported: true, authorized: true },
+  { consumer: "openai-chat-tools", supported: false, authorized: false, legacy: false },
+  { consumer: "openai-chat-tools", supported: false, authorized: true, legacy: false },
+  { consumer: "openai-chat-tools", supported: true, authorized: true, legacy: false },
+  { consumer: "openai-chat-tools", supported: true, authorized: true, legacy: true },
 ])(
-  "derives $consumer cold mode (supported=$supported, authorized=$authorized)",
-  ({ consumer, supported, authorized }) => {
+  "derives $consumer cold mode (supported=$supported, authorized=$authorized, legacy=$legacy)",
+  ({ consumer, supported, authorized, legacy }) => {
     const source = committedSourceFixture({
       "package.json": '{"type":"module","version":"2026.9.4"}',
       [runtimePath]:
@@ -204,10 +205,15 @@ it.each([
       "src/config/zod-schema.session.ts":
         "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: PositiveDurationSchema.optional() }) });",
       "src/config/zod-schema.session-config.ts": supported ? "coldStorage: z.object({})" : null,
+      "src/config/sessions/session-cold-storage-worker.ts": supported
+        ? legacy
+          ? 'db.deleteFrom("transcript_events").where("session_id", "=", sessionId)'
+          : "retainSessionColdNavigationInTransaction(database, sessionId)"
+        : null,
     });
     const { result, args } = runConsumer(source, consumer, { authorized, dockerStatus: 0 });
     expect(result.status, result.stderr).toBe(0);
-    const mode = authorized && !supported ? "unsupported" : "required";
+    const mode = authorized && !supported ? "unsupported" : legacy ? "legacy" : "required";
     expect(args).toContain(`OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE=${mode}`);
     const configPath = path.join(source.root, "config.json");
     const configResult = spawnSync(
@@ -230,7 +236,7 @@ it.each([
     expect(configResult.status, configResult.stderr).toBe(0);
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     expect(config.session).toEqual(
-      mode === "required"
+      mode !== "unsupported"
         ? {
             maintenance: {
               mode: "warn",
@@ -246,6 +252,17 @@ it.each([
     expect(config.tools).toEqual({ allow: ["get_weather"] });
   },
 );
+
+it("refuses an unrecognized frozen cold writer before Docker", () => {
+  const source = committedSourceFixture({
+    "src/config/zod-schema.session-config.ts": "coldStorage: z.object({})",
+    "src/config/sessions/session-cold-storage-worker.ts": "unknown archive writer",
+  });
+  const { result, args } = runConsumer(source, "openai-chat-tools", { dockerStatus: 0 });
+  expect(result.status, result.stderr).toBe(2);
+  expect(result.stderr).toContain("unable to resolve frozen cold transcript archival contract");
+  expect(args).toEqual([]);
+});
 
 it("rejects an unreadable typed companion before Docker", () => {
   const relative = typedFiles[0]!;
@@ -267,7 +284,7 @@ function invoke(source: Source, command: string, env: NodeJS.ProcessEnv = {}) {
   );
 }
 
-it("preserves real read-failure injection under inherited automatic Git maintenance", () => {
+it("reads only committed source and preserves read failures under inherited Git maintenance", () => {
   const config = { "gc.auto": "1", "gc.autoDetach": "false", "maintenance.strategy": "gc" };
   vi.stubEnv("GIT_CONFIG_COUNT", String(Object.keys(config).length));
   for (const [index, [key, value]] of Object.entries(config).entries()) {
@@ -276,32 +293,22 @@ it("preserves real read-failure injection under inherited automatic Git maintena
   }
   try {
     const source = committedSourceFixture({
-      [metadata]: "unavailable source bytes",
+      [metadata]: "selected committed text\n",
       // Git samples directory 17/ for its loose-object auto-GC threshold.
       "gc-sample-a": "gc sample 376\n",
       "gc-sample-b": "gc sample 568\n",
       "gc-sample-c": "gc sample 675\n",
     });
-    removeObject(source, `${source.sha}:${metadata}`);
+    writeFileSync(path.join(source.root, metadata), "dirty worktree decoy\n");
     const reader = createFrozenTargetSource(source.root, source.sha);
+    expect(reader.readText(metadata)).toBe("selected committed text\n");
+    expect(reader.readText("scripts/absent.ts")).toBeNull();
+    removeObject(source, `${source.sha}:${metadata}`);
     expect(() => reader.readText(metadata)).toThrow("unable to read selected source");
+    expect(() => createFrozenTargetSource(source.root, source.sha).readText(metadata)).toThrow();
   } finally {
     vi.unstubAllEnvs();
   }
-});
-
-it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
-  const committedText = "selected committed text\n";
-  const source = committedSourceFixture({ [metadata]: committedText });
-  writeFileSync(path.join(source.root, metadata), "dirty worktree decoy\n");
-  const reader = createFrozenTargetSource(source.root, source.sha);
-  expect(reader.readText(metadata)).toBe(committedText);
-  expect(reader.readText("scripts/absent.ts")).toBeNull();
-
-  removeObject(source, `${source.sha}:${metadata}`);
-  expect(() => reader.readText(metadata)).toThrow();
-  const freshReader = createFrozenTargetSource(source.root, source.sha);
-  expect(() => freshReader.readText(metadata)).toThrow();
 });
 
 it.each(["tree", "blob"] as const)(

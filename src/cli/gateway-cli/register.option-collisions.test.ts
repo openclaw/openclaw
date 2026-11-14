@@ -1,35 +1,41 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  callGatewayCli: vi.fn(async (method: string, _opts: unknown, _params?: unknown) => {
-    if (method === "gateway.suspend.prepare") {
-      return {
-        status: "ready",
-        suspensionId: "suspension-1",
-        expiresAtMs: 1_800_000_000_000,
-        activeCount: 0,
-        blockers: [],
-      };
-    }
-    if (method === "gateway.suspend.resume") {
-      return { ok: true, status: "running", resumed: true };
-    }
-    return { ok: true };
-  }),
+const mocks = await vi.hoisted(async () => ({
+  callGatewayCli: vi.fn(
+    async (method: string, _opts: unknown, _params?: unknown): Promise<unknown> => {
+      if (method === "gateway.suspend.prepare") {
+        return {
+          status: "ready",
+          suspensionId: "suspension-1",
+          expiresAtMs: 1_800_000_000_000,
+          activeCount: 0,
+          blockers: [],
+        };
+      }
+      if (method === "gateway.suspend.resume") {
+        return { ok: true, status: "running", resumed: true };
+      }
+      return { ok: true };
+    },
+  ),
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
   formatHealthChannelLines: vi.fn(() => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   gatewayAuthTokenCommand: vi.fn(async (_runtime: unknown) => {}),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  consumeGatewayRestartHandoffSync: vi.fn(),
+  defaultRuntime: vi.mocked(
+    (await import("../../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv(),
+  ),
+}));
+
+vi.mock("../../infra/restart-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/restart-handoff.js")>()),
+  consumeGatewayRestartHandoffSync: mocks.consumeGatewayRestartHandoffSync,
 }));
 
 const { callGatewayCli, emitReachableGatewayAuthDiagnostic, gatewayStatusCommand, defaultRuntime } =
@@ -131,25 +137,29 @@ vi.mock("./discover.js", () => ({
 }));
 
 function expectCliError(message: unknown) {
-  expect(callGatewayCli).not.toHaveBeenCalled();
+  expectCallCount(0, callGatewayCli, defaultRuntime.error);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
     ok: false,
     error: { type: "cli_error", message },
   });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
 }
 
+const parse = (...args: string[]) =>
+  sharedProgram.parseAsync(["gateway", ...args], { from: "user" });
+function createProgram(register = registerGatewayCli) {
+  const program = new Command();
+  program.exitOverride();
+  register(program);
+  return program;
+}
+const sharedProgram = createProgram();
+
 describe("gateway register option collisions", () => {
-  const sharedProgram: Command = new Command();
-
-  sharedProgram.exitOverride();
-  registerGatewayCli(sharedProgram);
-
   beforeEach(() => vi.clearAllMocks());
 
   it("requires explicit confirmation before revealing the Gateway token", async () => {
-    await sharedProgram.parseAsync(["gateway", "auth-token"], { from: "user" });
+    await parse("auth-token");
 
     expect(mocks.gatewayAuthTokenCommand).not.toHaveBeenCalled();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
@@ -159,7 +169,7 @@ describe("gateway register option collisions", () => {
   });
 
   it("routes an explicitly confirmed token reveal through the output runtime", async () => {
-    await sharedProgram.parseAsync(["gateway", "auth-token", "--show"], { from: "user" });
+    await parse("auth-token", "--show");
 
     expect(mocks.gatewayAuthTokenCommand).toHaveBeenCalledWith(defaultRuntime);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
@@ -168,13 +178,13 @@ describe("gateway register option collisions", () => {
   it.each([
     {
       name: "gives setup detection enough transport grace",
-      argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
+      argv: ["call", "openclaw.setup.detect", "--json"],
       method: "openclaw.setup.detect",
       opts: { timeout: "40000" },
     },
     {
       name: "projects gateway suspend --port and request id",
-      argv: ["gateway", "suspend", "--request-id", "host-operation", "--port", "19086", "--json"],
+      argv: ["suspend", "--request-id", "host-operation", "--port", "19086", "--json"],
       method: "gateway.suspend.prepare",
       opts: { localPortOverride: 19086 },
       params: { requestId: "host-operation" },
@@ -182,7 +192,7 @@ describe("gateway register option collisions", () => {
     },
     {
       name: "inherits parent --port for gateway resume",
-      argv: ["gateway", "--port", "19087", "resume", "suspension-1", "--json"],
+      argv: ["--port", "19087", "resume", "suspension-1", "--json"],
       method: "gateway.suspend.resume",
       opts: { localPortOverride: 19087 },
       params: { suspensionId: "suspension-1" },
@@ -190,20 +200,20 @@ describe("gateway register option collisions", () => {
     },
     {
       name: "prefers the explicit usage-cost --port over the parent --port",
-      argv: ["gateway", "--port", "19090", "usage-cost", "--port", "19091", "--json"],
+      argv: ["--port", "19090", "usage-cost", "--port", "19091", "--json"],
       method: "usage.cost",
       opts: { localPortOverride: 19091 },
       params: { days: 30 },
     },
     {
       name: "prefers the explicit live stability --port over the parent --port",
-      argv: ["gateway", "--port", "19094", "stability", "--port", "19095", "--json"],
+      argv: ["--port", "19094", "stability", "--port", "19095", "--json"],
       method: "diagnostics.stability",
       opts: { localPortOverride: 19095 },
       params: { limit: 25 },
     },
   ])("$name", async ({ argv, method, opts, params, json }) => {
-    await sharedProgram.parseAsync(argv, { from: "user" });
+    await parse(...argv);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(callGatewayCli).toHaveBeenCalledOnce();
     expect(callGatewayCli.mock.calls[0]?.slice(0, 2)).toEqual([
@@ -219,26 +229,43 @@ describe("gateway register option collisions", () => {
   });
 
   it("inherits parent --port for gateway probe", async () => {
-    await sharedProgram.parseAsync(["gateway", "--port", "19082", "probe", "--json"], {
-      from: "user",
-    });
+    await parse("--port", "19082", "probe", "--json");
     expect(gatewayStatusCommand).toHaveBeenCalledOnce();
     expect(gatewayStatusCommand.mock.calls[0]?.[0]).toMatchObject({ port: "19082" });
   });
 
-  it("rejects non-decimal usage-cost --days values instead of silently defaulting", async () => {
-    await sharedProgram.parseAsync(["gateway", "usage-cost", "--days", "1e3", "--json"], {
-      from: "user",
+  it("preserves one busy JSON result when suspend exits nonzero", async () => {
+    const busy = {
+      status: "busy",
+      reason: "active-work",
+      retryAfterMs: 200,
+      activeCount: 1,
+      blockers: [{ kind: "root-request", count: 1, message: "1 active request" }],
+    };
+    callGatewayCli.mockResolvedValueOnce(busy);
+    const runtime = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+
+    await defaultRuntime.exit.withImplementation(runtime.defaultRuntime.exit, async () => {
+      await expect(
+        parse("suspend", "--request-id", "host-operation", "--json"),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
     });
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      ...busy,
+      requestId: "host-operation",
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-decimal usage-cost --days values instead of silently defaulting", async () => {
+    await parse("usage-cost", "--days", "1e3", "--json");
 
     expectCliError(expect.stringContaining("Invalid --days"));
   });
 
   it("rejects combining --url and --port for gateway call", async () => {
-    await sharedProgram.parseAsync(
-      ["gateway", "call", "health", "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
-      { from: "user" },
-    );
+    await parse("call", "health", "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json");
 
     expectCliError("Use either --url or --port, not both.");
   });
@@ -248,10 +275,7 @@ describe("gateway register option collisions", () => {
     callGatewayCli.mockRejectedValueOnce(authError);
     emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
 
-    await sharedProgram.parseAsync(
-      ["gateway", "health", "--port", "19081", "--timeout", "1234", "--json"],
-      { from: "user" },
-    );
+    await parse("health", "--port", "19081", "--timeout", "1234", "--json");
 
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledExactlyOnceWith({
       error: authError,
@@ -266,8 +290,6 @@ describe("gateway register option collisions", () => {
   });
 
   it("loads health presentation only for text output", async () => {
-    const program = new Command();
-    program.exitOverride();
     const loadGatewayHealthModule = vi.fn(async () => ({
       emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
       formatHealthChannelLines: mocks.formatHealthChannelLines,
@@ -280,7 +302,7 @@ describe("gateway register option collisions", () => {
     vi.doMock("../../commands/health.js", loadGatewayHealthModule);
     vi.doMock("../../../packages/terminal-core/src/health-style.js", loadHealthStyleModule);
     const { registerGatewayCli: registerFreshGatewayCli } = await import("./register.js");
-    registerFreshGatewayCli(program);
+    const program = createProgram(registerFreshGatewayCli);
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
@@ -290,17 +312,72 @@ describe("gateway register option collisions", () => {
       undefined,
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
-    expect(loadGatewayHealthModule).not.toHaveBeenCalled();
-    expect(loadHealthStyleModule).not.toHaveBeenCalled();
+    expectCallCount(0, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
 
-    const textProgram = new Command();
-    textProgram.exitOverride();
-    registerFreshGatewayCli(textProgram);
+    const textProgram = createProgram(registerFreshGatewayCli);
     await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
 
-    expect(loadGatewayHealthModule).toHaveBeenCalledOnce();
-    expect(loadHealthStyleModule).toHaveBeenCalledOnce();
+    expectCallCount(1, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
+  });
+});
+
+describe("gateway restart-handoff commands", () => {
+  const run = (...args: string[]) =>
+    runRegisteredCli({
+      register: registerGatewayCli,
+      argv: ["gateway", "restart-handoff", ...args, "--json"],
+    });
+  const expectJson = (fields: Record<string, unknown>) =>
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      protocol: "openclaw.gateway.restart-handoff",
+      protocolVersion: 1,
+      ...fields,
+    });
+  function expectError(reason: string, exitCode: number) {
+    expectJson({ ok: false, status: "error", reason });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.consumeGatewayRestartHandoffSync.mockReset();
+  });
+  it("keeps the machine command group out of normal gateway help", () => {
+    const gateway = sharedProgram.commands.find((command) => command.name() === "gateway");
+    expect(gateway).toBeDefined();
+    expect(gateway?.helpInformation()).not.toContain("restart-handoff");
+  });
+  it("reports protocol version 1 capabilities", async () => {
+    await run("capabilities");
+    expectJson({ ok: true, operations: ["consume"] });
+  });
+  it("forwards a validated expected PID and wraps the consume result", async () => {
+    mocks.consumeGatewayRestartHandoffSync.mockReturnValue({ status: "none", reason: "missing" });
+    await run("consume", "--expected-pid", "4242");
+    expect(mocks.consumeGatewayRestartHandoffSync).toHaveBeenCalledWith({ expectedPid: 4242 });
+    expectJson({ ok: true, status: "none", reason: "missing" });
+  });
+  it.each([
+    { name: "missing", args: [] },
+    { name: "valueless", args: ["--expected-pid"] },
+    { name: "unsafe", args: ["--expected-pid", "9007199254740992"] },
+    { name: "dash-prefixed malformed", args: ["--expected-pid", "-invalid"] },
+    { name: "valid with an unknown option", args: ["--expected-pid", "4242", "--unknown"] },
+    { name: "repeated", args: ["--expected-pid", "111", "--expected-pid", "222"] },
+  ])("rejects $name expected PID values before touching the handoff store", async ({ args }) => {
+    await run("consume", ...args);
+    expect(mocks.consumeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+    expectError("invalid-expected-pid", 2);
+  });
+  it("returns a stable machine error when the handoff store is unavailable", async () => {
+    mocks.consumeGatewayRestartHandoffSync.mockImplementation(() => {
+      throw new Error("database locked");
+    });
+    await run("consume", "--expected-pid", "4242");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "Gateway restart handoff consume failed: Error: database locked",
+    );
+    expectError("store-unavailable", 1);
   });
 });

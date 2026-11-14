@@ -53,6 +53,7 @@ import {
   consumeCronStandingGrant,
 } from "./operator-approval-store.js";
 import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.worker.js";
+import { createExecApprovalPresentation } from "./operator-approval-store.test-support.js";
 import { resolveOperatorApprovalInDatabase as resolveOperatorApprovalNative } from "./operator-approval-store.transitions.worker.js";
 
 type StandingGrantDatabase = Pick<
@@ -124,16 +125,7 @@ function approval(id: string, overrides: Partial<NewOperatorApproval> = {}): New
   return {
     id,
     kind: "exec",
-    presentation: {
-      kind: "exec",
-      commandText: "echo standing",
-      commandPreview: "echo standing",
-      warningText: null,
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    },
+    presentation: createExecApprovalPresentation("echo standing"),
     requester: { deviceId: "device-1", clientId: "client-1", deviceTokenAuth: true },
     reviewerDeviceIds: [],
     source: {
@@ -186,7 +178,6 @@ function seedCronJob(
       job: loadedJob,
       agentId: "main",
       startedAtMs: NOW_MS,
-      observed: undefined,
     });
     receipts.set(
       databaseOptions,

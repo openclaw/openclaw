@@ -16,9 +16,6 @@ type CatalogReadPool = ReturnType<
 >;
 
 class PluginModelCatalogInputError extends WorkerTaskError {
-  readonly operation = "catalog.read";
-  readonly field: string;
-
   constructor(input: PluginModelCatalogReadInput, cause: unknown) {
     let field = "input";
     // Inspect only after transport rejection; successful requests pay no extra clone cost.
@@ -32,7 +29,6 @@ class PluginModelCatalogInputError extends WorkerTaskError {
     }
     super(`Cannot serialize catalog.read request field ${field}`, "failed", { cause });
     this.name = "PluginModelCatalogInputError";
-    this.field = field;
   }
 }
 

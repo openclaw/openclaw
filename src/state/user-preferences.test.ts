@@ -37,6 +37,55 @@ function openWithoutFeatureSchemas() {
 }
 
 describe("user preferences", () => {
+  it.each(["git.coauthor.organization"])(
+    "requires a new disclosure choice when %s replaces previously inert consent",
+    (key) => {
+      const options = stateOptions();
+      const profileId = ensureProfileForEmail("credit@example.test", options).id;
+      setUserPreferences(profileId, { "git.coauthor.enabled": true }, options);
+      expect(
+        setUserPreferences(
+          profileId,
+          { [key]: { name: "Alice Example", email: "alice@example.test", policy: "test-policy" } },
+          { ...options, trustedProxyGitCoauthor: true },
+        ),
+      ).toMatchObject({ ok: true });
+      expect(getUserPreferences(profileId, undefined, options)).toEqual({
+        [key]: { name: "Alice Example", email: "alice@example.test", policy: "test-policy" },
+        "git.coauthor.enabled": false,
+      });
+      setUserPreferences(profileId, { "git.coauthor.enabled": true }, options);
+      setUserPreferences(
+        profileId,
+        {
+          [key]: {
+            name: "Alice Updated",
+            email: "alice.updated@example.test",
+            policy: "test-policy",
+          },
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      );
+      expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
+        "git.coauthor.enabled": true,
+      });
+      setUserPreferences(
+        profileId,
+        {
+          [key]: {
+            name: "Alice Updated",
+            email: "alice.updated@example.test",
+            policy: "replacement-policy",
+          },
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      );
+      expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
+        "git.coauthor.enabled": false,
+      });
+    },
+  );
+
   it("reads absent canonical preferences without creating their optional table", async () => {
     expect(await getCanonicalUserPreferences("missing", undefined, stateOptions())).toBeUndefined();
     const { db, options } = openWithoutFeatureSchemas();
@@ -135,10 +184,7 @@ describe("user preferences", () => {
     const tooMany = Object.fromEntries(
       Array.from({ length: 33 }, (_, index) => [`key-${index}`, index]),
     );
-    expect(set(tooMany)).toMatchObject({
-      ok: false,
-      error: { code: "invalid-entry-count" },
-    });
+    expect(set(tooMany)).toMatchObject({ ok: false, error: { code: "invalid-entry-count" } });
     expect(set({ valid: true, oversized: "🦞".repeat(1_025) })).toMatchObject({
       ok: false,
       error: { code: "value-too-large", key: "oversized" },
@@ -155,6 +201,7 @@ describe("user preferences", () => {
       error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
     });
     expect(set({ "key-0": null })).toEqual(success);
+    expect(set({}, { "key-0": null })).toEqual(success);
     expect(set({ "key-128": true })).toEqual(success);
     expect(get(["key-0", "key-128"])).toEqual({ "key-128": true });
   });
@@ -164,7 +211,8 @@ describe("user preferences", () => {
     const original = { retained: { nested: { a: 1, b: 2 }, list: [1, 2] }, removed: true };
     expect(set(original).ok).toBe(true);
     const { db } = openOpenClawStateDatabase(options);
-    const before = db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
+    const rows = () => db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
+    const before = rows();
     db.exec(`CREATE TRIGGER reject_any_insert BEFORE INSERT ON user_preferences
       BEGIN SELECT RAISE(FAIL, 'unexpected preference insert'); END;
       CREATE TRIGGER reject_any_delete BEFORE DELETE ON user_preferences
@@ -176,23 +224,17 @@ describe("user preferences", () => {
           { retained: { nested: { b: 2, a: 1 }, list: [2, 1] } },
         ),
       ).toEqual(conflict);
-      expect(db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all()).toEqual(before);
+      expect(rows()).toEqual(before);
     } finally {
       db.exec("DROP TRIGGER reject_any_insert; DROP TRIGGER reject_any_delete;");
     }
     expect(
       set(
         { removed: null, inserted: true },
-        {
-          retained: { list: [1, 2], nested: { b: 2, a: 1 } },
-          inserted: null,
-        },
+        { retained: { list: [1, 2], nested: { b: 2, a: 1 } }, inserted: null },
       ),
     ).toEqual(success);
-    expect(get()).toEqual({
-      retained: original.retained,
-      inserted: true,
-    });
+    expect(get()).toEqual({ retained: original.retained, inserted: true });
     expect(set({}, { inserted: null })).toEqual(conflict);
     expect(set({}, { removed: null })).toEqual(success);
   });
@@ -214,15 +256,40 @@ describe("user preferences", () => {
     expect(get()).toEqual({});
   });
 
-  it("keeps merged profiles within the same preference cap", () => {
-    const options = stateOptions();
-    const target = preferences(options, "target");
-    const source = preferences(options, "source");
-    target.fill(127, "target");
-    expect(source.set({ "source-a": true, "source-b": true })).toMatchObject({ ok: true });
-    mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
-    expect(Object.keys(target.get())).toHaveLength(128);
-    expect(target.get(["source-a", "source-b"])).toEqual({ "source-a": true });
-    expect(source.get()).toEqual({});
-  });
+  it.each([127, 128])(
+    "keeps merged profiles at the user preference cap (target keys=%s)",
+    (count) => {
+      const options = stateOptions();
+      const target = preferences(options, "target");
+      const source = preferences(options, "source");
+      target.fill(count, "target");
+      expect(source.set({ "source-a": true, "source-b": true })).toMatchObject({ ok: true });
+      expect(
+        setUserPreferences(
+          "source",
+          {
+            "git.coauthor.organization": {
+              name: "Alice",
+              email: "alice@example.test",
+              policy: "test-policy",
+            },
+          },
+          { ...options, trustedProxyGitCoauthor: true },
+        ),
+      ).toMatchObject({ ok: true });
+      mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
+      expect(Object.keys(target.get())).toHaveLength(129);
+      expect(target.get(["source-a", "source-b"])).toEqual(
+        count === 127 ? { "source-a": true } : {},
+      );
+      expect(target.get(["git.coauthor.organization"])).toEqual({
+        "git.coauthor.organization": {
+          name: "Alice",
+          email: "alice@example.test",
+          policy: "test-policy",
+        },
+      });
+      expect(source.get()).toEqual({});
+    },
+  );
 });

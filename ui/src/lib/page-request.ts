@@ -1,3 +1,5 @@
+export type PageReadResult = { error: unknown } | null;
+
 /** Requests publish into their display owner; completed payloads are never cached here. */
 export function createPageRequest<Args, Value>(
   notify: () => void,
@@ -7,15 +9,25 @@ export function createPageRequest<Args, Value>(
     onError: (error: unknown) => void;
   },
 ) {
-  let active: AbortController | null = null;
+  let active: {
+    controller: AbortController;
+    completion: PromiseWithResolvers<PageReadResult>;
+  } | null = null;
+  let read: Promise<PageReadResult> | null = null;
   const cancel = () => {
     const previous = active;
     active = null;
-    previous?.abort();
+    read = null;
+    previous?.controller.abort();
+    // Retired UI reads must not hold a replacement scope until transport settles.
+    previous?.completion.resolve(null);
   };
   return {
     get pending() {
       return active !== null;
+    },
+    get read() {
+      return read;
     },
     cancel,
     reset: () => {
@@ -24,14 +36,20 @@ export function createPageRequest<Args, Value>(
     },
     async run(args: Args): Promise<void> {
       cancel();
-      const request = new AbortController();
+      const request = {
+        controller: new AbortController(),
+        completion: Promise.withResolvers<PageReadResult>(),
+      };
       active = request;
+      read = request.completion.promise;
       notify();
       let publish: () => void;
+      let result: PageReadResult = null;
       try {
-        const value = await options.task(args, { signal: request.signal });
+        const value = await options.task(args, { signal: request.controller.signal });
         publish = () => options.onComplete(value);
       } catch (error) {
+        result = { error };
         publish = () => options.onError(error);
       }
       if (active !== request) {
@@ -41,9 +59,28 @@ export function createPageRequest<Args, Value>(
       active = null;
       try {
         publish();
+      } catch (error) {
+        result = { error };
+        throw error;
       } finally {
+        request.completion.resolve(result);
         notify();
       }
+    },
+  };
+}
+
+export function createPageRequestDelay(delay: number) {
+  let cancelled = false;
+  const completion = delay ? Promise.withResolvers<void>() : undefined;
+  const timer = completion ? setTimeout(completion.resolve, delay) : undefined;
+  return {
+    ready: completion?.promise,
+    isCancelled: () => cancelled,
+    cancel: () => {
+      cancelled = true;
+      clearTimeout(timer);
+      completion?.resolve();
     },
   };
 }

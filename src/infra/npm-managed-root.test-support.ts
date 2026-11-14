@@ -21,13 +21,6 @@ export async function readManifest(root: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
 }
 
-export async function writeLockfile(
-  root: string,
-  packages: Record<string, unknown>,
-): Promise<void> {
-  await writeFixtureJson(path.join(root, "package-lock.json"), { lockfileVersion: 3, packages });
-}
-
 export function useManagedNpmRootFixture() {
   const tracker = createSuiteTempRootTracker({ prefix: "openclaw-npm-managed-root-" });
   const tempDirs: string[] = [];

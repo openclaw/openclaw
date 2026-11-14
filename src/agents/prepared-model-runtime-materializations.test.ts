@@ -1,24 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   clearAllRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
+  runtimeAuthMaterializationChanges,
 } from "./auth-profiles/runtime-materializations.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
-import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
+import { bindPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 
-function createOwner(params: {
-  agentId: string;
-  agentDir: string;
-  needsRefresh?: boolean;
-}): PreparedModelRuntimeOwner {
+function createOwner(agentId: string, needsRefresh = false): PreparedModelRuntimeOwner {
+  const agentDir = `/tmp/configured-${agentId}`;
   const snapshot = {
     catalogOwner: undefined,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
+    agentId,
+    agentDir,
     config: {},
     authModes: {},
     activeProjectKeys: [],
@@ -32,12 +30,12 @@ function createOwner(params: {
   } as unknown as PreparedModelRuntimeSnapshot;
   return {
     catalogOwner: undefined,
-    input: { agentId: params.agentId, agentDir: params.agentDir, config: {} },
+    input: { agentId, agentDir, config: {} },
     environmentFingerprint: "test-env",
     catalogMode: "static",
     provenance: "configured",
     generation: 1,
-    needsRefresh: params.needsRefresh === true,
+    needsRefresh,
     catalogStale: false,
     snapshot,
   };
@@ -53,24 +51,22 @@ const materialization = {
   runtimeOwnerId: "codex",
 };
 
+const publishMaterialization = runtimeAuthMaterializationChanges.onChange;
 afterEach(() => {
+  runtimeAuthMaterializationChanges.onChange = publishMaterialization;
   clearAllRuntimeAuthMaterializations();
 });
 
-describe("prepared model runtime auth materialization publication", () => {
-  it("does not announce published while a sibling configured owner is stale", () => {
-    const main = createOwner({ agentId: "main", agentDir: "/tmp/configured-main" });
-    const atlas = createOwner({
-      agentId: "atlas",
-      agentDir: "/tmp/configured-atlas",
-      needsRefresh: true,
-    });
-    const owners = new Map<string, PreparedModelRuntimeOwner>([
-      ["main", main],
-      ["atlas", atlas],
-    ]);
+it.each([false, true])(
+  "announces auth materialization only when every configured owner is visible (stale sibling: %s)",
+  (staleSibling) => {
+    const main = createOwner("main");
+    const owners = new Map<string, PreparedModelRuntimeOwner>([["main", main]]);
+    if (staleSibling) {
+      owners.set("atlas", createOwner("atlas", true));
+    }
     const phases: string[] = [];
-    const unregister = registerPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
+    bindPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
       phases.push(event.phase);
     });
 
@@ -80,31 +76,12 @@ describe("prepared model runtime auth materialization publication", () => {
         agentDir: "/tmp/configured-main",
       }),
     ).toBe(true);
-    expect(phases).toEqual([]);
+    expect(phases).toEqual(staleSibling ? [] : ["invalidated", "published"]);
     expect(getPreparedModelRuntimeAuthMaterializations(main.snapshot!)).toEqual([
       expect.objectContaining({
         provider: "openai",
         runtimeOwnerId: "codex",
       }),
     ]);
-    unregister();
-  });
-
-  it("announces publication when every configured owner is request-visible", () => {
-    const main = createOwner({ agentId: "main", agentDir: "/tmp/configured-main" });
-    const owners = new Map<string, PreparedModelRuntimeOwner>([["main", main]]);
-    const phases: string[] = [];
-    const unregister = registerPreparedRuntimeAuthMaterializationPublisher(owners, (event) => {
-      phases.push(event.phase);
-    });
-
-    expect(
-      recordRuntimeAuthMaterialization({
-        ...materialization,
-        agentDir: "/tmp/configured-main",
-      }),
-    ).toBe(true);
-    expect(phases).toEqual(["invalidated", "published"]);
-    unregister();
-  });
-});
+  },
+);

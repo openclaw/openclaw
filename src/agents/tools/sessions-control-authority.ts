@@ -21,12 +21,7 @@ export async function prepareSessionControlTarget(params: {
   expectedLifecycleRevision?: string | null;
   operation: "archive" | "restore" | "stop";
   authority?: AdmittedRunOperatorAuthority;
-}): Promise<{
-  sessionId: string;
-  lifecycleRevision: string | null;
-  assertCurrent(this: void): void;
-  release(): void;
-}> {
+}) {
   // Identity-only callers compose their own invocation guard. In particular, accepted
   // continuations must acquire fresh authority instead of retaining a completed tool.
   const source = params.authority ? captureSessionControlAuthority(params.authority) : undefined;

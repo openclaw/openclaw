@@ -18,6 +18,7 @@ export {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  externalContentStamp,
   FRESHNESS_TO_RECENCY,
   isoToPerplexityDate,
   MAX_SEARCH_COUNT,
@@ -27,6 +28,8 @@ export {
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -71,3 +74,5 @@ export { DEFAULT_TIMEOUT_SECONDS } from "../agents/tools/web-shared.js";
 export { enablePluginInConfig } from "../plugins/enable.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
+
+export { nativeWebSearchCodecs } from "./provider-web-search-codecs.js";

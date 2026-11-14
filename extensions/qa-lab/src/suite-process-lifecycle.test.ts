@@ -2,17 +2,14 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { resolveTestNodeExecPath, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it } from "vitest";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
-const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const fixturePath = fileURLToPath(
-  new URL("./suite-process-lifecycle.test-support.ts", import.meta.url),
-);
+const repoRoot = path.resolve(import.meta.dirname, "../../..");
+const fixturePath = path.join(import.meta.dirname, "suite-process-lifecycle.test-support.ts");
 const artifactsRoot = path.join(repoRoot, ".artifacts", "qa-e2e");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let activeRun: ReturnType<typeof startSuiteProcess> | undefined;
@@ -87,13 +84,7 @@ function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
   const child = spawn(nodeExecPath, ["--import", "tsx", fixturePath, outputDir, ...scenarioIds], {
     cwd: repoRoot,
     env: buildSuiteProcessEnv(outputDir),
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-  });
-  const summaryWritten = Promise.withResolvers<void>();
-  child.on("message", (message: unknown) => {
-    if (message === "summary-written") {
-      summaryWritten.resolve();
-    }
+    stdio: ["ignore", "pipe", "pipe"],
   });
   const output = { stderr: "" };
   const gatewayPorts = new Set<number>();
@@ -108,12 +99,10 @@ function startSuiteProcess(outputDir: string, scenarioIds: readonly string[]) {
   const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code, signal) => {
-        resolve({ code, signal });
-      });
+      child.once("close", (code, signal) => resolve({ code, signal }));
     },
   );
-  return { child, closed, summaryWritten: summaryWritten.promise, gatewayPorts, output };
+  return { child, closed, gatewayPorts, output };
 }
 
 async function isTcpPortOpen(port: number) {
@@ -136,24 +125,16 @@ it(
     await fs.mkdir(artifactsRoot, { recursive: true });
     const outputDir = tempDirs.make("suite-process-lifecycle-", artifactsRoot);
     const run = (activeRun = startSuiteProcess(outputDir, ["channel-chat-baseline"]));
-    const readSummary = async (): Promise<QaSuiteSummaryJson> =>
-      JSON.parse(await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"));
     const heartbeat = setInterval(() => {
       process.stderr.write(
         `[qa-process-lifecycle] waiting for completed summary gatewayPorts=${run.gatewayPorts.size}\n`,
       );
     }, 30_000);
     heartbeat.unref();
-    const summary = await withinTest(
-      Promise.race([
-        run.summaryWritten.then(readSummary),
-        // IPC and stdio close are separate signals; the durable summary decides
-        // when process close arrives before its publication receipt.
-        run.closed.then(readSummary),
-      ]),
-      signal,
-    ).finally(() => clearInterval(heartbeat));
-    const outcome = await withinTest(run.closed, signal);
+    const outcome = await withinTest(run.closed, signal).finally(() => clearInterval(heartbeat));
+    const summary: QaSuiteSummaryJson = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
+    );
     const { output } = run;
 
     expect(outcome, output.stderr).toEqual({ code: 0, signal: null });

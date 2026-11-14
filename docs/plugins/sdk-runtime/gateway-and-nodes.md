@@ -54,12 +54,24 @@ await a scope's `stop()` from one of its own running callbacks.
 
 The host first closes scheduling admission and signals cancellation, then invokes
 the service's stop hook. Retirement waits for both that hook and scheduled work.
+For managed plugins, service startup, scheduled callbacks, and cleanup use the
+instance's background readers, so a startup or reload caller ending does not retire them.
 Plugins retain ownership of reconnection policy, sockets, watchers, durable flush
 ordering, and delivery custody. Stop transports and flush pending delivery in the
 owner's required order, then join its child scope before closing resources used
 by that work. Pass the lifetime signal to operations that support cancellation,
 and finish admitted writes before returning. Scheduling creates no durable jobs
 and changes no stored config or state; an update requires no state migration.
+
+Config-only service restarts share plugin replacement's five-second startup
+observation budget. Service startup and cleanup observation budgets measure elapsed
+time, so system-clock changes cannot shorten or extend them. If startup exceeds its
+budget, the host reports a service health
+failure and closes scheduling and managed capability admission. Raw startup
+remains owned until it settles, then the service's final stop runs exactly once.
+This does not forcibly terminate native plugin work: shutdown still waits for
+physical cleanup. After cleanup, reload the plugin to retry a timed-out service.
+This changes no stored config or state and requires no migration on update.
 
 Channel Gateway adapters opt in with `apiVersion: 2`. Their `startAccount` and
 `stopAccount` callbacks receive `ChannelGatewayContextV2`, including the required
@@ -94,6 +106,37 @@ command reports the diagnostic failure and continues. Exporter shutdown retires
 only its service scope, leaving the CLI scheduler available to other work.
 
 ## Gateway and node namespaces
+
+### Session control
+
+The session controller owns turn admission, queued input, and Stop. Gateway
+handler context does not expose writable `chatAbortControllers` or
+`chatQueuedTurns` maps. Reading either removed property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and migration guidance.
+
+An authenticated plugin handler can compose existing Gateway methods through
+`dispatchGatewayMethod` from `openclaw/plugin-sdk/gateway-method-runtime` when its manifest declares
+`contracts: { gatewayMethodDispatch: ["authenticated-request"] }`. The call
+retains the current client and its scopes; the declaration grants no additional
+authority. Use `chat.send` for input, `chat.abort` with `{ sessionKey, runId? }`
+for chat cancellation, `sessions.abort` with `{ key, runId?, clearQueued? }` for
+session cancellation, and `agent.wait` to await a run. There is no public
+controller mutation API.
+
+For status displays, use `sessions.list` to observe aggregate activity. Bundled
+or trusted official plugins can also use `api.runtime.gateway.request(...)`,
+`readSessionFacts(...)`, and `subscribeSessionChanges(...)` as described below.
+These runtime capabilities retain their existing trust restriction. A projection
+or run ID is an observation, not permission to mutate or cancel work.
+
+Consumers of `context.createAgentTurnFacade` receive a captured start owner
+through `onStartOwner`. Its observation uses optional nullable
+`startDeadlineAtMs`, replacing `expiresAtMs` without an alias. A finite value is
+the execution-start deadline; `null` means a live controller wait has no finite
+deadline, and an absent field means no deadline is available yet. An absent
+observation means that owner is no longer current. Once `executionStarted` is
+true, the start watch is complete. See the
+[migration details](/plugins/sdk-migration#agent-turn-start-observation).
 
 ### Session resource methods
 
@@ -149,7 +192,9 @@ The Gateway resolves `requiredByRole` from the person's effective role and this
 plugin's ID; role-bound policies use that fact instead of inferring a binding
 from the default role's name.
 Return `undefined` when the policy does not govern that person. Otherwise return
-`{ assertCurrent, signal }`; reject admission when the required access is absent.
+`{ assertCurrent, signal }`. For an explicit role binding, return `undefined` when
+the required grant is absent; otherwise deny access with an already-aborted signal.
+Throw only when evaluation is unavailable, not to report a policy denial.
 
 A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
 requires a current authority from your registered policy, including when the
@@ -166,6 +211,21 @@ owner and initialize it before accepting person access.
 Return a native `AbortSignal`. Registration preserves native cancellation and
 cleanup while keeping the assertion and callable abort-reason values bound to
 the plugin instance. Plugin retirement also ends captured access.
+
+The registration owner records a closed diagnostic `failureCause` when the grant
+or plugin lifetime ends. An internal assertion error, including a closed invocation
+scope or a temporarily quiesced plugin, refuses the operation without revoking the
+person or their admitted runs. The Gateway reevaluates the captured grant before
+treating an unclassified exception as a denial. An unavailable evaluation returns
+`UNAVAILABLE` with `details.code: "OPERATOR_ACCESS_UNAVAILABLE"`; before dispatch,
+it is retryable and does not authorize the failed operation. After dispatch starts,
+the response instead warns that execution may have completed and is not automatically
+retryable. HTTP authentication returns a retryable 503 for policy unavailability.
+Later HTTP revalidation failures return 503 with the uncertain-outcome warning;
+an already-started response is closed without framing partial data as complete.
+The log includes the redacted inner
+error name and message. Successful responses remain subject to current authority,
+and the next operation checks the policy again.
 
 The Gateway binds the returned authority to the original person and carries it
 through WebSocket and HTTP requests, and through commands admitted for a linked
@@ -269,6 +329,17 @@ applicable policy also requires fresh publication admission.
     can ignore them. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
+
+    `await api.runtime.gateway.appendAgentMessage({ sessionKey, agentId?, text, mentions?, idempotencyKey })`
+    adds one agent-authored message to an existing session without running the
+    model. Bundled or trusted official plugins can call it only while handling
+    an authenticated person's Gateway request, and only for a session that
+    person may write, such as their own session. The text is normalized like
+    typed chat input. `mentions` select `@label` spans; each mentioned person
+    gets the usual Inbox entry and involvement, with the caller named as the
+    sender, under the same rules as a typed mention. A retry with the same
+    `idempotencyKey` returns the original message with `replayed: true`
+    instead of writing another.
 
     `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
     selects immutable facts through the same session-list filtering owner,
@@ -505,6 +576,13 @@ before dispatch and each frame. Closing the service cancels open channels.
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Cron operations that require an agent owner reject with error code
+`AGENT_SELECTION_REQUIRED` when no explicit or ambient owner resolves. The
+in-process service handle preserves the error object and its `code` property.
+Pass an explicit `agentId` or configure `agents.defaults.systemAgent.agentId`;
+optional background services can handle this code to defer creation until an
+owner is available. Match the code rather than the human-readable message.
 
 Current service handles also expose `enqueueRun(id, mode)` for service-owned
 work. It uses the normal cron admission queue with the service's live authority,

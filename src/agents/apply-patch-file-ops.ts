@@ -1,8 +1,10 @@
-import syncFs from "node:fs";
+import callbackFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -15,7 +17,10 @@ import {
 import { toRelativeSandboxPath } from "./path-policy.js";
 import { isPathBoundaryEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { decodeUtf8File } from "./utf8-file.js";
+import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
+
+const readFileDescriptor = promisify(callbackFs.readFile);
+const closeFileDescriptor = promisify(callbackFs.close);
 
 export type SandboxApplyPatchConfig = {
   root: string;
@@ -30,7 +35,7 @@ export type ApplyPatchFileOptions = {
   /** Containment boundary when relative paths resolve from a nested cwd. */
   root?: string;
   sandbox?: SandboxApplyPatchConfig;
-  /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
+  /** Restrict patch paths to the workspace root (cwd). Host default: false; sandbox default: true. */
   workspaceOnly?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
 };
@@ -69,7 +74,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           const buf = await bridge.readFile({ filePath, cwd: root });
           assertCurrent();
-          return decodeUtf8File(buf, filePath);
+          return decodeUtf8Input(buf, `File ${filePath}`);
         }),
       writeFile: (filePath, content) =>
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
@@ -88,6 +93,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
             filePath,
             cwd: root,
             data: content,
+            mkdir: true,
             signal: options.signal,
           });
         }),
@@ -95,11 +101,6 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           assertCurrent();
           await bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
-        }),
-      mkdirp: (dir) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
         }),
     });
   }
@@ -110,7 +111,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           const buffer = await fs.readFile(filePath);
           assertCurrent();
-          return decodeUtf8File(buffer, filePath);
+          return decodeUtf8Input(buffer, `File ${filePath}`);
         }),
       writeFile: async (filePath, content) => {
         await writeHostFile(filePath, content, options.signal);
@@ -144,35 +145,53 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   }
 
   const containmentRoot = options.root ?? options.cwd;
-  const root = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
+  const initialRoot = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
+  const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
+  const resolveTarget = async (filePath: string) => {
+    const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
+    const relative = toRelativeSandboxPath(selectedRoot, filePath);
+    let root = roots.get(selectedRoot);
+    if (!root) {
+      root = await fsRoot(selectedRoot, { assertBeforeMutation: assertCurrent });
+      roots.set(selectedRoot, root);
+    }
+    const assertBeforeMutation = () => {
+      assertCurrent();
+      toRelativeSandboxPath(resolveHostWorkspaceRoot(containmentRoot, filePath), filePath);
+    };
+    return { root, relative, assertBeforeMutation };
+  };
   // Rebase only the admitted root spelling. Root owns parent-alias resolution;
   // absolute paths keep a literal "~" component from becoming home expansion.
-  const toRootPath = (filePath: string) =>
-    path.resolve(root.rootReal, toRelativeSandboxPath(root.rootDir, filePath));
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
     readFile: (filePath) =>
       runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+        const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
         const opened = await openRootFile({
           absolutePath: filePath,
-          rootPath: containmentRoot,
+          rootPath: selectedRoot,
           boundaryLabel: "workspace root",
           symlinks: "follow-parents-within-root",
         });
         assertBoundaryRead(opened, filePath);
         try {
           assertCurrent();
-          return decodeUtf8File(syncFs.readFileSync(opened.fd), filePath);
+          const buffer = await readFileDescriptor(opened.fd);
+          assertCurrent();
+          return decodeUtf8Input(buffer, `File ${filePath}`);
         } finally {
-          syncFs.closeSync(opened.fd);
+          await closeFileDescriptor(opened.fd);
         }
       }),
     writeFile: async (filePath, content) => {
       await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        assertCurrent();
+        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+        assertBeforeMutation();
         await root
-          .write(toRootPath(filePath), content, {
+          .write(path.resolve(root.rootReal, relative), content, {
             encoding: "utf8",
             mutationSymlinks: "follow-parents-within-root",
+            assertBeforeMutation,
           })
           .catch(rethrowHostMutationError);
       });
@@ -180,10 +199,12 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     createFileExclusive: async (filePath, content) => {
       try {
         await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await root.create(toRootPath(filePath), content, {
+          const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+          assertBeforeMutation();
+          await root.create(path.resolve(root.rootReal, relative), content, {
             encoding: "utf8",
             mutationSymlinks: "reject",
+            assertBeforeMutation,
           });
         });
         return "created";
@@ -196,11 +217,12 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     },
     remove: async (filePath) => {
       await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        assertCurrent();
+        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+        assertBeforeMutation();
         // remove requires a relative path; "./" preserves literal tilde names.
         // Omitted mutationSymlinks lets it unlink the final symlink itself.
         await root
-          .remove(`./${toRelativeSandboxPath(root.rootDir, filePath)}`)
+          .remove(`./${relative}`, { assertBeforeMutation })
           .catch(rethrowHostMutationError);
       });
     },

@@ -2,72 +2,55 @@ import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSnapshot as getSnapshot,
+  getRuntimeConfigSourceSnapshot as getSource,
+  getRuntimeConfigSnapshotMetadata as getMetadata,
   resetConfigRuntimeState,
-  resolveRuntimeModelConfigCacheKey,
-  setRuntimeConfigSnapshot,
-  setRuntimeConfigSourceSnapshotIfCurrent,
+  resolveRuntimeModelConfigCacheKey as resolveModelKey,
+  setRuntimeConfigSnapshot as setSnapshot,
+  setRuntimeConfigSourceSnapshotIfCurrent as setSourceIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
+import type { OpenClawConfig as Config } from "./types.openclaw.js";
 
 const unregister: Array<() => void> = [];
+const sidebar = (): Config => ({ ui: { prefs: { sidebarEntries: ["sessions"] } } });
+const identity = (): Config => ({
+  agents: { entries: { main: { identity: { name: "Renamed" } } } },
+});
+function watchChanges() {
+  const changes = vi.fn();
+  unregister.push(sessionChanges.subscribe(changes));
+  return changes;
+}
+const modelKey = () => resolveModelKey(getSnapshot()!);
 
 afterEach(() => {
   unregister.splice(0).forEach((release) => release());
   setRuntimeConfigSnapshotRefreshHandler(null);
   resetConfigRuntimeState();
+  vi.restoreAllMocks();
 });
 
-it.each<[string, OpenClawConfig, string, boolean]>([
-  [
-    "sidebar preferences",
-    { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-    "config-presentation",
-    false,
-  ],
-  [
-    "agent identity",
-    { agents: { entries: { main: { identity: { name: "Renamed" } } } } },
-    "config-profiles",
-    false,
-  ],
-  [
-    "authored sidebar preferences",
-    { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-    "config-presentation",
-    true,
-  ],
-  [
-    "authored agent identity",
-    { agents: { entries: { main: { identity: { name: "Renamed" } } } } },
-    "config-profiles",
-    true,
-  ],
+it.each<[string, Config, string, boolean]>([
+  ["sidebar preferences", sidebar(), "config-presentation", false],
+  ["agent identity", identity(), "config-profiles", false],
+  ["authored sidebar preferences", sidebar(), "config-presentation", true],
+  ["authored agent identity", identity(), "config-profiles", true],
 ])("publishes the projection impact of %s", (_label, change, scope, authored) => {
-  const initial: OpenClawConfig = { agents: { entries: { main: {} } } };
-  setRuntimeConfigSnapshot(initial, authored ? structuredClone(initial) : undefined);
-  const published = vi.fn();
-  const stop = sessionChanges.subscribe(published);
-  try {
-    const next = { ...initial, ...change };
-    setRuntimeConfigSnapshot(next, authored ? structuredClone(next) : undefined);
-    expect(published).toHaveBeenCalledExactlyOnceWith({ all: true, scope });
-  } finally {
-    stop();
-  }
+  const initial: Config = { agents: { entries: { main: {} } } };
+  setSnapshot(initial, authored ? structuredClone(initial) : undefined);
+  const published = watchChanges();
+  const next = { ...initial, ...change };
+  setSnapshot(next, authored ? structuredClone(next) : undefined);
+  expect(published).toHaveBeenCalledExactlyOnceWith({ all: true, scope });
 });
 
 it("reuses publication hashes and model keys across equal mutable fleet clones", () => {
-  const base = {
-    agents: {
-      entries: Object.fromEntries(
-        Array.from({ length: 29 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
-      ),
-    },
-  };
+  const entries = Object.fromEntries(
+    Array.from({ length: 29 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
+  );
+  const base = { agents: { entries } };
   const publications = Array.from({ length: 29 }, () => ({
     config: structuredClone(base),
     source: structuredClone(base),
@@ -76,149 +59,110 @@ it("reuses publication hashes and model keys across equal mutable fleet clones",
     publications.flatMap(({ config, source }) => [config.agents.entries, source.agents.entries]),
   );
   const keys = vi.spyOn(Object, "keys");
-  try {
-    const first = publications[0]!;
-    setRuntimeConfigSnapshot(first.config, first.source);
-    const metadata = getRuntimeConfigSnapshotMetadata();
-    const modelKey = resolveRuntimeModelConfigCacheKey(first.config);
-    for (const { config, source } of publications.slice(1)) {
-      setRuntimeConfigSnapshot(config, source);
-      expect(getRuntimeConfigSnapshotMetadata()).toBe(metadata);
-      expect(resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!)).toBe(modelKey);
-    }
-    expect(keys.mock.calls.filter(([value]) => rosters.has(value))).toHaveLength(4);
-    expect(getRuntimeConfigSnapshot()).toBe(first.config);
-  } finally {
-    keys.mockRestore();
+  const first = publications[0]!;
+  setSnapshot(first.config, first.source);
+  const metadata = getMetadata();
+  const firstModelKey = resolveModelKey(first.config);
+  for (const { config, source } of publications.slice(1)) {
+    setSnapshot(config, source);
+    expect(getMetadata()).toBe(metadata);
+    expect(resolveModelKey(getSnapshot()!)).toBe(firstModelKey);
   }
+  expect(keys.mock.calls.filter(([value]) => rosters.has(value))).toHaveLength(4);
+  expect(getSnapshot()).toBe(first.config);
 });
 
 it("keeps non-cloneable and accessor-backed setter inputs on the uncached path", () => {
-  const config: OpenClawConfig = {
-    plugins: { entries: { fixture: { config: { value: Symbol("fixture") } } } },
-  };
-  expect(() => setRuntimeConfigSnapshot(config)).not.toThrow();
-  expect(getRuntimeConfigSnapshot()).toBe(config);
+  const config: Config = { plugins: { entries: { fixture: { config: { value: Symbol("id") } } } } };
+  expect(() => setSnapshot(config)).not.toThrow();
+  expect(getSnapshot()).toBe(config);
   clearRuntimeConfigSnapshot();
   const port = vi.fn(() => 18789);
-  const accessor: OpenClawConfig = {
-    gateway: Object.defineProperty({}, "port", {
-      get: port,
-      enumerable: true,
-    }),
-  };
-  setRuntimeConfigSnapshot(accessor, accessor);
+  const gateway = Object.defineProperty({}, "port", { get: port, enumerable: true });
+  const accessor: Config = { gateway };
+  setSnapshot(accessor, accessor);
   expect(port).toHaveBeenCalledTimes(4);
-  expect(getRuntimeConfigSnapshot()).toBe(accessor);
+  expect(getSnapshot()).toBe(accessor);
 });
 
-it.each(["null prototype", "symbol key"])(
-  "preserves publication scope for inputs with a %s",
-  (shape) => {
-    const initial: OpenClawConfig = { agents: { entries: { main: {} } } };
-    if (shape === "null prototype") {
-      Object.setPrototypeOf(initial, null);
-    } else {
-      Object.assign(initial, { [Symbol("fixture")]: true });
-    }
-    setRuntimeConfigSnapshot(initial);
-    const changes = vi.fn();
-    unregister.push(sessionChanges.subscribe(changes));
-    setRuntimeConfigSnapshot({
-      ...initial,
-      ui: { prefs: { sidebarEntries: ["sessions"] } },
-    });
-    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config-presentation" });
-  },
-);
+it.each(["null prototype", "symbol key"])("preserves %s publication scope", (shape) => {
+  const initial: Config = { agents: { entries: { main: {} } } };
+  if (shape === "null prototype") {
+    Object.setPrototypeOf(initial, null);
+  } else {
+    Object.assign(initial, { [Symbol("fixture")]: true });
+  }
+  setSnapshot(initial);
+  const changes = watchChanges();
+  setSnapshot({ ...initial, ...sidebar() });
+  expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config-presentation" });
+});
 
-it.each(["added", "replaced", "removed"])(
-  "publishes %s authored policy when runtime values are unchanged",
-  (change) => {
-    const enabled: OpenClawConfig = { plugins: { entries: { fixture: { enabled: true } } } };
-    const disabled: OpenClawConfig = { plugins: { entries: { fixture: { enabled: false } } } };
-    const initialSource = change === "added" ? undefined : disabled;
-    const nextSource = change === "removed" ? undefined : enabled;
-    setRuntimeConfigSnapshot({}, initialSource);
-    const previousRevision = getRuntimeConfigSnapshotMetadata()!.revision;
-    const previousModelKey = resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!);
-    const changes = vi.fn();
-    unregister.push(sessionChanges.subscribe(changes));
+it.each(["added", "replaced", "removed"])("authored policy: %s", (change) => {
+  const enabled: Config = { plugins: { entries: { fixture: { enabled: true } } } };
+  const disabled: Config = { plugins: { entries: { fixture: { enabled: false } } } };
+  const initialSource = change === "added" ? undefined : disabled;
+  const nextSource = change === "removed" ? undefined : enabled;
+  setSnapshot({}, initialSource);
+  const before = { revision: getMetadata()!.revision, modelKey: modelKey() };
+  const changes = watchChanges();
 
-    setRuntimeConfigSnapshot({}, nextSource);
+  setSnapshot({}, nextSource);
 
-    expect(getRuntimeConfigSourceSnapshot()).toBe(nextSource ?? null);
-    expect(getRuntimeConfigSnapshotMetadata()!.revision).toBe(previousRevision + 1);
-    expect(resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!)).not.toBe(
-      previousModelKey,
-    );
-    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config-presentation" });
-  },
-);
+  expect(getSource()).toBe(nextSource ?? null);
+  expect(getMetadata()!.revision).toBe(before.revision + 1);
+  expect(modelKey()).not.toBe(before.modelKey);
+  expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config-presentation" });
+});
 
 it("retains broad authored model-policy invalidation alongside runtime preferences", () => {
-  const source: OpenClawConfig = {
-    agents: { defaults: { model: { primary: "openai/first" } } },
-  };
-  setRuntimeConfigSnapshot({}, source);
-  const changes = vi.fn();
-  unregister.push(sessionChanges.subscribe(changes));
+  const source: Config = { agents: { defaults: { model: { primary: "openai/first" } } } };
+  setSnapshot({}, source);
+  const changes = watchChanges();
 
-  setRuntimeConfigSnapshot(
-    { ui: { prefs: { sidebarEntries: ["sessions"] } } },
-    { agents: { defaults: { model: { primary: "openai/second" } } } },
-  );
+  setSnapshot(sidebar(), { agents: { defaults: { model: { primary: "openai/second" } } } });
 
   expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
 });
 
 it("restores captured authored policy after its live source was edited in place", () => {
-  const source: OpenClawConfig = { plugins: { enabled: true } };
-  setRuntimeConfigSnapshot({}, source);
-  const changes = vi.fn();
-  unregister.push(sessionChanges.subscribe(changes));
+  const source: Config = { plugins: { enabled: true } };
+  setSnapshot({}, source);
+  const changes = watchChanges();
   source.plugins!.enabled = false;
-  const restored: OpenClawConfig = { plugins: { enabled: true } };
+  const restored: Config = { plugins: { enabled: true } };
 
-  setRuntimeConfigSnapshot({}, restored);
+  setSnapshot({}, restored);
 
-  expect(getRuntimeConfigSourceSnapshot()).toBe(restored);
+  expect(getSource()).toBe(restored);
   expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
 });
 
-it.each(["same source", "equal clone", "migration marker"])(
-  "ignores an in-place version restamp while retaining %s policy",
-  (change) => {
-    const source: OpenClawConfig = {
-      plugins: { enabled: true },
-      meta: { lastTouchedVersion: "1" },
-    };
-    setRuntimeConfigSnapshot({}, source);
-    const metadata = getRuntimeConfigSnapshotMetadata()!;
-    const modelKey = resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!);
-    const changes = vi.fn();
-    unregister.push(sessionChanges.subscribe(changes));
-    source.meta!.lastTouchedVersion = "2";
-    if (change === "migration marker") {
-      source.meta!.migrations = { modelPolicyAllowlist: true };
-    }
-    const nextSource = change === "same source" ? source : structuredClone(source);
+it.each(["same source", "equal clone", "migration marker"])("version restamp: %s", (change) => {
+  const source: Config = { plugins: { enabled: true }, meta: { lastTouchedVersion: "1" } };
+  setSnapshot({}, source);
+  const metadata = getMetadata()!;
+  const previousModelKey = modelKey();
+  const changes = watchChanges();
+  source.meta!.lastTouchedVersion = "2";
+  if (change === "migration marker") {
+    source.meta!.migrations = { modelPolicyAllowlist: true };
+  }
+  const nextSource = change === "same source" ? source : structuredClone(source);
 
-    expect(
-      setRuntimeConfigSourceSnapshotIfCurrent({
-        expectedRevision: metadata.revision,
-        sourceConfig: nextSource,
-      }),
-    ).toBe(true);
+  const updated = setSourceIfCurrent({
+    expectedRevision: metadata.revision,
+    sourceConfig: nextSource,
+  });
+  expect(updated).toBe(true);
 
-    if (change === "migration marker") {
-      expect(getRuntimeConfigSourceSnapshot()).toBe(nextSource);
-      expect(resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!)).not.toBe(modelKey);
-      expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
-    } else {
-      expect(getRuntimeConfigSnapshotMetadata()).toBe(metadata);
-      expect(resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!)).toBe(modelKey);
-      expect(changes).not.toHaveBeenCalled();
-    }
-  },
-);
+  if (change === "migration marker") {
+    expect(getSource()).toBe(nextSource);
+    expect(modelKey()).not.toBe(previousModelKey);
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+  } else {
+    expect(getMetadata()).toBe(metadata);
+    expect(modelKey()).toBe(previousModelKey);
+    expect(changes).not.toHaveBeenCalled();
+  }
+});

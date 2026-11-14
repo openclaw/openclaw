@@ -8,7 +8,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 
 type OpenAiCompatibleSpeechProviderBaseConfig = {
   apiKey?: string;
@@ -211,9 +211,8 @@ export function createOpenAiCompatibleSpeechProvider<
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = normalizeConfig(baseTtsConfig);
+      const next = normalizeConfig(baseTtsConfig);
       const responseFormat = normalizeResponseFormat(talkProviderConfig.responseFormat);
-      const next: OpenAiCompatibleSpeechProviderConfig<ExtraConfig> = { ...base };
       if (talkProviderConfig.apiKey !== undefined) {
         next.apiKey = normalizeResolvedSecretInputString({
           value: talkProviderConfig.apiKey,
@@ -228,7 +227,7 @@ export function createOpenAiCompatibleSpeechProvider<
       if (modelId !== undefined) {
         next.model = normalizeModel(modelId, options.defaultModel);
       }
-      next.voice = resolveConfiguredSpeechVoice(talkProviderConfig) ?? base.voice;
+      next.voice = resolveConfiguredSpeechVoice(talkProviderConfig) ?? next.voice;
       const speed = asFiniteNumber(talkProviderConfig.speed);
       if (speed !== undefined) {
         next.speed = speed;

@@ -90,6 +90,48 @@ class ControlUiWebViewAuthTest {
   }
 
   @Test
+  fun pinnedGatewayDoesNotLoadOrExposeAuthWithoutSslErrorCallback() {
+    for (baseUrl in listOf("https://gateway.example:8443/openclaw/", "https://127.0.0.1:8443/openclaw/")) {
+      for (legacy in listOf(false, true)) {
+        if (legacy) ControlUiAuthFeatureShadow.unsupported.add(WebViewFeature.DOCUMENT_START_SCRIPT)
+        var credentialReads = 0
+        var signed = 0
+        val mounted =
+          mount(
+            baseUrl = baseUrl,
+            tlsFingerprintSha256 = "ab".repeat(32),
+            legacyAuth = {
+              credentialReads += 1
+              JsonObject(mapOf("token" to JsonPrimitive("synthetic-native-token")))
+            },
+          ) { _, _ ->
+            signed += 1
+            JsonObject(emptyMap())
+          }
+        try {
+          // Successful platform TLS need not invoke onReceivedSslError at all.
+          assertNull(shadowOf(mounted.view).lastLoadedUrl)
+          // The intentional restriction must not tell users to reconnect: the same pin repeats it.
+          val refusal = requireNotNull(shadowOf(mounted.view).lastLoadData).data
+          assertTrue(refusal, refusal.contains("certificate-pinned"))
+          assertFalse(refusal, refusal.contains("Reconnect"))
+          assertFalse(ControlUiAuthCompatShadow.registrations.containsKey(mounted.view))
+          assertFalse(ControlUiAuthCompatShadow.scripts.containsKey(mounted.view))
+          val client = mounted.view.webViewClient
+          client.onPageStarted(mounted.view, "${baseUrl}dashboard", null)
+          client.onPageFinished(mounted.view, "${baseUrl}dashboard")
+          assertTrue(Shadow.extract<ControlUiAuthWebViewShadow>(mounted.view).transfers.isEmpty())
+          assertEquals(0, credentialReads)
+          assertEquals(0, signed)
+        } finally {
+          mounted.close()
+          ControlUiAuthFeatureShadow.unsupported.clear()
+        }
+      }
+    }
+  }
+
+  @Test
   fun mountedBridgeSignsNativeIdentityAndCurrentTokenWithoutExportingStartupSecrets() {
     val app = RuntimeEnvironment.getApplication()
     val storage = app.getSharedPreferences("native-control-auth-test", Context.MODE_PRIVATE)
@@ -522,10 +564,12 @@ class ControlUiWebViewAuthTest {
     baseUrl: String = "https://gateway.example:8443/openclaw/",
     path: String = "dashboard",
     onExternalLink: ((String) -> Unit)? = null,
+    tlsFingerprintSha256: String? = null,
+    legacyAuth: (() -> JsonObject)? = null,
     sign: (String, Long) -> JsonObject,
   ): Mounted {
     val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
-    val page = NodeRuntime.GatewayControlPage(baseUrl, null, sign)
+    val page = NodeRuntime.GatewayControlPage(baseUrl, tlsFingerprintSha256, sign, legacyAuth = legacyAuth)
     controller.get().setContent {
       OpenClawTheme(themeMode = AppearanceThemeMode.System) {
         ControlUiWebView(page, "${page.baseUrl}$path", onExternalLink = onExternalLink)

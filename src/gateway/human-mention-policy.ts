@@ -13,10 +13,12 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { updateSessionProfileInvolvementAsync } from "../config/sessions/session-accessor.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionParticipantRecord } from "../config/sessions/session-membership-facts.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
@@ -28,13 +30,16 @@ import {
   authorizeGatewaySessionCreation,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
-import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
-import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
+import {
+  isSameSessionSharingTarget,
+  prepareSessionSharingRead,
+} from "./session-sharing-target-read.js";
 import {
   createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
@@ -51,14 +56,15 @@ type MentionTarget = {
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
 };
 type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
-
-function scopesAllowRead(scopes: readonly string[]): boolean {
-  return roleScopesAllow({
-    role: "operator",
-    requestedScopes: [READ_SCOPE],
-    allowedScopes: scopes,
-  });
-}
+type MentionRanking = {
+  participants: readonly SessionParticipantRecord[];
+  members: ReadonlySet<string>;
+};
+type PreparedMentionContext = {
+  readTarget: () => SessionSharingTarget | null;
+  readRanking?: () => MentionRanking | undefined;
+  release: () => void;
+};
 
 /** UI labels are text, never identity or an email-address fallback. */
 export function humanMentionDisplayLabel(label: string | undefined, profileId: string): string {
@@ -131,7 +137,7 @@ export function createHumanMentionPolicy(params: {
       client.invalidated === true ||
       client.internal?.syntheticClient ||
       (client.connect.role ?? "operator") !== "operator" ||
-      !scopesAllowRead(client.connect.scopes ?? [])
+      !operatorScopeSatisfied(SESSION_READ_SCOPE, client.connect.scopes ?? [])
     ) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Human mentions require a signed-in operator."));
     }
@@ -151,7 +157,7 @@ export function createHumanMentionPolicy(params: {
       return err(authenticatedProfileUnavailableError());
     }
     const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
-    if (policy && !scopesAllowRead(policy.scopes)) {
+    if (policy && !operatorScopeSatisfied(SESSION_READ_SCOPE, policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
     const admin =
@@ -161,7 +167,7 @@ export function createHumanMentionPolicy(params: {
     const { entryFilter } = prepareSessionSharing({
       cfg,
       client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [READ_SCOPE] },
+        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
       },
     });
@@ -183,7 +189,7 @@ export function createHumanMentionPolicy(params: {
     }
     const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
     const scopes = policy?.scopes ?? [READ_SCOPE];
-    if (!scopesAllowRead(scopes)) {
+    if (!operatorScopeSatisfied(SESSION_READ_SCOPE, scopes)) {
       return undefined;
     }
     if (scopes.includes(ADMIN_SCOPE)) {
@@ -293,7 +299,10 @@ export function createHumanMentionPolicy(params: {
   }
 
   return {
-    async prepareContext(input: UsersMentionableParams) {
+    async prepareContext(
+      input: UsersMentionableParams,
+      includeRanking = false,
+    ): Promise<PreparedMentionContext> {
       if (!("sessionKey" in input)) {
         return { readTarget: () => null, release() {} };
       }
@@ -307,10 +316,36 @@ export function createHumanMentionPolicy(params: {
         sessionKey: input.sessionKey,
         agentId: agent.agentId,
       });
-      return {
-        readTarget: () => prepared.readCurrent(params.getRuntimeConfig()).target,
-        release: prepared.release,
-      };
+      try {
+        const target = prepared.readCurrent(params.getRuntimeConfig()).target;
+        const records =
+          includeRanking && target && !isIncognitoSessionKey(target.canonicalKey)
+            ? await readSessionEntriesFromStoreInWorker({
+                agentId: target.agentId,
+                storePath: target.storePath,
+                sessionKeys: [target.storeKey],
+                snapshotFields: [],
+                includeParticipantRecords: true,
+              })
+            : undefined;
+        return {
+          readTarget: () => prepared.readCurrent(params.getRuntimeConfig()).target,
+          readRanking: () => {
+            const current = prepared.readCurrent(params.getRuntimeConfig());
+            if (!target || !isSameSessionSharingTarget(current.target, target)) {
+              return undefined;
+            }
+            return {
+              participants: records?.participantRecords?.[target.storeKey] ?? [],
+              members: current.membership,
+            };
+          },
+          release: prepared.release,
+        };
+      } catch (error) {
+        prepared.release();
+        throw error;
+      }
     },
     async recordCommittedInvolvementAsync(
       input: MentionCommittedInput,
@@ -366,7 +401,8 @@ export function createHumanMentionPolicy(params: {
     mentionable(
       client: GatewayClient | null,
       input: UsersMentionableParams,
-      prepared?: { readTarget: () => SessionSharingTarget | null },
+      prepared?: Pick<PreparedMentionContext, "readTarget" | "readRanking">,
+      displayProfileIds?: readonly string[],
     ): Result<UsersMentionableResult, ErrorShape> {
       const cfg = params.getRuntimeConfig();
       const context = resolveContext(client, input, cfg, prepared);
@@ -386,7 +422,10 @@ export function createHumanMentionPolicy(params: {
             ? [
                 {
                   profileId: candidate.profileId,
-                  displayName: humanMentionDisplayLabel(candidate.label, candidate.profileId),
+                  displayName: humanMentionDisplayLabel(
+                    candidate.label ?? logins[0],
+                    candidate.profileId,
+                  ),
                   avatarUrl: candidate.avatarUrl,
                   logins,
                   online: false,
@@ -399,7 +438,9 @@ export function createHumanMentionPolicy(params: {
       const query = input.query?.trim().toLocaleLowerCase() ?? "";
       const users = eligibleDirectory.users.filter(
         (candidate) =>
-          candidate.profileId !== profile.profileId &&
+          (displayProfileIds
+            ? displayProfileIds.includes(candidate.profileId)
+            : candidate.profileId !== profile.profileId) &&
           (!query ||
             candidate.displayName.toLocaleLowerCase().includes(query) ||
             candidate.logins.some((login) => login.toLocaleLowerCase().includes(query))),
@@ -427,8 +468,32 @@ export function createHumanMentionPolicy(params: {
         avatarUrl: candidate.avatarUrl,
         online: online.has(candidate.profileId),
       }));
+      const ranking = prepared?.readRanking?.();
+      const speakers = new Map<string, number>();
+      for (const record of ranking?.participants ?? []) {
+        if (
+          record.identity.type === "profile" &&
+          record.contributionCount > 0 &&
+          record.lastPromptedAt !== null
+        ) {
+          // Profile merges retain historical contribution IDs; combine their latest sent times.
+          const profileId = readProfile(record.identity.id)?.profileId;
+          if (profileId) {
+            speakers.set(
+              profileId,
+              Math.max(speakers.get(profileId) ?? record.lastPromptedAt, record.lastPromptedAt),
+            );
+          }
+        }
+      }
+      // Rank before truncation: a current-chat speaker must not be lost to global names.
+      // Silent members follow speakers; presence and names remain the stable fallback.
       projected.sort(
         (left, right) =>
+          Number(speakers.has(right.profileId)) - Number(speakers.has(left.profileId)) ||
+          (speakers.get(right.profileId) ?? 0) - (speakers.get(left.profileId) ?? 0) ||
+          Number(ranking?.members.has(right.profileId) ?? false) -
+            Number(ranking?.members.has(left.profileId) ?? false) ||
           Number(right.online) - Number(left.online) ||
           left.displayName.localeCompare(right.displayName) ||
           left.profileId.localeCompare(right.profileId),

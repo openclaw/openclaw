@@ -13,11 +13,7 @@ import {
   publicationSourceRequest,
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
-import {
-  isShaPinnedReleaseValidationBranch,
-  normalizeFullReleaseValidationRun,
-  validateFullReleaseValidationEvidence as validateEvidence,
-} from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { validateFullReleaseValidationEvidence as validateEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function checkEvidence(
@@ -141,7 +137,7 @@ function strictEvidenceReuse(version = 3) {
   return {
     schema: `openclaw.release-validation-evidence/v${version}`,
     valid: true,
-    current: { runId: "123", targetSha },
+    current: { runId: "123", targetSha, conclusion: "success" },
     root: { runId: "122", targetSha },
     evidenceReuse: {
       changedPaths: [],
@@ -150,7 +146,6 @@ function strictEvidenceReuse(version = 3) {
       rootRunId: "122",
       selectedRunId: "122",
     },
-    conclusions: { allRequiredSucceeded: true },
   };
 }
 
@@ -197,12 +192,12 @@ describe("full release validation evidence", () => {
     ).toThrow("Release manifest contains failed selected job evidence");
   });
 
-  it.each([
-    { publishInputs: { stableSoakWaiver: "approved" } },
-    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
-  ])("rejects retired waiver inputs before accepting direct evidence: %j", (inputs) => {
-    expect(() => validate({}, inputs)).toThrow(/waivers|knownFlakyJobsJson/u);
-  });
+  it.each([{ validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } }])(
+    "rejects retired flaky-job inputs before accepting direct evidence: %j",
+    (inputs) => {
+      expect(() => validate({}, inputs)).toThrow(/knownFlakyJobsJson/u);
+    },
+  );
 
   it.each([
     "publish",
@@ -210,11 +205,27 @@ describe("full release validation evidence", () => {
     "missing",
     "selection",
     "windows-after-admission",
-    "context",
-    "tooling",
     "missing-publication",
     "new-publish-without-admission",
+    "receipt-recovery",
+    "receipt-recovery-without-proof",
+    "plugins-only",
+    "plugins-only-route",
+    "plugins-only-channel",
+    "plugins-only-roster",
+    "subset",
+    "subset-outside-roster",
+    "subset-duplicate",
+    "subset-route",
+    "subset-channel",
+    "subset-empty",
+    "subset-windows",
+    "subset-core",
+    "subset-wrong-origin",
+    "subset-tampered-evidence",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
+    const recovery = scenario.startsWith("receipt-recovery");
+    const branch = recovery ? "main" : pinnedBranch;
     const selection: PublicationSelection = {
       route: "normal",
       npmDistTag: "latest",
@@ -236,7 +247,7 @@ describe("full release validation evidence", () => {
       PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: workflowSha }),
       PUBLICATION_TARGET_SHA: targetSha,
       GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: `refs/heads/${pinnedBranch}`,
+      GITHUB_REF: `refs/heads/${branch}`,
       GITHUB_SHA: workflowSha,
       GITHUB_RUN_ID: "123",
       GITHUB_RUN_ATTEMPT: "2",
@@ -248,23 +259,29 @@ describe("full release validation evidence", () => {
         ? null
         : {
             version: "2026.9.9",
-            packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
+            packages: [
+              { name: "@openclaw/test", version: "2026.9.9", targets: ["clawhub", "npm"] },
+              { name: "openclaw", version: "2026.9.9", targets: ["npm"] },
+            ],
             platforms: [],
           },
     );
     const manifest = releaseManifest({
       sourceAdmissionContract: "1",
       sourceAdmission: source,
+      workflowRef: branch,
+      workflowFullRef: `refs/heads/${branch}`,
+      ...(recovery ? { receiptRecovery: {} } : {}),
       releaseProfile: "full",
       rerunGroup: "all",
       runReleaseSoak: "true",
       trustedWorkflow: {
-        fullRef: scenario === "tooling" ? "refs/heads/other" : "refs/heads/main",
+        fullRef: "refs/heads/main",
         sha: workflowSha,
       },
       validationInputs: {
         ...publicationIntentInputs(source),
-        targetContextRef: scenario === "context" ? "release/2026.9.8" : "release/2026.9.9",
+        targetContextRef: "release/2026.9.9",
         allowUnreleasedChangelog: "false",
       },
     });
@@ -275,30 +292,89 @@ describe("full release validation evidence", () => {
     const run = () =>
       checkEvidence({
         manifest,
+        ...(recovery
+          ? {
+              run: releaseRun({
+                head_branch: branch,
+                name: "Full Release Receipt Recovery",
+                path: ".github/workflows/full-release-receipt-recovery.yml",
+              }),
+            }
+          : {}),
         getWorkflowSource: () =>
           'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n' +
-          (scenario === "new-publish-without-admission"
+          (scenario === "new-publish-without-admission" || recovery
             ? '  FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\n'
             : "") +
           (scenario === "missing-publication"
             ? '  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n'
             : ""),
-        expectedPublicationSelection: (): PublicationSelection => ({
-          ...selection,
-          route: scenario === "selection" ? "prepared" : "normal",
-          ...(scenario === "windows-after-admission"
-            ? {
-                windowsNodeTag: "v0.6.3",
-                windowsNodeInstallerDigests: {
-                  "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
-                },
-              }
-            : {}),
+        expectedReleaseTag: "v2026.9.9",
+        validateEvidenceReuseStrictly: () => ({
+          valid: true,
+          current: {
+            runId: scenario === "subset-wrong-origin" ? "124" : "123",
+            runAttempt: 2,
+            workflowRefProof:
+              scenario === "receipt-recovery" ? "receipt-backed-recovery-v1" : undefined,
+            targetSha,
+            conclusion: "success",
+            manifest:
+              scenario === "subset-tampered-evidence"
+                ? { ...manifest, targetSha: workflowSha }
+                : manifest,
+          },
         }),
+        expectedPublicationOperation:
+          scenario.startsWith("subset") || scenario.startsWith("plugins-only")
+            ? {
+                ...selection,
+                publishOpenclawNpm: scenario === "subset-core",
+                pluginPublishScope: scenario.startsWith("plugins-only")
+                  ? "all-publishable"
+                  : "selected",
+                plugins: scenario.startsWith("plugins-only")
+                  ? scenario === "plugins-only-roster"
+                    ? ["@openclaw/unknown"]
+                    : []
+                  : scenario === "subset-empty"
+                    ? []
+                    : scenario === "subset-outside-roster"
+                      ? ["@openclaw/unknown"]
+                      : scenario === "subset-duplicate"
+                        ? ["@openclaw/test", "@openclaw/test"]
+                        : ["@openclaw/test"],
+                route: scenario.endsWith("-route") ? "prepared" : "normal",
+                npmDistTag: scenario.endsWith("-channel") ? "beta" : "latest",
+                ...(scenario === "subset-windows" ? { windowsNodeTag: "v0.6.3" } : {}),
+              }
+            : undefined,
+        expectedPublicationSelection:
+          scenario.startsWith("subset") || scenario.startsWith("plugins-only")
+            ? undefined
+            : (): PublicationSelection => ({
+                ...selection,
+                route: scenario === "selection" ? "prepared" : "normal",
+                ...(scenario === "windows-after-admission"
+                  ? {
+                      windowsNodeTag: "v0.6.3",
+                      windowsNodeInstallerDigests: {
+                        "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+                      },
+                    }
+                  : {}),
+              }),
       });
     if (scenario === "windows-after-admission") {
       expect(run).toThrow("windows-node-release.yml");
-    } else if (scenario === "publish") {
+    } else if (scenario === "receipt-recovery-without-proof") {
+      expect(run).toThrow("Receipt recovery requires authenticated original qualification");
+    } else if (
+      scenario === "publish" ||
+      scenario === "subset" ||
+      scenario === "receipt-recovery" ||
+      scenario === "plugins-only"
+    ) {
       expect(run).not.toThrow();
     } else {
       expect(run).toThrow(
@@ -349,38 +425,22 @@ describe("full release validation evidence", () => {
     },
   );
 
-  it("normalizes REST and gh run metadata", () => {
-    const normalized = normalizeFullReleaseValidationRun(releaseRun());
-
-    expect(normalized).toMatchObject({
-      databaseId: "123",
-      runAttempt: 2,
-      workflowName: "Full Release Validation",
-      workflowPath: ".github/workflows/full-release-validation.yml",
-      repository: "openclaw/openclaw",
-      headBranch: pinnedBranch,
-      headSha: workflowSha,
-    });
-    expect(
-      normalizeFullReleaseValidationRun({
+  it("accepts gh metadata with a qualified workflow path and v4 evidence bound to current main", () => {
+    const { isTrustedMainAncestor, result } = validate(
+      {
+        id: undefined,
         databaseId: 123,
+        run_attempt: undefined,
         attempt: 2,
+        name: undefined,
         workflowName: "Full Release Validation",
-        workflowPath: ".github/workflows/full-release-validation.yml@refs/heads/main",
-      }),
-    ).toMatchObject({
-      databaseId: "123",
-      runAttempt: 2,
-      workflowPath: ".github/workflows/full-release-validation.yml",
-      workflowQualifiedRef: "refs/heads/main",
-    });
-  });
-
-  it("accepts v4 SHA-pinned evidence bound to current main", () => {
-    const { isTrustedMainAncestor, result } = validate({}, { version: 4 });
+        path: undefined,
+        workflowPath: `.github/workflows/full-release-validation.yml@${pinnedBranch}`,
+      },
+      { version: 4 },
+    );
     expect(result.source).toBe("sha-pinned-main");
     expect(isTrustedMainAncestor).toHaveBeenCalledWith(workflowSha);
-    expect(isShaPinnedReleaseValidationBranch(pinnedBranch)).toBe(true);
   });
 
   it.each([false, true])("accepts protected tooling evidence (historical: %s)", (historical) => {
@@ -429,13 +489,6 @@ describe("full release validation evidence", () => {
         isTrustedMainAncestor: () => !historical,
       }),
     ).toThrow(message);
-  });
-
-  it("accepts a REST workflow path qualified with release-ci/aaaaaaaaaaaa-1783705000000", () => {
-    const { result } = validate({
-      path: `.github/workflows/full-release-validation.yml@${pinnedBranch}`,
-    });
-    expect(result.source).toBe("sha-pinned-main");
   });
 
   it.each([
@@ -505,7 +558,10 @@ describe("full release validation evidence", () => {
   it.each([
     [undefined, "requires strict chain validation"],
     [
-      () => ({ ...strictEvidenceReuse(), conclusions: { allRequiredSucceeded: false } }),
+      () => ({
+        ...strictEvidenceReuse(),
+        current: { ...strictEvidenceReuse().current, conclusion: "failure" },
+      }),
       "failed strict chain validation",
     ],
   ] as const)(

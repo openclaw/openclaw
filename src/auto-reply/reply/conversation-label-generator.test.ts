@@ -37,6 +37,8 @@ const fallback = (
   overrides: Partial<Parameters<typeof generateConversationLabelWithFallback>[0]> = {},
 ) => generateConversationLabelWithFallback({ ...params, ...overrides });
 const attemptedModels = () => runIsolatedCompletion.mock.calls.map(([request]) => request.model);
+const attemptedRoutes = (...fields: string[]) =>
+  runIsolatedCompletion.mock.calls.map(([request]) => fields.map((field) => request[field]));
 const unavailable = () =>
   new FailoverError("Fixture server unavailable", { reason: "server_error" });
 function expectCompletion(request: Record<string, unknown>) {
@@ -88,8 +90,6 @@ describe("generateConversationLabel", () => {
       generate({
         cfg: modelConfig("openai/gpt-main", "openai/gpt-mini", ["openai/utility-backup"]),
         agentId: "main",
-        userMessage: "Plan a garden.",
-        prompt: "Generate a label.",
       }),
     ).resolves.toBe("Garden planning");
     expect(attemptedModels()).toEqual(["gpt-mini", "utility-backup"]);
@@ -139,7 +139,6 @@ describe("generateConversationLabel", () => {
   ])(
     "keeps the utility label on its selected runtime ($primary, session=$sessionRuntime)",
     async ({ primary, sessionRuntime }) => {
-      const utilityModel = "anthropic/claude-haiku";
       const cfg = {
         agents: {
           defaults: {
@@ -164,11 +163,9 @@ describe("generateConversationLabel", () => {
           ...baseParams,
           cfg,
           agentId: "main",
-          utilityModelRef: utilityModel,
+          utilityModelRef: "anthropic/claude-haiku",
           regularModelRef: `anthropic/${primary}`,
           agentHarnessRuntimeOverride: sessionRuntime,
-          prompt: "Return a session title.",
-          userMessage: "Plan a garden.",
         }),
       );
       expectCompletion({
@@ -234,7 +231,29 @@ describe("generateConversationLabelWithFallback", () => {
     expect(attemptedModels()).toEqual(["gpt-mini", "gpt-main"]);
   });
 
-  it.each(["utility backup", "regular model", "exhausted"] as const)(
+  it("re-runs the regular model with the session runtime override after a utility attempt without it", async () => {
+    runIsolatedCompletion.mockImplementation(
+      async (request: { model?: string; agentHarnessRuntimeOverride?: string }) => {
+        if (request.model === "gpt-main" && request.agentHarnessRuntimeOverride === "codex") {
+          return { text: "Runtime recovery label" };
+        }
+        throw unavailable();
+      },
+    );
+    await expect(
+      fallback({
+        cfg: modelConfig(undefined, "openai/gpt-mini", ["openai/gpt-main"]),
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).resolves.toBe("Runtime recovery label");
+    expect(attemptedRoutes("model", "agentHarnessRuntimeOverride")).toEqual([
+      ["gpt-mini", "codex"],
+      ["gpt-main", undefined],
+      ["gpt-main", "codex"],
+    ]);
+  });
+
+  it.each(["regular model", "exhausted"] as const)(
     "uses the utility chain before the existing label recovery: %s",
     async (outcome) => {
       const cfg = modelConfig(
@@ -243,10 +262,7 @@ describe("generateConversationLabelWithFallback", () => {
         ["label-test/utility-backup"],
       );
       runIsolatedCompletion.mockImplementation(async ({ model }) => {
-        if (
-          (model === "utility-backup" && outcome === "utility backup") ||
-          (model === "main" && outcome === "regular model")
-        ) {
+        if (model === "main" && outcome === "regular model") {
           return { text: "Garden planning" };
         }
         throw unavailable();
@@ -263,11 +279,7 @@ describe("generateConversationLabelWithFallback", () => {
       } else {
         await expect(label).resolves.toBe("Garden planning");
       }
-      expect(attemptedModels()).toEqual(
-        outcome === "utility backup"
-          ? ["utility", "utility-backup"]
-          : ["utility", "utility-backup", "main"],
-      );
+      expect(attemptedModels()).toEqual(["utility", "utility-backup", "main"]);
     },
   );
 
@@ -275,13 +287,11 @@ describe("generateConversationLabelWithFallback", () => {
     const cfg = {
       agents: {
         entries: { main: {} },
-        defaults: {
-          model: "label-test/regular",
-          utilityModel: {
-            primary: "label-test/utility",
-            fallbacks: hasFallback ? ["label-test/backup"] : [],
-          },
-        },
+        defaults: modelConfig(
+          "label-test/regular",
+          "label-test/utility",
+          hasFallback ? ["label-test/backup"] : [],
+        ).agents.defaults,
       },
     };
     const operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -338,13 +348,7 @@ describe("generateConversationLabelWithFallback", () => {
     await expect(
       fallback({ utilityModelRef: row.utilityModelRef, agentHarnessRuntimeOverride: "codex" }),
     ).resolves.toBe("Primary title");
-    expect(
-      runIsolatedCompletion.mock.calls.map(([request]) => [
-        request.provider,
-        request.agentHarnessRuntimeOverride,
-        request.authProfileId,
-      ]),
-    ).toEqual([
+    expect(attemptedRoutes("provider", "agentHarnessRuntimeOverride", "authProfileId")).toEqual([
       [row.provider, row.runtime, row.profile],
       ["openai", "codex", "work"],
     ]);

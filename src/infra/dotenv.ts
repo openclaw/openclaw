@@ -135,6 +135,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "APPDATA",
   "LOCALAPPDATA",
   "MATTERMOST_URL",
+  "MISE_DATA_DIR",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "NPM_CONFIG_PREFIX",
@@ -152,7 +153,6 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_ACCOUNT_ID",
   "AWS_ACCOUNT_ID_ENDPOINT_MODE",
   "AWS_BEARER_TOKEN_BEDROCK",
-  "AWS_BEDROCK_SKIP_AUTH",
   "AWS_CONFIG_FILE",
   "AWS_CREDENTIAL_EXPIRATION",
   "AWS_CREDENTIAL_SCOPE",
@@ -170,13 +170,13 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_WEB_IDENTITY_TOKEN_FILE",
   "BUZZ_RELAY_URL",
   "SMS_ALLOWED_USERS",
-  "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
   "SMS_PUBLIC_WEBHOOK_URL",
   "SLACK_API_URL",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_ALLOWED_USER_IDS",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
+  "XDG_BIN_HOME",
   "ZALO_API_URL",
 ]);
 
@@ -247,10 +247,7 @@ function shouldBlockWorkspaceStaticDotEnvKey(key: string): boolean {
   );
 }
 
-export function loadWorkspaceDotEnvFile(
-  filePath: string,
-  opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv },
-) {
+export function loadWorkspaceDotEnvFile(filePath: string, opts?: { env?: NodeJS.ProcessEnv }) {
   const env = opts?.env ?? process.env;
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
@@ -264,7 +261,6 @@ export function loadWorkspaceDotEnvFile(
     entryFilter: (key) =>
       !shouldBlockWorkspaceStaticDotEnvKey(key) &&
       !getProviderAuthBlockedKeys().has(key.toUpperCase()),
-    quiet: opts?.quiet ?? true,
   });
   if (!parsed) {
     return;
@@ -281,12 +277,11 @@ export function loadWorkspaceDotEnvFile(
 
 async function loadWorkspaceDotEnvFileAsync(
   filePath: string,
-  opts: { env: NodeJS.ProcessEnv; quiet?: boolean },
+  opts: { env: NodeJS.ProcessEnv },
 ): Promise<void> {
   const parsed = await readDotEnvFileAsync({
     filePath,
     entryFilter: (key) => !shouldBlockWorkspaceStaticDotEnvKey(key),
-    quiet: opts.quiet ?? true,
   });
   if (!parsed?.entries.length) {
     return;
@@ -308,28 +303,25 @@ async function loadWorkspaceDotEnvFileAsync(
 
 export async function loadDotEnvAsync(opts: {
   env: NodeJS.ProcessEnv;
-  quiet?: boolean;
   cwd?: string;
 }): Promise<void> {
-  const quiet = opts.quiet ?? true;
   const cwd = Object.hasOwn(opts, "cwd") ? opts.cwd : tryProcessCwd();
   if (cwd) {
-    await loadWorkspaceDotEnvFileAsync(path.join(cwd, ".env"), { env: opts.env, quiet });
+    await loadWorkspaceDotEnvFileAsync(path.join(cwd, ".env"), { env: opts.env });
   }
-  await loadGlobalRuntimeDotEnvFilesAsync({ env: opts.env, quiet });
+  await loadGlobalRuntimeDotEnvFilesAsync({ env: opts.env });
 }
 
 export { loadGlobalRuntimeDotEnvFiles };
 
-export function loadDotEnv(opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv }) {
-  const quiet = opts?.quiet ?? true;
+export function loadDotEnv(opts?: { env?: NodeJS.ProcessEnv }) {
   const env = opts?.env ?? process.env;
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet, env });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { env });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  loadGlobalRuntimeDotEnvFiles({ quiet, env });
+  loadGlobalRuntimeDotEnvFiles({ env });
 }

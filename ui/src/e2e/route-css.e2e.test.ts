@@ -82,26 +82,20 @@ suite.define(() => {
         "skills",
         page.getByRole("searchbox", { name: "Search skills", exact: true }),
       );
-
-      expect(
-        await probeStyles(
-          page,
-          `
-          <h2>Heading</h2>
-          <ul><li class="task-list-item">Task</li></ul>
-          <pre><code>code</code></pre>
-          <table><tbody><tr><td>Cell</td></tr></tbody></table>
-        `,
-          [
-            ["h2", "border-bottom-style"],
-            ["pre", "overflow-x"],
-            ["table", "display"],
-            [".task-list-item", "list-style-type"],
-          ],
-          "sidebar-markdown",
-          "article",
-        ),
-      ).toEqual(["solid", "auto", "block", "none"]);
+      const skillStyles = await probeStyles(
+        page,
+        '<h2>Heading</h2><ul><li class="task-list-item">Task</li></ul>' +
+          "<pre><code>code</code></pre><table><tbody><tr><td>Cell</td></tr></tbody></table>",
+        [
+          ["h2", "border-bottom-style"],
+          ["pre", "overflow-x"],
+          ["table", "display"],
+          [".task-list-item", "list-style-type"],
+        ],
+        "sidebar-markdown",
+        "article",
+      );
+      expect(skillStyles).toEqual(["solid", "auto", "block", "none"]);
 
       await openRoute("chat?session=main", page.locator("openclaw-chat-page"));
 
@@ -112,10 +106,8 @@ suite.define(() => {
         probe.innerHTML = `
           <ol class="probe-list"><li>First</li></ol>
           <blockquote class="probe-quote"><p>Quoted block</p></blockquote>
-          <table>
-            <thead><tr><th>Dimension</th><th>Sentiment signal</th></tr></thead>
-            <tbody><tr><td>Demographics</td><td>Experience-dependent sentiment.</td></tr></tbody>
-          </table>
+          <table><thead><tr><th>Dimension</th><th>Sentiment signal</th></tr></thead>
+          <tbody><tr><td>Demographics</td><td>Experience-dependent sentiment.</td></tr></tbody></table>
           <p class="probe-table-copy"><strong>Overall characterization:</strong> Pragmatic adoption under suspicion.</p>
           <ul class="probe-task-list"><li class="task-list-item"><input class="task-list-item-checkbox" type="checkbox" disabled /> Task</li></ul>
           <details class="probe-details"><summary>More details</summary><p>Body</p></details>
@@ -125,28 +117,28 @@ suite.define(() => {
         document.body.append(probe);
         const element = (selector: string) => probe.querySelector(selector)!;
         const dimension = element("th:first-child");
-        const gap = (before: string, after: string) =>
-          element(after).getBoundingClientRect().top -
-          element(before).getBoundingClientRect().bottom;
-        const margin = (selector: string) =>
-          Number.parseFloat(getComputedStyle(element(selector)).marginTop);
         const lineCount = (target: Element) => {
           const range = document.createRange();
           range.selectNodeContents(target);
           return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size;
         };
         const fontSize = Number.parseFloat(getComputedStyle(element(".probe-table-copy")).fontSize);
+        const adjacent = [
+          [".probe-list", ".probe-quote"],
+          ["table", ".probe-table-copy"],
+          [".probe-task-list", ".probe-details"],
+          [".probe-unordered", ".probe-ordered"],
+        ] as const;
         const result = {
           lines: [lineCount(dimension), lineCount(element("td:first-child"))],
           firstColumnWidth: dimension.getBoundingClientRect().width,
-          gaps: [
-            gap(".probe-list", ".probe-quote"),
-            gap("table", ".probe-table-copy"),
-            gap(".probe-task-list", ".probe-details"),
-            gap(".probe-unordered", ".probe-ordered"),
-          ],
-          margins: [".probe-quote", ".probe-table-copy", ".probe-details", ".probe-ordered"].map(
-            (selector) => margin(selector) / fontSize,
+          gaps: adjacent.map(
+            ([before, after]) =>
+              element(after).getBoundingClientRect().top -
+              element(before).getBoundingClientRect().bottom,
+          ),
+          margins: adjacent.map(
+            ([, after]) => Number.parseFloat(getComputedStyle(element(after)).marginTop) / fontSize,
           ),
         };
         probe.remove();

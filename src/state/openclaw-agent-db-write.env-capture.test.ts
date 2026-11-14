@@ -73,17 +73,20 @@ vi.mock("./openclaw-agent-execution.js", () => ({
 vi.mock("./openclaw-agent-write-admission.js", () => ({
   runOpenClawAgentWriteAdmission: boundary.admit,
 }));
+// mock-isolation: Admission uses the fixture's pending-open cache without real lifecycle state.
 vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   agentDatabaseLifecycle: boundary.cache,
-  retainAgentDatabase: vi.fn(() => vi.fn()),
 }));
+// mock-isolation: Synthetic admission owns the handle; this fixture observes borrow release only.
+vi.mock("./openclaw-agent-db-borrower.js", () => ({ retainAgentDatabase: vi.fn(() => vi.fn()) }));
 // mock-isolation: The fixture supplies database admission without opening operator databases.
 vi.mock("./agent-database-admission.js", () => ({ assertAgentDatabaseAdmitted: vi.fn() }));
 vi.mock("./agent-deletion-cleanup.js", () => ({
   assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
   getAgentDeletionDatabaseCleanup: () => undefined,
 }));
-vi.mock("./openclaw-state-db-async-lifecycle.js", () => ({
+vi.mock("./openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-async-lifecycle.js")>()),
   getOpenClawDatabaseMaintenanceScope: () => undefined,
   observeOpenClawDatabaseMaintenanceResource: vi.fn(),
 }));

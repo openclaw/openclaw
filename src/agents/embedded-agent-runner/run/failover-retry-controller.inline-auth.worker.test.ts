@@ -1,5 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../../test/helpers/sqlite-worker-fault.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
@@ -40,7 +41,7 @@ import {
 } from "../../auth-profiles/store-runtime.js";
 import { withAuthProfileStoreAgentDir } from "../../auth-profiles/store.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
-import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { createRetryController } from "./failover-retry-controller.test-support.js";
 
 const saveStore = (store: AuthProfileStore, agentDir?: string) =>
   saveAuthProfileStore(store, agentDir, {
@@ -101,19 +102,52 @@ async function withoutHostSql(
     sql.restore();
   }
 }
-async function holdAdmission(
-  options: Parameters<typeof admission.runOpenClawAgentWriteAdmission>[0] & { path: string },
-  run = () => {},
+async function withQueuedFailure(
+  f: Fixture,
+  run: (pending: Promise<void>, release: () => void) => Promise<void>,
+  earlier = () => {},
 ) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const held = admission.runOpenClawAgentWriteAdmission(options, async () => {
-    entered.resolve();
-    await release.promise;
-    run();
-  });
+  const queued = createDeferredCore();
+  const held = admission.runOpenClawAgentWriteAdmission(
+    { agentId: "voice", path: f.database.path, env: f.state.env },
+    async () => {
+      entered.resolve();
+      await release.promise;
+      earlier();
+    },
+  );
   await entered.promise;
-  return { held, release, observation: observeAdmission(options.path) };
+  const original = admission.runOpenClawAgentWriteAdmission;
+  const spy = vi
+    .spyOn(admission, "runOpenClawAgentWriteAdmission")
+    .mockImplementation((...args) => {
+      const result = original(...args);
+      if (args[0].path === f.database.path) {
+        queued.resolve();
+      }
+      return result;
+    });
+  let settled = false;
+  const pending = f.fail().finally(() => {
+    settled = true;
+  });
+  void pending.catch(() => {});
+  try {
+    await awaitGateBeforeSettlement(
+      queued.promise,
+      pending,
+      "Inline health settled before admission",
+    );
+    spy.mockRestore();
+    expect(settled).toBe(false);
+    await run(pending, release.resolve);
+  } finally {
+    spy.mockRestore();
+    release.resolve();
+    await Promise.allSettled([held, pending]);
+  }
 }
 
 type Owner = "local-agent" | "legacy-main" | "main-with-shared-base";
@@ -135,35 +169,6 @@ afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   clearRuntimeConfigSnapshot();
 });
-
-function observeAdmission(path: string) {
-  const queued = createDeferredCore();
-  const original = admission.runOpenClawAgentWriteAdmission;
-  const spy = vi
-    .spyOn(admission, "runOpenClawAgentWriteAdmission")
-    .mockImplementation((...args) => {
-      const result = original(...args);
-      if (args[0].path === path) {
-        queued.resolve();
-      }
-      return result;
-    });
-  return {
-    async wait(operation: Promise<void>) {
-      try {
-        await Promise.race([
-          queued.promise,
-          operation.then(() => {
-            throw new Error("Inline health mutation settled before agent write admission");
-          }),
-        ]);
-      } finally {
-        spy.mockRestore();
-      }
-    },
-    restore: () => spy.mockRestore(),
-  };
-}
 
 async function fixture(state: OpenClawTestState, owner: Owner = "local-agent", empty = false) {
   const config = {
@@ -268,22 +273,10 @@ async function fixture(state: OpenClawTestState, owner: Owner = "local-agent", e
     setRuntimeAuthProfileStoreSnapshot(runtime, childDir);
     derived = { agentDir: childDir, durable: child, profiles: structuredClone(runtime.profiles) };
   }
-  const controller = createEmbeddedRunFailoverRetryController({
-    runInput: {
-      runParams: {
-        runId: "inline-auth-failure-run",
-        sessionId: "inline-auth-failure-session",
-        sessionFile: state.path("synthetic-session.jsonl"),
-        workspaceDir: state.workspaceDir,
-        prompt: "synthetic inline-key failure",
-        timeoutMs: 60_000,
-        config,
-      },
-      globalLane: "inline-auth-failure-test",
-      agentDir,
-      fallbackConfigured: false,
-    },
-    preparedRuntime: {
+  const controller = createRetryController({
+    agentDir,
+    runParams: { workspaceDir: state.workspaceDir, config },
+    runtime: {
       provider,
       modelId: "synthetic-model",
       profileFailureStore: store,
@@ -296,9 +289,7 @@ async function fixture(state: OpenClawTestState, owner: Owner = "local-agent", e
         mode: "api-key",
         source: "models.json",
       }),
-      advanceAttemptAuthProfile: async () => false,
     },
-    getSessionId: () => "inline-auth-failure-session",
   });
   const fail = (reason: "auth" | "timeout" = "auth") =>
     controller.maybeMarkAuthProfileFailure({ reason });
@@ -375,66 +366,51 @@ it("rejects a real inline-health write failure without publishing caller or runt
   }));
 
 it("rereads durable inline health in FIFO order and publishes before the next admitted reader", () =>
-  withFixture(async ({ state, agentDir, initial, store, database, fail }) => {
+  withFixture(async (f) => {
+    const { state, agentDir, initial, store, database } = f;
     const options = { agentId: "voice", path: database.path, env: state.env };
-    const {
-      held: earlier,
-      release,
-      observation,
-    } = await holdAdmission(options, () => {
-      saveStore(withHealth(initial, 7), agentDir);
-    });
-    let settled = false;
-    const update = fail().finally(() => {
-      settled = true;
-    });
-    void update.catch(() => {});
-    let following: Promise<unknown> | undefined;
-    try {
-      await observation.wait(update);
-      expect(settled).toBe(false);
-      expect(loadPersistedAuthProfileStore(agentDir)?.usageStats?.[usageId]?.errorCount).toBe(2);
-      expect(store.usageStats?.[usageId]?.errorCount).toBe(99);
-      following = admission.runOpenClawAgentWriteAdmission(options, () => ({
-        durable: loadPersistedAuthProfileStore(agentDir)?.usageStats,
-        runtime: getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats,
-      }));
-      release.resolve();
-      await earlier;
-      await update;
-      const persisted = loadPersistedAuthProfileStore(agentDir);
-      expectHealthCount(persisted, 8);
-      expect(store.usageStats).toEqual(persisted?.usageStats);
-      await expect(following).resolves.toEqual({
-        durable: persisted?.usageStats,
-        runtime: persisted?.usageStats,
-      });
-      expect(credentials(persisted)).toEqual(credentials(initial));
-      expect(persisted?.usageStats?.[siblingId]).toEqual(initial.usageStats?.[siblingId]);
-    } finally {
-      observation.restore();
-      release.resolve();
-      await Promise.allSettled([earlier, update, following]);
-    }
+    await withQueuedFailure(
+      f,
+      async (update, release) => {
+        expect(loadPersistedAuthProfileStore(agentDir)?.usageStats?.[usageId]?.errorCount).toBe(2);
+        expect(store.usageStats?.[usageId]?.errorCount).toBe(99);
+        const following = admission.runOpenClawAgentWriteAdmission(options, () => ({
+          durable: loadPersistedAuthProfileStore(agentDir)?.usageStats,
+          runtime: getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats,
+        }));
+        release();
+        try {
+          await update;
+          const persisted = loadPersistedAuthProfileStore(agentDir);
+          expectHealthCount(persisted, 8);
+          expect(store.usageStats).toEqual(persisted?.usageStats);
+          await expect(following).resolves.toEqual({
+            durable: persisted?.usageStats,
+            runtime: persisted?.usageStats,
+          });
+          expect(credentials(persisted)).toEqual(credentials(initial));
+          expect(persisted?.usageStats?.[siblingId]).toEqual(initial.usageStats?.[siblingId]);
+        } finally {
+          await Promise.allSettled([following]);
+        }
+      },
+      () => saveStore(withHealth(initial, 7), agentDir),
+    );
   }));
 
 it.each(["agent", "root"] as const)(
   "rejects inline health when its exact %s owner closes while admission is queued",
   (scope) =>
-    withFixture(async ({ state, agentDir, store, database, fail }) => {
-      const options = { agentId: "voice", path: database.path, env: state.env };
+    withFixture(async (f) => {
+      const { state, agentDir, store, database } = f;
       const before = healthState(agentDir, structuredClone(store));
-      const { held, release, observation } = await holdAdmission(options);
-      const update = fail();
-      void update.catch(() => {});
-      try {
-        await observation.wait(update);
+      await withQueuedFailure(f, async (update, release) => {
         if (scope === "agent") {
           closeOpenClawAgentDatabaseByPath(database.path, "voice");
         } else {
           closeOpenClawAgentDatabases(state.stateDir);
         }
-        release.resolve();
+        release();
         const error: unknown = await update.then(
           () => undefined,
           (failure: unknown) => failure,
@@ -447,18 +423,16 @@ it.each(["agent", "root"] as const)(
               candidate.message === "Agent database execution admission is closed",
           ),
         ).toBe(true);
-        expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+        expect(
+          getOpenClawAgentDatabaseIfOpen({ agentId: "voice", path: database.path, env: state.env }),
+        ).toBeUndefined();
         expect(store).toEqual(before.caller);
         const retainedRuntime = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
         if (retainedRuntime) {
           expect(retainedRuntime).toEqual(before.runtime);
         }
         expect(loadPersistedAuthProfileStore(agentDir)).toEqual(before.durable);
-      } finally {
-        observation.restore();
-        release.resolve();
-        await Promise.allSettled([held, update]);
-      }
+      });
     }),
 );
 

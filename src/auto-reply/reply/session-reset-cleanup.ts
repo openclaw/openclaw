@@ -1,5 +1,5 @@
 import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
-import { clearEmbeddedSessionForkSnapshot } from "../../agents/embedded-agent-runner/session-fork.js";
+import { clearPromptCacheObservations } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
@@ -18,11 +18,16 @@ import {
   normalizeOptionalAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { clearSessionLifecycleQueues } from "./queue/cleanup.js";
 import {
-  clearReplyRunForResetBySessionId,
-  resolveActiveReplyOperationForSessionId,
-} from "./reply-run-registry.js";
+  getSessionControllerOperation,
+  stopReplyOperationForRestart,
+} from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { isReplyOperationPreBackendPhase } from "../../sessions/session-controller.state.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 
 export class SessionResetCleanupError extends Error {}
 
@@ -91,8 +96,11 @@ export async function prepareSessionResetCleanupGuard(params: {
 
 /** Reset must report unfinished child cleanup before committing a fresh conversation. */
 export async function stopSessionResetSubagents(
-  params: Parameters<typeof killSessionSubagentRuns>[0] & { assertCurrent: () => void },
-): Promise<void> {
+  params: Parameters<typeof killSessionSubagentRuns>[0] & {
+    assertCurrent: () => void;
+    beforeKill?: () => boolean | Promise<boolean>;
+  },
+): Promise<{ stopped: number; failed: number }> {
   try {
     // Hooks and child finalizers can yield after reset accepted its parent. Fence
     // that incarnation before selection and at every child cancellation boundary.
@@ -102,6 +110,7 @@ export async function stopSessionResetSubagents(
     if (result.status === "error") {
       throw new Error(result.error);
     }
+    return { stopped: result.killed, failed: 0 };
   } catch (cause) {
     if (cause instanceof SessionResetCleanupError) {
       throw cause;
@@ -115,6 +124,7 @@ export async function stopSessionResetSubagents(
 
 export function clearCommittedSessionResetRuntimeState(params: {
   previousSessionEntry: Pick<SessionEntry, "sessionId"> | undefined;
+  storePath: string;
   agentId: string;
   sessionKey: string;
   signal?: AbortSignal;
@@ -126,6 +136,12 @@ export function clearCommittedSessionResetRuntimeState(params: {
   try {
     clearSessionResetRuntimeState([params.sessionKey, params.previousSessionEntry.sessionId], {
       activeReplySessionId: params.previousSessionEntry.sessionId,
+      controllerTarget: captureSessionTarget({
+        storeScope: params.storePath,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        incarnation: params.previousSessionEntry.sessionId,
+      }),
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       assertCurrent: () => params.signal?.throwIfAborted(),
@@ -140,6 +156,7 @@ export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
   opts: {
     agentId: string;
+    controllerTarget?: SessionTarget;
     sessionKey: string;
     activeReplySessionId?: string;
     assertCurrent: () => void;
@@ -149,16 +166,10 @@ export function clearSessionResetRuntimeState(
   clearEmbeddedSessionPromptStates([opts.activeReplySessionId]);
   clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
   if (opts.activeReplySessionId) {
-    clearEmbeddedSessionForkSnapshot(opts.activeReplySessionId);
+    clearPromptCacheObservations(opts.activeReplySessionId);
   }
-  const cleared = clearSessionLifecycleQueues({
-    keys,
-    agentId: opts.agentId,
-    sessionKey: opts.sessionKey,
-    sessionId: opts.activeReplySessionId,
-    assertCurrent: opts.assertCurrent,
-  });
-  for (const key of cleared.keys) {
+  const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
+  for (const key of cleared) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;
     if (owner && owner !== normalizeAgentId(opts.agentId)) {
@@ -170,20 +181,23 @@ export function clearSessionResetRuntimeState(
 
   if (opts.activeReplySessionId) {
     opts.assertCurrent();
-    const operation = resolveActiveReplyOperationForSessionId(opts.activeReplySessionId);
+    const operation = getSessionControllerOperation(opts.sessionKey, opts.controllerTarget);
     const ownerAgentId =
       normalizeOptionalAgentId(operation?.agentId) ?? parseAgentSessionKey(operation?.key)?.agentId;
     if (
       operation &&
       ownerAgentId === normalizeAgentId(opts.agentId) &&
       operation.sessionId === opts.activeReplySessionId &&
-      cleared.keys.some(
+      cleared.some(
         (key) =>
           key !== opts.activeReplySessionId &&
           agentSessionKeysMatchByRequestKey(operation.key, key),
       )
     ) {
-      clearReplyRunForResetBySessionId(opts.activeReplySessionId);
+      if (!isReplyOperationPreBackendPhase(operation.phase)) {
+        opts.assertCurrent();
+        stopReplyOperationForRestart(operation);
+      }
     }
   }
 }

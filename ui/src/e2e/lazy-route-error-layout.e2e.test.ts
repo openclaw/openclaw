@@ -49,7 +49,7 @@ suite.define(() => {
           );
 
           const error = page.locator(".lazy-view-error");
-          await error.getByText("Panel failed to load", { exact: true }).waitFor();
+          await error.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
           expect(await error.getByText(gatewayError, { exact: true }).isVisible()).toBe(false);
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({

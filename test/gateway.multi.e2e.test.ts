@@ -133,6 +133,7 @@ describe("gateway multi-instance e2e", () => {
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const model = buildMockOpenAiResponsesProvider("http://127.0.0.1:9/v1", "scheduler-canary");
+      const profileId = `${model.providerId}:cron-passive-manager`;
       const manager = await createOpenClawTestInstance({
         name: "cron-passive-manager",
         config: {
@@ -160,9 +161,9 @@ describe("gateway multi-instance e2e", () => {
           await manager.state.writeAuthProfiles({
             version: 1,
             profiles: {
-              "openai:cron-passive-manager": {
+              [profileId]: {
                 type: "api_key",
-                provider: "openai",
+                provider: model.providerId,
                 key: "synthetic-cron-scheduler-key",
               },
             },
@@ -177,7 +178,7 @@ describe("gateway multi-instance e2e", () => {
             wakeMode: "now",
             payload: {
               kind: "agentTurn",
-              model: "openai/gpt-4.1@openai:cron-passive-manager",
+              model: `${model.modelRef}@${profileId}`,
               message: "run canary",
               toolsAllow: [],
             },
@@ -284,7 +285,13 @@ try {
           });
           await instance.startGateway();
           const nodeIdentity = loadOrCreateDeviceIdentity({
-            path: path.join(instance.homeDir, "proof-node-device.sqlite"),
+            path: path.join(
+              instance.homeDir,
+              "proof-clients",
+              "node",
+              "client",
+              "credentials.sqlite",
+            ),
           });
           const nodeId = nodeIdentity.deviceId;
           node = await connectProofClient(instance, {
@@ -326,7 +333,13 @@ try {
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
             deviceIdentity: loadOrCreateDeviceIdentity({
-              path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
+              path: path.join(
+                instance.homeDir,
+                "proof-clients",
+                "operator",
+                "client",
+                "credentials.sqlite",
+              ),
             }),
           });
           const pairing = await operator.request<{

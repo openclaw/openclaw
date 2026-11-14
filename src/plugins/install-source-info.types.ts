@@ -12,12 +12,6 @@ export type PluginInstallSourceWarning =
   | "npm-spec-missing-integrity"
   | "npm-spec-package-name-mismatch";
 
-type PluginInstallNpmPinState =
-  | "exact-with-integrity"
-  | "exact-without-integrity"
-  | "floating-with-integrity"
-  | "floating-without-integrity";
-
 export type PluginInstallNpmSourceInfo = {
   spec: string;
   packageName: string;
@@ -26,7 +20,11 @@ export type PluginInstallNpmSourceInfo = {
   selectorKind: ParsedRegistryNpmSpec["selectorKind"];
   exactVersion: boolean;
   expectedIntegrity?: string;
-  pinState: PluginInstallNpmPinState;
+  pinState:
+    | "exact-with-integrity"
+    | "exact-without-integrity"
+    | "floating-with-integrity"
+    | "floating-without-integrity";
 };
 
 export type PluginInstallClawHubSourceInfo = {

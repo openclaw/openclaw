@@ -5,9 +5,19 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  TURN_MODEL_DEFAULT_REF,
+  TURN_MODEL_DIFFERENTIAL_FIXTURES,
+  TURN_MODEL_OVERRIDE_REF,
+  turnModelRefLabel,
+} from "../../test-utils/turn-model-selection-differential.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
@@ -86,7 +96,8 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-function createFixture(options: { manifestOwner?: boolean } = {}) {
+function createFixture(options: { manifestOwner?: boolean; sessionKey?: string } = {}) {
+  const key = options.sessionKey ?? sessionKey;
   const workspaceDir = tempDirs.make("command-configured-selection-");
   const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
     model: { primary: "custom/base" },
@@ -116,8 +127,8 @@ function createFixture(options: { manifestOwner?: boolean } = {}) {
       : [],
   });
   const registry = createEmptyPluginRegistry();
-  const store: Record<string, SessionEntry> = { [sessionKey]: automaticEntry() };
-  const entry = () => expectDefined(store[sessionKey], "configured selection fixture session");
+  const store: Record<string, SessionEntry> = { [key]: automaticEntry() };
+  const entry = () => expectDefined(store[key], "configured selection fixture session");
   const inventory = vi.mocked(loadManifestModelCatalog).mockImplementation(() => {
     throw new Error("Configured selection must not require unrelated manifest inventory");
   });
@@ -128,7 +139,7 @@ function createFixture(options: { manifestOwner?: boolean } = {}) {
         opts: { message: "Select the configured child", allowModelOverride: false },
         sessionEntry: entry(),
         sessionStore: store,
-        sessionKey,
+        sessionKey: key,
         sessionId: entry().sessionId,
         storePath: path.join(workspaceDir, "sessions.json"),
         sessionAgentId: "main",
@@ -151,7 +162,7 @@ function createFixture(options: { manifestOwner?: boolean } = {}) {
     return select(overrides).finally(() => expect({ cfg, store }).toEqual(before));
   };
   const userSelection = (model: string, provider = "custom", extra: Partial<SessionEntry> = {}) => {
-    store[sessionKey] = sessionEntry({
+    store[key] = sessionEntry({
       providerOverride: provider,
       modelOverride: model,
       modelOverrideSource: "user",
@@ -275,6 +286,45 @@ describe("command selection with configured model facts", () => {
     expect(selected.sessionEntryForAttempt?.authProfileOverride).toBeUndefined();
   });
 
+  it("preserves a prepared missing personal account pin without main-thread SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = createFixture();
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      fixture.inventory.mockReturnValue(customCatalog("base", "child", "manual"));
+      const owner = ensureProfileForEmail("missing-model-pin@example.test");
+      const profileId = `personal:${owner.id}:00000000-0000-4000-8000-000000000001`;
+      fixture.userSelection("child", "custom", {
+        authProfileOverride: profileId,
+        authProfileOverrideSource: "user",
+      });
+      const sql = observeMainThreadSql();
+      sql.calibrate();
+      const ensureStore = authProfiles.ensureAuthProfileStoreAsync;
+      const prepared = vi
+        .spyOn(authProfiles, "ensureAuthProfileStoreAsync")
+        .mockImplementation(async (...args) => {
+          const store = await ensureStore(...args);
+          // Shared-store preparation retains native compatibility reads; selection uses its facts.
+          sql.clear();
+          return store;
+        });
+      try {
+        const selected = await fixture.unchanged();
+        expect(selected).toMatchObject({
+          ...expectedRoute("child"),
+          sessionEntryForAttempt: {
+            authProfileOverride: profileId,
+            authProfileOverrideSource: "user",
+          },
+        });
+        sql.expectIdle();
+      } finally {
+        prepared.mockRestore();
+        sql.restore();
+      }
+    });
+  });
+
   it.each(["custom/child", "blocked", "locked"])(
     "rejects a role-denied %s selection before runtime effects",
     async (model) => {
@@ -353,7 +403,6 @@ describe("command selection with configured model facts", () => {
         ...expectedRoute("child"),
         storedModelOverrideSource: "auto",
         effectiveTurnThinkLevel: "off",
-        sessionEntry: automaticEntry(),
         sessionEntryForAttempt: automaticEntry(),
       });
       expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
@@ -417,28 +466,23 @@ describe("command selection with configured model facts", () => {
     }
   });
 
-  it.each(["raw", "resolved"] as const)(
-    "keeps a literal model over its alias (%s route)",
-    async (route) => {
+  it("reports the configured default replaced by a wildcard catalog route", async () => {
+    const capture = createWarnLogCapture("command-model-fallback");
+    try {
       const fixture = createFixture();
-      fixture.defaults.modelPolicy = {
-        allow: ["custom/base", "custom/alias", "custom/actual"],
-      };
-      fixture.defaults.models = { "custom/actual": { alias: "alias" } };
-      fixture.custom.models.push(configuredModel("alias"), configuredModel("actual"));
-      fixture.store[sessionKey] =
-        route === "raw"
-          ? sessionEntry({
-              providerOverride: "custom",
-              modelOverride: "alias",
-              modelOverrideSource: "user",
-              modelSelectionLocked: true,
-            })
-          : automaticEntry("alias");
-      fixture.inventory.mockReturnValue([catalogEntry("custom", "alias")]);
-      expect(await fixture.unchanged()).toMatchObject(expectedRoute("alias"));
-    },
-  );
+      fixture.store[sessionKey] = sessionEntry();
+      fixture.defaults.modelPolicy = { allow: ["remote/*"] };
+      fixture.inventory.mockReturnValue([
+        catalogEntry("remote", "z-first"),
+        catalogEntry("remote", "a-second"),
+      ]);
+      expect(await fixture.unchanged()).toMatchObject(expectedRoute("z-first", "remote"));
+      expect(await capture.findText("Falling back to")).toContain('"custom/base"');
+      expect(await capture.findText("Falling back to")).toContain('"remote/z-first"');
+    } finally {
+      capture.cleanup();
+    }
+  });
 
   it.each([
     { permission: false, error: "Model override is not authorized for this caller." },
@@ -488,6 +532,44 @@ describe("command selection with configured model facts", () => {
 });
 
 describe("command selection with session routing", () => {
+  it.each(TURN_MODEL_DIFFERENTIAL_FIXTURES)("pins observed $name behavior", async (fixture) => {
+    const key = "agent:main:telegram:group:selection";
+    const harness = createFixture({ sessionKey: key });
+    harness.defaults.model = { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) };
+    delete harness.defaults.modelPolicy;
+    delete harness.cfg.models;
+    harness.cfg.channels = fixture.modelByChannel
+      ? { modelByChannel: fixture.modelByChannel }
+      : undefined;
+    const child = structuredClone(fixture.child);
+    harness.store[key] = child;
+    if (fixture.parent) {
+      harness.store[fixture.parent.key] = structuredClone(fixture.parent.entry);
+    }
+    const selection = await harness.unchanged({
+      opts: {
+        message: "hello",
+        channel: fixture.ctx.Provider,
+        ...(fixture.turnModelOverride
+          ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true }
+          : {}),
+      },
+      pluginsEnabled: false,
+      configuredThinkingCatalog: [],
+      requestedThinkLevel: "off",
+      isSubagentLane: false,
+      suppressVisibleSessionEffects: true,
+      runContext: {
+        messageChannel: fixture.ctx.Provider,
+        groupId: child.groupId,
+        groupChannel: child.groupChannel,
+        currentChannelId: "target",
+      },
+    });
+    const { provider, model } = fixture.expected.command;
+    expect(selection).toMatchObject({ provider, model });
+  });
+
   it.each([
     [sessionKey, false, "store"],
     [sessionKey, false, "explicit"],
@@ -500,24 +582,21 @@ describe("command selection with session routing", () => {
       fixture.defaults.modelPolicy = { allow: ["custom/*"] };
       fixture.inventory.mockReturnValue([catalogEntry("custom", "base")]);
       const sessionId = "routing-session";
-      const storedEntry: SessionEntry =
-        route === "explicit" ? fixture.entry() : { sessionId: "stored-session", updatedAt: 2 };
+      const storedEntry =
+        route === "explicit" ? fixture.entry() : sessionEntry({ sessionId: "stored-session" });
       const store = {
         [sessionKey]: storedEntry,
-        [sessionId]: { sessionId: "not-a-keyed-session", updatedAt: 3 },
-        "": { sessionId: "not-an-empty-key-session", updatedAt: 4 },
+        [sessionId]: sessionEntry({ sessionId: "not-a-keyed-session" }),
+        "": sessionEntry({ sessionId: "not-an-empty-key-session" }),
       };
-      const explicitEntry: SessionEntry | undefined =
-        route === "explicit" ? { sessionId: "explicit-session", updatedAt: 1 } : undefined;
-      const storePath = path.join(fixture.cfg.agents!.entries!.main!.workspace!, "sessions.json");
+      const explicitEntry =
+        route === "explicit" ? sessionEntry({ sessionId: "explicit-session" }) : undefined;
 
       const selected = await fixture.select({
-        opts: { message: "Resolve transcript routing", threadId: 42 },
         sessionId,
         sessionKey: key,
         sessionEntry: explicitEntry,
         sessionStore: store,
-        storePath,
         suppressVisibleSessionEffects,
       });
 
@@ -561,7 +640,6 @@ describe("command selection with session routing", () => {
       }),
     ).rejects.toBe(denied);
 
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(1);
     expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
   });
 });

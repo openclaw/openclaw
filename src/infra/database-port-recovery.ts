@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import { hasErrnoCode } from "./errno.js";
 
@@ -47,8 +48,9 @@ const manifestSchema = z
     outcome: z.enum(["ported", "rolled-back"]).optional(),
     root: z.strictObject({
       stateDir: absolutePath,
-      dev: z.string().regex(/^\d+$/),
-      ino: z.string().regex(/^\d+$/),
+      // Node can expose high-bit POSIX device/inode values as signed integers.
+      dev: z.string().regex(/^-?\d+$/),
+      ino: z.string().regex(/^-?\d+$/),
     }),
     direction: z.strictObject({
       from: z.enum(["sqlite", "postgres"]),
@@ -81,6 +83,15 @@ export type DatabasePortRecoveryIntent = {
   action: "resume" | "rollback";
 };
 
+/** Port recovery requires durable directories and atomic replacement of existing SQLite files. */
+export function assertDatabasePortPlatformSupported(): void {
+  if (process.platform === "win32") {
+    throw new Error(
+      "Native Windows does not support SQLite ↔ PostgreSQL database port yet. Existing data and engine selection stay unchanged. Start with a fresh PostgreSQL setup on Windows, or run the port on Linux or macOS.",
+    );
+  }
+}
+
 export function databasePortManifestPath(stateDir: string): string {
   return path.join(stateDir, "recovery", "database-port", "manifest.json");
 }
@@ -96,22 +107,19 @@ function refusal(stateDir: string): DatabasePortRecoveryError {
 }
 
 function readManifest(stateDir: string): DatabasePortManifest | undefined {
-  let raw: string;
   try {
-    // One syscall when absent; O_NOFOLLOW also refuses a dangling manifest symlink.
-    raw = fs.readFileSync(databasePortManifestPath(stateDir), {
+    const filePath = databasePortManifestPath(stateDir);
+    // Reject special files before opening; the read retains native missing-path errors.
+    statRegularFileSync(filePath);
+    const raw = fs.readFileSync(filePath, {
       encoding: "utf8",
       flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
     });
+    return manifestSchema.parse(JSON.parse(raw));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
-    throw refusal(stateDir);
-  }
-  try {
-    return manifestSchema.parse(JSON.parse(raw));
-  } catch {
     throw refusal(stateDir);
   }
 }

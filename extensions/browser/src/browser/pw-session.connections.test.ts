@@ -1,8 +1,9 @@
+import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTargetBrowser as makeBrowser } from "./pw-session.browser.test-support.js";
 import {
-  type BrowserMockBundle,
   makeEmptyBrowser,
   setupPwSessionConnectionTest,
 } from "./pw-session.connection.test-support.js";
@@ -24,38 +25,6 @@ const {
 } = pwAi;
 
 const cdpUrl = "http://127.0.0.1:9222";
-
-function makeBrowser(targetId: string, url: string): BrowserMockBundle {
-  const browserClose = vi.fn(async () => {});
-  const page = {
-    on: vi.fn(),
-    context: () => context,
-    title: vi.fn(async () => `title:${targetId}`),
-    url: vi.fn(() => url),
-  } as unknown as import("playwright-core").Page;
-
-  const context: import("playwright-core").BrowserContext = {
-    pages: () => [page],
-    on: vi.fn(),
-    newCDPSession: vi.fn(async () => ({
-      send: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo"
-          ? { targetInfo: { targetId, title: `title:${targetId}` } }
-          : {},
-      ),
-      detach: vi.fn(async () => {}),
-    })),
-  } as unknown as import("playwright-core").BrowserContext;
-
-  const browser = {
-    contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
-    close: browserClose,
-  } as unknown as import("playwright-core").Browser;
-
-  return { browser, browserClose };
-}
 
 function makeStuckPageTargetBrowser() {
   const fixture = makeBrowser("STUCK", "https://stuck.example");
@@ -587,9 +556,20 @@ describe("Playwright created-page ownership", () => {
 
   function installBrowserMocks() {
     const openPages: Page[] = [];
-    const sessionSend = vi.fn(async (_method: string) => targetInfo);
-    const pageMock = {
-      on: vi.fn(),
+    const sessionSend = vi.fn(async (method: string) => {
+      if (method === "Target.getTargetInfo") {
+        return targetInfo;
+      }
+      if (method === "Page.getFrameTree") {
+        return { frameTree: { frame: { id: "MAIN_FRAME" } } };
+      }
+      return {};
+    });
+    const session = Object.assign(new EventEmitter(), {
+      send: sessionSend,
+      detach: vi.fn(async () => {}),
+    });
+    const pageMock = Object.assign(new EventEmitter(), {
       context: () => context,
       goto: vi.fn(async () => null),
       close: vi.fn(async () => {
@@ -597,10 +577,9 @@ describe("Playwright created-page ownership", () => {
       }),
       title: async () => "",
       url: () => "about:blank",
-      route: vi.fn(),
+      isClosed: () => false,
       bringToFront: vi.fn(async () => {}),
-      unroute: vi.fn(),
-    };
+    });
     const page = pageMock as unknown as Page;
     const contextMock = {
       on: vi.fn(),
@@ -613,7 +592,7 @@ describe("Playwright created-page ownership", () => {
       close: vi.fn(async () => {
         openPages.length = 0;
       }),
-      newCDPSession: async () => ({ send: sessionSend, detach: async () => {} }),
+      newCDPSession: async () => session,
     };
     const context = contextMock as unknown as BrowserContext;
     const browserMock = {
@@ -668,7 +647,7 @@ describe("Playwright created-page ownership", () => {
     expect(f.pageMock.close).not.toHaveBeenCalled();
     expect(f.context.pages()).toEqual([f.page]);
   });
-  it.each(["connect", "context", "page", "target", "route"] as const)(
+  it.each(["connect", "context", "page", "target", "interception"] as const)(
     "rejects an unsignalled authority revocation during %s before navigation",
     async (stage) => {
       getChromeWebSocketUrlSpy.mockResolvedValue({
@@ -684,7 +663,18 @@ describe("Playwright created-page ownership", () => {
       } else if (stage === "target") {
         f.sessionSend.mockImplementationOnce(() => pause(targetInfo));
       } else {
-        f.pageMock.route.mockImplementationOnce(() => pause(undefined));
+        f.sessionSend.mockImplementation(async (method: string) => {
+          if (method === "Fetch.enable") {
+            return await pause({});
+          }
+          if (method === "Target.getTargetInfo") {
+            return targetInfo;
+          }
+          if (method === "Page.getFrameTree") {
+            return { frameTree: { frame: { id: "MAIN_FRAME" } } };
+          }
+          return {};
+        });
       }
       let current = true;
       const creation = create({

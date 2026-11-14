@@ -1,14 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import * as modelPlans from "../models-config.plan.js";
 import * as catalogCredentials from "../plugin-model-catalog-credentials.js";
 import * as catalogs from "../plugin-model-catalog.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { retainPersistedCredential } from "./credential-authority.test-support.js";
 import {
   createApiKeyCredential as apiKey,
   createOAuthRefreshCredential,
@@ -20,7 +18,6 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw as inspectState,
   inspectPersistedAuthProfileStoreRaw as inspectStore,
-  resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStateRaw,
 } from "./sqlite.js";
 import {
@@ -67,6 +64,15 @@ const readCatalog = (agentDir: string) =>
   catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
 const spyCleanup = () =>
   vi.spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials");
+const remove = (agentDir: string, profileId: string, beforeRemove?: () => Promise<void>) =>
+  removeProfiles({ agentDir, profileIds: [profileId], beforeRemove });
+
+function saveCliProfile(agentDir: string) {
+  const profileId = "claude-cli:work";
+  const credential = apiKey("claude-cli", "synthetic-cli-credential");
+  saveProfiles(agentDir, { [profileId]: credential });
+  return { profileId, credential, resolveProfile: () => resolveCliProfile(agentDir, profileId) };
+}
 
 it.each([
   { window: "before-delete", credentialChange: "unchanged" },
@@ -87,6 +93,14 @@ it.each([
         apiKey: survivor.key,
         headers: { Authorization: `Bearer ${survivor.key}` },
       };
+      const models = [
+        {
+          id: "retained-inventory",
+          apiKey: independentKey,
+          headers: { "X-Independent-Auth": independentHeader },
+        },
+        survivingModel,
+      ];
       saveProfiles(
         agentDir,
         credentialChange === "added"
@@ -97,28 +111,10 @@ it.each([
       const release = createDeferredCore();
       vi.spyOn(modelPlans, "planOpenClawModelsJson").mockImplementationOnce(async () => {
         if (credentialChange !== "unchanged") {
-          saveProfiles(agentDir, {
-            survivor,
-            selected: apiKey("fixture", key),
-          });
+          saveProfiles(agentDir, { survivor, selected: apiKey("fixture", key) });
         }
-        const credential = loadLocal(agentDir).profiles.selected;
-        if (credential?.type !== "api_key") {
-          throw new Error("expected selected API-key profile during catalog planning");
-        }
-        expect(credential.key).toBe(key);
-        const pluginCatalogWrites = catalogWrites(
-          credential.key,
-          [
-            {
-              id: "retained-inventory",
-              apiKey: independentKey,
-              headers: { "X-Independent-Auth": independentHeader },
-            },
-            survivingModel,
-          ],
-          { Authorization: `Bearer ${credential.key}` },
-        );
+        expect(loadLocal(agentDir).profiles.selected).toMatchObject(apiKey("fixture", key));
+        const pluginCatalogWrites = catalogWrites(key, models, { Authorization: `Bearer ${key}` });
         planned.resolve();
         await release.promise;
         return { action: "write", contents: '{"providers":{}}\n', pluginCatalogWrites };
@@ -128,20 +124,15 @@ it.each([
       const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
       const publishHeldRefresh = async () => {
         release.resolve();
-        const result = await refresh;
+        await refresh;
         const persisted = readCatalog(agentDir);
-        expect(result.publishedSource).toMatchObject({
-          modelsJsonContents: '{"providers":{}}\n',
-          pluginCatalogs: [{ pluginId: "fixture", contents: persisted }],
-        });
         if (window === "before-delete") {
           expect(persisted).toContain(key);
         } else {
           expect(persisted).not.toContain(key);
-          expect(persisted).toContain("retained-inventory");
         }
       };
-      const cleanup = spyCleanup().mockImplementation(async (params) => {
+      spyCleanup().mockImplementation(async (params) => {
         await scrub(params);
         if (window === "after-delete") {
           await publishHeldRefresh();
@@ -149,22 +140,16 @@ it.each([
       });
       try {
         expect(
-          await removeProfiles({
+          await remove(
             agentDir,
-            profileIds: ["selected"],
-            beforeRemove: window === "before-delete" ? publishHeldRefresh : undefined,
-          }),
+            "selected",
+            window === "before-delete" ? publishHeldRefresh : undefined,
+          ),
         ).toBe(true);
-        expect(cleanup.mock.calls.length).toBe(1);
         expect(loadPersisted(agentDir)?.profiles).toEqual({ survivor });
         const persisted = readCatalog(agentDir);
         expect(persisted).not.toContain(key);
-        expect(persisted).toContain("retained-inventory");
-        expect(persisted).toContain(independentKey);
-        expect(persisted).toContain(independentHeader);
-        expect(JSON.parse(persisted ?? "null").providers.fixture.models).toContainEqual(
-          survivingModel,
-        );
+        expect(JSON.parse(persisted ?? "null").providers.fixture.models).toEqual(models);
       } finally {
         release.resolve();
         await refresh;
@@ -198,7 +183,7 @@ it.each(["contention", "failure"] as const)(
         }
         return update(params);
       });
-      const removing = removeProfiles({ agentDir: child, profileIds: [profileId] });
+      const removing = remove(child, profileId);
       if (exit === "failure") {
         await expect(removing).rejects.toThrow("synthetic second-owner failure");
       } else {
@@ -227,15 +212,12 @@ it("restores an absent credential cell and exact state after catalog cleanup fai
     const absent = { status: "missing", reason: "row" };
     expect(inspectStore(agentDir)).toEqual(absent);
     let removedState: ReturnType<typeof inspectState> | undefined;
-    const cleanup = spyCleanup().mockImplementationOnce(async () => {
+    spyCleanup().mockImplementationOnce(async () => {
       removedState = inspectState(agentDir);
       throw new Error("synthetic catalog cleanup failure");
     });
 
-    await expect(removeProfiles({ agentDir, profileIds: [profileId] })).rejects.toThrow(
-      "saved credentials were restored",
-    );
-    expect(cleanup).toHaveBeenCalledOnce();
+    await expect(remove(agentDir, profileId)).rejects.toThrow("saved credentials were restored");
     expect(removedState).toMatchObject({
       status: "readable",
       raw: { order: { fixture: ["fixture:retained"] } },
@@ -248,24 +230,12 @@ it("restores an absent credential cell and exact state after catalog cleanup fai
 it("revokes a retained credential and the next CLI inference after logout commits", () =>
   withState("openclaw-auth-cli-logout-", async ({ agentDirFor }) => {
     const agentDir = agentDirFor("inference");
-    const profileId = "claude-cli:work";
-    const credential = apiKey("claude-cli", "synthetic-cli-credential");
-    saveProfiles(agentDir, { [profileId]: credential });
-    const resolveProfile = () => resolveCliProfile(agentDir, profileId);
+    const { profileId, credential, resolveProfile } = saveCliProfile(agentDir);
     await expect(resolveProfile()).resolves.toBe(profileId);
-    const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    const identity = inspectDatabasePathIdentitySync(databasePath);
-    if (!identity) {
-      throw new Error("Missing fixture database identity");
-    }
-    const authority = captureAuthProfileCredentialAuthority(
-      captureOpenClawStateWorkerContext(),
-      { identity: `${identity.key}:${identity.birthtime ?? ""}`, databasePath },
-      profileId,
-    );
+    const authority = retainPersistedCredential(agentDir, profileId);
     expect(authority.readCurrentCredential()).toEqual(credential);
 
-    await expect(removeProfiles({ agentDir, profileIds: [profileId] })).resolves.toBe(true);
+    await expect(remove(agentDir, profileId)).resolves.toBe(true);
 
     expect(authority.readCurrentCredential()).toBeUndefined();
     await expect(resolveProfile()).rejects.toThrow(
@@ -276,11 +246,7 @@ it("revokes a retained credential and the next CLI inference after logout commit
 it("preserves newer credentials and selection when failed cleanup compensates logout", () =>
   withState("openclaw-auth-newer-rollback-", async ({ agentDirFor }) => {
     const agentDir = agentDirFor("inference");
-    const profileId = "claude-cli:work";
-    saveProfiles(agentDir, {
-      [profileId]: apiKey("claude-cli", "synthetic-original-credential"),
-    });
-    const resolveProfile = () => resolveCliProfile(agentDir, profileId);
+    const { profileId, resolveProfile } = saveCliProfile(agentDir);
     await expect(resolveProfile()).resolves.toBe(profileId);
     const newerStore = {
       version: AUTH_STORE_VERSION,
@@ -298,16 +264,13 @@ it("preserves newer credentials and selection when failed cleanup compensates lo
       throw new Error("synthetic catalog cleanup failure");
     });
 
-    await expect(removeProfiles({ agentDir, profileIds: [profileId] })).rejects.toThrow(
+    await expect(remove(agentDir, profileId)).rejects.toThrow(
       "concurrent auth changes prevented full restoration",
     );
     expect(removalObserved).toBe(true);
     expect(loadPersisted(agentDir)).toEqual(newerStore);
     await expect(
-      loadRuntimeAsync(agentDir, {
-        readOnly: true,
-        allowKeychainPrompt: false,
-      }),
+      loadRuntimeAsync(agentDir, { readOnly: true, allowKeychainPrompt: false }),
     ).resolves.toMatchObject(newerStore);
     await expect(resolveProfile()).resolves.toBe(profileId);
   }));

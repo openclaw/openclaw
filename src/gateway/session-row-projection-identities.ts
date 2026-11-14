@@ -7,6 +7,7 @@ import {
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   first,
@@ -37,8 +38,8 @@ export function createSessionRowCreatorIndex() {
   }
   return {
     update(previous: Row | undefined, next?: Row) {
-      const before = previous?.entry?.createdActor;
-      const after = next?.entry?.createdActor;
+      const before = resolveSessionCreatorActor(previous?.entry?.createdActor);
+      const after = resolveSessionCreatorActor(next?.entry?.createdActor);
       if (
         Boolean(previous?.entry) === Boolean(next?.entry) &&
         before?.id === after?.id &&
@@ -137,20 +138,20 @@ export function createSessionRowCreatorIndex() {
         return [
           ...Array.from(resolved.values(), ({ type, id, label }) => ({ type, id, label })),
           ...(memory
-            ? (memory.owner
-                ?.listSessions(memory.authority)
-                .flatMap(({ entry }) =>
-                  entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
-                ) ?? [])
+            ? (memory.owner?.listSessions(memory.authority).flatMap(({ entry }) => {
+                const actor = resolveSessionCreatorActor(entry?.createdActor);
+                return entry?.incognito && actor?.id ? [actor] : [];
+              }) ?? [])
             : memorySessionActorOwners.list().flatMap((owner) =>
                 owner
                   .listSessions({
                     assertCurrent: owner.assertCurrent,
                     authorize: owner.assertCurrent,
                   })
-                  .flatMap(({ entry }) =>
-                    entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
-                  ),
+                  .flatMap(({ entry }) => {
+                    const actor = resolveSessionCreatorActor(entry?.createdActor);
+                    return entry?.incognito && actor?.id ? [actor] : [];
+                  }),
               )),
         ];
       });
@@ -206,28 +207,6 @@ export function createSessionRowCapabilityReader(owner: {
   };
 }
 
-function updateIndex(
-  map: Map<string, Set<string>>,
-  key: string | undefined,
-  id: string,
-  deleting: boolean,
-) {
-  if (!key) {
-    return;
-  }
-  const values = map.get(key);
-  if (deleting) {
-    values?.delete(id);
-    if (values?.size === 0) {
-      map.delete(key);
-    }
-  } else if (values) {
-    values.add(id);
-  } else {
-    map.set(key, new Set([id]));
-  }
-}
-
 export function indexSessionRow(
   row: Row,
   indexes: {
@@ -237,38 +216,86 @@ export function indexSessionRow(
     byParent: Map<string, Set<string>>;
   },
   deleting = false,
+  previous?: Row,
 ) {
+  // Replacement keeps the same physical identity; unchanged memberships keep their position.
+  if (previous === row) {
+    return;
+  }
   const { byStore, byAgent, byKey, byParent } = indexes;
   const id = identity(row);
-  updateIndex(byStore, row.storeTarget.storePath, id, deleting);
-  updateIndex(byAgent, row.agentId, id, deleting);
-  updateIndex(byKey, `key:${row.key}`, id, deleting);
-  updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
-  updateIndex(byKey, logicalSessionRowIdentity(row.agentId, row.key), id, deleting);
-  const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
-  if (uuid) {
-    // Eight characters is the shortest URL id; the resolver filters longer prefixes and ties.
-    updateIndex(
-      byKey,
-      `url-id:${uuid.toLowerCase().replaceAll("-", "").slice(0, 8)}`,
-      id,
-      deleting,
-    );
-    const entry = row.storedEntry ?? row.entry;
-    if (entry) {
-      updateIndex(
-        byKey,
-        `url-slug:${controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, entry))}`,
-        id,
-        deleting,
-      );
+  let singleton: Set<string> | undefined;
+  function updateIndex(map: Map<string, Set<string>>, key: string | undefined, remove = deleting) {
+    if (!key) {
+      return;
+    }
+    const values = map.get(key);
+    if (remove) {
+      if (values?.size === 1) {
+        if (values.has(id)) {
+          map.delete(key);
+        }
+      } else {
+        values?.delete(id);
+      }
+    } else if (!values) {
+      map.set(key, (singleton ??= new Set([id])));
+    } else if (values.size === 1) {
+      // Singleton buckets share storage across aliases; only collisions need a mutable set.
+      if (!values.has(id)) {
+        map.set(key, new Set([...values, id]));
+      }
+    } else {
+      values.add(id);
     }
   }
-  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
-  if (row.key === "global" || row.key === "unknown") {
-    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
+  function replaceIndex(map: Map<string, Set<string>>, key: string | undefined, oldKey?: string) {
+    if (previous && key === oldKey) {
+      return;
+    }
+    if (oldKey) {
+      updateIndex(map, oldKey, true);
+    }
+    updateIndex(map, key);
+  }
+  if (!previous) {
+    updateIndex(byStore, row.storeTarget.storePath);
+    updateIndex(byAgent, row.agentId);
+    updateIndex(byKey, `key:${row.key}`);
+    updateIndex(byKey, logicalSessionRowIdentity(row.agentId, row.key));
+    // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
+    if (row.key === "global" || row.key === "unknown") {
+      updateIndex(byKey, physical(row.storeTarget.storePath, row.key));
+    }
+  }
+  replaceIndex(
+    byKey,
+    row.entry && `id:${row.entry.sessionId}`,
+    previous?.entry && `id:${previous.entry.sessionId}`,
+  );
+  const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+  if (uuid) {
+    if (!previous) {
+      // Eight characters is the shortest URL id; the resolver filters longer prefixes and ties.
+      updateIndex(byKey, `url-id:${uuid.toLowerCase().replaceAll("-", "").slice(0, 8)}`);
+    }
+    const slug = (candidate: Row | undefined) => {
+      const entry = candidate?.storedEntry ?? candidate?.entry;
+      return (
+        entry &&
+        `url-slug:${controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, entry))}`
+      );
+    };
+    replaceIndex(byKey, slug(row), slug(previous));
+  }
+  for (const parent of previous?.parents ?? []) {
+    if (!row.parents.has(parent)) {
+      updateIndex(byParent, parent, true);
+    }
   }
   for (const parent of row.parents) {
-    updateIndex(byParent, parent, id, deleting);
+    if (!previous?.parents.has(parent)) {
+      updateIndex(byParent, parent);
+    }
   }
 }

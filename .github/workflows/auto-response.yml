@@ -71,4 +71,4 @@ jobs:
             );
             const { runBarnacleAutoResponse } = await import(moduleUrl.href);
 
-            await runBarnacleAutoResponse({ github, context, core });
+            await runBarnacleAutoResponse({ github, context, core, expectedAppId: Number("${{ steps.app-token.outputs.token && '2729701' || '2971289' }}") });

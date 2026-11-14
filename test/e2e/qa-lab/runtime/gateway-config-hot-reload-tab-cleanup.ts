@@ -62,6 +62,7 @@ async function runProof(repoRoot: string, appendLog: (text: string) => void) {
       const external = await externalOwner.start();
       gateway = await gatewayOwner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

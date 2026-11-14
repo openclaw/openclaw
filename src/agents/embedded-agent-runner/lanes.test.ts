@@ -1,3 +1,5 @@
+// Coverage for global command lane normalization.
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
@@ -9,7 +11,7 @@ import {
 } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
+import { resolveGlobalLane } from "./lanes.js";
 
 function sessionContext(
   sessionId: string,
@@ -161,14 +163,4 @@ describe("subagent session concurrency", () => {
     }
     await expect(child).resolves.toBeUndefined();
   });
-});
-
-it("normalizes session lane identities without duplicating the prefix", () => {
-  for (const [lane, expected] of [
-    ["  ", "session:main"],
-    [" xyz ", "session:xyz"],
-    ["session:abc", "session:abc"],
-  ] as const) {
-    expect(resolveSessionLane(lane)).toBe(expected);
-  }
 });

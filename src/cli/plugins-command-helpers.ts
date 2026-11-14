@@ -8,6 +8,7 @@ export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime):
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
+  // ClawHub's audit renderer escapes fields before composing its styled, multiline box.
   return {
     info: (msg) => runtime.log(msg),
     warn: (msg) => runtime.log(msg.includes("╭─") ? msg : theme.warn(msg)),

@@ -29,6 +29,7 @@ export function checkSharedWorktreeReceipt(row: GitHubPublicationRow): void {
       idempotencyKey: row.idempotency_key,
       title: row.title ?? undefined,
       body: row.body ?? undefined,
+      draft: row.draft == null ? undefined : row.draft === 1,
     })
   ) {
     throw new Error("GitHub publication receipt is corrupt.");
@@ -78,6 +79,7 @@ export function digestGitHubPublicationRequest(params: {
   idempotencyKey: string;
   title?: string;
   body?: string;
+  draft?: boolean;
 }): string {
   return sha256Hex(
     JSON.stringify({
@@ -85,6 +87,7 @@ export function digestGitHubPublicationRequest(params: {
       idempotencyKey: params.idempotencyKey,
       title: params.title ?? null,
       body: params.body ?? null,
+      ...(params.draft !== undefined ? { draft: params.draft } : {}),
     }),
   );
 }

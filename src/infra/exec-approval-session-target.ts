@@ -1,4 +1,3 @@
-// Resolves approval delivery targets from sessions and turn sources.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,7 +9,7 @@ import {
   type ApprovalRequestSessionDelivery,
   resolveApprovalRequestSessionDelivery,
 } from "./approval-request-account-binding.js";
-import { normalizeApprovalRequest, type ApprovalRequestInput } from "./approval-types.js";
+import type { ApprovalRequestInput } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets-session.js";
 
@@ -55,27 +54,6 @@ function normalizeExecApprovalThreadValue(
   return normalizeOptionalString(value);
 }
 
-function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {
-  const normalizedRequest = normalizeApprovalRequest(request);
-  if (normalizedRequest.approvalKind === "exec") {
-    return normalizedRequest;
-  }
-  return {
-    approvalKind: "exec",
-    id: normalizedRequest.id,
-    request: {
-      command: normalizedRequest.request.title,
-      sessionKey: normalizedRequest.request.sessionKey ?? undefined,
-      turnSourceChannel: normalizedRequest.request.turnSourceChannel ?? undefined,
-      turnSourceTo: normalizedRequest.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: normalizedRequest.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: normalizedRequest.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: normalizedRequest.createdAtMs,
-    expiresAtMs: normalizedRequest.expiresAtMs,
-  };
-}
-
 /** Resolves the conversation encoded in an approval request session key for an optional channel. */
 export function resolveApprovalRequestSessionConversation(params: {
   request: ApprovalRequestLike;
@@ -99,11 +77,9 @@ export function resolveApprovalRequestSessionConversation(params: {
   return resolved;
 }
 
-/** Resolves the best known message target for an exec approval request. */
-function resolveExecApprovalSessionTargetFromDelivery(
+/** Resolve delivery using the shared turn-source fields, independent of approval kind. */
+function resolveSessionTargetFromDelivery(
   params: {
-    cfg: OpenClawConfig;
-    request: ExecApprovalRequest;
     turnSourceChannel?: string | null;
     turnSourceTo?: string | null;
     turnSourceAccountId?: string | null;
@@ -143,35 +119,7 @@ function resolveApprovalRequestSessionTargetFromDelivery(
   },
   sessionDelivery: ApprovalRequestSessionDelivery | null,
 ): ExecApprovalSessionTarget | null {
-  const execLikeRequest = toExecLikeApprovalRequest(params.request);
-  return resolveExecApprovalSessionTargetFromDelivery(
-    {
-      cfg: params.cfg,
-      request: execLikeRequest,
-      turnSourceChannel: execLikeRequest.request.turnSourceChannel ?? undefined,
-      turnSourceTo: execLikeRequest.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: execLikeRequest.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: execLikeRequest.request.turnSourceThreadId ?? undefined,
-    },
-    sessionDelivery,
-  );
-}
-
-function resolveApprovalRequestStoredSessionTarget(
-  params: {
-    cfg: OpenClawConfig;
-    request: ApprovalRequestLike;
-  },
-  sessionDelivery: ApprovalRequestSessionDelivery | null,
-): ExecApprovalSessionTarget | null {
-  const execLikeRequest = toExecLikeApprovalRequest(params.request);
-  return resolveExecApprovalSessionTargetFromDelivery(
-    {
-      cfg: params.cfg,
-      request: execLikeRequest,
-    },
-    sessionDelivery,
-  );
+  return resolveSessionTargetFromDelivery(params.request.request, sessionDelivery);
 }
 
 /** Resolves a channel-specific origin target only when live and stored bindings are consistent. */
@@ -195,13 +143,7 @@ function resolveApprovalRequestOriginTargetFromDelivery<TTarget>(
 
   const turnSourceTarget = params.resolveTurnSourceTarget(params.request);
   const expectedChannel = normalizeMessageChannel(params.channel);
-  const sessionTargetBinding = resolveApprovalRequestStoredSessionTarget(
-    {
-      cfg: params.cfg,
-      request: params.request,
-    },
-    sessionDelivery,
-  );
+  const sessionTargetBinding = resolveSessionTargetFromDelivery({}, sessionDelivery);
   const sessionTarget =
     sessionTargetBinding &&
     normalizeMessageChannel(sessionTargetBinding.channel) === expectedChannel
@@ -228,20 +170,20 @@ function warnLegacyTarget(name: string): void {
 
 /** @deprecated Use resolveExecApprovalSessionTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveExecApprovalSessionTarget(
-  params: Parameters<typeof resolveExecApprovalSessionTargetFromDelivery>[0],
+  params: Parameters<typeof resolveSessionTargetFromDelivery>[0] & {
+    cfg: OpenClawConfig;
+    request: ExecApprovalRequest;
+  },
 ): ExecApprovalSessionTarget | null {
   warnLegacyTarget("resolveExecApprovalSessionTarget");
-  return resolveExecApprovalSessionTargetFromDelivery(
-    params,
-    resolveApprovalRequestSessionDelivery(params),
-  );
+  return resolveSessionTargetFromDelivery(params, resolveApprovalRequestSessionDelivery(params));
 }
 export async function resolveExecApprovalSessionTargetAsync(
-  params: Parameters<typeof resolveExecApprovalSessionTargetFromDelivery>[0] & {
+  params: Parameters<typeof resolveExecApprovalSessionTarget>[0] & {
     sessionDelivery?: ApprovalRequestSessionDelivery | null;
   },
 ): Promise<ExecApprovalSessionTarget | null> {
-  return resolveExecApprovalSessionTargetFromDelivery(
+  return resolveSessionTargetFromDelivery(
     params,
     await resolveApprovalRequestSessionDeliveryAsync(params),
   );

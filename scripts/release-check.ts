@@ -27,6 +27,7 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
@@ -65,18 +66,18 @@ type ReleaseCheckCommandInvocation = {
 };
 
 const forbiddenPrivateQaContentMarkers = [
-  "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
-const forbiddenPrivatePluginSdkDeclarationMarkers = [
-  "//#region src/agents/test-helpers/",
-  "//#region src/plugin-sdk/test-helpers/",
-  "//#region src/test-helpers/",
-  "//#region src/test-utils/",
+const forbiddenPrivateSourcePrefixes = [
+  "extensions/qa-lab/",
+  "src/agents/test-helpers/",
+  "src/plugin-sdk/test-helpers/",
+  "src/test-helpers/",
+  "src/test-utils/",
 ] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
@@ -1009,7 +1010,11 @@ export function collectForbiddenPackContentPaths(
       }
       return (
         forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker)) ||
-        forbiddenPrivatePluginSdkDeclarationMarkers.some((marker) => content.includes(marker))
+        // Preserve literal historical metadata scans as well as current module labels.
+        forbiddenPrivateSourcePrefixes.some((prefix) => content.includes(`//#region ${prefix}`)) ||
+        [...bundledModuleRegions(content)].some((match) =>
+          forbiddenPrivateSourcePrefixes.some((prefix) => match[1]?.startsWith(prefix)),
+        )
       );
     })
     .toSorted((left, right) => left.localeCompare(right));

@@ -18,6 +18,26 @@ const read = (root: string, name: string) => readFileSync(join(root, name), "utf
 const shells = process.platform === "darwin" ? ["/bin/bash", "bash"] : ["bash"];
 const models = ["openai/gpt-5.5", "anthropic/claude-opus-5", "google/gemini-3.1-pro-preview"];
 
+it("routes custom sibling updates through the candidate plugin registry", () => {
+  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+  const start = source.indexOf('if [ "$SCENARIO" = "custom-plugin-siblings" ]; then');
+  const end = source.indexOf('if [ "$SCENARIO" = "abandoned-update" ]; then', start);
+  const scenario = source.slice(start, end);
+  const candidateResolution = scenario.indexOf(
+    "phase resolve-sibling-candidate resolve_candidate_version",
+  );
+  const registry = scenario.indexOf(
+    "phase configure-sibling-plugin-registry configure_plugin_registry",
+  );
+  const update = scenario.indexOf("phase update-sibling-candidate update_candidate");
+
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  expect(candidateResolution).toBeGreaterThan(0);
+  expect(registry).toBeGreaterThan(candidateResolution);
+  expect(update).toBeGreaterThan(registry);
+});
+
 function runInner(
   root: string,
   body: string,

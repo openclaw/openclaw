@@ -3,9 +3,10 @@ import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   failedDeliveryQueueHealthAdmission,
+  isDeliveryQueueTombstonePruneDue,
+  nextDeliveryQueueTombstoneExpiryAdmission,
   type FailedDeliveryQueueHealth,
 } from "./delivery-queue-cache.js";
-import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
 import {
   countPendingDeliveryQueueEntriesInDatabase,
   loadDeliveryQueueEntriesInDatabase,
@@ -59,10 +60,8 @@ export async function inspectDeliveryQueueReceipt(
 export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
-  mode: DeliveryQueueReadMode = "pending",
-  context?: DeliveryQueueStateContext,
 ): DeliveryQueueEntryState[] {
-  return loadDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir, context), queueName, mode);
+  return loadDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueName);
 }
 
 /** Count dead-lettered entries per queue namespace for coarse health reporting. */
@@ -136,7 +135,16 @@ export async function pruneExpiredDeliveryQueueTombstones(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const expiry = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    nextDeliveryQueueTombstoneExpiryAdmission,
+    () => undefined,
+  );
+  if (!isDeliveryQueueTombstonePruneDue(expiry, Date.now())) {
+    return;
+  }
+  await executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.pruneTombstones",
     input: undefined,
   });

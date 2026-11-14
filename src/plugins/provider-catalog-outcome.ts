@@ -1,3 +1,5 @@
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 export type ProviderCatalogOutcome = {
   provider: string;
   /** Auth profile tested by discovery; omission means provider-wide auth. */
@@ -5,6 +7,15 @@ export type ProviderCatalogOutcome = {
   /** Limits an auth rejection to catalog discovery rather than model execution. */
   rejectionScope?: "catalog";
   status: "ready" | "auth-rejected" | "unavailable";
+  /** Accepted selections advertised by this authenticated account, never static model support. */
+  modelAccessPrograms?: readonly {
+    modelId: string;
+    runtimeId: string;
+    /** Physical route for host-owned credentials; native observations stay harness-scoped. */
+    api?: string;
+    baseUrl?: string;
+    cyber: readonly CyberAccessProgram[];
+  }[];
   /** Private account-scoped observations from successful discovery, never static model hints. */
   modelServiceTiers?: readonly {
     modelId: string;

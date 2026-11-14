@@ -77,6 +77,7 @@ export async function finishAlreadyCurrentUpdate(
     const inspection = {
       ...params,
       roots: [params.root],
+      packageAlreadyCurrent: true,
       updateInstallKind: params.result.mode === "git" ? ("git" as const) : ("package" as const),
       jsonMode: Boolean(params.opts.json),
       timeoutMs: params.updateStepTimeoutMs,

@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { preparePostgresBackupDiscovery } from "../infra/backup-database-discovery.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
@@ -19,6 +19,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
@@ -54,6 +55,14 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
+
+function gitBackupContentTimeout(bytes: number): number {
+  // Allow 1 MiB/s for local content work, bounded to stop wedged Git processes.
+  return Math.min(
+    24 * 60 * 60 * 1000,
+    Math.max(GIT_TIMEOUT_MS, Math.ceil(bytes / 1024 ** 2) * 1000),
+  );
+}
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -150,8 +159,8 @@ function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: un
   return `Fix its ownership and run chmod 700 ${repositoryPath}.`;
 }
 
-async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
-  const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
+async function assertGitRepository(repositoryPath: string): Promise<void> {
+  const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"]);
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
     fs.realpath(normalizeGitPathForFilesystem(topLevel)),
     fs.realpath(repositoryPath),
@@ -166,7 +175,6 @@ export async function initializeGitBackupRepository(params: {
   repositoryPath: string;
   stateDir: string;
   remote?: string;
-  gitEnv?: NodeJS.ProcessEnv;
 }): Promise<{ repositoryPath: string }> {
   const repositoryPath = path.resolve(params.repositoryPath);
   const stateDir = path.resolve(params.stateDir);
@@ -190,27 +198,21 @@ export async function initializeGitBackupRepository(params: {
       { cause: error },
     );
   }
-  const probe = await runGit(repositoryPath, ["rev-parse", "--show-toplevel"], {
-    env: params.gitEnv,
-  });
+  const probe = await runGit(repositoryPath, ["rev-parse", "--show-toplevel"]);
   if (probe.code !== 0) {
-    await requireGit(repositoryPath, ["init"], { env: params.gitEnv });
+    await requireGit(repositoryPath, ["init"]);
   }
-  await assertGitRepository(repositoryPath, params.gitEnv);
+  await assertGitRepository(repositoryPath);
   const remote = params.remote?.trim();
   if (remote) {
-    const existing = await runGit(repositoryPath, ["remote", "get-url", "origin"], {
-      env: params.gitEnv,
-    });
+    const existing = await runGit(repositoryPath, ["remote", "get-url", "origin"]);
     if (existing.code === 0 && existing.stdout.trim() !== remote) {
       throw new Error(
         `Git backup repository already has a different origin: ${sanitizeGitBackupDiagnostic(existing.stdout.trim())}`,
       );
     }
     if (existing.code !== 0) {
-      await requireGit(repositoryPath, ["remote", "add", "origin", remote], {
-        env: params.gitEnv,
-      });
+      await requireGit(repositoryPath, ["remote", "add", "origin", remote]);
     }
   }
   return { repositoryPath };
@@ -219,10 +221,12 @@ export async function initializeGitBackupRepository(params: {
 async function commitGitBackup(params: {
   repositoryPath: string;
   head?: string;
-  now?: Date;
   paths: string[];
-  env?: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
+  let bytes = 0;
+  for (const file of params.paths) {
+    bytes += (await lstatIfExists(path.join(params.repositoryPath, file)))?.size ?? 0;
+  }
   const indexWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-git-backup-index-",
@@ -230,7 +234,7 @@ async function commitGitBackup(params: {
   try {
     // Overlay only owned artifacts on HEAD. Never read unrelated operator staging
     // into a backup commit, including extras nested inside a selected scope.
-    const env = { ...process.env, ...params.env, GIT_INDEX_FILE: indexWorkspace.path("index") };
+    const env = { ...process.env, GIT_INDEX_FILE: indexWorkspace.path("index") };
     const head = await runGit(params.repositoryPath, ["rev-parse", "--verify", "--quiet", "HEAD"], {
       env,
     });
@@ -249,6 +253,7 @@ async function commitGitBackup(params: {
       {
         env,
         input: params.paths.join("\0") + "\0",
+        timeoutMs: gitBackupContentTimeout(bytes),
       },
     );
     const changed = await runGit(params.repositoryPath, ["diff", "--cached", "--quiet"], { env });
@@ -258,20 +263,14 @@ async function commitGitBackup(params: {
     if (changed.code !== 1) {
       requireGitCommandOutput("git diff --cached", changed);
     }
-    const now = params.now ?? new Date();
-    if (!Number.isFinite(now.getTime())) {
-      throw new Error("Git backup timestamp is invalid.");
-    }
-    const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"], {
-      env: params.env,
-    });
+    const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"]);
     const identityArgs =
       email.code === 0 && email.stdout.trim()
         ? []
         : ["-c", "user.name=OpenClaw", "-c", "user.email=backup@openclaw.local"];
     await requireGit(
       params.repositoryPath,
-      [...identityArgs, "commit", "-m", `openclaw backup ${now.toISOString()}`],
+      [...identityArgs, "commit", "-m", `openclaw backup ${new Date().toISOString()}`],
       { env },
     );
     // Converge only the managed entries in the ordinary index; preserved extras
@@ -279,9 +278,9 @@ async function commitGitBackup(params: {
     await requireGit(
       params.repositoryPath,
       ["reset", "--quiet", "HEAD", "--pathspec-from-file=-", "--pathspec-file-nul"],
-      { env: params.env, input: params.paths.map((file) => `:(literal)${file}\0`).join("") },
+      { input: params.paths.map((file) => `:(literal)${file}\0`).join("") },
     );
-    return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
+    return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"]);
   } finally {
     await cleanupGitBackupWorkspace(indexWorkspace);
   }
@@ -295,8 +294,6 @@ export async function createGitBackup(params: {
   all?: boolean;
   excludeSecrets?: boolean;
   push?: boolean;
-  now?: Date;
-  gitEnv?: NodeJS.ProcessEnv;
 }): Promise<GitBackupCreateResult> {
   const databases = [...params.databases];
   if (params.all) {
@@ -332,9 +329,7 @@ export async function createGitBackup(params: {
         const resourceId = resource?.pluginId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
         const id = primary
           ? family
-          : `${family}${resourceId ? `__${resourceId}` : ""}__${createHash("sha256")
-              .update(resourcePath)
-              .digest("hex")}`;
+          : `${family}${resourceId ? `__${resourceId}` : ""}__${sha256Hex(resourcePath)}`;
         databases.push({ path: file, identity: { role: "generic", id } });
       }
     }
@@ -352,9 +347,8 @@ export async function createGitBackup(params: {
   await initializeGitBackupRepository({
     repositoryPath,
     stateDir: params.stateDir,
-    gitEnv: params.gitEnv,
   });
-  const repositoryState = await readGitBackupRepositoryState(repositoryPath, params.gitEnv);
+  const repositoryState = await readGitBackupRepositoryState(repositoryPath);
   const staging = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-git-backup-",
@@ -404,7 +398,6 @@ export async function createGitBackup(params: {
         gitBackupScopePath(manifest.identity),
         repositoryState,
         manifest,
-        params.gitEnv,
       );
       if (update) {
         updates.push(update);
@@ -412,9 +405,7 @@ export async function createGitBackup(params: {
     }
     if (params.all) {
       // Retain every selected store, including configured agents whose snapshot failed.
-      updates.push(
-        ...(await prepareStaleScopeUpdates(repositoryPath, scopes, repositoryState, params.gitEnv)),
-      );
+      updates.push(...(await prepareStaleScopeUpdates(repositoryPath, scopes, repositoryState)));
     }
     for (const update of updates) {
       await applyScopeUpdate(staging.dir, repositoryPath, update);
@@ -425,7 +416,6 @@ export async function createGitBackup(params: {
   const commit = await commitGitBackup({
     repositoryPath,
     head: repositoryState.head,
-    now: params.now,
     paths: [
       ...new Set(
         updates.flatMap(({ relative, previousFiles, files }) =>
@@ -435,24 +425,23 @@ export async function createGitBackup(params: {
         ),
       ),
     ],
-    env: params.gitEnv,
   });
   let pushed = false;
   let pushWarning: string | undefined;
   if (params.push) {
     // Staging is path-scoped, but push ships HEAD's full ancestry. A dedicated
     // repository is the supported remote shape.
-    const nonBackupCommitCount = await requireGit(
-      repositoryPath,
-      ["rev-list", "HEAD", "--invert-grep", "--grep=^openclaw backup ", "--count"],
-      { env: params.gitEnv },
-    );
+    const nonBackupCommitCount = await requireGit(repositoryPath, [
+      "rev-list",
+      "HEAD",
+      "--invert-grep",
+      "--grep=^openclaw backup ",
+      "--count",
+    ]);
     if (nonBackupCommitCount !== "0") {
       pushWarning = GIT_BACKUP_NON_BACKUP_HISTORY_WARNING;
     } else {
-      const pushedResult = await runGit(repositoryPath, ["push", "-u", "origin", "HEAD"], {
-        env: params.gitEnv,
-      });
+      const pushedResult = await runGit(repositoryPath, ["push", "-u", "origin", "HEAD"]);
       if (pushedResult.code === 0) {
         pushed = true;
       } else {
@@ -485,7 +474,9 @@ async function materializeGitBackupRef(params: {
     `${params.ref?.trim() || "HEAD"}^{commit}`,
   ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
-  const entries = (await requireGit(repositoryPath, ["ls-tree", "-r", "-z", commit, "--", scope]))
+  const entries = (
+    await requireGit(repositoryPath, ["ls-tree", "-r", "-l", "-z", commit, "--", scope])
+  )
     .split("\0")
     .filter(Boolean);
   const files = new Map(entries.map((entry) => [entry.slice(entry.indexOf("\t") + 1), entry]));
@@ -497,6 +488,7 @@ async function materializeGitBackupRef(params: {
     if (!entry.startsWith("100644 blob ") && !entry.startsWith("100755 blob ")) {
       throw new Error(`Git backup ref contains a non-regular artifact: ${file}`);
     }
+    return Number(entry.slice(0, entry.indexOf("\t")).trim().split(/\s+/).at(-1));
   };
   const manifestPath = `${scope}/${GIT_BACKUP_MANIFEST}`;
   assertRegularArtifact(manifestPath);
@@ -504,12 +496,10 @@ async function materializeGitBackupRef(params: {
     await requireGit(repositoryPath, ["show", `${commit}:${manifestPath}`]),
     manifestPath,
   );
-  const artifacts = gitBackupArtifactFiles(manifest).map(
-    (file) => `${scope}/${file.split(path.sep).join("/")}`,
-  );
-  for (const file of artifacts) {
-    assertRegularArtifact(file);
-  }
+  const artifacts = gitBackupArtifactFiles(manifest).map((file) => {
+    const gitPath = `${scope}/${file.split(path.sep).join("/")}`;
+    return { file: gitPath, timeout: gitBackupContentTimeout(assertRegularArtifact(gitPath)) };
+  });
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-git-restore-",
@@ -518,7 +508,7 @@ async function materializeGitBackupRef(params: {
   try {
     // A ref may contain unrelated documents or filesystem metadata. Only the
     // manifest's artifacts enter restore staging and database verification.
-    for (const file of artifacts) {
+    for (const { file, timeout } of artifacts) {
       const relative = file.slice(scope.length + 1);
       const destination = path.join(outputPath, relative);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
@@ -530,7 +520,7 @@ async function materializeGitBackupRef(params: {
         stdout: { file: destination },
         buffer: { stdout: false },
         maxBuffer: { stderr: 1024 * 1024 },
-        timeout: GIT_TIMEOUT_MS,
+        timeout,
       });
     }
     return {

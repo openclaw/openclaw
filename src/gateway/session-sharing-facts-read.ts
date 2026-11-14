@@ -35,7 +35,21 @@ export async function readSessionSharingFactsInWorker(
   return {
     ...loaded,
     sharing:
-      loaded.sharing ??
+      (loaded.snapshotSource
+        ? {
+            source: { agentId: loaded.snapshotSource.agentId, path: loaded.snapshotSource.path },
+            databaseIdentity: `file:${loaded.snapshotSource.databaseIdentity}`,
+            placeholders: loaded.sharing?.placeholders ?? [],
+            members:
+              loaded.sharing?.members ??
+              loaded.entries.map(({ sessionKey }) => ({
+                sessionKey,
+                identityIds: (loaded.members?.[sessionKey] ?? []).map(
+                  (member) => member.identityId,
+                ),
+              })),
+          }
+        : loaded.sharing) ??
       (loaded.databaseIdentity && physicalSource
         ? {
             source: physicalSource,

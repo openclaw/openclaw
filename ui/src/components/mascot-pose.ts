@@ -36,19 +36,15 @@ export type MascotPose = {
   effectPhase: number;
 };
 
-export type MascotPalette = {
-  gradientTop: string;
-  gradientBottom: string;
-  antenna: string;
-};
+export type MascotPalette = typeof DARK_PALETTE;
 
-const DARK_PALETTE: MascotPalette = {
+const DARK_PALETTE = {
   gradientTop: "#ff4d4d",
   gradientBottom: "#991b1b",
   antenna: "#ff4d4d",
 };
 
-const LIGHT_PALETTE: MascotPalette = {
+const LIGHT_PALETTE = {
   gradientTop: "#ff7079",
   gradientBottom: "#ea4c59",
   antenna: "#ef4b58",

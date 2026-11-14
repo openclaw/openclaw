@@ -1,6 +1,7 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { loadTypefaceStylesheet } from "../../app/typography.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { forceTerminalRender } from "./terminal-panel-session-types.ts";
 
 let symbols: FontFace | undefined;
@@ -22,8 +23,8 @@ export function observeTerminalFonts(
     forceTerminalRender(controller);
   };
   const stylesheet = loadTypefaceStylesheet("jetbrains-mono");
-  stylesheet?.addEventListener("load", refresh);
-  document.fonts.addEventListener("loadingdone", refresh);
+  const stopStylesheet = stylesheet ? listen(stylesheet, "load", refresh) : undefined;
+  const stopFonts = listen(document.fonts, "loadingdone", refresh);
   if (!symbols) {
     symbols = new FontFace(
       "OpenClaw Nerd Symbols",
@@ -37,8 +38,8 @@ export function observeTerminalFonts(
   void symbols.load().then(refresh, refresh);
   return () => {
     disposed = true;
-    stylesheet?.removeEventListener("load", refresh);
-    document.fonts.removeEventListener("loadingdone", refresh);
+    stopStylesheet?.();
+    stopFonts();
   };
 }
 

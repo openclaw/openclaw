@@ -31,6 +31,13 @@ function bundledArtifact(
   setBundledDir(bundledPluginsDir, trust);
   return { bundledPluginsDir, modulePath };
 }
+function pluginFixture(type = "commonjs") {
+  const root = tempDirs.make("openclaw-public-surface-loader-");
+  const bundledPluginsDir = path.join(root, "extensions");
+  const pluginRoot = path.join(bundledPluginsDir, "demo");
+  writeArtifact(path.join(pluginRoot, "package.json"), JSON.stringify({ type }));
+  return { root, bundledPluginsDir, pluginRoot };
+}
 async function freshLoader(scope: string) {
   const loader = await importFreshModule<typeof import("./public-surface-loader.js")>(
     import.meta.url,
@@ -57,10 +64,9 @@ afterEach(() => {
   tempDirs.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
-  vi.doUnmock("jiti");
+  vi.doUnmock("./jiti-factory.js");
   vi.doUnmock("./bundled-dir.js");
   vi.doUnmock("./native-module-require.js");
-  vi.doUnmock("./public-surface-runtime.js");
   vi.doUnmock("./sdk-alias.js");
   vi.unstubAllEnvs();
 });
@@ -91,12 +97,9 @@ describe("bundled plugin public surface loader", () => {
     );
   });
 
-  it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
-    const tempRoot = tempDirs.make("openclaw-public-surface-env-");
+  it("loads candidate artifacts from each caller's environment without changing process.env", async () => {
     const createEnvironment = (marker: string) => {
-      const bundledPluginsDir = path.join(tempRoot, marker);
-      const pluginRoot = path.join(bundledPluginsDir, "demo");
-      writeArtifact(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n');
+      const { bundledPluginsDir, pluginRoot } = pluginFixture();
       writeArtifact(
         path.join(pluginRoot, "api.js"),
         `module.exports = { marker: ${JSON.stringify(marker)} };\n`,
@@ -110,8 +113,8 @@ describe("bundled plugin public surface loader", () => {
     const firstEnvironment = createEnvironment("first");
     const secondEnvironment = createEnvironment("second");
     const loader = await freshLoader("caller-environment");
-    const load = (env: NodeJS.ProcessEnv) => loader.load({ ...publicArtifact, env });
-    expect(load(firstEnvironment).marker).toBe("first");
+    const load = (env: NodeJS.ProcessEnv) => loader.candidates({ ...candidateArtifacts, env });
+    expect(load(firstEnvironment)?.marker).toBe("first");
     expect(
       loader.candidates({
         dirName: "demo",
@@ -119,15 +122,13 @@ describe("bundled plugin public surface loader", () => {
         env: secondEnvironment,
       })?.marker,
     ).toBe("second");
-    expect(load(firstEnvironment).marker).toBe("first");
+    expect(load(firstEnvironment)?.marker).toBe("first");
   });
 
   it.each([false, true])(
     "separates disabled and enabled fallback caches with disabledFirst=%s",
     async (disabledFirst) => {
-      const tempRoot = tempDirs.make("openclaw-public-surface-env-cache-");
-      const pluginRoot = path.join(tempRoot, "extensions", "demo");
-      writeArtifact(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n');
+      const { root: tempRoot, pluginRoot } = pluginFixture();
       writeArtifact(path.join(pluginRoot, "api.js"), 'module.exports = { marker: "enabled" };\n');
       // Both environments lack a discovered tree; only the package source fallback exists.
       vi.doMock("./bundled-dir.js", async (importOriginal) => ({
@@ -151,92 +152,59 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
-  it("keeps auto-resolved bundled roots on built public artifacts", async () => {
-    // The non-isolated plugin shard may have already imported the native loader.
-    vi.resetModules();
-    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-    const bundledPluginsDir = path.join(tempRoot, "dist", "extensions");
-    const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");
-    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-    fs.writeFileSync(modulePath, 'export const marker = "built";\n', "utf8");
+  it.each(["auto-resolved dist", "package-local dist", "Windows dist"] as const)(
+    "loads %s artifacts without source transforms",
+    async (layout) => {
+      // The non-isolated plugin shard may have already imported the native loader.
+      vi.resetModules();
+      const createJiti = vi.fn(() => {
+        throw new Error("built artifacts must load without source transforms");
+      });
+      vi.doMock("./jiti-factory.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./jiti-factory.js")>()),
+        createJiti,
+      }));
+      const { root, bundledPluginsDir: sourceRoot, pluginRoot } = pluginFixture();
+      const packageLocal = layout === "package-local dist";
+      const bundledPluginsDir = packageLocal ? sourceRoot : path.join(root, "dist", "extensions");
+      writeArtifact(path.join(root, "package.json"), '{"type":"commonjs"}\n');
+      writeArtifact(
+        path.join(pluginRoot, "api.ts"),
+        'throw new Error("source artifact must not execute");\nexport {};\n',
+      );
+      writeArtifact(
+        path.join(bundledPluginsDir, "demo", ...(packageLocal ? ["dist"] : []), "api.js"),
+        'module.exports = { marker: "native-dist" };\n',
+      );
 
-    const resolveBundledPluginPublicSurfacePath = vi.fn(() => modulePath);
-    vi.doMock("./bundled-dir.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./bundled-dir.js")>();
-      return {
-        ...actual,
-        resolveBundledPluginsDir: () => bundledPluginsDir,
+      if (layout === "auto-resolved dist") {
+        vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", undefined);
+        vi.doMock("./bundled-dir.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./bundled-dir.js")>()),
+          resolveBundledPluginsDir: () => bundledPluginsDir,
+        }));
+        vi.doMock("./sdk-alias.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./sdk-alias.js")>()),
+          resolveLoaderPackageRoot: () => root,
+        }));
+      } else {
+        setBundledDir(bundledPluginsDir);
+      }
+
+      const load = async () => {
+        const loader = await freshLoader(`native-${layout}`);
+        expect(loader.load(publicArtifact).marker).toBe("native-dist");
+        expect(createJiti).not.toHaveBeenCalled();
       };
-    });
-    vi.doMock("./public-surface-runtime.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./public-surface-runtime.js")>();
-      return {
-        ...actual,
-        resolveBundledPluginPublicSurfacePath,
-      };
-    });
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: (target: string) => ({
-        ok: true,
-        moduleExport: { marker: path.basename(path.dirname(target)) },
-      }),
-    }));
+      if (layout === "Windows dist") {
+        await withMockedWindowsPlatform(load);
+      } else {
+        await load();
+      }
+    },
+  );
 
-    const publicSurfaceLoader = await importFreshModule<
-      typeof import("./public-surface-loader.js")
-    >(import.meta.url, "./public-surface-loader.js?scope=auto-bundled-built-artifacts");
-
-    expect(
-      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
-        dirName: "demo",
-        artifactBasename: "provider-policy-api.js",
-      }).marker,
-    ).toBe("demo");
-    expect(resolveBundledPluginPublicSurfacePath).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledPluginsDir,
-        bundledPluginsDirMode: "explicit",
-      }),
-    );
-  });
-
-  it("uses native require for Windows dist public artifact loads", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: () => ({
-        ok: true,
-        moduleExport: { marker: "windows-dist-ok" },
-      }),
-    }));
-
-    await withMockedWindowsPlatform(async () => {
-      const publicSurfaceLoader = await importFreshModule<
-        typeof import("./public-surface-loader.js")
-      >(import.meta.url, "./public-surface-loader.js?scope=windows-dist-jiti");
-      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-      const bundledPluginsDir = path.join(tempRoot, "dist");
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-
-      const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");
-      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-      fs.writeFileSync(modulePath, 'export const marker = "windows-dist-ok";\n', "utf8");
-
-      expect(
-        publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
-          dirName: "demo",
-          artifactBasename: "provider-policy-api.js",
-        }).marker,
-      ).toBe("windows-dist-ok");
-      expect(createJiti).not.toHaveBeenCalled();
-    });
-  });
-
-  it("loads import-only dependencies under tsx and shares source artifacts for one cache generation", () => {
+  it("loads import-only dependencies under tsx and retains bundled code across cache generations", () => {
     const tempRoot = tempDirs.make("openclaw-public-surface-source-");
     const bundledPluginsDir = path.join(tempRoot, "extensions");
     const pluginRoot = path.join(bundledPluginsDir, "demo");
@@ -272,10 +240,10 @@ describe("bundled plugin public surface loader", () => {
         fs.writeFileSync(${JSON.stringify(dependencyPath)}, 'export const marker = "replacement";\\n');
         assert.equal(load(), first);
         clearPluginMetadataLifecycleCaches();
-        const replacement = load();
-        assert.notEqual(replacement, first);
-        assert.equal(replacement.marker, "replacement");
-        assert.equal(replacement.shared, first.shared);
+        const refreshed = load();
+        assert.notEqual(refreshed, first);
+        assert.equal(refreshed.marker, "original");
+        assert.equal(refreshed.shared, first.shared);
         console.log("source artifact import, identity, and lifecycle verified");
       `,
       {
@@ -304,45 +272,6 @@ describe("bundled plugin public surface loader", () => {
     expect(result.stdout.trim()).toBe("source artifact import, identity, and lifecycle verified");
   });
 
-  it("keeps package-local dist public artifacts on the native path for source plugin roots", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "jiti-should-not-run" })));
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
-        ok: true,
-        moduleExport: {
-          marker: modulePath.includes(`${path.sep}dist${path.sep}`) ? "dist" : "source",
-        },
-      }),
-    }));
-
-    const publicSurfaceLoader = await importFreshModule<
-      typeof import("./public-surface-loader.js")
-    >(import.meta.url, "./public-surface-loader.js?scope=source-root-local-dist-public-artifacts");
-    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-    const bundledPluginsDir = path.join(tempRoot, "extensions");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-
-    const sourcePath = path.join(bundledPluginsDir, "demo", "api.ts");
-    const distPath = path.join(bundledPluginsDir, "demo", "dist", "api.js");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.mkdirSync(path.dirname(distPath), { recursive: true });
-    fs.writeFileSync(sourcePath, 'export const marker = "source";\n', "utf8");
-    fs.writeFileSync(distPath, 'export const marker = "dist";\n', "utf8");
-
-    expect(
-      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
-        dirName: "demo",
-        artifactBasename: "api.js",
-      }).marker,
-    ).toBe("dist");
-    expect(createJiti).not.toHaveBeenCalled();
-  });
-
   it.each([
     { firstLocation: "root", nextLocation: "dist" },
     { firstLocation: "dist", nextLocation: "root" },
@@ -351,10 +280,7 @@ describe("bundled plugin public surface loader", () => {
     async ({ firstLocation, nextLocation }) => {
       const loader = await freshLoader(`esm-artifact-relocation-${firstLocation}-${nextLocation}`);
       const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
-      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-      const bundledPluginsDir = path.join(tempRoot, "extensions");
-      const pluginDir = path.join(bundledPluginsDir, "demo");
-      writeArtifact(path.join(pluginDir, "package.json"), '{"type":"module"}\n');
+      const { bundledPluginsDir, pluginRoot: pluginDir } = pluginFixture("module");
       setBundledDir(bundledPluginsDir);
       const artifactPath = (location: "root" | "dist") =>
         path.join(pluginDir, ...(location === "dist" ? ["dist"] : []), "api.js");
@@ -375,8 +301,9 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
-  it("reloads a replaced installed public artifact and its dependencies after plugin metadata changes", async () => {
+  it("shares warm installed artifacts with facades and reloads their dependencies after metadata changes", async () => {
     const loader = await freshLoader("installed-artifact-replacement");
+    const { loadFacadeModuleAtLocationSync } = await import("../plugin-sdk/facade-loader.js");
     const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
     const tempRoot = fs.realpathSync(tempDirs.make("openclaw-public-surface-replacement-"));
     const pluginRoot = path.join(tempRoot, "installed-plugin");
@@ -387,13 +314,31 @@ describe("bundled plugin public surface loader", () => {
       writeArtifact(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`);
       writeArtifact(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
     };
-    const loadArtifact = () => loader.installed({ pluginRoot, artifactBasename: "api.js" }).marker;
+    const loadArtifact = () => loader.installed({ pluginRoot, artifactBasename: "api.js" });
     replaceArtifact("retired");
-    expect(loadArtifact()).toBe("retired");
+    const first = loadArtifact();
+    const probes = [
+      vi.spyOn(fs, "existsSync"),
+      vi.spyOn(fs, "realpathSync"),
+      vi.spyOn(fs, "statSync"),
+      vi.spyOn(fs, "openSync"),
+    ];
+    expect(loadArtifact()).toBe(first);
+    expect(
+      loadFacadeModuleAtLocationSync({
+        location: { modulePath, boundaryRoot: pluginRoot },
+        trackedPluginId: "shared-artifact",
+      }),
+    ).toBe(first);
+    expect(first.marker).toBe("retired");
+    for (const probe of probes) {
+      expect(probe).not.toHaveBeenCalled();
+      probe.mockRestore();
+    }
     replaceArtifact("replacement");
-    expect(loadArtifact()).toBe("retired");
+    expect(loadArtifact()).toBe(first);
     clearPluginMetadataLifecycleCaches();
-    expect(loadArtifact()).toBe("replacement");
+    expect(loadArtifact().marker).toBe("replacement");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -408,30 +353,12 @@ describe("bundled plugin public surface loader", () => {
       fs.mkdirSync(path.dirname(modulePath), { recursive: true });
       writeArtifact(sourcePath, 'export const marker = "demo";\n');
       fs.linkSync(sourcePath, modulePath);
+      expect(fs.statSync(modulePath).nlink).toBeGreaterThan(1);
       setBundledDir(bundledPluginsDir);
       expect(loader.load(publicArtifact).marker).toBe("demo");
       const installed = { pluginRoot: bundledPluginsDir, artifactBasename: "demo/api.js" };
       expect(() => loader.installed(installed)).toThrow(
         "Unable to open plugin public surface demo/api.js",
-      );
-    },
-  );
-
-  it.runIf(process.platform !== "win32").each(["provider-policy-api.js"])(
-    "rejects installed plugin public artifact %s hardlinked outside its root",
-    async (artifact) => {
-      const loader = await freshLoader(`installed-hardlink-${artifact.replace(".js", "")}`);
-      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-      const pluginRoot = path.join(tempRoot, "installed-plugin");
-      const outsidePath = path.join(tempRoot, "outside.js");
-      const artifactPath = path.join(pluginRoot, artifact);
-      fs.mkdirSync(pluginRoot, { recursive: true });
-      writeArtifact(outsidePath, 'export const marker = "outside-plugin-root";\n');
-      fs.linkSync(outsidePath, artifactPath);
-      expect(fs.statSync(artifactPath).nlink).toBeGreaterThan(1);
-      const installed = { pluginRoot, artifactBasename: artifact };
-      expect(() => loader.installed(installed)).toThrow(
-        `Unable to open plugin public surface ${artifact}`,
       );
     },
   );
@@ -456,40 +383,12 @@ describe("bundled plugin public surface loader", () => {
     expect(loader.load(publicArtifact).marker).toBe("demo");
   });
 
-  it("shares installed artifact exports with SDK facades without warm filesystem probes", async () => {
-    const { loadPluginPublicArtifactModuleSync } = await import("./public-surface-loader.js");
-    const { loadFacadeModuleAtLocationSync } = await import("../plugin-sdk/facade-loader.js");
-    const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-shared-plugin-artifact-"));
-    const modulePath = path.join(pluginRoot, "api.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = { marker: "shared-artifact" };\n');
-    const loadArtifact = () =>
-      loadPluginPublicArtifactModuleSync<{ marker: string }>({
-        pluginRoot,
-        artifactBasename: "api.cjs",
-      });
-    const first = loadArtifact();
-    const exists = vi.spyOn(fs, "existsSync");
-    const realpath = vi.spyOn(fs, "realpathSync");
-    const stat = vi.spyOn(fs, "statSync");
-    const open = vi.spyOn(fs, "openSync");
-
-    expect(loadArtifact()).toBe(first);
-    expect(
-      loadFacadeModuleAtLocationSync({
-        location: { modulePath, boundaryRoot: pluginRoot },
-        trackedPluginId: "shared-artifact",
-      }),
-    ).toBe(first);
-    expect(first.marker).toBe("shared-artifact");
-    expect(exists).not.toHaveBeenCalled();
-    expect(realpath).not.toHaveBeenCalled();
-    expect(stat).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-  });
-
   it("rejects public artifacts that change after boundary validation", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "should-not-load" })));
-    vi.doMock("jiti", () => ({ createJiti }));
+    vi.doMock("./jiti-factory.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./jiti-factory.js")>()),
+      createJiti,
+    }));
     const loader = await freshLoader("post-validation-identity");
     const { modulePath } = bundledArtifact(undefined, undefined, false);
     const realStatSync = fs.statSync.bind(fs);

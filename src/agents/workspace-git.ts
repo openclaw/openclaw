@@ -2,7 +2,6 @@ import { existsSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 
 /** Find the nearest Git metadata, including damaged linked-worktree pointers. */
@@ -55,6 +54,7 @@ export function hasWorkspaceGitCheckout(start: string): boolean {
 // Git availability is process-stable; cache the probe result, including failure, until restart.
 const isGitAvailable = createLazyPromise(async () => {
   try {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
     const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
     return result.code === 0;
   } catch {
@@ -77,6 +77,7 @@ export async function ensureGitRepo(
   if (!(await isGitAvailable())) {
     return;
   }
+  const { runCommandWithTimeout } = await import("../process/exec.js");
   beforePersistentApply?.();
   try {
     await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });

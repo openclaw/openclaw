@@ -185,11 +185,8 @@ describe("legacy main session input handoff", () => {
       completions: [],
     });
     expect(await listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
-      total: 2,
-      items: [
-        { id: queued.inputId, message: queued.message, state: "interrupted" },
-        { id: cancelled.inputId, message: cancelled.message, state: "cancelled" },
-      ],
+      total: 1,
+      items: [{ id: cancelled.inputId, message: cancelled.message, state: "cancelled" }],
     });
     expect(
       await listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
@@ -243,17 +240,15 @@ describe("legacy main session input handoff", () => {
     expect(f.rows(f.destination).completions).toEqual(
       retained.map((row) => Object.assign({}, row, { session_key: f.destination.key })),
     );
+    if (!scenario.final) {
+      await expect(f.accept(f.destination, "private-result")).rejects.toThrow("ownership ended");
+      return;
+    }
     const retry = await f.accept(f.destination, "private-result");
     expect(retry.completion).toEqual(
-      scenario.final
-        ? scenario.retainDestination
-          ? scenario.destination
-          : scenario.source
-        : undefined,
+      scenario.retainDestination ? scenario.destination : scenario.source,
     );
-    if (scenario.final) {
-      expect(() => retry.run(() => "replayed work")).toThrow("already completed");
-    }
+    expect(() => retry.run(() => "replayed work")).toThrow("already completed");
   });
 
   it.each(["pending input", "completion"] as const)(
@@ -268,11 +263,11 @@ describe("legacy main session input handoff", () => {
         if (changed) {
           return;
         }
-        await f.accept(
-          f.source,
-          kind === "pending input" ? "late-input" : "accepted",
-          kind === "completion" ? { completion: failed } : {},
-        );
+        if (kind === "pending input") {
+          await f.accept(f.source, "late-input");
+        } else {
+          f.setCompletedAt(f.source, 1);
+        }
         changed = f.rows(f.source);
       });
 

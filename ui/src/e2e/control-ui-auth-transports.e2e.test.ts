@@ -4,15 +4,14 @@ import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../src/test-utils/openclaw-test-state.js";
-import { getFreePort } from "../../../src/test-utils/ports.js";
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../../test/helpers/openclaw-test-instance.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiE2eWaitTimeoutMs,
@@ -57,7 +56,7 @@ let allowedUi: ControlUiE2eServer;
 let rejectedUi: ControlUiE2eServer;
 let gateway: Awaited<ReturnType<typeof startRealGateway>>;
 let proxy: Awaited<ReturnType<typeof startRealTransportProxy>>;
-let gatewayState: OpenClawTestState | undefined;
+let gatewayInstance: OpenClawTestInstance | undefined;
 // Register producers before awaiting startup so partial setup still owns their closes.
 const closeProducers: Array<() => Promise<void>> = [];
 
@@ -339,26 +338,16 @@ async function startControlUiOriginProxy(upstreamBaseUrl: string): Promise<Contr
 }
 
 async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
-  const port = await getFreePort();
-  const httpUrl = `http://127.0.0.1:${port}/`;
-  signal.throwIfAborted();
-  gatewayState = await createOpenClawTestState({
-    label: "control-ui-auth-transports",
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
+  const instance = await createOpenClawTestInstance({
+    name: "control-ui-auth-transports",
+    // Keep the stopped socket closed for the transport cleanup assertions.
+    reserveIdlePort: false,
+    signal,
   });
-  const state = gatewayState;
+  gatewayInstance = instance;
+  closeProducers.push(() => instance.stopGateway());
+  const { port, state } = instance;
+  const httpUrl = `http://127.0.0.1:${port}/`;
   signal.throwIfAborted();
   const trustedProxy = {
     allowLoopback: true,
@@ -392,25 +381,12 @@ async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
     },
   });
   signal.throwIfAborted();
-  const { startGatewayServer } = await import("../../../src/gateway/server.js");
-  signal.throwIfAborted();
-  const startup = startGatewayServer(port, {
-    auth,
-    bind: "loopback",
-    controlUiEnabled: true,
-    sidecarStartup: "defer",
-  });
-  // Retain the original startup, including rejection; no close handle means state is unsafe to release.
-  closeProducers.push(async () => {
-    const server = await startup;
-    await server.close({ reason: "control ui auth transports test cleanup" });
-  });
-  await startup;
+  await instance.startGateway();
   return {
     httpUrl,
     port,
     state,
-    url: `ws://127.0.0.1:${port}`,
+    url: instance.url,
   };
 }
 
@@ -511,15 +487,17 @@ async function expectRawConfig(page: Page, prefix: string) {
   await expect.poll(() => editor.inputValue()).toContain(prefix);
 }
 
-async function waitForVisibleFailure(page: Page, expectedText: string): Promise<void> {
+async function waitForVisibleFailure(page: Page, expectedText: string): Promise<Locator> {
   const failure = page.locator(".login-gate__failure");
   await failure.waitFor();
   expect(await failure.getAttribute("role")).toBe("status");
   expect(await failure.getAttribute("aria-live")).toBe("polite");
   const raw = (await failure.locator(".login-gate__failure-raw").textContent()) ?? "";
   expect(raw.toLowerCase()).toContain(expectedText.toLowerCase());
-  expect(await failure.locator(".login-gate__failure-steps").isVisible()).toBe(true);
+  await failure.getByText("Show details", { exact: true }).click();
+  expect(await failure.locator(".login-gate__failure-raw").isVisible()).toBe(true);
   expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+  return failure;
 }
 
 async function isPortClosed(host: string, port: number): Promise<boolean> {
@@ -575,9 +553,9 @@ const suite = createControlUiE2eSuite({
       });
     },
     async release() {
-      await gatewayState?.cleanup();
+      await gatewayInstance?.cleanup();
     },
-    retainedState: () => gatewayState?.root,
+    retainedState: () => gatewayInstance?.state.root,
   },
 });
 
@@ -607,7 +585,7 @@ suite.define(() => {
         settingsUrl.searchParams.set("section", "messages");
         expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
         const prefix = connected.page.getByRole("textbox", {
-          name: "Outbound Response Prefix",
+          name: "Outbound response prefix",
           exact: true,
         });
         await expect.poll(() => prefix.inputValue()).toBe(configProofPrefixBefore);
@@ -642,26 +620,25 @@ suite.define(() => {
     await suite.runScenario(context, {
       async run() {
         const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
-        const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
-        await waitForVisibleFailure(rejected.page, "unauthorized");
+        const failure = await waitForVisibleFailure(rejected.page, "unauthorized");
         const untrustedEvidence = await waitForConnectionEvidence(
           (entry) => entry.route === "untrusted" && entry.gatewayResult?.ok === false,
           rejected.evidenceStartIndex,
         );
         expect(untrustedEvidence.gatewayResult).toMatchObject({
           message: expect.stringContaining("unauthorized"),
-          errorReason: expectedReason,
+          errorReason: "trusted_proxy_missing_header_x-forwarded-proto",
           errorCode: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
         });
-        const failure = rejected.page.locator(".login-gate__failure");
         expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
-        expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain("SSO");
-        expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain(
-          "WebSocket upgrade",
+        expect(await failure.locator(".login-gate__failure-steps:visible").textContent()).toContain(
+          "Open the dashboard through the sign-in proxy, not the Gateway directly.",
+        );
+        expect(await failure.locator(".login-gate__failure-detail").textContent()).toContain(
+          "Ask an admin to check identity headers, required-header forwarding on WebSocket upgrade requests, and your account access.",
         );
         expect(await failure.locator(".login-gate__command").count()).toBe(0);
         await finishBrowser(rejected);
-
         const connected = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
         await waitForShell(connected.page);
         const trustedEvidence = await waitForConnectionEvidence(
@@ -731,29 +708,28 @@ suite.define(() => {
     await suite.runScenario(context, {
       async run() {
         const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
-        await waitForVisibleFailure(rejected.page, "origin not allowed");
-        const originFailure = rejected.page.locator(".login-gate__failure");
-        expect(await originFailure.getAttribute("data-kind")).toBe("origin-not-allowed");
-        expect(await originFailure.locator(".login-gate__command").count()).toBe(0);
-        const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
+        const failure = await waitForVisibleFailure(rejected.page, "origin not allowed");
+        expect(await failure.getAttribute("data-kind")).toBe("origin-not-allowed");
+        expect(await failure.locator(".login-gate__command").count()).toBe(0);
+        expect(await failure.locator(".login-gate__failure-detail").textContent()).toContain(
+          "Add this browser origin to gateway.controlUi.allowedOrigins.",
+        );
         await waitForConnectionEvidence(
           (entry) =>
             entry.route === "trusted" &&
-            entry.browserOrigin === rejectedOrigin &&
+            entry.browserOrigin === new URL(rejectedUi.baseUrl).origin &&
             (entry.gatewayResult?.errorCode ===
               ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED ||
               entry.upstreamHandshakeStatus === 403),
           rejected.evidenceStartIndex,
         );
         await finishBrowser(rejected);
-
         const allowed = await createBrowserPage(allowedUi.baseUrl, proxy.trustedUrl);
         await waitForShell(allowed.page);
-        const allowedOrigin = new URL(allowedUi.baseUrl).origin;
         await waitForConnectionEvidence(
           (entry) =>
             entry.route === "trusted" &&
-            entry.browserOrigin === allowedOrigin &&
+            entry.browserOrigin === new URL(allowedUi.baseUrl).origin &&
             entry.gatewayResult?.ok === true,
           allowed.evidenceStartIndex,
         );

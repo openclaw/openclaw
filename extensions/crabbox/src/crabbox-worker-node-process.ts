@@ -1,3 +1,4 @@
+import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CRABBOX_MACOS_APP_PATH,
   crabboxMacosDesktopDirectory,
@@ -5,13 +6,16 @@ import {
 } from "./crabbox-worker-desktop-macos.js";
 import { createCrabboxWindowsDesktopNodeLauncher } from "./crabbox-worker-desktop-windows.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
+import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
 
 /** The enrollment script and native desktop host share one process receipt contract. */
 export function createCrabboxNodeProcessRuntime(
   desktopTarget: CrabboxOperatingSystem | undefined,
   leaseId: string,
+  resumeDeviceId?: string,
 ): string {
   return `const desktopTarget = ${JSON.stringify(desktopTarget)};
+const resumeDeviceId = ${JSON.stringify(resumeDeviceId)};
 ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher() : ""}
   // The watchdog only stops a hung tool; enrollment owns total time. CPU-starved macOS
   // hosts measured ps/lsof identity probes at up to 27 s, so Darwin gets the 60 s subprocess budget.
@@ -141,12 +145,14 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
       const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
       if (inspectMacosHost(launch)?.state !== "gone") throw new Error("Cloud worker desktop host is still running or could not be verified; release and reprovision the worker");
     }
-    fs.unlinkSync(pidFile);
+    // A resume child cannot commit before replacing this receipt. Retaining the
+    // confirmed-dead PID makes a lost pre-commit launcher safely retryable.
+    if (resumeDeviceId === undefined) fs.unlinkSync(pidFile);
   }
   return false;
   };
   const launchNodeProcess = async () => {
-  const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
+  const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run", ...${JSON.stringify(resumeDeviceId ? ["--resume-device", resumeDeviceId] : [])}];
   setPhase("node launch");
   const logPath = path.join(stateDir, "node.log");
   const log = process.platform === "win32" ? undefined : fs.openSync(logPath, "a", 0o600);
@@ -155,8 +161,27 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
   let parentPid;
   let startTime;
   let desktopIdentity;
+  const resumeHandoff = process.platform === "linux" && resumeDeviceId !== undefined;
+  let resumeCommitSent = false;
+  const waitResumeReply = (type, commit = false) => new Promise((resolve, reject) => {
+    const cleanup = () => { child.off("message", onMessage); child.off("error", fail); child.off("close", onClose); child.off("disconnect", onClose); };
+    const fail = (error) => { cleanup(); reject(error); };
+    const onClose = () => fail(new Error("Saved node resume child closed before handoff"));
+    const onMessage = (message) => {
+      if (message?.type !== type || message.deviceId !== resumeDeviceId) return;
+      cleanup(); resolve();
+    };
+    child.on("message", onMessage);
+    child.once("error", fail);
+    child.once("close", onClose);
+    child.once("disconnect", onClose);
+    if (commit) {
+      resumeCommitSent = true;
+      child.send({ type: "openclaw.node.resume-commit", deviceId: resumeDeviceId }, (error) => { if (error) fail(error); });
+    }
+  });
   try {
-    const nodeArgs = [cli, ...args, "--ephemeral", "--display-name", displayName];
+    const nodeArgs = [cli, ...(resumeHandoff ? ["--openclaw-node-host-resume-child", resumeDeviceId] : []), ...args, "--ephemeral", "--display-name", displayName];
     if (desktopTarget === "macos") {
       // LaunchServices makes the signed host its own TCC responsibility owner.
       // open is only a waiter; the host's inspected receipt identifies the actual processes.
@@ -196,8 +221,8 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
       }
       if (!pid) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
     } else {
-      child = spawn(process.execPath, nodeArgs, { cwd: runtimeDir, env: nodeEnv, detached: true, windowsHide: true, stdio: ["ignore", log, log] });
-      await once(child, "spawn");
+      child = spawn(process.execPath, nodeArgs, { cwd: runtimeDir, env: nodeEnv, detached: true, windowsHide: true, stdio: resumeHandoff ? ["ignore", log, log, "ipc"] : ["ignore", log, log] });
+      await Promise.all([once(child, "spawn"), ...(resumeHandoff ? [waitResumeReply("openclaw.node.resume-ready")] : [])]);
       pid = child.pid;
       if (process.platform !== "linux") startTime = processStartTime(pid);
     }
@@ -209,9 +234,29 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
           fs.renameSync(temporary, launchFile);
         } finally { fs.rmSync(temporary, { force: true }); }
       }
-      fs.writeFileSync(pidFile, String(pid) + "\\n", { mode: 0o600 });
+      const temporaryPid = pidFile + "." + crypto.randomUUID();
+      try {
+        fs.writeFileSync(temporaryPid, String(pid) + "\\n", { mode: 0o600, flag: "wx" });
+        fs.renameSync(temporaryPid, pidFile);
+      } finally { fs.rmSync(temporaryPid, { force: true }); }
+      // A lost launcher before this receipt closes the private channel and the
+      // detached child exits without starting the node. Commit never precedes it.
+      if (resumeHandoff) await waitResumeReply("openclaw.node.resume-committed", true);
     child?.unref();
   } catch (error) {
+    if (resumeHandoff && child) {
+      if (!resumeCommitSent) {
+        // Locally closing IPC need not emit child "close"; join the actual process exit.
+        const exited = child.pid && child.exitCode === null && child.signalCode === null ? once(child, "exit") : undefined;
+        if (child.connected) child.disconnect();
+        await exited;
+      } else {
+        // The receipt precedes commitment. Preserve that known process for exact
+        // inspection on retry; an uncertain reply never authorizes another launch.
+        child.unref();
+      }
+      throw error;
+    }
     if (desktopTarget === "macos") {
       let confirmedStopped = !child?.pid;
       try {
@@ -241,4 +286,58 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
   } finally { if (log !== undefined) fs.closeSync(log); }
   };
 `;
+}
+
+type ResumeRequest = Parameters<NonNullable<WorkerProvider["resumeNode"]>>[0];
+
+/** No setup, artifact download, enrollment credential, or repository command enters recovery. */
+export function createCrabboxNodeResumeScript(
+  request: ResumeRequest,
+  phase: "inspect" | "launch",
+): string {
+  const script = `const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
+const crypto = require("node:crypto");
+const { spawn, spawnSync } = require("node:child_process");
+const { once } = require("node:events");
+(async () => {
+  process.umask(0o077);
+  const home = fs.realpathSync(os.homedir());
+  const leaseId = ${JSON.stringify(request.leaseId)};
+  const mode = "resume";
+  const displayName = "Cloud worker";
+  const setPhase = () => {};
+  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", ${JSON.stringify(request.nodeBootstrapSha256)});
+  const runtimeLink = path.join(stateDir, "runtime");
+  const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  const pidFile = path.join(stateDir, "node.pid");
+  const launchFile = path.join(stateDir, "node-launch.json");
+  const setupFile = path.join(stateDir, "setup-code");
+  if (!fs.lstatSync(stateDir).isDirectory() || fs.realpathSync(stateDir) !== stateDir || !fs.lstatSync(runtimeDir).isDirectory() || fs.realpathSync(runtimeDir) !== runtimeDir || !fs.lstatSync(runtimeLink).isSymbolicLink() || fs.realpathSync(runtimeLink) !== runtimeDir) throw new Error("Cloud worker saved runtime is missing or changed; resume refused");
+  const packageRoot = path.join(runtimeDir, "node_modules", "openclaw");
+  if ([".openclaw-lifecycle-pending", "dist/openclaw-install-guard"].some((file) => fs.existsSync(path.join(packageRoot, file)))) throw new Error("Cloud worker saved package requires repair; resume refused");
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+  if (manifest.name !== "openclaw" || manifest.version !== ${JSON.stringify(request.openclawVersion)}) throw new Error("Cloud worker saved package identity changed; resume refused");
+  // The saved process receipt names the actual CLI, not a compile-cache respawn.
+  const nodeEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir, NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_NO_RESPAWN: "1" };
+  nodeEnv.PATH = path.dirname(process.execPath) + path.delimiter + path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
+  ${
+    phase === "inspect"
+      ? `// The supported read-only identity command may wait on runtime startup.
+  // Return to the host owner before admitting a separate write invocation.
+  const identity = spawnSync(process.execPath, [cli, "node", "identity", "--json"], { cwd: runtimeDir, env: nodeEnv, encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+  if (identity.status !== 0 || JSON.parse(identity.stdout).deviceId !== ${JSON.stringify(request.deviceId)}) throw new Error("Cloud worker saved device identity changed; resume refused");`
+      : `${createCrabboxNodeProcessRuntime(undefined, request.leaseId, request.deviceId)}
+  // Runtime/receipt checks are repeated in this write invocation; the node runner
+  // independently enforces the exact saved device, configuration and paired token.
+  if (!reuseNodeProcess()) await launchNodeProcess();`
+  }
+})().catch((error) => { console.error(error.message); process.exitCode = 1; });`;
+  return wrapCrabboxNodeScript(
+    script,
+    "linux",
+    `CRABBOX_NODE_RESUME_${phase.toUpperCase()}_SCRIPT`,
+  );
 }

@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
@@ -27,6 +29,7 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 function syntheticRequest(
@@ -44,12 +47,10 @@ function syntheticRequest(
   const context = createContext([[method, scope, "scope-proof", handler]]);
   const request = withOperatorToolGatewayAuthority(
     {
-      authenticatedUserProfile: {
-        profileId: ensureProfileForEmail("scope-owner@example.test").id,
+      authenticatedUserProfile: gatewayProfile(
+        ensureProfileForEmail("scope-owner@example.test").id,
         displayName,
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      ),
       scopes,
     },
     () =>
@@ -109,6 +110,43 @@ describe("synthetic operator scope attenuation", () => {
       }
     },
   );
+});
+
+describe("own-run exec approvals under a System launch client", () => {
+  it.each([
+    ["exec.approval.request", true],
+    ["exec.approval.waitDecision", true],
+    ["exec.approval.resolve", false],
+  ] as const)("lets a subagent run call %s: %s", async (method, allowed) => {
+    const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+      expect(client?.connect.scopes).toEqual(["operator.approvals"]);
+      respond(true, { ok: true });
+    });
+    const context = createContext([[method, "operator.approvals", "approval-proof", handler]]);
+    // Subagent launches and settle wakes run their tools under a write-only System client.
+    const client = createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } });
+    await withPluginRuntimeGatewayRequestScope(
+      { client, context, isWebchatConnect: () => false },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:subagent:child",
+            operationalRunInstance: createOperationalRunInstanceRef("child-run"),
+            receiptAuthority: () => true,
+          },
+          async () => {
+            const request = callAgentToolGatewayRequest({ method, params: {} });
+            if (allowed) {
+              await expect(request).resolves.toEqual({ ok: true });
+            } else {
+              await expect(request).rejects.toThrow("missing scope: operator.approvals");
+            }
+          },
+        ),
+    );
+    expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  });
 });
 
 describe("registered plugin SDK scope attenuation", () => {

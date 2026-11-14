@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { validateName } from "../../worktrees/name.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
@@ -31,10 +32,20 @@ import {
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
+const BLIND_FORK_ERROR =
+  'Blind spawns require context="isolated"; a forked transcript carries the requester conversation.';
+
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ) {
+  if (params.worktreeName !== undefined) {
+    try {
+      validateName(params.worktreeName);
+    } catch (error) {
+      return rejectSubagentSpawnRequest("error", summarizeSpawnError(error));
+    }
+  }
   const requestedAgentId = params.agentId?.trim();
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {
@@ -101,6 +112,9 @@ export async function resolveSubagentSpawnRequest(
       accountId: ctx.agentAccountId,
     },
   });
+  if (params.blind === true && contextMode === "fork") {
+    return rejectSubagentSpawnRequest("error", BLIND_FORK_ERROR);
+  }
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: ctx.agentSessionKey,
@@ -149,10 +163,15 @@ export async function resolveSubagentSpawnRequest(
           "Private completion requires an existing requester session. Retry from an active session.",
         );
       }
+      const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
+      // Children of a blind requester stay blind, so they cannot fork its transcript either.
+      if (contextMode === "fork" && requesterEntry?.blindPrompt) {
+        return rejectSubagentSpawnRequest("error", BLIND_FORK_ERROR);
+      }
       return {
         ok: true as const,
         requesterTarget,
-        requesterEntry: requesterTarget.store[requesterTarget.canonicalKey],
+        requesterEntry,
         completionRequesterSessionId: completionEntry?.sessionId,
         completionRequesterLifecycleRevision: completionEntry?.lifecycleRevision,
       };
@@ -385,6 +404,8 @@ export async function resolveSubagentSpawnRequest(
       ownership,
       requesterEntry: requester.requesterEntry,
       requesterTarget: requester.requesterTarget,
+      // Descendants of a blind requester stay blind; their prompts would otherwise name the route.
+      blind: params.blind === true || requester.requesterEntry?.blindPrompt === true,
       requesterAgentId,
       targetAgentId,
       swarmConfig,

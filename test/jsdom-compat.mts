@@ -1,3 +1,4 @@
+import { types } from "node:util";
 import type { DOMWindow } from "jsdom";
 import type { Environment } from "vitest/runtime";
 
@@ -7,6 +8,31 @@ const adapterInstalled = Symbol.for("openclaw.vitest.jsdom-adapter");
 export type JsdomCustomElementDefinition = { name: string };
 
 const VITEST_SPY_FRAME = /[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u;
+
+function installNode24ByteViewAdapter(Bytes: typeof Uint8Array): void {
+  if (process.versions.bun || !process.versions.node.startsWith("24.")) {
+    return;
+  }
+  const prototype = Bytes.prototype;
+  if (Object.hasOwn(prototype, adapterInstalled)) {
+    return;
+  }
+  Object.defineProperty(prototype, adapterInstalled, { value: true });
+  for (const method of ["toBase64", "toHex"] as const) {
+    const nativeEncode = prototype[method];
+    if (typeof nativeEncode !== "function") {
+      continue;
+    }
+    // Node 24's experimental encoders ignore byteOffset. Keep native options
+    // and receiver checks, copying only offset views until that host is retired.
+    Object.defineProperty(prototype, method, {
+      value(this: unknown, ...args: unknown[]) {
+        const bytes = types.isUint8Array(this) && this.byteOffset !== 0 ? new Bytes(this) : this;
+        return Reflect.apply(nativeEncode, bytes, args);
+      },
+    });
+  }
+}
 
 // Conservative on an unreadable stack: retaining source resources can cost a stale generation;
 // dropping dependency resources would break every later file.
@@ -115,6 +141,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
     return;
   }
   Object.defineProperty(environment, adapterInstalled, { value: true });
+  installNode24ByteViewAdapter(Uint8Array);
   const NativeBlob = globalThis.Blob;
   const NativeFile = globalThis.File;
   const NativeURL = globalThis.URL;
@@ -124,6 +151,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   const setupVM = environment.setupVM;
 
   function installWebApis(target: object, window: DOMWindow) {
+    installNode24ByteViewAdapter(window.Uint8Array);
     const { blob, formData } = bindings();
     const toNativeBlob = (value: Blob) =>
       // oxlint-disable-next-line eslint/no-underscore-dangle -- jsdom owns this implementation member name.

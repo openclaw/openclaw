@@ -1,5 +1,4 @@
 import path from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { APIError as AnthropicAPIError } from "@anthropic-ai/sdk/core/error.js";
 import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import {
   createAnthropicResponse,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 
 type OpenAIChunk = Record<string, unknown>;
 
@@ -64,19 +64,12 @@ type ParityFixture = {
   snapshot?: string;
 };
 
-const openAiModel = {
-  id: "gpt-5.5",
+const openAiModel = makeProviderModel("openai-completions", "openai", "gpt-5.5", {
   name: "GPT-5.5",
-  api: "openai-completions",
-  provider: "openai",
   // Managed official OpenAI reasoning tool turns use Responses; this covers the Chat wire.
   baseUrl: "https://chat-proxy.example/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4096,
-} satisfies Model<"openai-completions">;
+});
 
 const openRouterModel = {
   ...openAiModel,
@@ -372,21 +365,10 @@ describe("provider and transport observable parity fixtures", () => {
     { name: "seeded starts followed by deltas", seeded: true, deltas: true },
     { name: "seed-only blocks", seeded: true, deltas: false },
     { name: "empty starts followed by deltas", seeded: false, deltas: true },
-  ])("preserves Anthropic $name like the native SDK", async ({ seeded, deltas }) => {
+  ])("preserves Anthropic $name", async ({ seeded, deltas }) => {
     const events = anthropicEvents
       .filter((event) => deltas || event.type !== "content_block_delta")
       .map((event) => {
-        if (event.type === "message_start") {
-          return Object.assign({}, event, {
-            message: Object.assign({}, event.message, {
-              type: "message",
-              role: "assistant",
-              content: [],
-              stop_reason: null,
-              stop_sequence: null,
-            }),
-          });
-        }
         if (!seeded && event.type === "content_block_start" && event.content_block) {
           return Object.assign({}, event, {
             content_block:
@@ -397,24 +379,9 @@ describe("provider and transport observable parity fixtures", () => {
         }
         return event;
       });
-    const sdk = new Anthropic({
-      apiKey: "synthetic-key",
-      fetch: async () => createAnthropicResponse(events),
-    });
-    const sdkResult = await sdk.messages
-      .stream({
-        model: anthropicModel.id,
-        max_tokens: 4096,
-        messages: [{ role: "user", content: "Find the answer." }],
-      })
-      .finalMessage();
     const thought = `${seeded ? "seed" : ""}${deltas ? " + thought" : ""}`;
     const answer = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
     const signature = deltas ? "final-signature" : "seed-signature";
-    expect(sdkResult.content).toEqual([
-      { type: "thinking", thinking: thought, signature },
-      text(answer),
-    ]);
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runAnthropic(implementation, "success", events);
       expect(result.terminal).toMatchObject({

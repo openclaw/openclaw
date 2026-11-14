@@ -90,12 +90,10 @@ export function createKeyedStateDomainPublication<T>(codec: {
     sources: WeakMap<EngineConnection, SqliteCommitSource>;
     capture?: Capture;
     facts: Set<(change: StateDomainChange<T>) => void>;
-    observers: Set<(change: StateDomainChange<T>) => void>;
     installingFacts: number;
   }>(Symbol.for(`openclaw.stateDomainPublication.${codec.domain}`), () => ({
     sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
     facts: new Set<(change: StateDomainChange<T>) => void>(),
-    observers: new Set<(change: StateDomainChange<T>) => void>(),
     installingFacts: 0,
   }));
   const sourceFor = (db: EngineConnection) => {
@@ -146,7 +144,7 @@ export function createKeyedStateDomainPublication<T>(codec: {
         change = { kind: "unknown", identity: receipt.source.identity };
         install(change);
       },
-      notify: () => notifyListeners(state.observers, change),
+      notify() {},
     };
   };
   const stage = (db: EngineConnection, facts: Facts) => {
@@ -233,8 +231,6 @@ export function createKeyedStateDomainPublication<T>(codec: {
     },
     subscribeFacts: (listener: (change: StateDomainChange<T>) => void) =>
       registerListener(state.facts, listener),
-    subscribe: (listener: (change: StateDomainChange<T>) => void) =>
-      registerListener(state.observers, listener),
     begin(
       owner: { identity: string | symbol; assertCurrent(): void; publishPending?: boolean },
       isFact = codec.isFact,

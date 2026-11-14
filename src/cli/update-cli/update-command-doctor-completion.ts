@@ -22,18 +22,17 @@ import {
 } from "./update-command-config-snapshot.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 
-type DoctorCompletionOptions = {
+export function createPackageUpdateDoctorCompletion(params: {
   root: string;
   progress: UpdateStepProgress;
+  results: UpdateStepResult[];
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
   context?: { changes: UpdateDoctorConfigChange[]; databaseBackup?: UpdateDatabaseBackup };
   configSnapshot?: UpdateConfigSnapshot;
   sectionTiming: UpdateDoctorSectionTiming;
   assertCurrent: () => void;
   doctorProgressInfo: { name: string; command: string; index: number; total: number };
-};
-
-export function createPackageUpdateDoctorCompletion(params: DoctorCompletionOptions) {
+}) {
   const { context, configSnapshot, sectionTiming, assertCurrent, doctorProgressInfo } = params;
   return async (
     doctorStep: UpdateStepResult,
@@ -45,6 +44,10 @@ export function createPackageUpdateDoctorCompletion(params: DoctorCompletionOpti
     const databaseReceipt = context?.databaseBackup
       ? recordUpdateDatabaseWrites(context.databaseBackup, doctorResult?.databaseWrites, doctorStep)
       : undefined;
+    if (databaseReceipt) {
+      // The verifier attributes thrown completion failures to the last Doctor step.
+      params.results.unshift(databaseReceipt);
+    }
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal

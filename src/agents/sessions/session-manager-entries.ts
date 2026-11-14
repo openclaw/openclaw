@@ -1,9 +1,18 @@
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import {
+  getOwnedSessionTranscriptActor,
+  SessionTranscriptWriterClaimReboundError,
+} from "../../config/sessions/transcript-write-context.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
+import type { CustomMessage } from "./messages.js";
+import {
+  sessionManagerAppendPromptContext,
+  type PrepareModelPromptProjection,
+} from "./model-prompt-projection-append.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -22,6 +31,10 @@ import type {
   SessionInfoEntry,
   SessionLeafControl,
 } from "./session-manager-types.js";
+import {
+  sessionManagerReadTranscriptBranch,
+  sessionManagerReadToolResultProjectionEntries,
+} from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 type LeafControlSelection = {
@@ -174,6 +187,29 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return entry.id;
   }
 
+  async [sessionManagerAppendPromptContext](
+    message: CustomMessage,
+    prepare: PrepareModelPromptProjection,
+  ): Promise<string> {
+    const target = this.getSessionTarget();
+    const actor = target ? getOwnedSessionTranscriptActor(target)?.actor : undefined;
+    // Join user admission before entering the manager's append queue.
+    const projection =
+      actor && actor.target.database.kind !== "memory" ? await prepare() : undefined;
+    const { customType, content, display, details, timestamp } = message;
+    const entry: CustomMessageEntry = this.createEntry(
+      { type: "custom_message", customType, content, display, details },
+      timestamp,
+    );
+    await this.appendEntryAsync(
+      entry,
+      { invalidateSerializedPrefixCache: true },
+      false,
+      projection,
+    );
+    return entry.id;
+  }
+
   /** @deprecated Await appendCustomMessageEntryAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendCustomMessageEntry(
     customType: string,
@@ -207,6 +243,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
         entry,
         undefined,
         admission,
+        "reload",
         undefined,
         undefined,
         this.transcriptMutationAt,
@@ -293,7 +330,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     this.appendMode = params.appendMode;
     this.pendingDeliberateAppend = false;
     this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+      (prefix) => prefix.anchorIds.length,
     );
   }
 
@@ -329,7 +366,22 @@ export class SessionManagerEntries extends SessionManagerAppend {
 
   /** Omitted projection metadata follows its retained branch anchors, outside model history. */
   getToolResultProjectionEntries() {
-    let entries: (SessionEntry | Record<string, unknown>)[] = this.getBranch();
+    this.getBranch();
+    // Prefix arrays come from the frozen hydration owner; detach only on SDK exposure.
+    this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.map((prefix) =>
+      Object.isFrozen(prefix.entries)
+        ? {
+            ...prefix,
+            entries: cloneTranscriptView(prefix.entries, { shareImmutablePayloads: false }),
+          }
+        : prefix,
+    );
+    return this[sessionManagerReadToolResultProjectionEntries]();
+  }
+
+  [sessionManagerReadToolResultProjectionEntries]() {
+    let entries: (SessionEntry | Record<string, unknown>)[] =
+      this[sessionManagerReadTranscriptBranch]();
     for (const prefix of this.cacheTtlProjectionPrefixes ?? []) {
       const anchor = prefix.anchorIds.length
         ? entries.findIndex((entry) => prefix.anchorIds.some((id) => id === entry.id))

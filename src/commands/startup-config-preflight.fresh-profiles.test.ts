@@ -1,15 +1,25 @@
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
+import {
+  readMacNodeWorkerProofRows,
+  seedMacNodeWorkerProofState,
+} from "../../scripts/lib/mac-node-worker-proof-state.mjs";
 import { readDaemonRuntimePinMigrationPending } from "../daemon/runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  prepareOpenClawStateDatabaseSchema,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { setupCommand } from "./setup.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
@@ -46,7 +56,31 @@ it.each([...producers, "native bootstrap"] as const)(
     await withOpenClawTestState({ label: "fresh-runtime-pins" }, async (state) => {
       await createProfile(creation === "native bootstrap" ? "gateway" : creation, state);
       if (creation === "native bootstrap") {
-        seedMacNodeWorkerProofState(resolveOpenClawStateSqlitePath(state.env));
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        const nativeRows = seedMacNodeWorkerProofState(databasePath);
+        const maintenance = await beginDoctorMaintenance({
+          root: null,
+          options: { repair: true, nonInteractive: true },
+          runtime: { log() {}, error() {}, exit() {} },
+        });
+        expect(maintenance).toBeDefined();
+        try {
+          const migrated = await maintenance!.run(() =>
+            prepareOpenClawStateDatabaseSchema({ env: state.env }, "doctor"),
+          );
+          expect(migrated.warnings).toEqual([]);
+        } finally {
+          await maintenance!.release();
+        }
+        await closeOpenClawStateDatabaseAsync();
+        const database = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          expect(
+            readMacNodeWorkerProofRows(database, resolveClientCredentialStorePath(state.env)),
+          ).toEqual(nativeRows);
+        } finally {
+          database.close();
+        }
       } else if (creation !== "gateway") {
         // Setup must complete its own profile, even before the first Gateway start.
         expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
@@ -54,15 +88,6 @@ it.each([...producers, "native bootstrap"] as const)(
       const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
       expect(ready.snapshot.valid).toBe(true);
       expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
-
-      const owner = await acquireGatewayLock({ allowInTests: true, env: state.env, timeoutMs: 0 });
-      expect(owner).not.toBeNull();
-      try {
-        expect(await migrateDaemonRuntimePins(state.env)).toEqual({ changes: [], warnings: [] });
-        owner?.assertCurrent();
-      } finally {
-        await owner?.release();
-      }
     });
   },
 );

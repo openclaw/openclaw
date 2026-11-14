@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  extractLastUserText,
+  normalizeResponsesInput,
+  splitMockConversationContext,
+} from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-input.js";
 
 type Deferred = { promise: Promise<void>; resolve: () => void };
 
@@ -20,7 +26,10 @@ async function readBody(request: AsyncIterable<unknown>): Promise<string> {
 }
 
 function responseText(raw: string): string {
-  const matches = [...raw.matchAll(/Reply exactly:\s*([A-Z0-9_-]+)/gu)];
+  const body: unknown = JSON.parse(raw);
+  const input = normalizeResponsesInput(asRecord(body).input);
+  const { current } = splitMockConversationContext(extractLastUserText(input));
+  const matches = [...current.matchAll(/Reply exactly:\s*([A-Z0-9_-]+)/gu)];
   return matches.at(-1)?.[1] ?? "WIRE-OK";
 }
 
@@ -80,6 +89,7 @@ function writeReply(response: ServerResponse, text: string): void {
 export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readonly string[]) {
   const holdSet = new Set(holdMarkers);
   const releases = new Map(holdMarkers.map((marker) => [marker, createDeferred()] as const));
+  const arrivals = new Map(holdMarkers.map((marker) => [marker, createDeferred()] as const));
   const held = new Set<string>();
   const pendingResponses = new Set<ServerResponse>();
   const server = createServer((request, response) => {
@@ -97,6 +107,7 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
       const text = responseText(raw);
       if (holdSet.has(text)) {
         held.add(text);
+        arrivals.get(text)!.resolve();
         pendingResponses.add(response);
         response.once("close", () => pendingResponses.delete(response));
         response.writeHead(200, {
@@ -133,6 +144,9 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
     hasHeld(marker: string): boolean {
       return held.has(marker);
     },
+    waitForHeld(marker: string): Promise<void> {
+      return arrivals.get(marker)!.promise;
+    },
     release(marker: string): void {
       releases.get(marker)?.resolve();
     },
@@ -150,7 +164,9 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
       }
       pendingResponses.clear();
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
 }

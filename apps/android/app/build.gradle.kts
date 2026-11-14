@@ -365,6 +365,9 @@ android {
   }
 
   sourceSets {
+    // The same public TLS fixtures exercise JVM and Android platform verification.
+    getByName("test").kotlin.directories.add("src/testShared/java")
+    getByName("androidTest").kotlin.directories.add("src/testShared/java")
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
       assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
@@ -619,6 +622,7 @@ dependencies {
   // The Android AAR has bionic dispatch; JVM vectors need the same-version host dispatch JAR.
   testRuntimeOnly("${libs.jna.get()}@jar")
 
+  androidTestImplementation(libs.mockwebserver)
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.uiautomator)
@@ -700,7 +704,8 @@ val generateMermaidAssets =
   tasks.register<Exec>("generateMermaidAssets") {
     val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
     workingDir(repositoryRoot)
-    commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")
+    val pnpmBin = if (System.getProperty("os.name").startsWith("Windows")) "pnpm.cmd" else "pnpm"
+    commandLine(pnpmBin, "--dir", "packages/mermaid-renderer", "build")
     inputs
       .files(
         fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {

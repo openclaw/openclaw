@@ -1,120 +1,160 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { sanitizeSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
+  createComposerControlsFixture,
   createComposerProps,
   resetComposerFixture,
-  disposeComposer,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
+import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
+
+const metrics = vi.hoisted(() => ({ started: false, ...Promise.withResolvers<void>() }));
+vi.mock("./components/chat-composer-quota-metrics.tsx", async (importOriginal) => {
+  metrics.started = true;
+  await metrics.promise;
+  return importOriginal();
+});
 
 afterEach(() => resetComposerFixture());
 
-it("keeps the context popover open and its usage link focused during live usage refreshes", async () => {
-  let current = createComposerProps({
+it("clears restored context usage after a live withdrawal and subsequent partial rows", () => {
+  const state = { client: null, hello: null, sessionKey: "main", connected: false };
+  const partial = { key: "main", kind: "direct" as const, updatedAt: 1 };
+  const usage = { used: 190_000, limit: 200_000, approximate: false, fromLastPrompt: false };
+  const restored = projectChatSessionStateSnapshot(state, partial, {
+    contextUsage: usage,
+    unarchiveAllowed: false,
+  });
+  expect(restored.contextUsage).toEqual(usage);
+  const props = createComposerProps({
+    contextUsage: restored.contextUsage,
+    selectedSession: partial,
+  });
+  const container = document.body.appendChild(createComposerContainer());
+  renderComposerInto(container, props);
+  expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toContain("95%");
+  expect(container.querySelector(".context-ring--warning")).not.toBeNull();
+
+  const unavailable = sanitizeSessionRow({
+    ...partial,
+    updatedAt: 2,
+    totalTokens: undefined,
+    totalTokensFresh: false,
+    contextTokens: 200_000,
+  });
+  // Admission must hide the old ring even before its saved display is replaced.
+  renderComposerInto(container, { ...props, selectedSession: unavailable });
+  expect(container.querySelector(".context-ring")).toBeNull();
+  const cleared = projectChatSessionStateSnapshot(state, unavailable, restored);
+  expect(cleared.contextUsage).toBeUndefined();
+  const next = projectChatSessionStateSnapshot(state, { ...partial, updatedAt: 3 }, cleared);
+  renderComposerInto(container, {
+    ...props,
+    selectedSession: partial,
+    contextUsage: next.contextUsage,
+  });
+  expect(container.querySelector(".context-ring")).toBeNull();
+});
+
+function usageProps(refreshed = false) {
+  const [provider, displayName, plan, usedPercent, revision] = refreshed
+    ? (["anthropic", "Claude", "Max", 61, 2] as const)
+    : (["openai", "OpenAI", "Plus", 21, 1] as const);
+  const controls = createComposerControlsFixture();
+  controls.model.accountSelection = {
+    kind: "shared",
+    label: "Selected account",
+    authProfileId: `${provider}:oauth`,
+  };
+  return createComposerProps({
+    composerControls: controls,
     selectedSession: {
       key: "main",
       kind: "direct",
-      updatedAt: 1,
-      totalTokens: 1_000,
+      updatedAt: revision,
+      totalTokens: refreshed ? 190_000 : 1_000,
       contextTokens: 200_000,
-      modelProvider: "openai",
+      modelProvider: provider,
+      ...(refreshed ? { inputTokens: 9_000, outputTokens: 400 } : {}),
     },
     providerUsage: {
-      basePath: "/control",
+      basePath: refreshed ? "/updated" : "/control",
       modelAuthStatusResult: {
-        ts: 1,
+        ts: revision,
         providers: [
           {
-            provider: "openai",
-            displayName: "OpenAI",
+            provider,
+            displayName,
             status: "ok",
-            profiles: [{ profileId: "openai:oauth", type: "oauth", status: "ok" }],
+            profiles: [{ profileId: `${provider}:oauth`, type: "oauth", status: "ok" }],
             usage: {
-              providerId: "openai",
-              plan: "Plus",
-              windows: [{ label: "Week", usedPercent: 21 }],
+              providerId: provider,
+              authProfileId: `${provider}:oauth`,
+              plan,
+              windows: [{ label: "Week", usedPercent }],
             },
           },
         ],
       },
     },
   });
-  const view = { container: document.body.appendChild(createComposerContainer()) };
-  onTestFinished(() => {
-    disposeComposer(view.container);
-  });
-  renderComposerInto(view.container, current);
-  const details = view.container.querySelector<HTMLDetailsElement>(".context-usage details");
-  if (!details) {
-    throw new Error("Expected the composer's context usage popover");
-  }
+}
+
+it("keeps the context counter exempt and usage-link focus during refreshes", async () => {
+  const props = usageProps();
+  const container = document.body.appendChild(createComposerContainer());
+  renderComposerInto(container, props);
+  const query = container.querySelector.bind(container);
+  const details = query<HTMLDetailsElement>(".context-usage details")!;
   expect(details.querySelector(".context-usage__popover")).toBeNull();
+  expect(metrics.started).toBe(false);
   details.querySelector("summary")!.click();
   await waitForSolid(() =>
     expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(true),
   );
-  const usageLink = view.container.querySelector<HTMLAnchorElement>("[data-chat-provider-usage]")!;
+  const usageLink = query<HTMLAnchorElement>("[data-chat-provider-usage]")!;
+  await waitForSolid(() => expect(metrics.started).toBe(true));
+  expect(details.querySelectorAll(".context-usage__limit")).toHaveLength(1);
+  expect(details.querySelector('[role="progressbar"]')).toBeNull();
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
+  expect(query<HTMLElement>(".context-usage__context-value")!.translate).toBe(false);
+  expect(query<HTMLElement>(".oc-menu-heading__label")!.translate).toBe(true);
 
-  current = {
-    ...current,
-    selectedSession: {
-      key: "main",
-      kind: "direct",
-      updatedAt: 2,
-      totalTokens: 190_000,
-      contextTokens: 200_000,
-      inputTokens: 9_000,
-      outputTokens: 400,
-      modelProvider: "anthropic",
-    },
-    providerUsage: {
-      basePath: "/updated",
-      modelAuthStatusResult: {
-        ts: 2,
-        providers: [
-          {
-            provider: "anthropic",
-            displayName: "Claude",
-            status: "ok",
-            profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
-            usage: {
-              providerId: "anthropic",
-              plan: "Max",
-              windows: [{ label: "Week", usedPercent: 61 }],
-            },
-          },
-        ],
-      },
-    },
-  };
-  renderComposerInto(view.container, current);
+  const current = usageProps(true);
+  renderComposerInto(container, {
+    ...props,
+    composerControls: current.composerControls,
+    selectedSession: current.selectedSession,
+    providerUsage: current.providerUsage,
+  });
   flush();
 
-  expect(view.container.querySelector(".context-usage details")).toBe(details);
+  expect(query(".context-usage details")).toBe(details);
   expect(details.open).toBe(true);
-  expect(view.container.querySelector("[data-chat-provider-usage]")).toBe(usageLink);
   expect(document.activeElement).toBe(usageLink);
   expect(usageLink.getAttribute("href")).toBe("/updated/usage");
   expect(usageLink.textContent).toContain("Max");
-  expect(view.container.querySelector(".context-usage__context-value")?.textContent).toContain(
-    "190k / 200k",
+  expect(query(".context-usage__context-value")?.textContent).toContain("190k / 200k");
+  expect(query(".context-ring")?.classList).toContain("context-ring--warning");
+  metrics.resolve();
+  await waitForSolid(() =>
+    expect(query('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("61"),
   );
-  expect(view.container.querySelector(".context-ring")?.classList).toContain(
-    "context-ring--warning",
-  );
+  expect(details.querySelectorAll(".context-usage__limit")).toHaveLength(1);
+  expect(document.activeElement).toBe(usageLink);
+  expect(query(".context-usage__limit")?.getAttribute("aria-valuenow")).toBe("61");
   expect(
-    view.container.querySelector(".context-usage__limit-bar")?.getAttribute("aria-valuenow"),
-  ).toBe("61");
-  expect(view.container.querySelector(".context-usage__provenance")?.textContent).toContain(
-    "Claude",
-  );
-  expect(view.container.querySelector(".context-usage__stats")?.textContent).toContain("9k");
+    query(".context-usage__identity .provider-brand-icon")?.getAttribute("data-provider-icon"),
+  ).toBe("claude");
+  expect(query(".context-usage__stats")?.textContent).toContain("9k");
   details.querySelector("summary")!.click();
   flush();
-  expect(details.querySelector(".context-usage__popover")).toBeNull();
+  expect(details.open).toBe(false);
+  expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(false);
+  expect(query("[data-chat-provider-usage]")).toBe(usageLink);
 });

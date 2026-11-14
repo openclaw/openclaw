@@ -20,21 +20,33 @@ let repo: string;
 let destination: string;
 let commit: string;
 
+const git = (...args: string[]) => requireGit(repo, args);
+const read = (base: string, relative: string) => fs.readFile(path.join(base, relative), "utf8");
+const expectPendingCheckout = () =>
+  expect(fs.access(path.join(destination, "src/main.ts"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+
+async function save(message: string) {
+  await git("add", ".");
+  await git("commit", "-qm", message);
+  commit = await git("rev-parse", "HEAD");
+}
+
 async function write(relative: string, content: string) {
   const target = path.join(repo, relative);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, content);
 }
 
-async function snapshot() {
-  return await Promise.all(
+const snapshot = () =>
+  Promise.all(
     promptFiles.map(async (relative) => {
       const target = path.join(destination, relative);
       const stat = await fs.stat(target);
       return { relative, bytes: await fs.readFile(target), ino: stat.ino, mtimeMs: stat.mtimeMs };
     }),
   );
-}
 
 async function create(onPromptReady: (commit: string) => Promise<void>) {
   return await addManagedWorktree({
@@ -65,67 +77,57 @@ beforeEach(async () => {
     await write(relative, `committed ${relative}\n`);
   }
   await write("src/main.ts", "remaining checkout\n");
-  await requireGit(repo, ["add", "."]);
-  await requireGit(repo, ["commit", "-qm", "prompt inputs"]);
-  commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+  await save("prompt inputs");
 });
 
 afterEach(() => vi.unstubAllEnvs());
 
-it.each(["lf", "crlf"])(
-  "preserves %s project and personal prompt bytes and stat data across complete materialization",
-  async (eol) => {
-    await write(".gitattributes", `* text=auto eol=${eol}\n`);
-    await requireGit(repo, ["config", "filter.unused.smudge", "unused-filter-must-not-run"]);
-    await write(".agents/.gitattributes", "* text eol=lf\n");
-    await write("users/.gitattributes", "* text eol=crlf\n");
-    await write("users/Profile_123/.gitattributes", "USER.md text eol=lf\n");
-    await requireGit(repo, ["add", "."]);
-    await requireGit(repo, ["commit", "-qm", "prompt line endings"]);
-    commit = await requireGit(repo, ["rev-parse", "HEAD"]);
-    await write("AGENTS.md", "uncommitted instructions must not reach the model\n");
-    await write("users/Profile_123/USER.md", "uncommitted personal instructions\n");
-    let early: Awaited<ReturnType<typeof snapshot>> | undefined;
-    const result = await create(async (preparedCommit) => {
-      expect(preparedCommit).toBe(commit);
-      expect(await requireGit(destination, ["symbolic-ref", "--short", "HEAD"])).toBe("prompt");
-      await expect(fs.access(path.join(destination, "src/main.ts"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      early = await snapshot();
-      expect(early.map((file) => file.bytes.toString())).toEqual(
-        promptFiles.map(
-          (relative) =>
-            `committed ${relative}${eol === "crlf" && !relative.startsWith(".agents/") && !relative.startsWith("users/") ? "\r\n" : "\n"}`,
-        ),
-      );
-    });
-    expect(result.code).toBe(0);
-    expect(early).toBeDefined();
-    expect(await snapshot()).toEqual(early);
-    expect(await fs.readFile(path.join(destination, "src/main.ts"), "utf8")).toBe(
-      `remaining checkout${eol === "crlf" ? "\r\n" : "\n"}`,
+it.each(["lf", "crlf"])("preserves %s prompt bytes and stat data after checkout", async (eol) => {
+  await write(".gitattributes", `* text=auto eol=${eol}\n`);
+  await git("config", "filter.unused.smudge", "unused-filter-must-not-run");
+  await write(".agents/.gitattributes", "* text eol=lf\n");
+  await write("users/.gitattributes", "* text eol=crlf\n");
+  await write("users/Profile_123/.gitattributes", "USER.md text eol=lf\n");
+  await save("prompt line endings");
+  const dirty = {
+    "AGENTS.md": "uncommitted instructions must not reach the model\n",
+    "users/Profile_123/USER.md": "uncommitted personal instructions\n",
+  };
+  for (const [relative, content] of Object.entries(dirty)) {
+    await write(relative, content);
+  }
+  let early: Awaited<ReturnType<typeof snapshot>> | undefined;
+  const result = await create(async (preparedCommit) => {
+    expect(preparedCommit).toBe(commit);
+    expect(await requireGit(destination, ["symbolic-ref", "--short", "HEAD"])).toBe("prompt");
+    await expectPendingCheckout();
+    early = await snapshot();
+    expect(early.map((file) => file.bytes.toString())).toEqual(
+      promptFiles.map(
+        (relative) =>
+          `committed ${relative}${eol === "crlf" && !relative.startsWith(".agents/") && !relative.startsWith("users/") ? "\r\n" : "\n"}`,
+      ),
     );
-    expect(await requireGit(destination, ["status", "--porcelain"])).toBe("");
-    expect(await fs.readFile(path.join(repo, "AGENTS.md"), "utf8")).toBe(
-      "uncommitted instructions must not reach the model\n",
-    );
-    expect(await fs.readFile(path.join(repo, "users/Profile_123/USER.md"), "utf8")).toBe(
-      "uncommitted personal instructions\n",
-    );
-  },
-);
+  });
+  expect(result.code).toBe(0);
+  expect(await snapshot()).toEqual(early);
+  expect(await read(destination, "src/main.ts")).toBe(
+    `remaining checkout${eol === "crlf" ? "\r\n" : "\n"}`,
+  );
+  expect(await requireGit(destination, ["status", "--porcelain"])).toBe("");
+  for (const [relative, content] of Object.entries(dirty)) {
+    expect(await read(repo, relative)).toBe(content);
+  }
+});
 
 it.each([".gitattributes", ".codex/config.toml", ".CODEX/config.toml"])(
-  "retains ordinary materialization when %s can change prompt inputs",
+  "falls back for prompt-changing %s",
   async (relative) => {
     await write(
       relative,
       relative === ".gitattributes" ? "AGENTS.md filter=custom\n" : "model = 'fixture'\n",
     );
-    await requireGit(repo, ["add", "."]);
-    await requireGit(repo, ["commit", "-qm", "checkout policy"]);
-    commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+    await save("checkout policy");
     const ready = vi.fn(async () => {});
     expect((await create(ready)).code).toBe(0);
     expect(ready).not.toHaveBeenCalled();
@@ -134,7 +136,7 @@ it.each([".gitattributes", ".codex/config.toml", ".CODEX/config.toml"])(
 );
 
 it.skipIf(process.platform === "win32")(
-  "prepares mixed-case skills and raw prompt paths without scanning unrelated attributes",
+  "selects raw/mixed-case prompts, not unrelated attributes",
   async () => {
     const inputs = [
       "Skills/nested/example/SKILL.md",
@@ -146,18 +148,12 @@ it.skipIf(process.platform === "win32")(
       await write(relative, `prompt ${relative}\n`);
     }
     await write("src/.GITATTRIBUTES", "*.ts text eol=lf\n");
-    await requireGit(repo, ["add", "."]);
-    await requireGit(repo, ["commit", "-qm", "selected prompt paths"]);
-    commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+    await save("selected prompt paths");
     const ready = vi.fn(async () => {
       for (const relative of inputs) {
-        expect(await fs.readFile(path.join(destination, relative), "utf8")).toBe(
-          `prompt ${relative}\n`,
-        );
+        expect(await read(destination, relative)).toBe(`prompt ${relative}\n`);
       }
-      await expect(fs.access(path.join(destination, "src/main.ts"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectPendingCheckout();
     });
     expect((await create(ready)).code).toBe(0);
     expect(ready).toHaveBeenCalledOnce();
@@ -171,9 +167,7 @@ it.skipIf(process.platform === "win32").each([
 ])("retains ordinary checkout for linked prompt file $file", async ({ file, target }) => {
   await fs.rm(path.join(repo, file), { force: true });
   await fs.symlink(target, path.join(repo, file));
-  await requireGit(repo, ["add", file]);
-  await requireGit(repo, ["commit", "-qm", "linked prompt input"]);
-  commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+  await save("linked prompt input");
   const ready = vi.fn(async () => {});
   expect((await create(ready)).code).toBe(0);
   expect(ready).not.toHaveBeenCalled();
@@ -187,5 +181,5 @@ it("removes its partial checkout when the prompt consumer rejects preparation", 
     }),
   ).rejects.toThrow("prompt consumer canceled");
   await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await requireGit(repo, ["branch", "--list", "prompt"])).toBe("");
+  expect(await git("branch", "--list", "prompt")).toBe("");
 });

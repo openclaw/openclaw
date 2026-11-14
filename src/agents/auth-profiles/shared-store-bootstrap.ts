@@ -11,8 +11,13 @@ import {
 } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../../infra/sqlite-snapshot-source.js";
 import { registerListener } from "../../shared/listeners.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { agentEngineInput, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -162,10 +167,8 @@ export function readSharedAuthLegacyRowsFromDatabase(
   };
 }
 
-export function inspectSharedAuthLegacyRowsReadOnly(
-  sourcePath: string,
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
-): SharedAuthLegacyRows {
+/** Released synchronous auth-store writes prepare fresh ownership before their transaction. */
+function inspectNativeSharedAuthLegacyRows(sourcePath: string): SharedAuthLegacyRows {
   const postgres = agentEngineInput() !== undefined;
   if (postgres) {
     assertEngineStoreExecutionAllowed();
@@ -178,47 +181,93 @@ export function inspectSharedAuthLegacyRowsReadOnly(
     // Prepare in a child: closing the original inode here can release this
     // process's live auth writer locks on Linux, even through a read-only handle.
     prepared =
-      !postgres && behavior.artifactPreservingReadOnly
+      !postgres && isArtifactPreservingStateRead()
         ? prepareSqliteReadOnlyLocationSync(sourcePath)
         : undefined;
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
   }
   try {
-    let anchor: DatabaseSync;
-    try {
-      anchor = openNodeSqliteDatabase(prepared?.location ?? sourcePath, { readOnly: !postgres });
-    } catch (error) {
-      throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
-    }
-    let database: EngineConnection = anchor;
-    try {
-      if (postgres) {
-        database = openAgentEngineStore(
-          anchor,
-          undefined,
-          sourcePath,
-          true,
-          (connection, error) => {
-            database = connection;
-            throw error;
-          },
-        );
-      }
-      return readSharedAuthLegacyRowsFromDatabase(database);
-    } catch (error) {
-      throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
-    } finally {
-      try {
-        database.close();
-      } finally {
-        if (database !== anchor && anchor.isOpen) {
-          anchor.close();
-        }
-      }
-    }
+    return inspectSharedAuthLegacyRowsAtLocation(
+      sourcePath,
+      prepared?.location ?? sourcePath,
+      postgres,
+    );
   } finally {
     prepared?.cleanup();
+  }
+}
+
+/** Doctor prepares private bytes asynchronously; native bootstrap retains its synchronous contract. */
+export async function inspectSharedAuthLegacyRowsReadOnlyAsync(
+  sourcePath: string,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
+): Promise<SharedAuthLegacyRows> {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
+  const postgres = agentEngineInput() !== undefined;
+  if (postgres) {
+    assertEngineStoreExecutionAllowed();
+  }
+  if (inspectSharedAuthLegacySourceFile(sourcePath).status === "missing") {
+    return { store: null, state: null };
+  }
+  let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
+  try {
+    prepared =
+      !postgres && (behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead())
+        ? await prepareSqliteReadOnlyLocation(sourcePath, {
+            preserveSourceArtifacts: true,
+            signal,
+            requireCleanup: true,
+          })
+        : undefined;
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
+  }
+  try {
+    signal?.throwIfAborted();
+    return inspectSharedAuthLegacyRowsAtLocation(
+      sourcePath,
+      prepared?.location ?? sourcePath,
+      postgres,
+    );
+  } finally {
+    await prepared?.cleanupAsync();
+  }
+}
+
+function inspectSharedAuthLegacyRowsAtLocation(
+  sourcePath: string,
+  readLocation: string,
+  postgres: boolean,
+): SharedAuthLegacyRows {
+  let anchor: DatabaseSync;
+  try {
+    anchor = openNodeSqliteDatabase(readLocation, { readOnly: !postgres });
+  } catch (error) {
+    throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
+  }
+  let database: EngineConnection = anchor;
+  try {
+    if (postgres) {
+      database = openAgentEngineStore(anchor, undefined, sourcePath, true, (connection, error) => {
+        database = connection;
+        throw error;
+      });
+    }
+    return readSharedAuthLegacyRowsFromDatabase(database);
+  } catch (error) {
+    throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
+  } finally {
+    try {
+      database.close();
+    } finally {
+      if (database !== anchor && anchor.isOpen) {
+        anchor.close();
+      }
+    }
   }
 }
 
@@ -290,7 +339,7 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;
     }
-    const rows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
+    const rows = inspectNativeSharedAuthLegacyRows(sourcePath);
     if (rows.store || rows.state || hasPendingSharedAuthCleanup(env, sourcePath)) {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;

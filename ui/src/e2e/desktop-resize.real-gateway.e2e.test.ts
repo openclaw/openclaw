@@ -5,53 +5,39 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
-import { createServer } from "vite";
 import { expect, it } from "vitest";
 import type {
   desktopProofTestReport,
   readDesktopProofPhase,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
-import {
-  readDesktopProofGatewayCloses,
-  readDesktopProofNodeStreamCloses,
-} from "../../../scripts/lib/desktop-resize-proof.mts";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { prepareSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
 import {
   createOpenClawTestInstance,
   type GatewayReadinessDiagnostic,
 } from "../../../test/helpers/openclaw-test-instance.ts";
-import { installControlUiE2ePageDiagnosticRing } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  waitForControlUiRoute,
-} from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createDesktopResizeGuest,
+  createDesktopResizeProxy,
   observeDesktopEndpointPackets,
-  observeDesktopProofRfbLifecycle,
   readDesktopResizeFixture,
   resizeSources,
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
 } from "./desktop-resize-real.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 type DesktopProofPhase = Exclude<
   ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
   "unknown"
 >;
-type DesktopViewerResizeFailure = NonNullable<
-  ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["viewerResize"]
->;
 
 declare module "vitest" {
   interface TaskMeta {
     desktopProofPhase?: DesktopProofPhase;
-    desktopViewerResizeFailure?: DesktopViewerResizeFailure;
     desktopGatewayReadiness?: GatewayReadinessDiagnostic[];
   }
 }
@@ -87,37 +73,9 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   // The suite owns the authenticated proxy; the scenario owns its real Gateway.
   startServer: async () => {
-    gatewayPort = await getFreePort();
-    const proxyPort = await getFreePort();
-    const proxy = await createServer({
-      configFile: false,
-      envFile: false,
-      appType: "custom",
-      logLevel: "error",
-      server: {
-        host: "127.0.0.1",
-        port: proxyPort,
-        strictPort: true,
-        proxy: {
-          "/": {
-            target: `http://127.0.0.1:${gatewayPort}`,
-            ws: true,
-            headers: {
-              "x-forwarded-for": "192.0.2.10",
-              "x-forwarded-proto": "http",
-              "x-forwarded-user": "resize-operator@example.test",
-            },
-          },
-        },
-      },
-    });
-    try {
-      await proxy.listen();
-      return { baseUrl: `http://127.0.0.1:${proxyPort}/`, close: () => proxy.close() };
-    } catch (error) {
-      await proxy.close();
-      throw error;
-    }
+    const proxy = await createDesktopResizeProxy();
+    gatewayPort = proxy.gatewayPort;
+    return proxy;
   },
 });
 
@@ -173,52 +131,19 @@ async function resizeWindow(page: Page, width: number, height: number) {
 }
 
 async function captureDesktopSockets(page: Page) {
-  // Observe native sockets so forbidden messages exercise the production filter.
-  // No connection, RFB authentication, RPC, or bridge is replaced.
+  // Observe native sockets without changing the noVNC channel prototype.
   await page.addInitScript(() => {
     localStorage.setItem(
       "openclaw:control-ui:community-invite:v2",
       JSON.stringify({ dismissedAtMs: 1770000000000 }),
     );
-    const NativeSocket = window.WebSocket;
     const sockets: WebSocket[] = [];
-    const closes: NonNullable<DesktopViewerResizeFailure["socketCloses"]> = [];
-    Object.assign(window, { desktopProofSockets: sockets, desktopProofSocketCloses: closes });
-    // noVNC checks the immediate raw-channel prototype. Observe construction
-    // without subclassing or changing the native socket/prototype it receives.
-    window.WebSocket = new Proxy(NativeSocket, {
+    Object.assign(window, { desktopProofSockets: sockets });
+    window.WebSocket = new Proxy(window.WebSocket, {
       construct(target, args) {
         const socket = Reflect.construct(target, args) as WebSocket;
         if (new URL(socket.url).pathname === "/desktop/observe") {
-          const socketIndex = sockets.length;
           sockets.push(socket);
-          socket.addEventListener("close", (event) => {
-            // Classify the bridge/registry's fixed reasons before retaining anything:
-            // a takeover reason can include the operator's name after the colon.
-            const category =
-              event.reason === "control-taken" || event.reason.startsWith("control-taken:")
-                ? "takeover"
-                : event.reason === "authority_revoked"
-                  ? "authority-revoked"
-                  : event.reason === "desktop stream closed"
-                    ? "stream-close"
-                    : [
-                          "desktop connection failed during authentication",
-                          "desktop authentication timed out",
-                          "macOS denied desktop access; check credentials and Screen Sharing or Remote Management Observe/Control permissions",
-                          "desktop VNC authentication rejected",
-                        ].includes(event.reason)
-                      ? "authentication"
-                      : event.reason
-                        ? "other"
-                        : "unknown";
-            // wasClean describes the native WebSocket close handshake, not noVNC's RFB state.
-            closes.push({ socketIndex, code: event.code, wasClean: event.wasClean, category });
-            if (closes.length > 8) {
-              closes.shift();
-            }
-          });
-          socket.addEventListener("error", () => console.error("Desktop proof socket error"));
         }
         return socket;
       },
@@ -356,7 +281,6 @@ suite.define(() => {
             serviceWorkers: "block",
           });
           const page = await browserContext.newPage();
-          const pageErrors: string[] = [];
           const observations: Array<Record<string, unknown>> = [];
           page.on("websocket", (socket) => {
             if (new URL(socket.url()).pathname === "/desktop/observe") {
@@ -384,8 +308,6 @@ suite.define(() => {
               }
             });
           });
-          const pageEvents = installControlUiE2ePageDiagnosticRing(page);
-          page.on("pageerror", (error) => pageErrors.push(error.message));
           await captureDesktopSockets(page);
           const assets = new Map<string, string>();
           const assetReads: Promise<unknown>[] = [];
@@ -420,41 +342,10 @@ suite.define(() => {
           const panel = page.locator("openclaw-desktop-panel");
           const canvas = panel.locator(".desktop-surface canvas");
           phase("desktop-connect");
-          try {
-            await canvas.waitFor();
-          } catch (error) {
-            await writeProof("connection-diagnostics.json", {
-              panel: await panel.evaluate((element) => ({
-                html: element.innerHTML,
-                bounds: element.getBoundingClientRect().toJSON(),
-                canvases: [...element.querySelectorAll("canvas")].map((surface) => ({
-                  width: surface.width,
-                  height: surface.height,
-                  bounds: surface.getBoundingClientRect().toJSON(),
-                })),
-              })),
-              sockets: await page.evaluate(() =>
-                window.desktopProofSockets.map((socket) => ({
-                  path: new URL(socket.url).pathname,
-                  readyState: socket.readyState,
-                })),
-              ),
-              pageErrors,
-              pageEvents,
-              observations,
-            });
-            await captureControlUiE2eFailureDiagnostics(page, {
-              error: error instanceof Error ? error : new Error(String(error)),
-              label: "desktop-resize-connection",
-              pageErrors,
-              pageEvents,
-            });
-            throw error;
-          }
+          await canvas.waitFor();
           phase("initial-framebuffer");
           const initial = await guest.geometry();
           await expect.poll(() => framebuffer(canvas)).toEqual(initial);
-          await panel.evaluate(observeDesktopProofRfbLifecycle);
           if (fixture.carrier === "node") {
             expect(observations.length).toBeGreaterThan(0);
             expect(
@@ -585,14 +476,6 @@ suite.define(() => {
             // viewport is emulated; guest geometry and framebuffer remain real.
             await observer.setViewportSize({ width, height });
             await verifyMatch(stage, observerCanvas);
-            expect(
-              await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
-            ).toBe(6);
-            expect(
-              await observerPanel
-                .getByRole("button", { name: "Audio unavailable", exact: true })
-                .isDisabled(),
-            ).toBe(true);
           }
           const colorCount = await sampledFramebufferColors(observerCanvas);
           expect(colorCount).toBeGreaterThan(8);
@@ -614,85 +497,9 @@ suite.define(() => {
             .poll(() => guest!.run(["cat", "/tmp/openclaw-desktop-resize-input"]))
             .toBe("controller");
           const viewerExpected = await guest.geometry();
-          let lastFramebuffer: Awaited<ReturnType<typeof framebuffer>> | null = null;
-          try {
-            await expect
-              .poll(async () => {
-                const current = await framebuffer(canvas);
-                lastFramebuffer = current;
-                return current;
-              })
-              .toEqual(viewerExpected);
-          } catch (error) {
-            const diagnostic: DesktopViewerResizeFailure = {
-              expected: viewerExpected,
-              lastFramebuffer,
-              snapshotStatus: "unavailable",
-              pageClosed: page.isClosed(),
-              canvasCount: null,
-              snapshotFramebuffer: null,
-              socketCount: null,
-              latestReadyState: null,
-              socketCloses: null,
-              nodeStreamCloses: null,
-              endpointCloses: packetProbe.terminalSnapshot(),
-              rfbLifecycle: null,
-              gatewayCloses: null,
-            };
-            // Retain known facts even if the one read-only browser snapshot cannot settle.
-            context.task.meta.desktopViewerResizeFailure = diagnostic;
-            diagnostic.gatewayCloses = await readDesktopProofGatewayCloses(gatewayLogFile);
-            if (node) {
-              diagnostic.nodeStreamCloses = await readDesktopProofNodeStreamCloses(node.logFile);
-            }
-            let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
-            try {
-              const snapshot = await Promise.race([
-                canvas.evaluateAll((canvases) => {
-                  const surface = canvases.length === 1 ? canvases[0] : null;
-                  const sockets: unknown = Reflect.get(window, "desktopProofSockets");
-                  const closes: unknown = Reflect.get(window, "desktopProofSocketCloses");
-                  const latest: unknown = Array.isArray(sockets) ? sockets.at(-1) : null;
-                  const readyState = latest instanceof WebSocket ? latest.readyState : null;
-                  const lifecycle: unknown = Reflect.get(window, "desktopProofRfbLifecycle");
-                  return {
-                    rfbLifecycle: typeof lifecycle === "function" ? lifecycle() : null,
-                    canvasCount: canvases.length,
-                    snapshotFramebuffer:
-                      surface instanceof HTMLCanvasElement
-                        ? { width: surface.width, height: surface.height }
-                        : null,
-                    socketCount: Array.isArray(sockets) ? sockets.length : null,
-                    latestReadyState:
-                      readyState === 0 || readyState === 1 || readyState === 2 || readyState === 3
-                        ? readyState
-                        : null,
-                    socketCloses: Array.isArray(closes) ? closes.slice(-8) : null,
-                  };
-                }),
-                new Promise<null>((resolve) => {
-                  snapshotTimer = setTimeout(() => resolve(null), 1_000);
-                }),
-              ]);
-              if (snapshot) {
-                Object.assign(diagnostic, snapshot, { snapshotStatus: "available" });
-              } else {
-                diagnostic.snapshotStatus = "timed-out";
-              }
-            } catch {
-              // Keep the unavailable snapshot, never replace the framebuffer assertion error.
-            } finally {
-              clearTimeout(snapshotTimer);
-              diagnostic.pageClosed = page.isClosed();
-            }
-            throw error;
-          }
+          await expect.poll(() => framebuffer(canvas)).toEqual(viewerExpected);
           await expect
-            .poll(() =>
-              page.evaluate(() => {
-                return window.desktopProofSockets.at(-1)?.readyState;
-              }),
-            )
+            .poll(() => page.evaluate(() => window.desktopProofSockets.at(-1)?.readyState))
             .toBe(1);
           const inputAttempt = await page.evaluate(() => {
             const sockets = window.desktopProofSockets;

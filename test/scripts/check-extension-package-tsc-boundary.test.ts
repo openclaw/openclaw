@@ -10,7 +10,6 @@ import {
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
   formatSkippedCompileProgress,
-  formatStepFailure,
   installCanaryArtifactCleanup,
   resolveCompileConcurrency,
   resolveCanaryArtifactPaths,
@@ -27,6 +26,7 @@ import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
 
 const tempRoots = createTempDirTracker();
 let receipts: FixtureReceiptChannel;
@@ -194,6 +194,7 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     "packages/normalization-core/package.json",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/plugins/package-entrypoints.ts",
+    ...resolveNativeDeclarationFixtureSources(),
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
@@ -284,28 +285,6 @@ it("parses extension boundary compile concurrency strictly", () => {
   }
 });
 
-it("summarizes long failure output with the useful tail", () => {
-  const stdout = Array.from({ length: 45 }, (_, index) => `stdout ${index + 1}`).join("\n");
-
-  const message = formatStepFailure("demo-plugin", {
-    stdout,
-    stderr: "stderr 1\nstderr 2\nstderr 3",
-    kind: "timeout",
-    elapsedMs: 4_321,
-    note: "demo-plugin timed out after 5000ms",
-  });
-  const messageLines = message.split("\n");
-
-  expect(message).toContain("demo-plugin");
-  expect(message).toContain("[... 5 earlier lines omitted ...]");
-  expect(message).toContain("kind: timeout");
-  expect(message).toContain("elapsed: 4321ms");
-  expect(message).toContain("stdout 45");
-  expect(messageLines).not.toContain("stdout 1");
-  expect(message).toContain("stderr:\nstderr 1\nstderr 2\nstderr 3");
-  expect(message).toContain("demo-plugin timed out after 5000ms");
-});
-
 it("formats a success summary with counts and elapsed time", () => {
   expect(
     formatBoundaryCheckSuccessSummary({
@@ -363,6 +342,9 @@ it("keeps full failure output on the thrown error for canary detection", async (
     ].join(" "),
   );
   expect(failure.message).toContain("[... 6 earlier lines omitted ...]");
+  expect(failure.message.split("\n")).not.toContain("stdout 1");
+  expect(failure.message).toContain("stdout 45");
+  expect(failure.message).toContain("stderr:\nTS6059");
   const failureMetadata = failure as {
     elapsedMs?: unknown;
     fullOutput?: unknown;

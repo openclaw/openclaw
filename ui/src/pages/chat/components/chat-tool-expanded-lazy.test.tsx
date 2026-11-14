@@ -7,11 +7,8 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 const loading = vi.hoisted(() => {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release, started: false };
+  const { promise, resolve: release } = Promise.withResolvers<void>();
+  return { promise, release: () => release(), started: false };
 });
 vi.mock("./chat-tool-expanded.solid.tsx", async (original) => {
   loading.started = true;

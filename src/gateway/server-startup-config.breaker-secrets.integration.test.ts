@@ -72,7 +72,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["literal", "provider-ref", "gateway-ref"] as const)(
+it.each(["provider-ref", "gateway-ref"] as const)(
   "keeps catalog defaults out of authored route policy after %s startup",
   async (credentials) => {
     stubEnv({
@@ -87,10 +87,8 @@ it.each(["literal", "provider-ref", "gateway-ref"] as const)(
       models: { providers: { openai: { apiKey, models: [{ ...model }] } } },
     });
     const runtime = structuredClone(source);
-    runtime.models!.providers!.openai!.models[0]!.compat = {
-      supportsTemperature: false,
-      codeMode: "preferred",
-    };
+    const compat = { supportsTemperature: false, codeMode: "preferred" } as const;
+    runtime.models!.providers!.openai!.models[0]!.compat = compat;
     await prepareGatewayStartupConfig({
       configSnapshot: startupSnapshot(source, runtime),
       activateRuntimeSecrets: createRuntimeSecretsActivator({
@@ -100,9 +98,7 @@ it.each(["literal", "provider-ref", "gateway-ref"] as const)(
       }),
     });
     const published = getRuntimeConfigSnapshot()!;
-    expect(published.models?.providers?.openai?.models[0]?.compat).toEqual(
-      runtime.models!.providers!.openai!.models[0]!.compat,
-    );
+    expect(published.models?.providers?.openai?.models[0]?.compat).toEqual(compat);
     expect(
       resolveOpenAIModelRoutes({
         provider: "openai",

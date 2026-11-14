@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createQaBusState,
@@ -28,6 +27,7 @@ import {
   type GatewayClientName,
 } from "../../../../src/utils/message-channel.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { withFixturePlugin } from "./fixture-plugin-config.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-media-talk-runtime";
@@ -74,19 +74,23 @@ const SCENARIOS = {
       SOURCE_PATH,
       "src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts",
       "extensions/codex/src/app-server/dynamic-tool-build.ts",
-      "src/infra/outbound/message-action-tts.ts",
+      "src/infra/outbound/message-action-send.ts",
     ],
   },
   "active-talk-agent-run-status": {
     title: "Active Talk agent-run control boundaries",
     run: runActiveTalkAgentRunProof,
     sourcePath: "qa/scenarios/runtime/active-talk-agent-run-status.yaml",
-    docsRefs: ["docs/nodes/talk.md", "docs/web/control-ui.md"],
+    docsRefs: [
+      "docs/nodes/talk.md",
+      "docs/web/control-ui.md",
+      "docs/concepts/session-controller.md",
+    ],
     codeRefs: [
       SOURCE_PATH,
       "src/gateway/talk/handlers/client.ts",
       "src/talk/agent-run-control.ts",
-      "src/agents/embedded-agent-runner/runs.ts",
+      "src/sessions/session-controller.mailbox-source.ts",
     ],
   },
 } as const;
@@ -181,25 +185,6 @@ module.exports = {
     "utf8",
   );
   return { pluginDir, realtimeCallsPath, speechCallsPath };
-}
-
-function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
 }
 
 async function connectGatewayClient(params: {
@@ -344,6 +329,7 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -355,7 +341,7 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
         OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
       },
       mutateConfig: (config) => {
-        const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+        const withPlugin = withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID);
         return {
           ...withPlugin,
           tts: {
@@ -460,7 +446,7 @@ async function runCodexInboundMessageAutoTtsProof(options: ProducerOptions): Pro
           OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
         },
         mutateConfig: (config) => {
-          const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+          const withPlugin = withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID);
           return {
             ...withPlugin,
             messages: { ...withPlugin.messages, visibleReplies: "message_tool" },
@@ -670,6 +656,7 @@ async function waitForQueuedTalkSteer(client: GatewayClient, sessionKey: string)
 
 async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-talk-"));
+  const logPath = path.join(fixtureRoot, "gateway.jsonl");
   const fixture = await createFixturePlugin(fixtureRoot);
   const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 60_000 });
   const gatewayOwner = createQaGatewayChild();
@@ -678,6 +665,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -688,9 +676,10 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         OPENCLAW_QA_REALTIME_CALLS_PATH: fixture.realtimeCallsPath,
       },
       mutateConfig: (config) => {
-        const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+        const withPlugin = withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID);
         return {
           ...withPlugin,
+          logging: { ...withPlugin.logging, file: logPath, level: "info" },
           talk: {
             ...withPlugin.talk,
             realtime: {
@@ -757,18 +746,6 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     await consultRequest;
     client.stop();
     client = undefined;
-    const queuedDiagnostics = (await gateway.call("diagnostics.stability", {
-      type: "message.queued",
-      limit: 20,
-    })) as DiagnosticStabilitySnapshot;
-    const steeringQueueDepths = queuedDiagnostics.events
-      .filter((event) => event.source === "embedded-agent-runner")
-      .map((event) => event.queueDepth);
-    if (JSON.stringify(steeringQueueDepths) !== JSON.stringify([1, 1])) {
-      throw new Error(
-        `active-run steering changed diagnostic backlog: ${JSON.stringify(queuedDiagnostics.events)}`,
-      );
-    }
     const stateDiagnostics = (await gateway.call("diagnostics.stability", {
       type: "session.state",
       limit: 20,
@@ -779,7 +756,44 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         `Talk run did not finish with empty diagnostic backlog: ${JSON.stringify(stateDiagnostics.events)}`,
       );
     }
-    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
+    // Controller injection receipts are file-only; normal shutdown flushes the log owner.
+    await stopQaGatewayFixture(gatewayOwner);
+    const phases = (await readJsonLines(logPath))
+      .filter((record) => record.message === "session controller phase")
+      .map((record) => {
+        const fields = record["1"];
+        assert.ok(fields && typeof fields === "object" && !Array.isArray(fields));
+        return fields as Record<string, unknown>;
+      });
+    assert.ok(phases.every((record) => record.omittedObservations === 0));
+    const consumed = phases.filter(
+      (record) => record.phase === "injection-outcome" && record.status === "settled",
+    );
+    assert.equal(consumed.length, 2, "Talk must consume both controller injections");
+    assert.ok(consumed.every((record) => record.reason === "consumed"));
+    for (const field of ["sourceIdHash", "sessionScopeHash", "diagnosticEpoch"]) {
+      assert.ok(
+        consumed.every((record) => typeof record[field] === "string" && record[field].length > 0),
+      );
+    }
+    assert.equal(new Set(consumed.map((record) => record.sourceIdHash)).size, 2);
+    assert.equal(new Set(consumed.map((record) => record.sessionScopeHash)).size, 1);
+    assert.equal(new Set(consumed.map((record) => record.diagnosticEpoch)).size, 1);
+    for (const injection of consumed) {
+      const predecessors = phases.filter(
+        (record) =>
+          record.phase === "injection-predecessor" &&
+          record.status === "waiting" &&
+          record.sourceIdHash === injection.sourceIdHash &&
+          record.sessionScopeHash === injection.sessionScopeHash &&
+          record.diagnosticEpoch === injection.diagnosticEpoch,
+      );
+      assert.deepEqual(
+        predecessors.map((record) => record.pendingInputs),
+        [0],
+      );
+    }
+    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; consumedControllerInjections=${consumed.length}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
     client?.stop();
     await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);

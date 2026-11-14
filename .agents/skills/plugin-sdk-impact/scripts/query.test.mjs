@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { captureSource } from "./scan-bundled.mjs";
 
 const exec = promisify(execFile);
 const script = fileURLToPath(new URL("query.mjs", import.meta.url));
 const key = "api-member:api.registerTool";
+const releaseSince = "2026-07-16T12:00:00.000Z";
+const releasedSince = 1784203200000;
 const plugin = { packageName: "example", releaseId: "release-1", version: "1.0.0" };
 const consumer = {
   ...plugin,
@@ -23,8 +29,91 @@ const consumer = {
     unknownCount: 0,
   },
 };
+
+async function bundledFixture(t, unnamed = false) {
+  const root = await mkdtemp(path.join(tmpdir(), "sdk-impact-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const json = (file, value) => writeFile(path.join(root, file), JSON.stringify(value));
+  for (const [pluginId, packageName] of [
+    ["local", "@openclaw/local"],
+    ["published", "example"],
+  ]) {
+    const relativeRoot = `extensions/${pluginId}`;
+    await mkdir(path.join(root, relativeRoot), { recursive: true });
+    await json(`${relativeRoot}/openclaw.plugin.json`, { id: pluginId });
+    if (!unnamed || pluginId !== "local") {
+      await json(`${relativeRoot}/package.json`, {
+        name: packageName,
+        openclaw: { extensions: ["./index.ts"] },
+      });
+    }
+  }
+  await json("package.json", { name: "openclaw" });
+  await exec("git", ["init", "-q", root]);
+  await exec("git", ["-C", root, "add", "."]);
+  await exec("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "commit",
+    "-qm",
+    "fixture",
+  ]);
+  const { source, plugins } = await captureSource(root);
+  const report = {
+    schemaVersion: 1,
+    traversalComplete: true,
+    generatedAt: "2026-10-17T00:00:00Z",
+    inspectorVersion: "0.4.3",
+    source,
+    plugins: plugins.map((item) =>
+      Object.assign(item, {
+        sdkUsage: {
+          ...consumer.scan,
+          inputKind: "source",
+          entries: [
+            {
+              key,
+              classification: "runtime",
+              referenceKinds: ["call"],
+              evidence: consumer.evidence,
+            },
+          ],
+          unknowns: [],
+        },
+      }),
+    ),
+  };
+  const file = path.join(root, "inventory.json");
+  const save = () => writeFile(file, JSON.stringify(report));
+  await save();
+  return { root, file, report, save };
+}
+function coverageItem(overrides = {}) {
+  return { ...plugin, status: "complete", unknownCount: 0, ...overrides };
+}
+function usage(items = [consumer]) {
+  return { key, items, nextCursor: null };
+}
 function coverage(status = "complete", unknownCount = 0) {
-  return { scope: "page", items: [{ ...plugin, status, unknownCount }], nextCursor: null };
+  return { scope: "page", items: [coverageItem({ status, unknownCount })], nextCursor: null };
+}
+function respondWith(items = []) {
+  return (url) => (url.pathname.endsWith("/coverage") ? coverage() : usage(items));
+}
+function windowedPage(url) {
+  const cutoff = Number(url.searchParams.get("releasedSince"));
+  const page = url.pathname.endsWith("/coverage") ? coverage() : usage();
+  return {
+    ...page,
+    releasedSince: cutoff,
+    items: page.items.map((item) => Object.assign({}, item, { releaseCreatedAt: cutoff })),
+  };
 }
 
 async function query(t, respond, args, now) {
@@ -37,12 +126,7 @@ async function query(t, respond, args, now) {
   await new Promise((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
-  t.after(
-    () =>
-      new Promise((resolve) => {
-        server.close(resolve);
-      }),
-  );
+  t.after(() => promisify(server.close.bind(server))());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   const clock = now
     ? [
@@ -64,64 +148,6 @@ async function query(t, respond, args, now) {
   return { code: result.code, report: JSON.parse(result.stdout), stdout: result.stdout };
 }
 
-test("CLI follows empty intermediate pages and reports distinct consumers with evidence", async (t) => {
-  const { code, report } = await query(t, (url) => {
-    if (url.pathname.endsWith("/coverage")) {
-      return url.searchParams.has("cursor")
-        ? coverage()
-        : { scope: "page", items: [], nextCursor: "coverage-2" };
-    }
-    assert.equal(url.searchParams.get("key"), key);
-    return url.searchParams.has("cursor")
-      ? { key, items: [consumer], nextCursor: null }
-      : { key, items: [], nextCursor: "usage-2" };
-  });
-  assert.equal(code, 0);
-  assert.equal(report.assessment, "observed-consumers");
-  assert.equal(report.distinctPlugins, 1);
-  assert.equal(report.coverage.complete, 1);
-  assert.equal(report.traversalComplete, true);
-  assert.deepEqual(report.items[0].evidence, consumer.evidence);
-  assert.deepEqual(report.referenceCounts, { runtime: 1, type: 1, declarative: 0 });
-});
-
-test("CLI uses the same release cutoff for consumers and coverage on every page", async (t) => {
-  const since = "2026-07-16T12:00:00.000Z";
-  const releasedSince = 1784203200000;
-  const { code, report } = await query(
-    t,
-    (url) => {
-      assert.equal(url.searchParams.get("releasedSince"), String(releasedSince));
-      if (!url.searchParams.has("cursor")) {
-        return { key, scope: "page", releasedSince, items: [], nextCursor: "more" };
-      }
-      return url.pathname.endsWith("/coverage")
-        ? {
-            ...coverage(),
-            releasedSince,
-            items: [
-              { ...plugin, releaseCreatedAt: releasedSince, status: "complete", unknownCount: 0 },
-            ],
-          }
-        : {
-            key,
-            releasedSince,
-            items: [{ ...consumer, releaseCreatedAt: releasedSince }],
-            nextCursor: null,
-          };
-    },
-    ["--since", since],
-  );
-  assert.equal(code, 0);
-  assert.equal(report.distinctPlugins, 1);
-  assert.equal(report.coverage.eligible, 1);
-  assert.deepEqual(report.releaseWindow, {
-    latestReleaseUploadedSince: since,
-    timezone: "UTC",
-    inclusive: true,
-  });
-});
-
 test("completed empty results remain distinct from incomplete coverage and an empty corpus", async (t) => {
   for (const [status, unknownCount, expected] of [
     ["complete", 0, "no-observed-consumers"],
@@ -137,7 +163,7 @@ test("completed empty results remain distinct from incomplete coverage and an em
         ? status
           ? coverage(status, unknownCount)
           : { scope: "page", items: [], nextCursor: null }
-        : { key, items: [], nextCursor: null },
+        : usage([]),
     );
     assert.equal(code, 0);
     assert.equal(report.assessment, expected);
@@ -178,7 +204,7 @@ test("a page budget and a changing release prevent claims of complete traversal"
           ...coverage(),
           items: [{ ...plugin, releaseId: "release-2", status: "complete", unknownCount: 0 }],
         }
-      : { key, items: [consumer], nextCursor: null },
+      : usage(),
   );
   assert.equal(changed.code, 0);
   assert.equal(changed.report.assessment, "incomplete-coverage");
@@ -195,13 +221,7 @@ test("three calendar months clamps month ends in UTC, including leap years", asy
       t,
       (url) => {
         assert.equal(url.searchParams.get("releasedSince"), String(Date.parse(since)));
-        return {
-          key,
-          scope: "page",
-          releasedSince: Date.parse(since),
-          items: [],
-          nextCursor: null,
-        };
+        return { ...usage([]), scope: "page", releasedSince: Date.parse(since) };
       },
       ["--months", "3"],
       now,
@@ -213,7 +233,6 @@ test("three calendar months clamps month ends in UTC, including leap years", asy
 });
 
 test("a server ignoring the filter or returning out-of-window releases leaves counts unknown", async (t) => {
-  const releasedSince = 1784203200000;
   for (const page of [
     { key, items: [], nextCursor: null },
     { key, releasedSince, items: [consumer], nextCursor: null },
@@ -249,9 +268,7 @@ test("invalid or conflicting date filters fail before making a request", async (
   }
 });
 
-test("CLI keeps large paginated inventories readable without losing aggregate coverage", async (t) => {
-  const since = "2026-07-16T12:00:00.000Z";
-  const releasedSince = 1784203200000;
+test("CLI follows empty pages with the same cutoff and keeps large inventories readable", async (t) => {
   const consumers = Array.from({ length: 12 }, (_, index) => ({
     ...consumer,
     packageName: `consumer-${String(index).padStart(2, "0")}`,
@@ -259,33 +276,33 @@ test("CLI keeps large paginated inventories readable without losing aggregate co
     releaseCreatedAt: releasedSince,
   }));
   const roster = [
-    ...consumers.map(({ packageName, releaseId, version, releaseCreatedAt }) => ({
-      packageName,
-      releaseId,
-      version,
-      releaseCreatedAt,
-      status: "complete",
-      unknownCount: 0,
-    })),
-    ...Array.from({ length: 1143 }, (_, index) => ({
-      packageName: `missing-${index}`,
-      releaseId: `missing-release-${index}`,
-      version: "1.0.0",
-      releaseCreatedAt: releasedSince,
-      status: "missing",
-      unknownCount: 0,
-    })),
-    {
+    ...consumers.map(({ packageName, releaseId, version, releaseCreatedAt }) =>
+      coverageItem({ packageName, releaseId, version, releaseCreatedAt }),
+    ),
+    ...Array.from({ length: 1143 }, (_, index) =>
+      coverageItem({
+        packageName: `missing-${index}`,
+        releaseId: `missing-release-${index}`,
+        releaseCreatedAt: releasedSince,
+        status: "missing",
+      }),
+    ),
+    coverageItem({
       packageName: "partial-last",
       releaseId: "partial-release",
-      version: "1.0.0",
       releaseCreatedAt: releasedSince,
       status: "partial",
       unknownCount: 7,
-    },
+    }),
   ];
   const respond = (url) => {
     assert.equal(url.searchParams.get("releasedSince"), String(releasedSince));
+    if (!url.pathname.endsWith("/coverage")) {
+      assert.equal(url.searchParams.get("key"), key);
+    }
+    if (!url.searchParams.has("cursor")) {
+      return { key, scope: "page", releasedSince, items: [], nextCursor: "0" };
+    }
     const records = url.pathname.endsWith("/coverage") ? roster : consumers;
     const offset = Number(url.searchParams.get("cursor") ?? 0);
     const end = offset + 100;
@@ -297,14 +314,18 @@ test("CLI keeps large paginated inventories readable without losing aggregate co
       nextCursor: end < records.length ? String(end) : null,
     };
   };
-  const { code, report, stdout } = await query(t, respond, ["--since", since]);
+  const { code, report, stdout } = await query(t, respond, ["--since", releaseSince]);
   assert.equal(code, 0);
   assert.ok(
     Buffer.byteLength(stdout) < 16_000,
     "chat output must retain its count and coverage header",
   );
   assert.equal(report.key, key);
-  assert.equal(report.releaseWindow.latestReleaseUploadedSince, since);
+  assert.deepEqual(report.releaseWindow, {
+    latestReleaseUploadedSince: releaseSince,
+    timezone: "UTC",
+    inclusive: true,
+  });
   assert.equal(report.traversalComplete, true);
   assert.equal(report.assessment, "incomplete-coverage");
   assert.equal(report.distinctPlugins, 12);
@@ -328,7 +349,7 @@ test("CLI keeps large paginated inventories readable without losing aggregate co
   });
   assert.ok(report.source.startsWith("http://127.0.0.1:"));
 
-  const full = await query(t, respond, ["--since", since, "--full"]);
+  const full = await query(t, respond, ["--since", releaseSince, "--full"]);
   assert.equal(full.code, 0);
   assert.equal(full.report.distinctPlugins, 12);
   assert.equal(full.report.coverage.eligible, 1156);
@@ -341,4 +362,84 @@ test("CLI keeps large paginated inventories readable without losing aggregate co
     exampleLimit: null,
     omitted: { items: 0, gaps: 0, warnings: 0 },
   });
+});
+
+test("bundled consumers are included once across sources and remain visible with a release window", async (t) => {
+  const fixture = await bundledFixture(t);
+  const { code, report } = await query(t, windowedPage, [
+    "--bundled",
+    fixture.file,
+    "--months",
+    "3",
+  ]);
+  assert.equal(code, 0, JSON.stringify(report));
+  assert.equal(report.assessment, "observed-consumers");
+  assert.equal(report.distinctPlugins, 1);
+  assert.equal(report.bundled.distinctPlugins, 2);
+  assert.equal(report.bundled.coverage.complete, 2);
+  assert.equal(report.bundled.releaseWindow, null);
+  assert.equal(report.combined.distinctPlugins, 2);
+  assert.equal(report.combined.overlappingConsumers, 1);
+  assert.equal(report.combined.eligiblePlugins, 2);
+  assert.equal(report.combined.assessment, "observed-consumers");
+});
+
+test("bundled gaps cannot turn an empty ClawHub result into a confident zero", async (t) => {
+  const fixture = await bundledFixture(t);
+  fixture.report.plugins[0].sdkUsage.entries = [];
+  fixture.report.plugins[1].sdkUsage.entries = [];
+  fixture.report.plugins[1].sdkUsage.status = "partial";
+  fixture.report.plugins[1].sdkUsage.unknowns = [
+    { path: "index.ts", line: 1, reason: "computed member" },
+  ];
+  await fixture.save();
+  const respond = respondWith();
+  const { report } = await query(t, respond, ["--bundled", fixture.file]);
+  assert.ok(report.combined, JSON.stringify(report));
+  assert.equal(report.combined.distinctPlugins, 0);
+  assert.equal(report.combined.assessment, "incomplete-coverage");
+  assert.equal(report.bundled.coverage.partial, 1);
+  assert.equal(report.bundled.coverage.unresolvedReferences, 1);
+  const missing = await query(t, respond);
+  assert.equal(missing.report.combined.distinctPlugins, null);
+  assert.equal(missing.report.combined.assessment, "unavailable");
+});
+
+test("stale or incomplete bundled inventories fail instead of reusing a zero", async (t) => {
+  const fixture = await bundledFixture(t);
+  const respond = respondWith();
+  const original = structuredClone(fixture.report);
+  for (const mutate of [
+    () => {
+      fixture.report.plugins.pop();
+    },
+    () => {
+      fixture.report.source.commit = "0".repeat(40);
+    },
+  ]) {
+    Object.assign(fixture.report, structuredClone(original));
+    mutate();
+    await fixture.save();
+    const result = await query(t, respond, ["--bundled", fixture.file]);
+    assert.equal(result.code, 1);
+    assert.equal(result.report.distinctPlugins, null);
+    assert.match(result.report.error, /inventory roster|inventory commit/);
+  }
+});
+
+test("manifest-only bundled plugins preserve consumers without inventing exact cross-source overlap", async (t) => {
+  const fixture = await bundledFixture(t, true);
+  // Only the unnamed local plugin uses the method; the public match might be it.
+  fixture.report.plugins[1].sdkUsage.entries = [];
+  await fixture.save();
+  const { code, report } = await query(t, respondWith([consumer]), ["--bundled", fixture.file]);
+  assert.equal(code, 0, JSON.stringify(report));
+  assert.equal(report.bundled.distinctPlugins, 1);
+  assert.equal(report.bundled.coverage.complete, 1);
+  assert.equal(report.bundled.coverage.partial, 1);
+  assert.equal(report.bundled.gaps[0].status, "partial");
+  assert.match(report.bundled.gaps[0].error, /implicit host entrypoint/);
+  assert.equal(report.combined.distinctPlugins, null);
+  assert.deepEqual(report.combined.distinctPluginBounds, { min: 1, max: 2 });
+  assert.equal(report.combined.observedPluginIdentities, 2);
 });

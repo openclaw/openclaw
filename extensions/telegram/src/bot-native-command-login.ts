@@ -2,9 +2,6 @@ import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-na
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   cancelProviderLoginFlow,
-  answerProviderLoginModelAccess,
-  offerProviderLoginModelAccess,
-  type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -132,16 +129,6 @@ export async function executeTelegramLoginCommand(params: {
         },
       }),
     cancelLogin: () => cancelProviderLoginFlow(flow),
-    answerChoice: (command) =>
-      answerProviderLoginModelAccess({
-        ...flow,
-        command,
-        agentId: dispatch.route.agentId,
-        readConfig: getRuntimeConfig,
-        runtime: dispatch.runtime,
-        signal: dispatch.opts.accountAbortSignal,
-        assertCurrent,
-      }),
   });
   if (!prepared) {
     return false;
@@ -182,7 +169,6 @@ export async function executeTelegramLoginCommand(params: {
   // reservation and account signal still own polling through completion.
   const completion = (async () => {
     let terminalMessage: string;
-    let modelAccess: PreparedProviderModelAccess | undefined;
     try {
       const targetSessionEntryAtStart = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
         agentId: dispatch.route.agentId,
@@ -201,9 +187,6 @@ export async function executeTelegramLoginCommand(params: {
         assertCurrent,
         sendMessage: sendLoginMessage,
         sendReply: (reply) => sendLoginAction(() => sendLoginReply(reply)),
-        onModelAccessRequested: (request) => {
-          modelAccess = request;
-        },
         sendDeviceCode: (deviceCode) =>
           sendLoginAction(() =>
             sendLoginMessage(formatTelegramLoginDeviceCode(deviceCode), "HTML"),
@@ -275,16 +258,20 @@ export async function executeTelegramLoginCommand(params: {
       }
       const sessionModel =
         targetSessionEntryAtStart?.modelOverride ?? targetSessionEntryAtStart?.model;
-      terminalMessage = formatProviderLoginCompletion(
-        loginChoice,
-        loginResult.authRefresh,
-        sessionSwitchFailed,
-        nextProfileId && sessionModel
-          ? { model: sessionModel, profileId: nextProfileId }
-          : undefined,
-      );
+      terminalMessage = [
+        formatProviderLoginCompletion(
+          loginChoice,
+          loginResult.authRefresh,
+          sessionSwitchFailed,
+          nextProfileId && sessionModel
+            ? { model: sessionModel, profileId: nextProfileId }
+            : undefined,
+        ),
+        loginResult.modelAccess?.message,
+      ]
+        .filter(Boolean)
+        .join(" ");
     } catch (error) {
-      modelAccess = undefined;
       if (flowSignal.aborted) {
         return;
       }
@@ -299,30 +286,21 @@ export async function executeTelegramLoginCommand(params: {
       return;
     }
     try {
-      if (modelAccess) {
-        const reply = offerProviderLoginModelAccess({
-          ...flow,
-          prepared: modelAccess,
-          terminalMessage,
-        });
-        await sendLoginAction(() => sendLoginReply(reply));
-      } else {
-        const { sendMessageTelegram } = await loadTelegramSendModule();
-        await sendMessageTelegram(
-          buildTelegramRoutingTarget(dispatch.chatId, dispatch.threadSpec),
-          terminalMessage,
-          {
-            cfg: dispatch.runtimeCfg,
-            token: dispatch.opts.token,
-            accountId: dispatch.route.accountId,
-          },
-        );
-        await dispatch.recordDeliveredReply(
-          params.commandText,
-          terminalMessage,
-          String(++deliveredReply),
-        );
-      }
+      const { sendMessageTelegram } = await loadTelegramSendModule();
+      await sendMessageTelegram(
+        buildTelegramRoutingTarget(dispatch.chatId, dispatch.threadSpec),
+        terminalMessage,
+        {
+          cfg: dispatch.runtimeCfg,
+          token: dispatch.opts.token,
+          accountId: dispatch.route.accountId,
+        },
+      );
+      await dispatch.recordDeliveredReply(
+        params.commandText,
+        terminalMessage,
+        String(++deliveredReply),
+      );
     } catch (error) {
       dispatch.runtime.error?.(
         danger(

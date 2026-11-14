@@ -18,6 +18,7 @@ export type UpdatePostCoreInput = {
   root: string;
   requester?: UpdateRequester;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
+  busyTimeoutMs?: number;
   opts: Pick<
     UpdateCommandOptions,
     "json" | "restart" | "yes" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
@@ -27,12 +28,35 @@ export type UpdatePostCoreInput = {
 export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
   repair: boolean;
+  retirementOnly?: true;
   fullIntegrityCheck?: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
   databasePluginOwners?: import("../../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
+};
+
+/** Rollback bookkeeping only; the delegated executor remains the authority. */
+export type UpdatePluginCohortSettlementInput = {
+  executor: UpdateCommandChildGrant;
+  runId: string;
+  transactionId: string;
+};
+
+/** Correlation only; the post-ready worker acquires its own native executor. */
+export type UpdatePluginCohortCommitInput = {
+  runId: string;
+  transactionId: string;
+  installKey: string;
+};
+
+export type UpdatePluginCohortSettlementResult = {
+  runId: string;
+  transactionId: string;
+  configPaths: string[];
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
@@ -40,10 +64,10 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
     FinishUpdateParams,
     "packageTransaction" | "databaseBackup" | "preManagedServiceStop" | "opts"
   > & {
-    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
+    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery" | "onResult"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence" | "sourceArtifactLock"
+        "requesterAuthority" | "executorFence" | "sourceArtifactLock" | "deadline"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };

@@ -1,5 +1,7 @@
 import { expect } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -44,6 +46,8 @@ export type IngressFrame = {
   event?: string;
   ok?: boolean;
   payload?: {
+    status?: SessionsFilesPreviewResult["status"];
+    sandboxPath?: SessionsFilesPreviewResult["sandboxPath"];
     nonce?: string;
     controlUiUrl?: string;
     auth?: { method: string; role: string; scopes: string[]; deviceToken?: string };
@@ -97,20 +101,31 @@ export async function connect(peer: Peer, options: ConnectOptions): Promise<Ingr
   const role = options.role ?? "operator";
   const signedAt = Date.now();
   const identity = options.identity;
-  const payload = identity
-    ? buildDeviceAuthPayloadV3({
-        deviceId: identity.deviceId,
-        clientId: client.id,
-        clientMode: client.mode,
-        platform: client.platform,
-        role,
-        scopes: options.scopes ?? [],
-        signedAtMs: signedAt,
-        token:
-          options.auth?.deviceToken ?? options.auth?.bootstrapToken ?? options.auth?.token ?? null,
-        nonce,
-      })
-    : undefined;
+  let device: ConnectParams["device"];
+  if (identity) {
+    const payload = buildDeviceAuthPayloadV3({
+      deviceId: identity.deviceId,
+      clientId: client.id,
+      clientMode: client.mode,
+      platform: client.platform,
+      role,
+      scopes: options.scopes ?? [],
+      signedAtMs: signedAt,
+      token:
+        options.auth?.deviceToken ?? options.auth?.bootstrapToken ?? options.auth?.token ?? null,
+      nonce,
+    });
+    device = {
+      id: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      signature: signDevicePayload(
+        identity.privateKeyPem,
+        options.tamperSignature ? `${payload}-tampered` : payload,
+      ),
+      signedAt,
+      nonce,
+    };
+  }
   const hello = await request(peer, "connect", {
     minProtocol: PROTOCOL_VERSION,
     maxProtocol: PROTOCOL_VERSION,
@@ -118,34 +133,18 @@ export async function connect(peer: Peer, options: ConnectOptions): Promise<Ingr
     role,
     scopes: options.scopes,
     auth: options.auth,
-    ...(identity && payload
-      ? {
-          device: {
-            id: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-            signature: signDevicePayload(
-              identity.privateKeyPem,
-              options.tamperSignature ? `${payload}-tampered` : payload,
-            ),
-            signedAt,
-            nonce,
-          },
-        }
-      : {}),
+    ...(device ? { device } : {}),
   });
   if (hello.ok && !options.owner) {
-    expect(hello).toMatchObject({
-      payload: {
-        snapshot: {
-          presence: expect.arrayContaining([
-            expect.objectContaining({
-              instanceId: client.instanceId,
-              user: expect.objectContaining({ id: options.profileId ?? "gateway-owner" }),
-            }),
-          ]),
-        },
-      },
-    });
+    expect(hello).toHaveProperty(
+      "payload.snapshot.presence",
+      expect.arrayContaining([
+        expect.objectContaining({
+          instanceId: client.instanceId,
+          user: expect.objectContaining({ id: options.profileId ?? "gateway-owner" }),
+        }),
+      ]),
+    );
   }
   return hello;
 }
@@ -153,10 +152,7 @@ export async function connect(peer: Peer, options: ConnectOptions): Promise<Ingr
 export function expectHello(frame: IngressFrame, method: string, scopes: readonly string[]): void {
   expect(frame).toMatchObject({
     ok: true,
-    payload: {
-      type: "hello-ok",
-      auth: { method, role: "operator", scopes },
-    },
+    payload: { type: "hello-ok", auth: { method, role: "operator", scopes } },
   });
   expect(frame.payload?.auth).not.toHaveProperty("deviceToken");
   expect(frame.payload?.auth).not.toHaveProperty("bootstrapToken");
@@ -171,14 +167,12 @@ export async function usePeer<T>(peer: Peer, run: (peer: Peer) => Promise<T>): P
 }
 
 export async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
-  expect(await request(peer, "voicewake.set", { triggers: [trigger] })).toMatchObject({
-    ok: true,
-    payload: { triggers: [trigger] },
-  });
-  expect(await request(peer, "voicewake.get", {})).toMatchObject({
-    ok: true,
-    payload: { triggers: [trigger] },
-  });
+  const triggers = [trigger];
+  for (const method of ["voicewake.set", "voicewake.get"]) {
+    expect(
+      await request(peer, method, method === "voicewake.set" ? { triggers } : {}),
+    ).toMatchObject({ ok: true, payload: { triggers } });
+  }
   expect(await request(peer, "config.set", { raw: "{}" })).toMatchObject({
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },

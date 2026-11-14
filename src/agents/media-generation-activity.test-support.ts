@@ -9,14 +9,16 @@ import type { MediaGenerationTaskHandle } from "./tools/media-generate-backgroun
 
 /** Literal completion handles in transport tests still need real native admission. */
 export function admitMediaHandle<
-  T extends Omit<MediaGenerationTaskHandle, "detach"> & { detach?: boolean },
+  T extends Omit<MediaGenerationTaskHandle, "detach" | "acceptedOperation"> & { detach?: boolean },
 >(
   handle: T,
 ): T & {
   detach: boolean;
   requesterTranscript: NonNullable<MediaGenerationTaskHandle["requesterTranscript"]>;
+  acceptedOperation: MediaGenerationTaskHandle["acceptedOperation"];
 } {
-  if (!findMediaGenerationOperation(handle.runId)) {
+  const acceptedOperation =
+    findMediaGenerationOperation(handle.runId) ??
     createMediaGenerationOperation({
       taskId: handle.taskId,
       runId: handle.runId,
@@ -24,15 +26,14 @@ export function admitMediaHandle<
       requesterSessionKey: handle.requesterSessionKey,
       requesterAgentId: handle.requesterAgentId,
       task: handle.taskLabel,
-      createdAt: Date.now(),
       status: "running",
     });
-  }
   const agentId =
     handle.requesterAgentId ?? resolveAgentIdFromSessionKey(handle.requesterSessionKey);
   return {
     ...handle,
     detach: handle.detach ?? true,
+    acceptedOperation,
     requesterTranscript: handle.requesterTranscript ?? {
       ...captureSessionTranscriptTargetBinding({
         agentId,
@@ -51,9 +52,16 @@ export function resetGeneratedMediaTaskActivityForTests(): void {
   if (!state || typeof state !== "object") {
     throw new Error("Media generation activity owner is not initialized");
   }
-  for (const key of ["operations", "active", "admissions", "owners", "drafts"] as const) {
+  for (const key of [
+    "operations",
+    "active",
+    "admissions",
+    "owners",
+    "drafts",
+    "listeners",
+  ] as const) {
     const value: unknown = Reflect.get(state, key);
-    if (!(value instanceof Map)) {
+    if (!(value instanceof Map || value instanceof Set)) {
       throw new Error(`Unexpected media generation activity fixture state: ${key}`);
     }
     value.clear();

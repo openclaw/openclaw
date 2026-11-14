@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import type {
@@ -25,7 +25,6 @@ import {
   seedAttachedPlacementEnvironment,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
@@ -87,7 +86,6 @@ export async function createHarness(
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
     runMoveBarrier?: DispatchOptions["runMoveBarrier"];
-    recoveryBarrierError?: Error;
     isShuttingDown?: () => boolean;
     prepareAcceptedWorkspacePublication?: DispatchOptions["prepareAcceptedWorkspacePublication"];
     publishAcceptedWorkspace?: DispatchOptions["publishAcceptedWorkspace"];
@@ -358,18 +356,33 @@ export async function createHarness(
       WorkerEnvironmentService,
       "recordError" | "requestDestroy" | "requiresNodeEnrollment" | "readMachineShape"
     > = {
-    fenceWorkerTurnForRecovery:
-      createWorkerSessionPlacementGate(placementStore).fenceWorkerTurnForRecovery,
     requiresNodeEnrollment: vi.fn(() => options.requiresNodeEnrollment === true),
     readMachineShape: () => undefined,
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
+    fenceWorkerTurnForRecovery: vi.fn(),
+    ensureRetainedRunning: vi.fn(async () => {}),
     assertPreparedIntentCurrent: vi.fn(),
-    prepareProjectIntent: vi.fn(async (_profileId, request) => ({
-      providerId: request?.inherited?.providerId ?? ready.providerId,
-      profileSnapshot: request?.inherited?.profileSnapshot ?? ready.profileSnapshot,
-    })),
+    prepareProjectIntent: vi.fn(async (_profileId, request) => {
+      const {
+        project: _project,
+        runtimePreparation: _runtimePreparation,
+        ...profileSnapshot
+      } = request?.inherited?.profileSnapshot ?? ready.profileSnapshot;
+      return {
+        providerId: request?.inherited?.providerId ?? ready.providerId,
+        profileSnapshot,
+      };
+    }),
     getPreparedCandidates: vi.fn(() => []),
+    refreshPreparedEnvironment: vi.fn(async (request) => {
+      request.assertCurrent();
+      const environment = environments.get(request.environmentId);
+      if (!environment) {
+        throw new Error("Missing prepared test environment");
+      }
+      return environment;
+    }),
     bindPreparedWorkspace: vi.fn(async (request) => ({
       assertCurrent: request.assertCurrent,
       gatewayNamespace: "dispatch-fixture",
@@ -430,6 +443,11 @@ export async function createHarness(
       },
     ),
     requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
+    reclaim: async (requestedEnvironmentId) => {
+      const ownerEpoch = environments.get(requestedEnvironmentId)?.ownerEpoch;
+      await environments.stopTunnel(requestedEnvironmentId, ownerEpoch);
+      return environments.destroy(requestedEnvironmentId);
+    },
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
@@ -463,13 +481,6 @@ export async function createHarness(
         throw new Error("barrier failed");
       }
       return placement;
-    },
-    runRecoveryBarrier: async ({ run }) => {
-      log.push("recovery-barrier");
-      if (options.recoveryBarrierError) {
-        throw options.recoveryBarrierError;
-      }
-      await run({ kind: "local", path: options.workspacePath ?? "/gateway/workspace" });
     },
     runActivationBarrier: async ({ authorize, activate }) => {
       authorize?.();
@@ -516,7 +527,8 @@ export async function createHarness(
     runReclaimBarrier:
       options.runReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+        await runSessionMutation({
+          diagnosticLabel: "placement-reclaim",
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
@@ -535,7 +547,8 @@ export async function createHarness(
     runFailedReclaimBarrier:
       options.runFailedReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
+        await runSessionMutation({
+          diagnosticLabel: "placement-failed-reclaim",
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
@@ -654,7 +667,6 @@ export const createRecoveryService = async (
     runnerAvailability: { read: () => undefined, version: () => 0 },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: "/gateway/workspace" }),
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,

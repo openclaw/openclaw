@@ -77,22 +77,19 @@ it.each([false, true])(
       return "ok";
     });
     try {
+      const command: Parameters<typeof executeUpdateRunCommand>[0] = {
+        type: "updateRuns.recordPhase",
+        input: {
+          runId: run.runId,
+          redactionFacts: captureUpdateRunRedactionFacts(env),
+          phase: "validating",
+          patch: {},
+        },
+      };
       const execute = () =>
         runWithSqliteWorkerStateContext({ environment: env }, () =>
           workerAdmission.withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-            executeUpdateRunCommand(
-              {
-                type: "updateRuns.recordPhase",
-                input: {
-                  runId: run.runId,
-                  redactionFacts: captureUpdateRunRedactionFacts(env),
-                  phase: "validating",
-                  patch: {},
-                },
-              },
-              { path: databasePath, env },
-              () => writer,
-            ),
+            executeUpdateRunCommand(command, { path: databasePath, env }, () => writer),
           ),
         );
       if (revoke) {

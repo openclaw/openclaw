@@ -4,7 +4,7 @@ import OpenClawKit
 
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
-    private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
+    private static let maxInlineMediaRawBytes = (maxGatewayPayloadBytes / 4) * 3
     private static let cuaOwnedCommands = Set([
         OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
@@ -400,8 +400,7 @@ extension MacNodeRuntime {
             let target: String?
             let placement: CanvasPlacement?
             if req.command == OpenClawCanvasCommand.present.rawValue {
-                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                    OpenClawCanvasPresentParams()
+                let params = try Self.decodeOptionalParams(OpenClawCanvasPresentParams.self, from: req)
                 target = params.url
                 placement = params.placement.map {
                     CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
@@ -455,23 +454,21 @@ private enum MacNodeCanvasTargetError: LocalizedError {
 // MARK: - Device command handling
 
 extension MacNodeRuntime {
-    private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    /// Enumeration needs only OpenClaw consent; other camera commands also need OS authorization.
+    private func requireCameraAccess(_ osCapabilities: [Capability]) async throws {
         let services = await self.mainActorServices()
-        let includeAudio = req.command == OpenClawCameraCommand.clip.rawValue &&
-            ((try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON).includeAudio) ?? true)
-        let cameraEnabled = Self.cameraEnabled()
-        // Enumeration needs only OpenClaw consent; other camera commands also need OS authorization.
-        let capabilities: [Capability] = req.command == OpenClawCameraCommand.list.rawValue
-            ? [.cameraEnabled] : includeAudio ? [.cameraEnabled, .camera, .microphone] : [.cameraEnabled, .camera]
         if let error = await services.missingPermissions(
-            capabilities, disabled: cameraEnabled ? [] : [.cameraEnabled])
+            [.cameraEnabled] + osCapabilities, disabled: Self.cameraEnabled() ? [] : [.cameraEnabled])
         {
             throw error
         }
+    }
+
+    private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
         case OpenClawCameraCommand.snap.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
-                OpenClawCameraSnapParams()
+            let params = try Self.decodeOptionalParams(OpenClawCameraSnapParams.self, from: req)
+            try await self.requireCameraAccess([.camera])
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
             let res = try await cameraCapture.snap(
                 facing: params.facing ?? .front,
@@ -492,15 +489,18 @@ extension MacNodeRuntime {
                 height: Int(res.size.height)))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.clip.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
-                OpenClawCameraClipParams()
+            let params = try Self.decodeOptionalParams(OpenClawCameraClipParams.self, from: req)
+            let includeAudio = params.includeAudio ?? true
+            try await self.requireCameraAccess(includeAudio ? [.camera, .microphone] : [.camera])
             let res = try await cameraCapture.clip(
                 facing: params.facing ?? .front,
                 durationMs: params.durationMs,
-                includeAudio: params.includeAudio ?? true,
+                includeAudio: includeAudio,
                 deviceId: params.deviceId)
             defer { try? FileManager().removeItem(atPath: res.path) }
-            let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+            guard let data = try Self.readInlineMedia(atPath: res.path) else {
+                return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs")
+            }
             struct ClipPayload: Encodable {
                 var format: String
                 var base64: String
@@ -512,12 +512,17 @@ extension MacNodeRuntime {
                 base64: data.base64EncodedString(),
                 durationMs: res.durationMs,
                 hasAudio: res.hasAudio))
+            guard try Self.fitsGatewayFrame(payload, for: req) else {
+                return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs")
+            }
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.list.rawValue:
+            try await self.requireCameraAccess([])
             let devices = await cameraCapture.listDevices()
             let payload = try Self.encodePayload(["devices": devices])
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.ptzStatus.rawValue:
+            try await self.requireCameraAccess([.camera])
             let params: OpenClawCameraPTZStatusParams
             do {
                 params = try Self.decodeParams(OpenClawCameraPTZStatusParams.self, from: req.paramsJSON)
@@ -527,6 +532,7 @@ extension MacNodeRuntime {
             let payload = try await Self.encodePayload(self.cameraPTZ.status(deviceId: params.deviceId))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.ptzControl.rawValue:
+            try await self.requireCameraAccess([.camera])
             let params: OpenClawCameraPTZControlParams
             do {
                 params = try Self.decodeParams(OpenClawCameraPTZControlParams.self, from: req.paramsJSON)
@@ -542,8 +548,7 @@ extension MacNodeRuntime {
 
     private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let mode = Self.locationMode()
-        let params = (try? Self.decodeParams(OpenClawLocationGetParams.self, from: req.paramsJSON)) ??
-            OpenClawLocationGetParams()
+        let params = try Self.decodeOptionalParams(OpenClawLocationGetParams.self, from: req)
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
         let services = await mainActorServices()
@@ -648,8 +653,7 @@ extension MacNodeRuntime {
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
-            OpenClawScreenRecordParams()
+        let params = try Self.decodeOptionalParams(OpenClawScreenRecordParams.self, from: req)
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -664,22 +668,27 @@ extension MacNodeRuntime {
             fps: params.fps,
             includeAudio: params.includeAudio)
         defer { try? FileManager().removeItem(atPath: res.path) }
-        let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+        guard let data = try Self.readInlineMedia(atPath: res.path) else {
+            return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs or fps")
+        }
         struct ScreenPayload: Encodable {
             var format: String
             var base64: String
-            var durationMs: Int?
-            var fps: Double?
+            var durationMs: Int
+            var fps: Double
             var screenIndex: Int?
             var hasAudio: Bool
         }
         let payload = try Self.encodePayload(ScreenPayload(
             format: "mp4",
             base64: data.base64EncodedString(),
-            durationMs: params.durationMs,
-            fps: params.fps,
+            durationMs: res.durationMs,
+            fps: res.fps,
             screenIndex: params.screenIndex,
             hasAudio: res.hasAudio))
+        guard try Self.fitsGatewayFrame(payload, for: req) else {
+            return Self.recordingPayloadTooLarge(req, hint: "reduce durationMs or fps")
+        }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -725,7 +734,7 @@ extension MacNodeRuntime {
                 code: .unavailable,
                 message: "UNAVAILABLE: screen snapshot failed")
         }
-        if res.data.count > Self.maxScreenSnapshotRawBytesBeforeBase64 {
+        if res.data.count > Self.maxInlineMediaRawBytes {
             return Self.screenSnapshotPayloadTooLarge(req)
         }
         struct ScreenSnapshotPayload: Encodable {
@@ -745,11 +754,7 @@ extension MacNodeRuntime {
             height: res.height,
             screenIndex: params.screenIndex,
             capturedAtMs: capturedAtMs))
-        if try Self.projectedOuterFrameBytes(
-            forPayloadJSON: payload,
-            requestId: req.id,
-            nodeId: req.nodeId) > Self.maxGatewayPayloadBytes
-        {
+        guard try Self.fitsGatewayFrame(payload, for: req) else {
             return Self.screenSnapshotPayloadTooLarge(req)
         }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
@@ -789,6 +794,9 @@ extension MacNodeRuntime {
 
     func shutdown() async {
         await self.codexThreadCatalogClient.shutdown()
+        // Terminal stop settles computer actions through releaseHeldComputerInput
+        // first, so no window observation can still write a capture.
+        WindowObservationArtifacts.removeAll(in: WindowObservationArtifacts.processDirectory)
     }
 }
 
@@ -852,8 +860,33 @@ extension MacNodeRuntime {
         return try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
+    /// Omitted params select command defaults; supplied params that fail to decode never fall back to them.
+    private static func decodeOptionalParams<T: Decodable>(_ type: T.Type, from req: BridgeInvokeRequest) throws -> T {
+        do {
+            return try self.decodeParams(type, from: req.paramsJSON ?? "{}")
+        } catch {
+            throw OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: invalid \(req.command) params")
+        }
+    }
+
     private static func encodePayload(_ obj: some Encodable) throws -> String {
         try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
+    }
+
+    /// Stats before reading so oversized recordings never allocate file data plus base64.
+    private static func readInlineMedia(atPath path: String) throws -> Data? {
+        let size = try FileManager().attributesOfItem(atPath: path)[.size] as? Int ?? 0
+        return size > self.maxInlineMediaRawBytes ? nil : try Data(contentsOf: URL(fileURLWithPath: path))
+    }
+
+    /// The Gateway closes the node socket on frames above its limit, losing the result.
+    private static func fitsGatewayFrame(_ payloadJSON: String, for req: BridgeInvokeRequest) throws -> Bool {
+        try self.projectedOuterFrameBytes(forPayloadJSON: payloadJSON, requestId: req.id, nodeId: req.nodeId) <=
+            self.maxGatewayPayloadBytes
+    }
+
+    private static func recordingPayloadTooLarge(_ req: BridgeInvokeRequest, hint: String) -> BridgeInvokeResponse {
+        self.errorResponse(req, code: .unavailable, message: "UNAVAILABLE: \(req.command) payload too large; \(hint)")
     }
 
     private static func screenSnapshotPayloadTooLarge(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {

@@ -57,8 +57,11 @@ merging a nested value such as voice settings.
     });
     ```
 
-    Declare the same id in `contracts.embeddingProviders`. This is the
-    general embedding contract for reusable vector generation, including
+    Declare the same id in `contracts.embeddingProviders`. Optional `aliases`
+    on the adapter provide alternate lookup ids; declare those in the manifest
+    too so cold startup can locate the plugin. Keep the created provider and
+    index identity canonical. Exact provider ids take precedence over aliases.
+    This is the general embedding contract for reusable vector generation, including
     memory search. The retired memory-specific registrar and manifest
     contract are no longer accepted.
 
@@ -102,12 +105,29 @@ merging a nested value such as voice settings.
     This optional field preserves existing plugin contracts, index contents,
     and embedding-cache identities.
 
+    The returned `runtime` can set `inlineIndexConcurrency` to cap how many
+    non-batch file indexing jobs memory runs at once. Use a positive safe
+    integer; omit it to keep the host default of 4. Invalid declarations are
+    ignored, and provider batch jobs keep their own concurrency. Servers that
+    answer requests in arrival order on the same host, such as Ollama and the
+    managed `local` llama-server, declare 1 so a search does not queue behind
+    several indexing requests. The generic OpenAI-compatible adapter declares 1
+    only when its base URL is a loopback address.
+
     `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
     that reports usage calls it once per successful upstream request, before
     resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
     response has no valid counts. Callers can sum these reports and treat any
     unavailable response as incomplete usage. The shared remote factory reports
     OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
+    Memory search applies an explicit `memory.search.queryInstruction` or
+    `memory.search.inputFormat.query` before calling `embed` and sets the
+    `queryInstructionApplied` call option. Explicit `inputFormat.document` sets
+    `documentFormatApplied` on document calls and asynchronous batch options.
+    Preserve supplied text and skip the corresponding provider-owned template
+    when its flag is set, including when the configured prefix is empty.
+    Without the corresponding flag, retain existing formatting behavior.
 
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
@@ -144,8 +164,12 @@ merging a nested value such as voice settings.
     from the private `openclaw/plugin-sdk/video-generation` subpath to round an
     optional duration and reject values outside 1–9007199254740991 seconds after
     rounding. Omission returns `undefined`; provider defaults remain provider-owned.
-    `selectSupportedVideoDuration` selects the nearest value from a nonempty list,
-    preferring the longer duration on ties. Keep provider-specific bounds in the provider.
+    Pass `supportedDurationSeconds` to the same helper to select the nearest allowed
+    value, preferring the longer duration on ties. This list overrides provider/model/mode
+    capabilities; omit it to use those capabilities, or pass an empty list to return
+    the rounded duration without selecting an allowed value. `selectSupportedVideoDuration`
+    provides selection alone for an already-normalized duration and a nonempty list.
+    Keep provider-specific bounds in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({
@@ -245,6 +269,8 @@ merging a nested value such as voice settings.
     `overflowUrl` provides delivery only when the body exceeds that cap; malformed
     media and transport errors still fail. The caller owns response cleanup.
     `downloadGeneratedVideoAsset` also owns fetching, deadlines, and cleanup.
+    Its optional `dispatcherPolicy` preserves configured result transport while
+    keeping strict target checks. Do not pass task headers or private-network trust.
 
   </Tab>
   <Tab title="Web fetch and search">
@@ -295,6 +321,26 @@ merging a nested value such as voice settings.
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
 
+    Provider-native OpenAI Responses search uses the model provider
+    `resolveNativeWebSearch` policy hook instead of registering a managed search
+    tool. Its context includes the selected `api`, `baseUrl`, and secret-free
+    `modelParams`; proxy providers must require both model support and admission
+    for that exact key-scoped route. Missing facts do not establish support.
+    OpenClaw applies the agent and sandbox tool policy before this hook.
+
+    In `wrapStreamFn`, reuse `createOpenAIHostedWebSearchWrapper` from
+    `openclaw/plugin-sdk/provider-stream-shared` with the same eligibility
+    predicate. It replaces a managed `web_search` function with the hosted
+    declaration, admits only that hosted type through Code Mode, and raises
+    `minimal` reasoning to the search-compatible `low`. It does not select
+    credentials, change routes, or retry a rejected request.
+
+    Search tools limited to ten results can spread
+    `WEB_SEARCH_QUERY_COUNT_PROPERTIES` from
+    `openclaw/plugin-sdk/provider-web-search-contract` (or its config-only
+    companion) into their schema's `properties`. Providers retain their own
+    required fields, additional-property policy, and optional filters.
+
     Search providers can declare `configPath` as a path relative to their own
     plugin configuration for the Search settings page. It defaults to
     `["webSearch"]`; use `null` when the provider has no inline settings.
@@ -316,6 +362,10 @@ merging a nested value such as voice settings.
     requests and check cancellation after asynchronous work. Existing
     one-argument implementations remain valid; OpenClaw rejects late fetch
     results after cancellation before publishing them to its fetch cache.
+
+    Forward the same signal to `resolveCitationRedirectUrl(url, signal)` when
+    enriching search citations. Caller cancellation rejects with its original
+    reason; ordinary redirect failures and timeouts keep the original URL.
 
   </Tab>
 </Tabs>

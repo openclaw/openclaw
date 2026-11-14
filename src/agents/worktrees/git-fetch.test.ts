@@ -5,12 +5,16 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeGitCommand, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  recordCommandProcessFailure,
+} from "../../process/exec-result.js";
 import * as processExec from "../../process/exec.js";
 import {
   ensureProjectCheckoutCommit,
   refreshProjectCheckout,
 } from "../../projects/project-clone-runtime.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import { runGit } from "./git.js";
 
@@ -108,7 +112,12 @@ it.each(["dry-run", "option value"])("does not repair origin for %s", async (mod
   expect((await executeGitCommand(clone, ["cat-file", "-t", tip], { env })).code).not.toBe(0);
 });
 
-it.each(["worktree", "renamed project branch", "pinned project commit"] as const)(
+it.each([
+  "worktree",
+  "missing cached default",
+  "renamed project branch",
+  "pinned project commit",
+] as const)(
   "repairs commit-graph-only tips through %s without removing local branches or detached HEADs",
   async (entry) => {
     if (entry === "renamed project branch") {
@@ -116,7 +125,10 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
       await git(source, ["branch", "-D", "keep"]);
     }
     expectBrokenFetch(await executeGitCommand(clone, fetchArgs, { env }));
-    if (entry === "worktree") {
+    if (entry === "missing cached default") {
+      await fs.writeFile(path.join(clone, ".git/refs/remotes/origin/main"), `${tip}\n`);
+    }
+    if (entry === "worktree" || entry === "missing cached default") {
       expect(await resolveWorktreeBase(clone)).toMatchObject({ commit: tip, fetchSucceeded: true });
     } else if (entry === "renamed project branch") {
       await refresh();
@@ -128,19 +140,28 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
     expect(await ref(clone, "refs/heads/main")).toBe(base);
     expect(await ref(clone, "refs/heads/retained")).toBe(tip);
     expect(await ref(linked, "HEAD")).toBe(tip);
+    // Isolated default refresh need not inspect or prune unrelated broken tips.
+    expect(await trackingRefs(clone)).toBe(
+      entry === "worktree" || entry === "missing cached default"
+        ? "refs/remotes/origin/retired"
+        : "",
+    );
+    expect((await fetch("--prune")).code).toBe(0);
     expect(await trackingRefs(clone)).toBe("");
-    expect((await executeGitCommand(clone, fetchArgs, { env })).code).toBe(0);
   },
 );
 
-it("preserves custom tracking mappings while recovering missing tips", async () => {
-  await config(source, "uploadpack.allowAnySHA1InWant", "true");
-  await git(source, ["update-ref", "-d", "refs/heads/main"]);
-  await config(clone, "remote.origin.fetch", "+refs/heads/keep:refs/remotes/origin/main");
-  expect((await fetch()).code).toBe(0);
-  expect(await ref(clone, "refs/remotes/origin/main")).toBe(tip);
-  expect(await trackingRefs(clone)).toBe("refs/remotes/origin/retired");
-});
+it.each(["", "--negotiation-tip=HEAD", "--quiet"])(
+  "preserves custom tracking mappings with optional flag %s while recovering missing tips",
+  async (flag) => {
+    await config(source, "uploadpack.allowAnySHA1InWant", "true");
+    await git(source, ["update-ref", "-d", "refs/heads/main"]);
+    await config(clone, "remote.origin.fetch", "+refs/heads/keep:refs/remotes/origin/main");
+    expect((await fetch(...(flag ? [flag] : []))).code).toBe(0);
+    expect(await ref(clone, "refs/remotes/origin/main")).toBe(tip);
+    expect(await trackingRefs(clone)).toBe("refs/remotes/origin/retired");
+  },
+);
 
 it("repairs physical tips hidden by a replacement during project refresh", async () => {
   const replacement = `refs/replace/${tip}`;
@@ -148,6 +169,38 @@ it("repairs physical tips hidden by a replacement during project refresh", async
   await refresh();
   expect(await git(clone, ["--no-replace-objects", "cat-file", "-t", tip])).toBe("commit");
   expect(await ref(clone, replacement)).toBe(base);
+});
+
+it.each(["worktree", "project refresh"])(
+  "negotiates %s missing-tip repair against resident history in a full blobless clone",
+  async (entry) => {
+    await config(clone, "fetch.unpackLimit", "1");
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "fetch.unpackLimit");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "1");
+    const packedObjects = async () =>
+      Number(/^in-pack: (\d+)$/m.exec(await git(clone, ["count-objects", "-v"]))![1]);
+    const before = await packedObjects();
+    if (entry === "worktree") {
+      expect((await fetch()).code).toBe(0);
+    } else {
+      await refresh();
+    }
+    expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
+    // Only the missing tip is new; its parent and unchanged tree are already resident.
+    expect((await packedObjects()) - before).toBe(1);
+  },
+);
+
+it("repairs a missing tip below the resident negotiation commit", async () => {
+  const relative = path.join(retired.slice(0, 2), retired.slice(2));
+  const destination = path.join(clone, ".git/objects", relative);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(path.join(source, ".git/objects", relative), destination);
+  await git(clone, ["update-ref", "refs/heads/a-descendant", retired]);
+  expect((await fetch()).code).toBe(0);
+  expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
+  expect(await ref(clone, "refs/heads/a-descendant")).toBe(retired);
 });
 
 it("preserves tags and tracking refs when the caller disables configured pruning", async () => {
@@ -214,36 +267,43 @@ it.each([
   expect(await ref(local ? clone : linked, ownerRef)).toBe(retired);
 });
 
-it.each(["unavailable", "uncertain"])("preserves local work on %s repair", async (failure) => {
-  const logs = createWarnLogCapture("missing-tip-repair");
-  onTestFinished(() => logs.cleanup());
-  const run = processExec.runCommandWithTimeout;
-  const uncertain = new CommandProcessCleanupError();
-  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-    if (argv.includes("fetch") && argv.includes("--stdin")) {
-      if (failure === "uncertain") {
-        throw uncertain;
+it.each(["unavailable", "uncertain", "recorded uncertain"])(
+  "preserves local work on %s repair",
+  async (failure) => {
+    const logs = createWarnLogCapture("missing-tip-repair");
+    onTestFinished(() => logs.cleanup());
+    const run = processExec.runCommandWithTimeout;
+    const uncertain =
+      failure === "recorded uncertain"
+        ? recordCommandProcessFailure(new Error("synthetic repair capture failure"), {
+            code: null,
+            termination: "signal",
+            cleanup: "uncertain",
+          })
+        : new CommandProcessCleanupError();
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (argv.includes("fetch") && argv.includes("--stdin")) {
+        if (failure !== "unavailable") {
+          throw uncertain;
+        }
+        return createCommandResult({ stderr: "remote object unavailable", code: 128 });
       }
-      return {
-        stdout: "",
-        stderr: "remote object unavailable",
-        code: 128,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return run(argv, options);
+    });
+    const operation = fetch();
+    if (failure === "uncertain") {
+      await expect(operation).rejects.toBe(uncertain);
+    } else if (failure === "recorded uncertain") {
+      const error = await operation.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CommandProcessCleanupError);
+      expect(error).toHaveProperty("cause", uncertain);
+    } else {
+      expect((await operation).code).toBe(128);
+      expect(await logs.findText("Git repository repair failed")).toContain(
+        "Local branches and worktree HEADs were preserved",
+      );
     }
-    return run(argv, options);
-  });
-  const operation = fetch();
-  if (failure === "uncertain") {
-    await expect(operation).rejects.toBe(uncertain);
-  } else {
-    expect((await operation).code).toBe(128);
-    expect(await logs.findText("Git repository repair failed")).toContain(
-      "Local branches and worktree HEADs were preserved",
-    );
-  }
-  expect(await rawRef("refs/heads/retained")).toBe(`${tip}\n`);
-  expect(await ref(linked, "HEAD")).toBe(tip);
-});
+    expect(await rawRef("refs/heads/retained")).toBe(`${tip}\n`);
+    expect(await ref(linked, "HEAD")).toBe(tip);
+  },
+);

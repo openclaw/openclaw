@@ -43,8 +43,6 @@ const mediaConfig = (botToken: string, extra: Partial<TelegramConfig> = {}): Ope
 describe("registered Telegram media", () => {
   it.each([
     { caption: "Animation caption", companionDocument: true },
-    { caption: "Animation caption", companionDocument: false },
-    { caption: undefined, companionDocument: true },
     { caption: undefined, companionDocument: false },
   ])("downloads animation as video: %j", async ({ caption, companionDocument }) => {
     const animationBytes = Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex");

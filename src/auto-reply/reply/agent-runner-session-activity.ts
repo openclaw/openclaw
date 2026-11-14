@@ -5,9 +5,10 @@ import {
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import type { RunReplyAgentParams } from "./agent-runner-core.js";
 
-export async function commitQueuedReplySessionActivity(params: {
+async function commitQueuedReplySessionActivity(params: {
   target: { agentId?: string; storePath: string; sessionKey: string };
   expected: SessionEntry;
   updatedAt: number;
@@ -45,9 +46,10 @@ export async function commitQueuedReplySessionActivity(params: {
         ),
       );
       if (outcome.kind !== "committed") {
-        throw new SqliteWorkerError(
+        throw wrapSqliteWorkerError(
           outcome.error.message,
           outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+          outcome.error,
         );
       }
       params.onCommittedEntry(outcome.receipt.postimage.entry);
@@ -56,4 +58,40 @@ export async function commitQueuedReplySessionActivity(params: {
       }
     },
   );
+}
+
+/** Keep queued/steered activity and its in-memory session projection at one write boundary. */
+export async function touchQueuedReplySessionActivity(
+  params: Pick<
+    RunReplyAgentParams,
+    "opts" | "followupRun" | "sessionKey" | "sessionStore" | "storePath"
+  >,
+  activeSessionEntry: SessionEntry | undefined,
+  onCommittedEntry: (entry: SessionEntry | undefined) => void,
+): Promise<void> {
+  const { opts, followupRun, sessionKey, sessionStore: activeSessionStore, storePath } = params;
+  if (opts?.internalEventExecution || !activeSessionEntry || !activeSessionStore || !sessionKey) {
+    return;
+  }
+  // Keep the in-memory snapshot aligned with the pending-reset write boundary.
+  const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
+  if (storePath) {
+    await commitQueuedReplySessionActivity({
+      target: { agentId: followupRun.run.agentId, storePath, sessionKey },
+      expected: activeSessionEntry,
+      updatedAt,
+      assertCurrent: () => {
+        followupRun.operatorAuthority?.assertCurrent();
+      },
+      onCommittedEntry: (entry) => {
+        onCommittedEntry(entry);
+        if (entry) {
+          activeSessionStore[sessionKey] = entry;
+        }
+      },
+    });
+  } else {
+    activeSessionEntry.updatedAt = updatedAt;
+    activeSessionStore[sessionKey] = activeSessionEntry;
+  }
 }

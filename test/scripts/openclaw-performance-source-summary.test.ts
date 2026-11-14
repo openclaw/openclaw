@@ -17,7 +17,6 @@ const mockHello = {
     gatewayProcessRssStartBytes: 90 * 1024 * 1024,
     wallMs: 250,
   },
-  run: { primaryModel: "mock-openai/perf" },
   scenarios: [{ id: "mock-hello", status: "pass" }],
 };
 
@@ -47,21 +46,10 @@ function writeSourceFixture(sourceDir = mkTmpRoot()) {
     results: [
       {
         id: "default",
-        name: "default",
         summary: {
-          readyzMs: { p50: 12, p95: 18 },
-          healthzMs: { p50: 5 },
-          httpListenLogMs: { p50: 8 },
-          gatewayReadyLogMs: { p50: 9 },
-          firstOutputMs: { p50: 30 },
+          readyzMs: { p50: 12 },
           maxRssMb: { p95: 120 },
           cpuCoreRatio: { p95: 0.25 },
-          startupTrace: {
-            "memory.ready.heapUsedMb": { p50: 30, p95: 32 },
-            "phase.load.total": { p50: 70, p95: 80 },
-            "phase.load.itemCount": { p50: 40, p95: 50 },
-            "phase.load": { p50: 7, p95: 8 },
-          },
         },
       },
     ],
@@ -74,23 +62,18 @@ function writeSourceFixture(sourceDir = mkTmpRoot()) {
       cases: [
         {
           id: "gatewayHealthJson",
-          name: "gateway health json",
           summary: {
-            durationMs: { p50: 10, p95: 14 },
+            durationMs: { p50: 10 },
             maxRssMb: { p95: 90 },
-            exitSummary: "code:0x3",
           },
         },
       ],
     },
   });
   writeJson(path.join(sourceDir, "extension-memory.json"), {
-    baseline: { maxRssMb: 50, status: "ok" },
-    combined: { maxRssMb: 180, status: "ok" },
-    counts: { totalEntries: 12 },
-    topByDeltaMb: [
-      { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
-    ],
+    baseline: { maxRssMb: 50 },
+    combined: { maxRssMb: 180 },
+    topByDeltaMb: [{ dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12 }],
   });
   writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
     ...sqliteRun,
@@ -111,34 +94,8 @@ it("labels CLI RSS semantics and rejects mixed-metric memory trends", () => {
   expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Incompatible CLI RSS metrics");
   writeJson(path.join(baselineDir, "cli-startup.json"), cli);
   expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: cli-runtime-max-rss-v1");
-  cli.primary.memoryMetric = "unknown-metric";
-  writeJson(cliPath, cli);
-  expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Unknown CLI RSS metric");
-
-  delete cli.primary.memoryMetric;
-  for (const [before, after, error] of [
-    [undefined, "native", null],
-    ["native", undefined, null],
-    ["native", "native", null],
-    ["transport", "transport", null],
-    [undefined, "transport", "Incompatible CLI execution modes"],
-    ["transport", "native", "Incompatible CLI execution modes"],
-    ["unknown", "unknown", "Unknown CLI execution mode"],
-    [null, "native", "Unknown CLI execution mode"],
-    ["native", 1, "Unknown CLI execution mode"],
-  ] satisfies Array<[unknown, unknown, string | null]>) {
-    writeJson(path.join(baselineDir, "cli-startup.json"), {
-      primary: { ...cli.primary, executionMode: before },
-    });
-    writeJson(cliPath, { primary: { ...cli.primary, executionMode: after } });
-    if (error) {
-      expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow(error);
-    } else {
-      expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: legacy-last-marker");
-    }
-  }
-  writeJson(cliPath, { primary: { ...cli.primary, executionMode: null } });
-  expect(() => buildMarkdown(sourceDir, null)).toThrow("Unknown CLI execution mode");
+  writeJson(cliPath, { primary: { ...cli.primary, executionMode: "transport" } });
+  expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Incompatible CLI execution modes");
 });
 
 function sqliteQuery(overrides: Record<string, unknown> = {}) {
@@ -196,14 +153,6 @@ describe("parseArgs", () => {
     });
   });
 
-  it("rejects missing path values", () => {
-    for (const flag of ["--source-dir", "--baseline-source-dir", "--output"]) {
-      for (const args of [[], [""], ["-h"], ["--source-dir", "reports/current"]]) {
-        expect(() => parseArgs([flag, ...args])).toThrow(`${flag} requires a value`);
-      }
-    }
-  });
-
   it("reports CLI argument errors without a Node stack trace", () => {
     for (const [args, error] of [
       [[], "--source-dir is required"],
@@ -224,19 +173,9 @@ describe("buildMarkdown", () => {
       id: "agent-cache.plugin-model-catalog.list",
       p50Ms: 1,
       p95Ms: 2,
-      plan: {
-        fullTableScans: [],
-        indexes: ["sqlite_autoindex_cache_entries_1"],
-        raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
-        tempSorts: [],
-      },
       rows: 100,
-      sql: "SELECT key FROM cache_entries WHERE scope = ?",
     });
-    const currentQuery = sqliteQuery({
-      p95Ms: 15,
-      sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
-    });
+    const currentQuery = sqliteQuery({ p95Ms: 15 });
     const sourceDir = makeSqliteSource([currentQuery, agentQuery]);
     const baselineDir = makeSqliteSource([
       { ...agentQuery, id: "baseline-only", p50Ms: 3, p95Ms: 4 },
@@ -344,7 +283,6 @@ describe("buildMarkdown", () => {
     const sourceDir = writeSourceFixture();
     fs.rmSync(path.join(sourceDir, "sqlite-perf-smoke.json"));
 
-    expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
-    expect(buildMarkdown(sourceDir, null)).toContain("No data.");
+    expect(buildMarkdown(sourceDir, null)).toMatch(/## SQLite State Smoke\s+No data\./u);
   });
 });

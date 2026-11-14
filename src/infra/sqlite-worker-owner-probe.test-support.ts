@@ -1,7 +1,9 @@
+import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import type { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 type Admit = Parameters<typeof createSqliteWorkerOperationAdmission>[0];
@@ -14,6 +16,32 @@ type CommandProbe = <Key extends keyof OpenClawStateWorkerOperations>(
 ) => Promise<OpenClawStateWorkerOperations[Key]["output"]>;
 
 export const sqliteWorkerOwnerProbe = {
+  writerLock(path: string) {
+    const competitor = new DatabaseSync(path);
+    competitor.exec("PRAGMA busy_timeout = 0");
+    const observed: string[] = [];
+    return {
+      observed,
+      observe(stage: string) {
+        if (stage !== "transaction" && stage !== "commit") {
+          return;
+        }
+        try {
+          competitor.exec("BEGIN IMMEDIATE");
+          competitor.exec("ROLLBACK");
+          observed.push(`${stage}:free`);
+        } catch (error) {
+          if (!isSqliteLockError(error)) {
+            throw error;
+          }
+          observed.push(`${stage}:held`);
+        }
+      },
+      [Symbol.dispose]() {
+        competitor.close();
+      },
+    };
+  },
   admission(
     module: { createSqliteWorkerOperationAdmission: typeof createSqliteWorkerOperationAdmission },
     intercept: (...args: [...Parameters<Admit>, Admit]) => void,

@@ -89,7 +89,6 @@ type RateLimitWindowEntry = {
 export type CodexAccountUsageSummary = {
   usageLine?: string;
   blocked: boolean;
-  blockedUntilMs?: number;
   blockedUntilText?: string;
   blockedResetRelative?: string;
   blockingPeriod?: string;
@@ -272,7 +271,6 @@ function summarizeRateLimitUsage(
     blocked: Boolean(blockingSnapshot),
     ...(blockingReset
       ? {
-          blockedUntilMs: blockingReset.resetsAtMs,
           blockedUntilText: `${formatCalendarResetTime(blockingReset.resetsAtMs, nowMs)} (in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)})`,
           blockedResetRelative: `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`,
         }

@@ -1,7 +1,3 @@
-/**
- * Adapts a remote Codex app-server WebSocket endpoint to the shared stdio-like
- * transport interface.
- */
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import path from "node:path";

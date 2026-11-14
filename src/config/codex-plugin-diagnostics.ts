@@ -16,11 +16,11 @@ import {
   resolveAgentConfig,
   resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
-  resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import {
   resolveDefaultModelForAgent,
+  resolveEffectiveModelFallbacks,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection-config.js";
 import {
@@ -256,6 +256,7 @@ function configuredModelRefsNeedCodex(params: {
     });
     for (const ref of refs) {
       if (
+        ref.capability === "decision" ||
         !configuredRefIsEffectiveForAgent({
           cfg: params.cfg,
           sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,

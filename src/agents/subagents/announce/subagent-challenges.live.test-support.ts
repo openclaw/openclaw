@@ -251,6 +251,7 @@ export async function runWithLiveSubagentGateway(
     maxConcurrent?: number;
     additionalTools?: string[];
     peerSessions?: boolean;
+    sessionVisibility?: "tree";
   },
   body: (context: LiveSubagentContext) => Promise<void>,
 ): Promise<void> {
@@ -314,6 +315,9 @@ export async function runWithLiveSubagentGateway(
           toolSearch: false,
           ...(options.peerSessions
             ? { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } }
+            : {}),
+          ...(options.sessionVisibility
+            ? { sessions: { visibility: options.sessionVisibility } }
             : {}),
           allow: [
             "sessions_spawn",

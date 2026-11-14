@@ -18,6 +18,7 @@ import {
   recordLegacyMigrationRun,
   recordLegacyMigrationSource,
 } from "../infra/state-migrations.receipts.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -44,36 +45,6 @@ export type AuthProfileMigrationSourceReceipt = {
   env?: NodeJS.ProcessEnv;
 };
 
-function createAuthProfileMigrationSourceReceipt(params: {
-  sourcePath: string;
-  sourceBytes: Buffer;
-  sourceRecordCount: number;
-  targetDatabasePath: string;
-  targetTable: AuthProfileMigrationSourceReceipt["targetTable"];
-  targetStoreKey?: AuthProfileMigrationSourceReceipt["targetStoreKey"];
-  now?: Date;
-  env?: NodeJS.ProcessEnv;
-}): AuthProfileMigrationSourceReceipt {
-  const sourcePath = path.resolve(params.sourcePath);
-  const sourceSha256 = sha256Hex(params.sourceBytes);
-  const sourceKey = `auth-profile-v2:${sha256Hex(`${sourcePath}\0${sourceSha256}`)}`;
-  const stamp = (params.now ?? new Date()).toISOString().replaceAll(":", "-");
-  return {
-    sourceKey,
-    runId: `${sourceKey}:${randomUUID()}`,
-    sourcePath,
-    sourceSha256,
-    sourceSizeBytes: params.sourceBytes.byteLength,
-    sourceRecordCount: params.sourceRecordCount,
-    sourceBytes: Buffer.from(params.sourceBytes),
-    targetDatabasePath: path.resolve(params.targetDatabasePath),
-    targetTable: params.targetTable,
-    ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
-    archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,
-    ...(params.env ? { env: params.env } : {}),
-  };
-}
-
 export function prepareAuthProfileSourceReceipt(params: {
   pathname: string;
   targetDatabasePath: string;
@@ -83,23 +54,27 @@ export function prepareAuthProfileSourceReceipt(params: {
   env?: NodeJS.ProcessEnv;
 }): AuthProfileMigrationSourceReceipt {
   const sourceBytes = fs.readFileSync(params.pathname);
-  let sourceRecordCount = 0;
-  try {
-    const parsed = JSON.parse(sourceBytes.toString("utf8")) as unknown;
-    sourceRecordCount = isRecord(parsed) ? Object.keys(parsed).length : 0;
-  } catch {
-    // The migration parser reports malformed input separately; receipts never include its bytes.
-  }
-  return createAuthProfileMigrationSourceReceipt({
-    sourcePath: params.pathname,
-    sourceBytes,
+  const parsed = parseAuthProfileMigrationSource({ sourceBytes, sourcePath: params.pathname });
+  const sourceRecordCount = isRecord(parsed) ? Object.keys(parsed).length : 0;
+  const now = new Date(params.now());
+  const sourcePath = path.resolve(params.pathname);
+  const sourceSha256 = sha256Hex(sourceBytes);
+  const sourceKey = `auth-profile-v2:${sha256Hex(`${sourcePath}\0${sourceSha256}`)}`;
+  const stamp = now.toISOString().replaceAll(":", "-");
+  return {
+    sourceKey,
+    runId: `${sourceKey}:${randomUUID()}`,
+    sourcePath,
+    sourceSha256,
+    sourceSizeBytes: sourceBytes.byteLength,
     sourceRecordCount,
-    targetDatabasePath: params.targetDatabasePath,
+    sourceBytes,
+    targetDatabasePath: path.resolve(params.targetDatabasePath),
     targetTable: params.targetTable,
     ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
-    now: new Date(params.now()),
+    archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,
     ...(params.env ? { env: params.env } : {}),
-  });
+  };
 }
 
 export function assertAuthProfileMigrationSourcesUnchanged(
@@ -126,13 +101,14 @@ export function assertAuthProfileMigrationSourcesUnchanged(
 }
 
 export function parseAuthProfileMigrationSource(
-  receipt: AuthProfileMigrationSourceReceipt | undefined,
+  receipt: Pick<AuthProfileMigrationSourceReceipt, "sourceBytes" | "sourcePath"> | undefined,
 ): unknown {
   if (!receipt?.sourceBytes) {
     return null;
   }
+  const text = decodeUtf8Input(receipt.sourceBytes, `Legacy auth source ${receipt.sourcePath}`);
   try {
-    return JSON.parse(receipt.sourceBytes.toString("utf8")) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     return null;
   }
@@ -256,9 +232,7 @@ function restoreAuthProfileMigrationArchiveNoClobber(
   return "restored";
 }
 
-export function archiveAuthProfileMigrationSource(
-  receipt: AuthProfileMigrationSourceReceipt,
-): void {
+function archiveAuthProfileMigrationSource(receipt: AuthProfileMigrationSourceReceipt): void {
   if (fs.existsSync(receipt.sourcePath)) {
     const sourceBytes = fs.readFileSync(receipt.sourcePath);
     if (sha256Hex(sourceBytes) !== receipt.sourceSha256) {
@@ -489,10 +463,10 @@ export function resumePendingAuthProfileMigrationArchives(
   return changes;
 }
 
-export function hasTerminalAuthProfileMigrationReceipt(
-  sourceKey: string,
-  env?: NodeJS.ProcessEnv,
-): boolean {
+/** Finish a reappeared source under the caller's source-file lock, without replaying credentials. */
+export function archivePreviouslyMigratedAuthProfileSource(
+  receipt: AuthProfileMigrationSourceReceipt,
+): string | null {
   const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQueryTakeFirstSync(
@@ -500,11 +474,35 @@ export function hasTerminalAuthProfileMigrationReceipt(
         getNodeSqliteKysely<MigrationDatabase>(db)
           .selectFrom("migration_sources")
           .select("status")
-          .where("source_key", "=", sourceKey),
+          .where("source_key", "=", receipt.sourceKey),
       ),
-    { env },
+    { env: receipt.env },
   );
-  return row?.status === "completed" || row?.status === "archived-unparsed";
+  if (row?.status !== "completed" && row?.status !== "archived-unparsed") {
+    return null;
+  }
+  const directory = path.dirname(receipt.sourcePath);
+  const prefix = `${path.basename(receipt.sourcePath)}.migrated-`;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+      continue;
+    }
+    const archivePath = path.join(directory, entry.name);
+    try {
+      if (sha256Hex(fs.readFileSync(archivePath)) !== receipt.sourceSha256) {
+        continue;
+      }
+    } catch {
+      // An unreadable archive cannot prove that another copy of these bytes survives.
+      continue;
+    }
+    // Include replacement archives: the terminal receipt may name a lost original.
+    assertAuthProfileMigrationSourcesUnchanged([receipt.sourcePath], [receipt]);
+    fs.unlinkSync(receipt.sourcePath);
+    return archivePath;
+  }
+  archiveAuthProfileMigrationSource(receipt);
+  return receipt.archivePath;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

@@ -1,4 +1,5 @@
 import { createProjection, createSignal } from "solid-js";
+import { userProfileDisplayName } from "../../../src/shared/user-profile-display-name.js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
@@ -10,10 +11,7 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export function createSessionOwnerMenu(
-  presented: () => boolean = () => true,
-  prepare?: () => unknown,
-) {
+export function createSessionOwnerMenu(presented: () => boolean = () => true) {
   const context = useOptionalApplication();
   const agents = context ? projectAgents(context.agents) : undefined;
   const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
@@ -41,9 +39,7 @@ export function createSessionOwnerMenu(
         id: profile.id,
         identity: { type: "profile", id: profile.id },
         label:
-          profile.displayName?.trim() ||
-          profile.githubIdentity?.login ||
-          profile.emails[0] ||
+          userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
           profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
@@ -77,13 +73,9 @@ export function createSessionOwnerMenu(
       error: directory?.error,
     };
   };
-  const snapshot = createParkedProjection(readSnapshot, presented, prepare);
-  const rows = createProjection(
-    snapshot,
-    {},
-    {
-      key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
-    },
-  );
+  const snapshot = createParkedProjection(readSnapshot, presented);
+  const rows = createProjection(snapshot, null, {
+    key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
+  });
   return { load, snapshot: () => rows, multipleOwners: () => rows.owners.length > 1 };
 }

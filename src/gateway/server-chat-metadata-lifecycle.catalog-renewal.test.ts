@@ -27,17 +27,20 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
-import type { ChatMetadataRuntimeDeps } from "./server-methods/chat-metadata-facts.js";
+import * as projectionRuntime from "./server-methods/chat-metadata-session-projection.js";
+import * as commands from "./server-methods/commands-list-result.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 const buildCommands = vi.fn(async () => ({ commands: [] }));
-const buildProjection = vi.fn<ChatMetadataRuntimeDeps["buildProjection"]>(async ({ facts }) => ({
-  modelCatalog: facts.modelCatalog.entries,
-  read: () => ({ models: facts.modelCatalog.entries }),
-  isCurrent: () => true,
-}));
+const buildProjection = vi.fn<typeof projectionRuntime.prepareChatMetadataModelProjection>(
+  async ({ facts }) => ({
+    modelCatalog: facts.modelCatalog.entries,
+    read: () => ({ models: facts.modelCatalog.entries }),
+    isCurrent: () => true,
+  }),
+);
 let owner: PreparedModelRuntimeSnapshot;
 let state: OpenClawTestState;
 let stop: (() => Promise<void>) | undefined;
@@ -51,29 +54,14 @@ const publication = (changed: boolean) => ({
   refreshStatusChanged: true,
 });
 
-vi.mock("./server-methods/chat-metadata-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-methods/chat-metadata-runtime.js")>();
-  return {
-    ...actual,
-    createGatewayChatMetadataRuntime: (
-      params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0],
-    ) =>
-      actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          getSkillsVersion: () => 0,
-          getPluginRegistryVersion: () => 0,
-          buildCommands,
-          buildProjection,
-        },
-      }),
-  };
-});
-
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "catalog-renewal-metadata" });
   await resetPreparedModelRuntimeHarness(state);
   clearBuilds();
+  vi.spyOn(commands, "buildCommandsListResult").mockImplementation(buildCommands);
+  vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+    buildProjection,
+  );
 });
 
 afterEach(async ({ task }) => {
@@ -81,6 +69,7 @@ afterEach(async ({ task }) => {
     await stop?.();
   } finally {
     stop = undefined;
+    vi.restoreAllMocks();
     await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
   }
 });
@@ -151,9 +140,9 @@ it("retains the published model owner across metadata reads and catalog renewal"
   const metadata = await harness.lifecycle.read({ agentId: "main" });
   expect(modelIds(metadata.models ?? [])).toEqual(modelIds(next.entries));
   expect(owner.isCurrent()).toBe(true);
-  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(harness.broadcast).toHaveBeenCalledTimes(2);
   await harness.lifecycle.read({ agentId: "main" });
-  expect(harness.broadcast).toHaveBeenCalledOnce();
+  expect(harness.broadcast).toHaveBeenCalledTimes(2);
   expect(owner.isCurrent()).toBe(true);
 });
 
@@ -228,12 +217,32 @@ it.for(["usage", "removed", "failed"] as const)(
         event.phase === "catalog-published" ? [event] : [],
       );
       expect(published).toEqual(change === "failed" ? [] : [publication(change !== "usage")]);
-      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
-        "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: change === "removed", commandsChanged: false },
-        { dropIfSlow: true },
+      const changes = [
+        ...(change === "usage"
+          ? []
+          : [
+              {
+                agentId: "main",
+                modelCatalogChanged: true,
+                authChanged: change === "removed",
+                commandsChanged: false,
+              },
+            ]),
+        ...(change === "failed"
+          ? []
+          : [
+              {
+                modelCatalogChanged: false,
+                modelCatalogStatusChanged: true,
+                authChanged: false,
+                commandsChanged: false,
+              },
+            ]),
+      ];
+      expect(harness.broadcast.mock.calls).toEqual(
+        changes.map((payload) => ["chat.metadata.changed", payload, { dropIfSlow: true }]),
       );
-      expect(harness.observedCatalogs).toHaveLength(1);
+      expect(harness.observedCatalogs).toHaveLength(changes.length);
       const observedCatalog = harness.observedCatalogs[0]!;
       expect(observedCatalog.pendingProviders).toBeUndefined();
       // The pending reply remains pending until the consumer receives the settlement signal.
@@ -255,7 +264,7 @@ it.for(["usage", "removed", "failed"] as const)(
         await nextEventLoopTurn();
         await harness.lifecycle.read({ agentId: "main" });
         expect(owner.readFullModelCatalog!()?.refreshFailed).toBeUndefined();
-        expect(harness.broadcast).toHaveBeenCalledTimes(2);
+        expect(harness.broadcast).toHaveBeenCalledTimes(3);
         expect(buildCommands).toHaveBeenCalledTimes(2);
         expect(publications).toHaveBeenLastCalledWith(publication(false));
       }

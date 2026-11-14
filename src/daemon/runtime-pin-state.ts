@@ -21,12 +21,16 @@ import {
 } from "./service-types.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
-const pinSchema = z.object({ runtime: z.enum(["node", "bun"]), path: z.string().min(1) });
+const pinSchema = z.object({
+  runtime: z.enum(["node", "bun", "standalone"]),
+  path: z.string().min(1),
+});
 const recordSchema = z.object({ version: z.literal(1), pin: pinSchema, definition: z.string() });
 
 type PinScope = { kind: "gateway" | "node"; env: NodeJS.ProcessEnv };
 function resolveKey({ kind, env }: PinScope) {
-  const nativeEnv = kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment() } : env;
+  const nativeEnv =
+    kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment(env) } : env;
   const name =
     process.platform === "darwin"
       ? resolveLaunchAgentLabel(nativeEnv)

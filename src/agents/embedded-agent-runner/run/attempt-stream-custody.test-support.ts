@@ -10,6 +10,7 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
@@ -39,6 +40,7 @@ export async function createStreamCustodyFixture(
     toolNames?: string[];
     thinkingRecovery?: boolean;
     onIdleTimeout?: (error: Error) => void;
+    deferStreamGuards?: boolean;
     /** Durable owner carrying a real Anthropic compaction checkpoint for `model`. */
     anthropicCompaction?: { model: Model; owner: AssistantMessage };
   } = {},
@@ -154,12 +156,22 @@ export async function createStreamCustodyFixture(
     diagnostics: { runTrace: createDiagnosticTraceContext() },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
   } as unknown as EmbeddedAttemptExecutionPhaseInput;
-  const diagnosticOwner = createDiagnosticEmbeddedRunOwner(input.attempt);
-  const streamGuards = installEmbeddedAttemptStreamGuards(input, {
-    onRejectedProviderReplayRepaired: repaired,
-    onIdleTimeout: options.onIdleTimeout ?? (() => {}),
-    diagnosticOwner,
-  });
+  let diagnosticOwner: ReturnType<typeof createDiagnosticEmbeddedRunOwner>;
+  let streamGuards: ReturnType<typeof installEmbeddedAttemptStreamGuards>;
+  const prepareStreamGuards = (watchdogAttempt?: SessionControllerWatchdogAttempt) => {
+    if (streamGuards) {
+      throw new Error("Stream guards already installed");
+    }
+    diagnosticOwner = createDiagnosticEmbeddedRunOwner({ ...input.attempt, watchdogAttempt });
+    streamGuards = installEmbeddedAttemptStreamGuards(input, {
+      onRejectedProviderReplayRepaired: repaired,
+      onIdleTimeout: options.onIdleTimeout ?? (() => {}),
+      diagnosticOwner,
+    });
+  };
+  if (!options.deferStreamGuards) {
+    prepareStreamGuards();
+  }
   expect(replayPresent(), "fixture preparation must retain replay").toBe(true);
   const streamOptions = {
     signal: controller.signal,
@@ -167,8 +179,13 @@ export async function createStreamCustodyFixture(
   };
   return {
     input,
-    diagnosticOwner,
-    streamGuards,
+    get diagnosticOwner() {
+      return diagnosticOwner;
+    },
+    get streamGuards() {
+      return streamGuards;
+    },
+    prepareStreamGuards,
     controller,
     manager,
     session: sdkSession?.session,

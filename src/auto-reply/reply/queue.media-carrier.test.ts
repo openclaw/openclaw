@@ -4,17 +4,23 @@ import * as policy from "../../agents/tool-policy.js";
 import * as identity from "../../audit/execution-identity-admission.js";
 import * as admission from "../../channels/message-access/admission-evidence.js";
 import * as ingress from "../../gateway/local-user-ingress.js";
+import { applyRunHydrationSuppression, readPersistedMediaFacts } from "../../media/media-facts.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
-import { FollowupRunDeferredError, type FollowupRun } from "./queue.js";
-import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
+import type { FollowupRun } from "./queue.js";
+import {
+  createQueueTestRun,
+  installQueueRuntimeErrorSilencer,
+  rejectQueuePreparation,
+} from "./queue.test-helpers.js";
+import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
-import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
 const evidenceCleanups = new Set<() => void>();
 function trackedQueue(...args: Parameters<typeof createQueueCase>) {
   const q = createQueueCase(...args);
@@ -30,10 +36,6 @@ const carrierRun = {
   provider: "openai",
   model: "gpt-route",
   memberRoleIds: ["operator", "member"],
-  thinkLevelOverride: "high",
-  fastModeOverride: true,
-  verboseLevel: "on",
-  reasoningLevel: "on",
   trustedInternalHandoff: {
     kind: "subagent-completion",
     sourceSessionKey: "agent:child",
@@ -55,6 +57,12 @@ it("drains the complete parked image turn after active steering rejects it", asy
   const q = trackedQueue();
   const key = q.key;
   const run = createQueueTestRun({ prompt: "  caption\n", messageId: key });
+  Object.assign(run.run, {
+    agentId: "main",
+    sessionKey: key,
+    messageProvider: "telegram",
+    senderId: "media-requester",
+  });
   run.images = [image("inline-png", "image/png")];
   run.imageOrder = ["offloaded", "inline"];
   run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
@@ -64,8 +72,11 @@ it("drains the complete parked image turn after active steering rejects it", asy
     target: () => undefined,
   });
   run.userTurnTranscriptRecorder = recorder;
-  const persist = vi.spyOn(recorder, "persistApproved");
-  const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: run.run.sessionId,
+    resetTriggered: false,
+  });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
   const reject = vi
@@ -73,34 +84,30 @@ it("drains the complete parked image turn after active steering rejects it", asy
     .mockRejectedValue(new Error("no active turn to steer"));
   operation.attachBackend({
     kind: "embedded",
+    supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     toolAuthorityFingerprint,
     cancel: vi.fn(),
-    messageInjection: { isAvailable: () => true, queueMessage: reject },
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (_text, _options, assertCurrent) => {
+        assertCurrent();
+        await reject();
+      },
+    },
   });
   operation.setPhase("running");
-  const typing = createMockTypingController();
   try {
     await expect(
-      runActiveReplySteer({
-        followupRun: run,
-        opts: undefined,
-        providedReplyOperation: operation,
-        queueKey: key,
-        releaseAdmissionTicket: vi.fn(),
-        replyOperationRunState: undefined,
-        resolvedQueue: { mode: "steer", debounceMs: 0 },
-        restartRecoverySourceTurnId: run.messageId,
-        runFollowup: q.runFollowup,
-        sessionCtx: {},
-        sessionKey: key,
-        touchActiveSessionEntry: async () => {},
-        typing,
-        typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-      }),
+      runActiveReplySteer(
+        createSteerParams(key, run, operation, {
+          sourceTurnId: run.messageId,
+          runFollowup: q.runFollowup,
+        }),
+      ),
     ).resolves.toBe("handled");
     expect(reject).toHaveBeenCalledOnce();
-    expect(persist).not.toHaveBeenCalled();
     operation.complete();
     await q.done.promise;
     expect(q.calls).toHaveLength(1);
@@ -112,15 +119,43 @@ it("drains the complete parked image turn after active steering rejects it", asy
     expect(recorder.hasPersisted()).toBe(false);
   } finally {
     operation.complete();
-    persist.mockRestore();
   }
+});
+
+it("keeps participant evidence out of sender-scoped collect routing", () => {
+  const audit = admission.createChannelAdmissionAudit({ enabled: true });
+  evidenceCleanups.add(() => audit.close());
+  const runs = ["person-1", "person-2"].map((senderId) => {
+    const item = createQueueTestRun({
+      prompt: `from ${senderId}`,
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+      audit,
+      channelId: "slack",
+      accountId: "default",
+      participantId: senderId,
+    });
+    item.run = {
+      ...item.run,
+      senderId,
+      senderE164: `+1555000${senderId.at(-1)}`,
+      senderIsOwner: false,
+    };
+    return item;
+  });
+
+  expect(resolveFollowupDeliveryStorageKey(runs[0]!)).not.toBe(
+    resolveFollowupDeliveryStorageKey(runs[1]!),
+  );
 });
 
 it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", async (kind) => {
   const mixed = kind === "mixed";
   const audit = admission.createChannelAdmissionAudit({ enabled: true });
   evidenceCleanups.add(() => audit.close());
-  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 1);
+  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 2);
   const turns = [
     ["a", "first", "/tmp/a.png", "image/png"],
     ["b", "second", "/tmp/b.pdf", "application/pdf"],
@@ -164,7 +199,7 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
   q.start(async (run) => {
     q.calls.push(run);
     if (q.calls.length === 1) {
-      throw new FollowupRunDeferredError();
+      rejectQueuePreparation(run, new Error("Synthetic pre-admission preparation failure"));
     }
     q.done.resolve();
   });
@@ -246,6 +281,36 @@ it.each([
       expect(q.calls[index]?.prompt).toContain(text);
     }
   }
+});
+it("pairs each collected source's run-only image skip with the transcript facts", async () => {
+  const q = trackedQueue();
+  const shared = { path: "/tmp/shared.png", contentType: "image/png" };
+  // Same path in both sources: only the second one could not be read this turn.
+  for (const [prompt, skipped] of [
+    ["one", false],
+    ["two", true],
+  ] as const) {
+    q.add({
+      ...createQueueTestRun({ prompt }),
+      media: [
+        skipped ? { ...shared, hydrationSuppressed: true, unresolvedThisTurn: true } : shared,
+      ],
+      userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+        input: { text: prompt, media: [shared] },
+        target: createTestUserTurnTranscriptTarget(),
+        updateMode: "none",
+      }),
+    });
+  }
+  await q.drain();
+  expect(q.calls).toHaveLength(1);
+  const message = await q.calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
+  const recorded = message ? readPersistedMediaFacts(message) : undefined;
+  expect(
+    applyRunHydrationSuppression(recorded ?? [], q.calls[0]?.media).map(
+      (fact) => fact.hydrationSuppressed === true,
+    ),
+  ).toEqual([false, true]);
 });
 describe("queued Gateway attach evidence", () => {
   installQueueRuntimeErrorSilencer();
@@ -348,7 +413,7 @@ describe("queued Gateway attach evidence", () => {
       attempts += 1;
       if (attempts === 1) {
         ingress.attachGatewayLocalUserIngress(client, prepareIngress("replacement-person"));
-        throw new Error("Synthetic pre-admission delivery failure");
+        rejectQueuePreparation(run, new Error("Synthetic pre-admission preparation failure"));
       }
       await admit(run);
     });

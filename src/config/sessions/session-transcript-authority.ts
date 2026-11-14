@@ -38,17 +38,33 @@ const staged = resolveGlobalSingleton(
 );
 const prepared = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityChanges"),
-  () => new WeakMap<object, SqliteCommittedFact<SessionTranscriptAuthority>>(),
+  () =>
+    new WeakMap<
+      object,
+      { fact: SqliteCommittedFact<SessionTranscriptAuthority>; publication: { final: boolean } }
+    >(),
 );
 
 export function readPreparedSessionTranscriptChange(change: SessionRowChange) {
-  return prepared.get(sessionRowChangeSource(change));
+  return prepared.get(sessionRowChangeSource(change))?.fact;
+}
+
+/** Only the final committed same-session postimage can release a projection waiter. */
+export function readFinalSessionTranscriptProjection(change: SessionRowChange) {
+  const entry = prepared.get(sessionRowChangeSource(change));
+  return !change.factsInvalidated &&
+    entry?.publication.final &&
+    entry.fact.kind === "postimage" &&
+    entry.fact.value.projectionReady
+    ? entry.fact.value
+    : undefined;
 }
 
 function receiptChanges(
   receipt: SessionTranscriptAuthorityReceipt,
   agentId: string | undefined,
   storePath: string,
+  publication = { final: true },
 ): SessionRowChange[] {
   return [...receipt.facts].map(([sessionKey, fact]) => {
     const change = sessionChanges.markFactsOnly(
@@ -61,7 +77,7 @@ function receiptChanges(
       },
       fact.kind === "unchanged" ? undefined : advanceSessionTranscriptUpdateVersion,
     );
-    prepared.set(change, fact);
+    prepared.set(change, { fact, publication });
     preparedSharingChanges.changes.set(change, {
       kind: "source",
       databaseIdentity: receipt.source.identity,
@@ -104,12 +120,17 @@ function publishTranscriptFact(
       staged.delete(database.db);
     }
   };
-  stageSqliteTransactionState(database.db, {
+  const publication = { final: false };
+  const stagedPublication = stageSqliteTransactionState(database.db, {
     stage() {
       staged.set(database.db, records);
       records.set(sessionKey, receipt);
     },
-    commit: remove,
+    commit() {
+      // Later same-session writes replace this receipt before any commit callback runs.
+      publication.final = records.get(sessionKey) === receipt;
+      remove();
+    },
     rollback() {
       if (previous) {
         records.set(sessionKey, previous);
@@ -118,7 +139,11 @@ function publishTranscriptFact(
       }
     },
   });
-  sessionChanges.emitBatch(receiptChanges(receipt, database.agentId, database.path), database.db);
+  publication.final = !stagedPublication;
+  sessionChanges.emitBatch(
+    receiptChanges(receipt, database.agentId, database.path, publication),
+    database.db,
+  );
 }
 
 /** Capture in the existing mutation statement, before COMMIT or savepoint release. */
@@ -260,6 +285,7 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.leafEventId !== null && typeof row.leafEventId !== "string") ||
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
       (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
+      (row.projectionReady !== undefined && row.projectionReady !== true) ||
       (row.lastMessagePreview !== undefined &&
         row.lastMessagePreview !== null &&
         typeof row.lastMessagePreview !== "string") ||

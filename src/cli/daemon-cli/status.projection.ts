@@ -1,3 +1,4 @@
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import type { GatewayService, GatewayServiceState } from "../../daemon/service-types.js";
 import { VERSION } from "../../version.js";
 import type { CliRuntimeStatus, ServiceRuntimeIntentStatus } from "./status.runtime-intent.js";
@@ -15,10 +16,8 @@ export async function projectDaemonRuntimeStatus(params: {
   state: Pick<GatewayServiceState, "command" | "loadState" | "inspectionReason"> & {
     inspectionFailed?: true;
   };
-  env?: NodeJS.ProcessEnv;
-  argv?: readonly string[];
 }): Promise<{ cli: CliStatusSummary; runtimeIntent?: ServiceRuntimeIntentStatus }> {
-  const entrypoint = (params.argv ?? process.argv)[1]?.trim();
+  const entrypoint = process.argv[1]?.trim();
   const cli: CliStatusSummary = {
     version: VERSION,
     ...(entrypoint ? { entrypoint } : {}),
@@ -28,14 +27,14 @@ export async function projectDaemonRuntimeStatus(params: {
   }
   const { inspectCliRuntime, inspectServiceRuntimeIntent } =
     await import("./status.runtime-intent.js");
-  const env = params.env ?? process.env;
+  const env = process.env;
   const { command, loadState, inspectionFailed, inspectionReason } = params.state;
   const runtimeIntent = await inspectServiceRuntimeIntent({
     kind: "gateway",
     service: params.service,
     command,
     env,
-    serviceEnv: { ...env, ...command?.environment },
+    serviceEnv: mergeGatewayServiceEnv(env, command),
     inspectionKnown: loadState.status !== "unknown" && !inspectionFailed && !inspectionReason,
   });
   return { cli: { ...cli, runtime: await inspectCliRuntime() }, runtimeIntent };

@@ -1,25 +1,19 @@
 // Tests stop command target resolution across active sessions and channel routes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import { captureChannelSessionStop } from "./abort-operation.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import { buildSessionCommandTestParams } from "./commands-session-params.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-type AbortOutcome = ReturnType<
-  ReturnType<typeof import("./abort-operation.js").prepareSessionRunTargetAbort>
->;
-
-function outcome(active = false, aborted = false, retirement?: Promise<void>): AbortOutcome {
-  return { active, aborted, retirement };
-}
-
-const abortEmbedded = vi.hoisted(() => vi.fn());
 const hookEvent = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbort = vi.hoisted(() =>
   vi.fn<typeof import("./commands-session-store.js").persistAbortTargetEntry>(async () => true),
@@ -31,13 +25,8 @@ const stopChildren = vi.hoisted(() =>
     return { stopped: 0, failed: 0 };
   }),
 );
-const abortTarget = vi.hoisted(() => vi.fn<(params: unknown) => AbortOutcome>(() => outcome()));
+const abortTarget = vi.hoisted(() => vi.fn());
 const formatReply = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
-
-// mock-isolation: Abort only the fixture run, never a live embedded agent.
-vi.mock("../../agents/embedded-agent.js", () => ({
-  abortEmbeddedAgentRun: abortEmbedded,
-}));
 
 // mock-isolation: Stop-target assertions do not depend on process-global verbose logging.
 vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
@@ -53,14 +42,15 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  prepareSessionRunTargetAbort: (params: unknown) =>
-    Object.assign(() => abortTarget(params), {
-      requestRunIds: new Set<string>(),
-    }),
-  stopSubagentsForRequester: stopChildren,
-}));
+vi.mock(import("./abort-operation.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    captureChannelSessionStop: vi.fn(actual.captureChannelSessionStop),
+    abortSessionRunTargetWithOutcome: abortTarget,
+    stopSubagentsForRequester: stopChildren,
+  };
+});
 
 vi.mock("./abort-trigger-text.js", () => ({ isAbortTrigger: vi.fn(() => false) }));
 
@@ -74,10 +64,6 @@ vi.mock("./abort.js", () => ({ formatAbortReplyText: formatReply }));
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbort,
   resolveCommandSessionEntryForKey: resolveEntry,
-}));
-
-vi.mock("./reply-run-registry.js", () => ({
-  resolveReplyOperationsForSession: vi.fn(() => []),
 }));
 
 const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
@@ -133,7 +119,23 @@ describe("handleStopCommand target fallback", () => {
   beforeEach(() => {
     previousPluginRegistry = getActivePluginRegistry();
     vi.clearAllMocks();
-    abortTarget.mockReturnValue(outcome());
+    abortTarget.mockImplementation((params) => {
+      const completed = (async () => {
+        const children = await params.stopChildren?.(async () => true);
+        await params.recordAbortTarget?.({ recordCutoff: false });
+        return {
+          aborted: false,
+          alreadyFinalizing: false,
+          queuedCancelled: 0,
+          activeCancelled: 0,
+          childrenStopped: children?.stopped ?? 0,
+          childFailures: children?.failed ?? 0,
+          failures: [],
+          settled: Promise.resolve(),
+        };
+      })();
+      return { completed };
+    });
     persistAbort.mockResolvedValue(true);
   });
 
@@ -151,12 +153,26 @@ describe("handleStopCommand target fallback", () => {
     const result = await handleStopCommand(params, true);
 
     expectStoppedReply(result, "⚙️ Agent was aborted.");
-    expect(abortTarget).toHaveBeenCalledWith({
-      agentId: "target",
-      key: "agent:target:telegram:direct:123",
-      sessionId: undefined,
-    });
-    expect(abortEmbedded).not.toHaveBeenCalledWith("wrapper-session-id");
+    expect(captureChannelSessionStop).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        agentId: "target",
+        key: "agent:target:telegram:direct:123",
+        sessionId: undefined,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+    expect(abortTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capture: vi.mocked(captureChannelSessionStop).mock.results[0]?.value,
+        hookContext: {
+          sessionKey: "agent:target:telegram:direct:123",
+          sessionEntry: undefined,
+          sessionId: undefined,
+          commandSource: "telegram",
+          senderId: "owner",
+        },
+      }),
+    );
     const persistAbortTargetParams = persistAbort.mock.calls[0]?.[0];
     expect(persistAbortTargetParams).toMatchObject({
       key: "agent:target:telegram:direct:123",
@@ -167,12 +183,6 @@ describe("handleStopCommand target fallback", () => {
     const stopSubagentsParams = stopChildren.mock.calls[0]?.[0];
     expect(stopSubagentsParams?.cfg).toBe(params.cfg);
     expect(stopSubagentsParams?.requesterSessionKey).toBe("agent:target:telegram:direct:123");
-    expect(hookEvent).toHaveBeenCalledWith("command", "stop", "agent:target:telegram:direct:123", {
-      sessionEntry: undefined,
-      sessionId: undefined,
-      commandSource: "telegram",
-      senderId: "owner",
-    });
   });
 
   it.each([
@@ -186,7 +196,17 @@ describe("handleStopCommand target fallback", () => {
     if (failed) {
       stopChildren.mockResolvedValueOnce({ stopped: 0, failed });
     } else {
-      abortTarget.mockReturnValue(outcome(true));
+      abortTarget.mockImplementationOnce((params) => ({
+        completed: (async () => {
+          const children = await params.stopChildren?.(async () => true);
+          return {
+            aborted: false,
+            alreadyFinalizing: true,
+            childrenStopped: children?.stopped ?? 0,
+            childFailures: children?.failed ?? 0,
+          };
+        })(),
+      }));
     }
     formatReply.mockReturnValueOnce(text);
     expectStoppedReply(await handleStopCommand(buildStopParams(), true), text);
@@ -210,10 +230,15 @@ describe("handleStopCommand target fallback", () => {
       const descendantCancellation = vi.fn(() => {
         throw descendantError;
       });
-      abortTarget.mockReturnValueOnce(outcome(true, accepted, Promise.reject(cleanupError)));
+      abortTarget.mockImplementationOnce((request) => {
+        request.retirements.push(Promise.reject(cleanupError));
+        const completed = request.stopChildren(async () => accepted);
+        return { completed };
+      });
       stopChildren.mockImplementationOnce(async (request) => {
-        await request.beforeKill?.(() => {});
-        descendantCancellation();
+        if (await request.beforeKill?.(() => {})) {
+          descendantCancellation();
+        }
         return { stopped: 0, failed: 0 };
       });
 
@@ -224,6 +249,42 @@ describe("handleStopCommand target fallback", () => {
       } else {
         await expect(stopping).rejects.toBe(cleanupError);
         expect(descendantCancellation).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "reports pending cleanup without losing a primary failure (primary failed=%s)",
+    async (primaryFailed) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferred();
+      const primaryError = new Error("primary Stop failure");
+      const cleanupMessage =
+        "Cancellation was requested, but cleanup is still pending. Check the turn status before retrying Stop.";
+      abortTarget.mockImplementationOnce((params) => {
+        params.retirements.push(cleanup.promise);
+        return {
+          completed: primaryFailed
+            ? Promise.reject(primaryError)
+            : Promise.resolve({
+                aborted: true,
+                alreadyFinalizing: false,
+                childrenStopped: 0,
+                childFailures: 0,
+              }),
+        };
+      });
+      try {
+        const pending = expect(handleStopCommand(buildStopParams(), true)).rejects.toMatchObject(
+          primaryFailed
+            ? { errors: [primaryError, expect.objectContaining({ message: cleanupMessage })] }
+            : { message: cleanupMessage },
+        );
+        await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
+        await pending;
+      } finally {
+        cleanup.resolve();
+        vi.useRealTimers();
       }
     },
   );

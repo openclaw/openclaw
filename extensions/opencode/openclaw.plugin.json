@@ -8,7 +8,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "opencode-native",
-      "baseUrls": ["https://opencode.ai/zen", "https://opencode.ai/zen/v1"]
+      "baseUrls": ["https://opencode.ai/zen", "https://opencode.ai/zen/v1", "https://opencode.ai/inference/openai/v1", "https://opencode.ai/inference/anthropic/v1", "https://opencode.ai/inference/google/v1beta"]
     }
   ],
   "providerRequest": {

@@ -97,7 +97,6 @@ async function assertProbeCanOverrideStorage(timeoutMs: number): Promise<void> {
   }
 }
 
-/** Sends one initialize request and returns the Codex version from its reply. */
 export async function probeCodexAppServerHandshake(
   command: string,
   timeoutMs: number = HANDSHAKE_TIMEOUT_MS,

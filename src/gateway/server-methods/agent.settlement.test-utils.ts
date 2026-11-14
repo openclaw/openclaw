@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -30,6 +31,8 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -102,7 +105,7 @@ export function registerSuccessfulAgentSettlementCase() {
             status: "ok",
             summary: "completed",
           });
-          expect(context.chatAbortControllers.has("gateway-agent-run")).toBe(false);
+          expect(rpcSourceTesting.has("gateway-agent-run")).toBe(false);
         });
       });
     });
@@ -265,7 +268,8 @@ export function registerCompactionSessionSettlementCase() {
         throw new Error("expected session id change callback");
       }
       onSessionIdChanged("rotated-session-id");
-      trackedSessionId = context.chatAbortControllers.get("agent-session-rotation")?.sessionId;
+      const source = rpcSourceTesting.get("agent-session-rotation");
+      trackedSessionId = source && getRpcSourceIdentity(source).sessionId;
       return {
         payloads: [{ text: "ok" }],
         meta: { durationMs: 100 },
@@ -309,6 +313,14 @@ export function registerYieldedRequesterSettlementCase(
         const nextRunId = "orchestrator-settle-continuation";
         using cleanup = observeAgentSubagentCleanup({ runId: nextRunId, childSessionKey });
         const workerRunId = "settled-worker";
+        await replaceSessionEntry(
+          {
+            agentId: "main",
+            sessionKey: requesterSessionKey,
+            storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+          },
+          { sessionId: "settlement-requester", updatedAt: Date.now() },
+        );
         const result = `${"Checked worker detail. ".repeat(200)}The completed worker result has been checked.`;
         const { terminalReply } = prepareAgentRunTerminalReply({ rawText: result });
         const completion = createDeferred<AgentWaitResult>();
@@ -370,6 +382,12 @@ export function registerYieldedRequesterSettlementCase(
               ? previousWait.promise
               : completion.promise),
         );
+        await writeSubagentSessionEntry({
+          stateDir: root,
+          agentId: "main",
+          sessionKey: childSessionKey,
+          defaultSessionId: "spawned-child-session",
+        });
         await registerSubagentRun({
           runId: previousRunId,
           childSessionKey,
@@ -467,7 +485,7 @@ export function registerYieldedRequesterSettlementCase(
             ],
           }),
         ).toBe(true);
-        await wakeCompleted.promise;
+        await racePromiseWithAbortSignal(wakeCompleted.promise, signal);
         expect(wake).toHaveBeenCalled();
         await execution.work.runWhenIdle(() => {
           expect(wakeRespond.mock.calls.find(([ok]) => !ok)).toBeUndefined();

@@ -1,9 +1,11 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   isDashboardSessionKey,
@@ -17,37 +19,37 @@ export type SubagentRoster = {
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /** The optional child read settled unsuccessfully; live parent facts still apply. */
+  subagentSessionsUnavailable?: boolean;
   /** A newly named child is still awaiting a covering read before the wait can count it. */
   subagentSessionsPending?: boolean;
-  /**
-   * True once the pane's own child query answered at least once. Seeded rows
-   * take ancestry from the broad list, which outlives the child-link retention.
-   */
-  subagentSessionsRead?: boolean;
 };
 
+/** A child query can be hydrated before it observes its own parent. */
+export function hasLoadedDetailsSubagents(
+  details: SubagentRoster & { selectedSession?: GatewaySessionRow },
+) {
+  return (
+    details.subagentSessionsHydrated &&
+    !details.subagentSessionsPending &&
+    details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
+    )
+  );
+}
+
 /** What a launch row needs to show its subagent's session and open it. */
-export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions" | "subagentParentKey"> & {
+export type SubagentRowContext = Pick<
+  SubagentRoster,
+  "subagentSessions" | "subagentParentKey" | "subagentSessionsHydrated" | "subagentSessionsPending"
+> & {
   /** Shows a subagent the Subagents panel lists. */
   onOpenSubagent?: (sessionKey: string) => void;
   /** Opens a session; any other subagent opens this way. */
   onOpenSession?: (sessionKey: string) => void;
 };
 
-export type SpawnedSubagent = {
-  /** The short name the launch call gave the subagent. */
-  label: string;
-  /** Its session, when the roster holds it; `runtimeMs` only once it finished. */
-  session?: {
-    key: string;
-    /** Whether the Subagents panel lists it. */
-    listed: boolean;
-    running: boolean;
-    runtimeMs: number | null;
-    /** How it ended, when not by finishing its work. */
-    ended?: "failed" | "stopped";
-  };
-};
+export type SpawnedSubagent = NonNullable<ReturnType<typeof resolveSpawnedSubagent>>;
 
 type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText">;
 
@@ -62,9 +64,8 @@ function readLaunch(card: LaunchCard) {
   }
   const args = asRecord(card.args);
   // History keeps the result as text; only a live result still carries its details.
-  const childKey =
-    text(asRecord(card.details)?.childSessionKey) ??
-    text(safeParseJsonRecord(card.outputText ?? "")?.childSessionKey);
+  const result = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
+  const childKey = text(result?.childSessionKey);
   return {
     label: text(args?.label),
     childKey,
@@ -86,13 +87,56 @@ export function spawnedSubagentLabel(card: LaunchCard): string | undefined {
   return launch && !launch.ownSession ? launch.label : undefined;
 }
 
+/**
+ * The session a call starts or addresses by key: a launch, a message, a history
+ * read, or a steer or stop. Undefined when the call names no session by key.
+ */
+function readAddressedSessionKey(card: LaunchCard): string | undefined {
+  const launch = readLaunch(card);
+  if (launch) {
+    return launch.ownSession ? undefined : launch.childKey;
+  }
+  const call = unwrapToolCallForDisplay(card);
+  const args = asRecord(call.args);
+  const tool = call.name.trim().toLowerCase();
+  const key =
+    tool === "sessions_send" || tool === "sessions_history"
+      ? text(args?.sessionKey)
+      : tool === "subagents" && (args?.action === "steer" || args?.action === "kill")
+        ? text(args?.target)
+        : undefined;
+  // Steer and stop also take labels, run ids and list indexes; those already read as names.
+  return key?.includes(":") ? key : undefined;
+}
+
+/**
+ * What a call that addresses a session by key is about: the roster names the
+ * session, else the call's own label. The key is routing, never a name, so an
+ * unresolved session leaves `name` empty and the caller keeps the action.
+ */
+export function addressedSession(
+  card: LaunchCard,
+  rows: readonly GatewaySessionRow[] | undefined,
+): { name?: string } | undefined {
+  const key = readAddressedSessionKey(card);
+  if (!key) {
+    return undefined;
+  }
+  const row = rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, key));
+  return {
+    name: row
+      ? resolveSessionDisplayName(row.key, row)
+      : text(asRecord(unwrapToolCallForDisplay(card).args)?.label),
+  };
+}
+
 export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
   return row.classification === "subagent" || isSubagentSessionKey(row.key);
 }
 
 /** A subagent that handed off to its own subagents is still at work. */
 export function isUnfinishedSubagent(row: GatewaySessionRow): boolean {
-  return isSessionRunActive(row) || row.hasActiveSubagentRun === true;
+  return isSessionRunStateActive(row) || row.hasActiveSubagentRun === true;
 }
 
 function finishedRuntimeMs(row: GatewaySessionRow): number | null {
@@ -120,7 +164,7 @@ export function endedWithoutFinishing(row: GatewaySessionRow): "failed" | "stopp
 export function resolveSpawnedSubagent(
   card: LaunchCard,
   rows: readonly GatewaySessionRow[] | undefined,
-): SpawnedSubagent | null {
+) {
   const launch = readLaunch(card);
   if (!launch?.label || launch.ownSession) {
     return null;
@@ -136,10 +180,13 @@ export function resolveSpawnedSubagent(
   const ended = running ? undefined : endedWithoutFinishing(row);
   return {
     label,
+    // Present only when the roster holds this session.
     session: {
       key: row.key,
+      // Whether the Subagents panel lists it.
       listed: isSubagentsPanelSession(row),
       running,
+      // Runtime is shown only once the session finishes.
       runtimeMs: running ? null : finishedRuntimeMs(row),
       ...(ended ? { ended } : {}),
     },

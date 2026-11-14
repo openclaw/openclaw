@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayReadSharing } from "./methods/descriptor.js";
 import { SerializedJsonPayload } from "./serialized-json.js";
@@ -122,11 +123,7 @@ export async function dispatchSharedRead(
       return;
     }
     read.assertCurrent?.();
-    let entries = owners.get(owner);
-    if (!entries) {
-      entries = new Map();
-      owners.set(owner, entries);
-    }
+    const entries = getOrCreateWeakOwnerMap(owners, owner);
     const key = JSON.stringify([options.req.method, shareKey]);
     const existing = entries.get(key);
     const valid = (entry: Entry) =>

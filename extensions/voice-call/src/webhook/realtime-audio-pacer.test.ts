@@ -1,24 +1,40 @@
-// Voice Call tests cover realtime audio pacer plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 
-type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[0]["serializer"];
+type PacerOptions = ConstructorParameters<typeof RealtimeAudioPacer>[0];
 
-function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
-  return {
-    serializeMedia: (payload) => JSON.stringify({ event: "media", streamSid, media: { payload } }),
-    serializeClear: () => JSON.stringify({ event: "clear", streamSid }),
-    serializeMark: (name) => JSON.stringify({ event: "mark", streamSid, mark: { name } }),
-  };
-}
-
-function createCompactSerializer(): RealtimeAudioSerializer {
+function createCompactSerializer(): PacerOptions["serializer"] {
   return {
     serializeMedia: (payload) => payload,
     serializeClear: () => "clear",
     serializeMark: (name) => `mark:${name}`,
   };
 }
+
+function createPlaybackPacer(overrides: Partial<PacerOptions> = {}) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+  const sent: string[] = [];
+  const onBackpressure = vi.fn();
+  const pacer = new RealtimeAudioPacer({
+    serializer: createCompactSerializer(),
+    onBackpressure,
+    send: (message) => {
+      sent.push(message);
+      return true;
+    },
+    ...overrides,
+  });
+  return { pacer, sent, onBackpressure };
+}
+
+async function fillRetention(pacer: RealtimeAudioPacer) {
+  for (let index = 1; index <= 128; index += 1) {
+    pacer.sendAudio(createSequencedAudio(1), { itemId: `item-${index}` });
+  }
+  await vi.advanceTimersByTimeAsync(128 * 20 + 500);
+}
+
+afterEach(() => vi.useRealTimers());
 
 function createSequencedAudio(frameCount: number): Buffer {
   const audio = Buffer.alloc(frameCount * 160);
@@ -33,46 +49,27 @@ function inspectQueue(pacer: RealtimeAudioPacer): { length: number; head: number
   return { length: state.queue.length, head: state.queueHead };
 }
 
-function readSentMarks(sent: string[]): { name: string; audioEndMs: number }[] {
+function sentMarkAt(sent: string[], targetMs: number): string {
   let audioEndMs = 0;
-  const marks: { name: string; audioEndMs: number }[] = [];
   for (const message of sent) {
     if (message.startsWith("mark:")) {
-      marks.push({ name: message.slice("mark:".length), audioEndMs });
+      if (audioEndMs === targetMs) {
+        return message.slice("mark:".length);
+      }
     } else if (message === "clear") {
       audioEndMs = 0;
     } else {
       audioEndMs += Buffer.from(message, "base64").length / 8;
     }
   }
-  return marks;
-}
-
-function sentMarkAt(sent: string[], audioEndMs: number): string {
-  const mark = readSentMarks(sent).find((entry) => entry.audioEndMs === audioEndMs);
-  if (!mark) {
-    throw new Error(`No sent carrier mark follows ${audioEndMs} ms of audio`);
-  }
-  return mark.name;
+  throw new Error(`No sent carrier mark follows ${targetMs} ms of audio`);
 }
 
 describe("RealtimeAudioPacer", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("catches up all overdue frames when a pump runs late", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const { pacer, sent } = createPlaybackPacer();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const sent: string[] = [];
-    const pacer = new RealtimeAudioPacer({
-      serializer: createCompactSerializer(),
-      send: (message) => {
-        sent.push(message);
-        return true;
-      },
-    });
 
     pacer.sendAudio(createSequencedAudio(50));
     expect(sent).toHaveLength(8);
@@ -83,20 +80,9 @@ describe("RealtimeAudioPacer", () => {
   });
 
   it("stops instead of buffering unbounded realtime audio", async () => {
-    vi.useFakeTimers();
-    const sent: unknown[] = [];
-    const onBackpressure = vi.fn();
-    const pacer = new RealtimeAudioPacer({
-      serializer: createTwilioSerializer("MZ-test"),
-      maxQueuedAudioBytes: 320,
-      onBackpressure,
-      send: (message) => {
-        sent.push(JSON.parse(message));
-        return true;
-      },
-    });
+    const { pacer, sent, onBackpressure } = createPlaybackPacer();
 
-    pacer.sendAudio(Buffer.alloc(480, 0x7f));
+    pacer.sendAudio(Buffer.alloc(960_160, 0x7f));
     pacer.sendMark("after-overflow");
     await vi.advanceTimersByTimeAsync(100);
 
@@ -130,28 +116,9 @@ describe("RealtimeAudioPacer", () => {
     expect(inspectQueue(pacer)).toEqual({ length: 0, head: 0 });
     expect(pacer.hasPendingAudio()).toBe(false);
   });
-});
-
-describe("RealtimeAudioPacer playout state", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function createPlaybackPacer() {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
-    const sent: string[] = [];
-    const pacer = new RealtimeAudioPacer({
-      serializer: createCompactSerializer(),
-      send: (message) => {
-        sent.push(message);
-        return true;
-      },
-    });
-    return { pacer, sent };
-  }
-
   it("drops playout state when queued audio is cleared or closed", async () => {
-    const { pacer } = createPlaybackPacer();
+    const onPlaybackReset = vi.fn();
+    const { pacer } = createPlaybackPacer({ onPlaybackReset });
 
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(400);
@@ -159,27 +126,11 @@ describe("RealtimeAudioPacer playout state", () => {
 
     pacer.clearAudio();
     expect(pacer.getPlaybackState()).toEqual([]);
+    expect(onPlaybackReset).toHaveBeenCalledTimes(1);
 
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-b" });
     pacer.close();
     expect(pacer.getPlaybackState()).toEqual([]);
-  });
-
-  it("fires the playback reset hook on every clear and close", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
-    const onPlaybackReset = vi.fn();
-    const pacer = new RealtimeAudioPacer({
-      serializer: createCompactSerializer(),
-      onPlaybackReset,
-      send: () => true,
-    });
-
-    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
-    pacer.clearAudio();
-    expect(onPlaybackReset).toHaveBeenCalledTimes(1);
-
-    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-b" });
-    pacer.close();
     expect(onPlaybackReset).toHaveBeenCalledTimes(2);
   });
 
@@ -238,35 +189,9 @@ describe("RealtimeAudioPacer playout state", () => {
 
     expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
   });
-});
-
-describe("RealtimeAudioPacer playback retention", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function createRetentionPolicyPacer() {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
-    const sent: string[] = [];
-    const onBackpressure = vi.fn();
-    const pacer = new RealtimeAudioPacer({
-      serializer: createCompactSerializer(),
-      onBackpressure,
-      send: (message) => {
-        sent.push(message);
-        return true;
-      },
-    });
-    return { pacer, sent, onBackpressure };
-  }
-
   it("does not evict fully sent segments without receipts after elapsed playout time", async () => {
-    const { pacer, onBackpressure } = createRetentionPolicyPacer();
-
-    for (let index = 1; index <= 128; index += 1) {
-      pacer.sendAudio(createSequencedAudio(1), { itemId: `item-${index}` });
-    }
-    await vi.advanceTimersByTimeAsync(128 * 20 + 500);
+    const { pacer, onBackpressure } = createPlaybackPacer();
+    await fillRetention(pacer);
     expect(pacer.hasPendingAudio()).toBe(false);
     expect(pacer.getPlaybackState()).toEqual(
       Array.from({ length: 128 }, (_, index) => ({
@@ -281,12 +206,8 @@ describe("RealtimeAudioPacer playback retention", () => {
   });
 
   it("reuses retention capacity only after receipts confirm completed prefixes", async () => {
-    const { pacer, sent, onBackpressure } = createRetentionPolicyPacer();
-
-    for (let index = 1; index <= 128; index += 1) {
-      pacer.sendAudio(createSequencedAudio(1), { itemId: `item-${index}` });
-    }
-    await vi.advanceTimersByTimeAsync(128 * 20 + 500);
+    const { pacer, sent, onBackpressure } = createPlaybackPacer();
+    await fillRetention(pacer);
     pacer.acknowledgeMark(sentMarkAt(sent, 160));
 
     expect(pacer.getPlaybackState()).toHaveLength(120);

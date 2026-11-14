@@ -1,23 +1,31 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
-import { installDeliveryQueueTmpDirHooks } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { installRouteReplyFixture } from "./route-reply.fixture.test-support.js";
 import { routePreparedReply, routeReply } from "./route-reply.js";
 
+const destination = {
+  cfg: {},
+  channel: "matrix",
+  to: "!room:example.invalid",
+  replyKind: "final",
+  mirror: false,
+} as const;
+function prepare(payload: ReplyPayload) {
+  const plan = createStructuredOutboundPayloadPlan([payload])[0];
+  assert(plan, "Expected a renderable prepared reply");
+  return plan;
+}
+
 describe("prepared reply routing", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
+  const fixtures = installRouteReplyFixture();
   let visible: ReplyPayload[];
   let beforeDelivery: (() => Promise<void>) | undefined;
 
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
     visible = [];
     beforeDelivery = undefined;
     const outbound: ChannelOutboundAdapter = {
@@ -33,27 +41,15 @@ describe("prepared reply routing", () => {
         return { channel: "matrix", messageId: "media-sent" };
       },
     };
-    const plugin = createOutboundTestPlugin({
-      id: "matrix",
-      outbound,
+    fixtures.register(outbound, {
       messaging: {
         transformReplyPayload: ({ payload }) => ({
           ...payload,
           text: `${payload.text} transformed`,
         }),
       },
+      threading: { resolveReplyTransport: () => ({ replyToId: "routed-target", threadId: null }) },
     });
-    plugin.threading = {
-      resolveReplyTransport: () => ({ replyToId: "routed-target", threadId: null }),
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    vi.unstubAllEnvs();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it.each(["raw", "prepared"] as const)(
@@ -64,19 +60,13 @@ describe("prepared reply routing", () => {
         mediaUrl: "https://example.invalid/clip.ogg",
       };
       const params = {
+        ...destination,
         cfg: { messages: { responsePrefix: "[prefix]" } },
-        channel: "matrix" as const,
-        to: "!room:example.invalid",
         replyKind: "block" as const,
-        mirror: false,
       };
-      const plan = createStructuredOutboundPayloadPlan([payload])[0];
-      if (!plan) {
-        throw new Error("Expected a renderable prepared reply");
-      }
       const result =
         operation === "prepared"
-          ? await routePreparedReply({ ...params, plan })
+          ? await routePreparedReply({ ...params, plan: prepare(payload) })
           : await routeReply({ ...params, payload });
 
       expect(result).toMatchObject({ ok: true, delivered: true, messageId: "media-sent" });
@@ -94,18 +84,81 @@ describe("prepared reply routing", () => {
     },
   );
 
+  it("delivers admitted final reasoning through the prepared transport", async () => {
+    const result = await routePreparedReply({
+      ...destination,
+      plan: prepare({ text: "Reasoning for the report.", isReasoning: true }),
+    });
+    expect(result).toMatchObject({ ok: true, delivered: true, messageId: "text-sent" });
+    expect(visible).toEqual([{ text: "Reasoning for the report. transformed" }]);
+  });
+
+  it.each([
+    ["generation", "raw"],
+    ["generation", "prepared"],
+    ["writer", "prepared"],
+  ] as const)("rejects a replaced %s after awaited %s channel work", async (owner, operation) => {
+    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+    const session = {
+      agentId: "main",
+      storePath: path.join(fixtures.tmpDir(), "sessions.json"),
+      sessionKey: "agent:main:route-authority",
+    };
+    const entry = { sessionId: "original-session", updatedAt: 1 };
+    const authority =
+      owner === "generation"
+        ? { lifecycleRevision: "original-generation" }
+        : { activeWriterRunId: "original-writer" };
+    await replaceSessionEntry(session, { ...entry, ...authority });
+    beforeDelivery = async () => {
+      await replaceSessionEntry(session, {
+        ...entry,
+        ...(owner === "generation"
+          ? { lifecycleRevision: "reset" }
+          : { activeWriterRunId: "replacement-writer" }),
+      });
+    };
+    const payload = { text: "old answer", mediaUrl: "https://example.invalid/clip.ogg" };
+    if (owner === "writer") {
+      setReplyPayloadMetadata(payload, {
+        sessionWriterDeliveryAuthority: {
+          ...session,
+          expectedSessionId: entry.sessionId,
+          expectedWriterRunId: "original-writer",
+        },
+      });
+    }
+    const params = {
+      ...destination,
+      cfg: { session: { store: session.storePath } },
+      sessionKey: session.sessionKey,
+      ...(owner === "generation"
+        ? {
+            sessionGeneration: { ...session, ...entry, lifecycleRevision: "original-generation" },
+          }
+        : {}),
+    };
+    const result =
+      operation === "prepared"
+        ? await routePreparedReply({ ...params, plan: prepare(payload) })
+        : await routeReply({ ...params, payload });
+    expect(result).toMatchObject({ ok: false, delivered: false });
+    expect(result.error).toContain(
+      owner === "generation"
+        ? "original session generation no longer accepts"
+        : "Session writer changed before final reply delivery",
+    );
+    expect(visible).toEqual([]);
+  });
+
   it("rejects a producer retired during its final delivery preparation", async () => {
     let current = true;
     const beforeDeliver = vi.fn(async () => {
       current = false;
     });
     const result = await routeReply({
-      cfg: {},
+      ...destination,
       payload: { text: "event update", mediaUrl: "https://example.invalid/clip.ogg" },
-      channel: "matrix",
-      to: "!room:example.invalid",
-      replyKind: "final",
-      mirror: false,
       beforeDeliver,
       assertCurrent: () => {
         if (!current) {
@@ -113,59 +166,8 @@ describe("prepared reply routing", () => {
         }
       },
     });
-    expect(beforeDeliver).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ ok: false, delivered: false });
     expect(result.error).toContain("event producer retired");
-    expect(visible).toEqual([]);
-  });
-
-  it("rejects a writer retired after prepared routing and awaited channel work", async () => {
-    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
-    const session = {
-      storePath: path.join(fixtures.tmpDir(), "sessions.json"),
-      sessionKey: "agent:main:prepared-route",
-    };
-    await replaceSessionEntry(session, {
-      sessionId: "current-session",
-      activeWriterRunId: "original-writer",
-      updatedAt: Date.now(),
-    });
-    const payload = setReplyPayloadMetadata(
-      { text: "caption", mediaUrl: "https://example.invalid/clip.ogg" },
-      {
-        sessionWriterDeliveryAuthority: {
-          ...session,
-          expectedSessionId: "current-session",
-          expectedWriterRunId: "original-writer",
-        },
-      },
-    );
-    const plan = createStructuredOutboundPayloadPlan([payload])[0];
-    if (!plan) {
-      throw new Error("Expected a renderable prepared reply");
-    }
-    const replaceWriter = vi.fn(async () => {
-      await replaceSessionEntry(session, {
-        sessionId: "current-session",
-        activeWriterRunId: "replacement-writer",
-        updatedAt: Date.now(),
-      });
-    });
-    beforeDelivery = replaceWriter;
-
-    const result = await routePreparedReply({
-      cfg: { session: { store: session.storePath } },
-      plan,
-      channel: "matrix",
-      to: "!room:example.invalid",
-      replyKind: "final",
-      sessionKey: session.sessionKey,
-      mirror: false,
-    });
-
-    expect(result).toMatchObject({ ok: false, delivered: false });
-    expect(replaceWriter).toHaveBeenCalledOnce();
-    expect(result.error).toContain("Session writer changed before final reply delivery");
     expect(visible).toEqual([]);
   });
 });

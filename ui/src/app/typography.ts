@@ -99,6 +99,20 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   if (typeof document === "undefined") {
     return;
   }
+  for (const face of new Set([faces.ui, faces.chat])) {
+    const id = `openclaw-font-preload-${face}`;
+    if (face !== "system" && !document.getElementById(id)) {
+      const link = document.createElement("link");
+      link.id = id;
+      link.rel = "preload";
+      link.as = "font";
+      link.type = "font/woff2";
+      link.crossOrigin = "anonymous";
+      const file = face === "atkinson-hyperlegible" ? "atkinson-hyperlegible-next" : face;
+      link.href = inferControlUiPublicAssetPath(`fonts/${file}-latin.woff2`);
+      document.head.append(link);
+    }
+  }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
   // base.css --mono names JetBrains Mono for every theme's code spans, but only
@@ -121,17 +135,5 @@ export function applyTypefaceOverrides(ui?: TypefaceId, chat?: TypefaceId): void
     } else {
       document.documentElement.style.removeProperty(property);
     }
-  }
-}
-
-/* Serif hairlines at chat size need macOS stem darkening; the app-wide
-   `antialiased` smoothing (base.css body) thins them into gray smear, so serif
-   chat faces opt chat prose back into `auto` (.chat-text consumes the
-   variable). Sans and mono faces keep the inherited app default. */
-export function applyChatFontSmoothing(chat: TypefaceId): void {
-  if (TYPEFACE_METADATA[chat].kind === "serif") {
-    document.documentElement.style.setProperty("--chat-font-smoothing", "auto");
-  } else {
-    document.documentElement.style.removeProperty("--chat-font-smoothing");
   }
 }

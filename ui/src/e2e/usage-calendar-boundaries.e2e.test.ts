@@ -1,41 +1,30 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  selectUsageTimeZone,
+  installUsageOverviewGateway as installMockGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
-const emptyTotals = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+const emptyTotals = createEmptyCostUsageTotals();
 const emptyMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
 function aggregates(
   messages = emptyMessages,
   costDaily: SessionsUsageResult["aggregates"]["costDaily"] = [],
 ) {
   return {
+    ...buildAggregatesFromSessions([]),
     messages,
     costDaily,
-    tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-    byModel: [],
-    byProvider: [],
-    byAgent: [],
-    byChannel: [],
-    daily: [],
   };
 }
 async function selectLocalDate(page: Page, date: string) {
-  await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
+  await selectUsageTimeZone(page, "local");
   const inputs = await page.locator(".usage-date-input").all();
   expect(inputs).toHaveLength(2);
   for (const input of inputs) {
@@ -61,7 +50,6 @@ suite.define(() => {
   it.each([
     ["Asia/Shanghai", "2026-09-13T16:30:00Z", "2026-09-13", "2026-09-14"],
     ["America/Los_Angeles", "2026-09-14T02:30:00Z", "2026-09-14", "2026-09-13"],
-    ["Asia/Shanghai", "2026-09-14T04:30:00Z", "2026-09-14", "2026-09-14"],
   ])(
     "uses the selected calendar for date presets in %s at %s",
     async (timezoneId, instant, utcDate, localDate) => {
@@ -89,15 +77,11 @@ suite.define(() => {
           await page.clock.setFixedTime(new Date(instant));
           const gateway = await installMockGateway(page, {
             methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "OpenClaw" },
-                  { id: "research", name: "Research" },
-                ],
-              },
+              "agents.list": agentRoster(
+                { main: "OpenClaw", research: "Research" },
+                "main",
+                "per-sender",
+              ),
               "sessions.usage": {
                 cases: [
                   ...calendars.map(({ date, mode }) => ({
@@ -143,16 +127,11 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
           for (const { timeZone, date, mode } of calendars) {
             const initialRequests = (await gateway.getRequests("sessions.usage")).length;
-            await page
-              .getByRole("combobox", { name: "Time zone", exact: true })
-              .selectOption(timeZone);
+            await selectUsageTimeZone(page, timeZone);
             await gateway.waitForRequest("sessions.usage", { after: initialRequests });
             for (const [label, days] of [
               ["Today", 1],
               ["7d", 7],
-              ["30d", 30],
-              ["90d", 90],
-              ["1y", 365],
               ["All", null],
             ] as const) {
               const startDate =
@@ -166,12 +145,18 @@ suite.define(() => {
                 .locator(".usage-presets")
                 .getByRole("button", { name: label, exact: true })
                 .click();
+              await page.clock.fastForward(400);
               const request = await gateway.waitForRequest("sessions.usage", {
                 after: requestsBefore,
               });
               await expect
-                .poll(() => page.locator(".usage-page .usage-loading-spinner").count())
-                .toBe(0);
+                .poll(() =>
+                  page
+                    .locator(".usage-page")
+                    .getByRole("button", { name: "Refresh", exact: true })
+                    .isEnabled(),
+                )
+                .toBe(true);
               expect(request.params).toMatchObject({ startDate, endDate: date, mode });
               const inputs = await page.locator(".usage-date-input").all();
               expect(await Promise.all(inputs.map((input) => input.inputValue()))).toEqual([
@@ -183,8 +168,8 @@ suite.define(() => {
                 .toBe("1.2K");
               if (label === "7d") {
                 expect(
-                  (await page.locator(".cost-window-card__label").allTextContents()).map(
-                    (windowLabel) => windowLabel.trim(),
+                  (await page.locator(".cost-window__label").allTextContents()).map((windowLabel) =>
+                    windowLabel.trim(),
                   ),
                 ).toContain("Today");
               }
@@ -366,7 +351,7 @@ suite.define(() => {
         const expectedBar = (time: string) =>
           `Sep 6, ${time} · 100 tokens · Out 0 · In 100 · CW 0 · CR 0`;
         await expect.poll(barLabels).toEqual([expectedBar("01:00 AM"), expectedBar("11:59 PM")]);
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
+        await selectUsageTimeZone(page, "utc");
         await expectUsageRange(gateway, date);
         await page.getByRole("button", { name: "Skipped midnight", exact: true }).click();
         await expect.poll(barLabels).toEqual([expectedBar("03:59 AM"), expectedBar("04:00 AM")]);

@@ -10,7 +10,7 @@ import {
 } from "./session-capability.test-support.ts";
 
 it.each(["local", "event"] as const)(
-  "shows %s-created sessions in observed owner/involvement windows without waiting for primary reconciliation or event pacing",
+  "shows %s-created sessions independently of primary reconciliation, pacing only remote events",
   async (origin) => {
     vi.useFakeTimers();
     const primary = createDeferred<SessionsListResult>();
@@ -64,7 +64,7 @@ it.each(["local", "event"] as const)(
           payload: { sessionKey: created.key, reason: "create", session: created },
         });
       }
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(origin === "local" ? 0 : 5_000);
       for (const query of queries.slice(0, 2)) {
         expect(sessions.listSnapshot(query).result?.sessions.map((row) => row.key)).toEqual([
           created.key,

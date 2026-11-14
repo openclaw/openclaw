@@ -28,14 +28,10 @@ const RETRYABLE_INFERENCE_STATUSES = new Set([
 // model-specific, so both stay scoped to the attempted route.
 const PROVIDER_WIDE_FAILURE_STATUSES = new Set(["timeout", "unavailable"]);
 
-type InferenceFallbackDeps = {
-  readConfig?: () => Promise<OpenClawConfig>;
-};
-
 type InferenceFallbackParams = {
   requestingAgentId?: string;
   runtime: RuntimeEnv;
-  deps?: InferenceFallbackDeps;
+  config?: OpenClawConfig;
 };
 
 type ConfiguredRoutePolicy = {
@@ -59,16 +55,14 @@ export function verifySystemAgentInferenceWithFallback(
 export async function verifySystemAgentInferenceWithFallback(
   params: InferenceFallbackParams & { routePolicy?: ConfiguredRoutePolicy },
 ): Promise<BoundVerifySetupInferenceResult | ConfiguredRouteResult> {
-  const deps = params.deps ?? {};
-  const routePolicy = params.routePolicy;
-  const snapshot = deps.readConfig
-    ? undefined
-    : await (await import("../config/config.js")).readConfigFileSnapshot();
-  const config = deps.readConfig
-    ? await deps.readConfig()
-    : snapshot?.exists && snapshot.valid
-      ? (snapshot.runtimeConfig ?? snapshot.config)
-      : {};
+  const { config: suppliedConfig, routePolicy } = params;
+  const snapshot =
+    suppliedConfig === undefined
+      ? await (await import("../config/config.js")).readConfigFileSnapshot()
+      : undefined;
+  const config =
+    suppliedConfig ??
+    (snapshot?.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {});
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
   const candidateAgentIds = new Set([requestedAgentId, ...listAgentIds(config)]);
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =

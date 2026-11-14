@@ -5,6 +5,7 @@ import type { AgentActivityItem } from "../../../../packages/gateway-protocol/sr
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { ActivityGroup } from "./components/chat-message-group-view.tsx";
@@ -101,7 +102,7 @@ describe("a launched subagent", () => {
     ).toBe(coder.key);
   });
 
-  it("counts a launch that opened a session in its own right with the other operations", () => {
+  it("counts a launch that opened a session in its own right with the other operations", async () => {
     const calls = [
       { id: "story", args: { label, task: "Write it." } },
       { id: "opened", args: { label: "Opened", task: "Write it.", visible: true } },
@@ -134,8 +135,10 @@ describe("a launched subagent", () => {
       },
       container,
     );
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "1 other operation · 1 subagent",
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+        "1 other operation · 1 subagent",
+      ),
     );
   });
 
@@ -225,5 +228,62 @@ describe("a launched subagent", () => {
     expect(
       selectActivityHeadline([item], [{ card: opened, children: [] }], new Map([[opened, item]])),
     ).toMatchObject({ title: item.meta });
+  });
+
+  it("names the subagent a call addresses instead of its key's suffix", () => {
+    const addressedChild = child("00000000-0000-4000-8000-000000007ef3");
+    const address = (
+      name: string,
+      args: Record<string, unknown>,
+      title: string,
+      extra: Partial<ToolCard> = {},
+    ) => {
+      const card: ToolCard = { id: "call", callId: "call", name, args, ...extra };
+      const item: AgentActivityItem = {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+        name,
+        title,
+        meta: "…7ef3",
+      };
+      return (rows?: GatewaySessionRow[]) =>
+        selectActivityHeadline([item], [{ card, children: [] }], new Map([[card, item]]), rows)
+          ?.title;
+    };
+    const send = address(
+      "sessions_send",
+      { sessionKey: addressedChild.key, message: "Hi" },
+      "Send to session",
+    );
+    expect(send([addressedChild])).toBe(label);
+    // Before the roster holds it, the action stands in; the key never does.
+    expect(send([])).toBe("Send to session");
+    // Through the catalog dispatcher, and for history reads and steering.
+    expect(
+      address(
+        "dispatch_action",
+        { id: "sessions_send", args: { sessionKey: addressedChild.key, message: "Hi" } },
+        "Send to session",
+      )([addressedChild]),
+    ).toBe(label);
+    expect(
+      address(
+        "sessions_history",
+        { sessionKey: addressedChild.key },
+        "Read session history",
+      )([addressedChild]),
+    ).toBe(label);
+    expect(
+      address("subagents", { action: "steer", target: addressedChild.key }, "Send to subagent")([]),
+    ).toBe("Send to subagent");
+    // An unlabeled launch is named by the session its result names.
+    const unlabeled = address("sessions_spawn", { task: "Write" }, "Start subagent", {
+      outputText: accepted(addressedChild.key),
+    });
+    expect(unlabeled([addressedChild])).toBe(label);
+    expect(unlabeled([])).toBe("Start subagent");
   });
 });

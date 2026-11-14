@@ -10,15 +10,7 @@ export async function loadPageAssistantIdentity(state: ChatPageHost) {
   }
   const client = state.client;
   const sessionKey = state.sessionKey.trim();
-  const agentId = resolveAgentIdForSession({
-    sessionKey,
-    assistantAgentId: state.assistantAgentId,
-    agentsList: state.agentsList,
-    hello: state.hello,
-  });
-  if (!agentId) {
-    return;
-  }
+  const agentId = resolveAgentIdForSession(state);
   const requestVersion = ++state.assistantIdentityRequestVersion;
   try {
     const identity = await fetchAssistantIdentity(client, agentId);

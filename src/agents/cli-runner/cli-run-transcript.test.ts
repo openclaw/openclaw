@@ -1,7 +1,8 @@
 import path from "node:path";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, onTestFinished } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
@@ -18,10 +19,66 @@ import {
 } from "../../sessions/transcript-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { isIntermediateAssistantTranscriptMessage } from "../embedded-agent-runner/message-visibility.js";
-import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
+import {
+  buildCliAssistantTranscriptUsage,
+  persistCliAssistantTranscript,
+} from "./cli-run-transcript.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-coordination-transcript-");
 afterEach(() => resetGlobalHookRunner());
+
+function sourcePricing(provider: string, id: string, cost: Record<string, unknown>) {
+  return {
+    models: {
+      providers: { [provider]: { baseUrl: "https://cli.invalid", models: [{ id, cost }] } },
+    },
+  } as unknown as OpenClawConfig;
+}
+
+async function transcriptFixture(name: string) {
+  const sessionId = `cli-${name}-session`;
+  const sessionKey = `agent:main:cli-${name}`;
+  const root = sessionDirs.make();
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({ ...target, entry: { sessionId, updatedAt: Date.now() } });
+  const runParams = {
+    ...target,
+    provider: "claude-cli",
+    runId: `cli-${name}-run`,
+    config: {},
+    sessionFile: `sqlite://agents/main/${sessionId}`,
+    workspaceDir: root,
+    prompt: "hi",
+    timeoutMs: 1_000,
+    persistAssistantTranscript: true,
+  };
+  const updates: InternalSessionTranscriptUpdate[] = [];
+  onTestFinished(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+  return {
+    target,
+    runParams,
+    updates,
+    persist: (overrides: Partial<Parameters<typeof persistCliAssistantTranscript>[0]>) =>
+      persistCliAssistantTranscript({
+        runParams,
+        text: "reply",
+        modelId: "claude-sonnet-4-6",
+        stopReason: "stop",
+        ...overrides,
+      }),
+  };
+}
+
+async function transcriptMessages(target: Parameters<typeof loadTranscriptEvents>[0]) {
+  return (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+}
 
 it.each([
   { sourceTool: "sessions_send", hidden: true },
@@ -31,17 +88,7 @@ it.each([
 ])(
   "preserves CLI $sourceTool output with its display policy after hooks (private=$privateCompletion)",
   async ({ sourceTool, hidden, privateCompletion }) => {
-    const root = sessionDirs.make();
-    const target = {
-      agentId: "main",
-      sessionId: "cli-coordination-session",
-      sessionKey: "agent:main:cli-coordination",
-      storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
+    const { target, runParams, persist, updates } = await transcriptFixture("coordination");
     const registry = createEmptyPluginRegistry();
     registry.typedHooks.push({
       pluginId: "rewrite-output",
@@ -52,134 +99,64 @@ it.each([
       }),
     });
     initializeGlobalHookRunner(registry);
-    const updates: InternalSessionTranscriptUpdate[] = [];
-    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    try {
-      const result = await persistCliAssistantTranscript({
-        runParams: {
-          ...target,
-          config: {},
-          sessionFile: `sqlite://agents/main/${target.sessionId}`,
-          workspaceDir: root,
-          prompt: "Review the worker result",
-          provider: "claude-cli",
-          runId: "cli-coordination-run",
-          timeoutMs: 1_000,
-          persistAssistantTranscript: true,
-          privateCompletion,
-          inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
-        },
-        text: "The worker result passed validation",
-        modelId: "claude-sonnet-4-6",
-        stopReason: "stop",
-      });
-      expect(result.owned).toBe(true);
-      const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
-        typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
-      );
-      expect(messages).toMatchObject([
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "The worker result passed validation" }],
-        },
-      ]);
-      expect(Reflect.get(messages[0]!, "display") === false).toBe(hidden);
-      expect(updates).toHaveLength(1);
-      expect(Reflect.get(updates[0]!.message!, "display") === false).toBe(hidden);
-      expect(readSessionTranscriptRunId(updates[0]!.message)).toBe("cli-coordination-run");
-    } finally {
-      unsubscribe();
-    }
+    const text = "The worker result passed validation";
+    const result = await persist({
+      runParams: {
+        ...runParams,
+        privateCompletion,
+        inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
+      },
+      text,
+    });
+    expect(result.owned).toBe(true);
+    const messages = await transcriptMessages(target);
+    expect(messages).toMatchObject([{ role: "assistant", content: [{ type: "text", text }] }]);
+    expect(Reflect.get(messages[0]!, "display") === false).toBe(hidden);
+    expect(updates).toHaveLength(1);
+    expect(Reflect.get(updates[0]!.message!, "display") === false).toBe(hidden);
+    expect(readSessionTranscriptRunId(updates[0]!.message)).toBe("cli-coordination-run");
   },
 );
 
-it("keeps CLI usage unmarked when the backend reports no separate turn total", async () => {
-  const root = sessionDirs.make();
-  const target = {
-    agentId: "main",
-    sessionId: "cli-usage-session",
-    sessionKey: "agent:main:cli-usage",
-    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+it.each([false, true])("persists CLI usage with separate turn total=%s", async (turnTotal) => {
+  const { target, runParams, persist } = await transcriptFixture("usage");
+  const rates = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+  const pricedRunParams = {
+    ...runParams,
+    provider: turnTotal ? "claude-cli" : "codex-cli",
+    // The synthetic model has no vendor catalog price: the other turn stays unpriced, never $0.
+    config: sourcePricing("claude-cli", "claude-opus-4-8", rates),
   };
-  await upsertSessionEntry({
-    ...target,
-    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  const modelId = turnTotal ? "claude-opus-4-8" : "unpriced-cli-test-model";
+  const cacheUsage = { input: 4418, output: 5, cacheWrite: 36955, cacheWrite1h: 36955 };
+  const priced = await buildCliAssistantTranscriptUsage({
+    runParams: pricedRunParams,
+    modelId,
+    usage: turnTotal ? cacheUsage : { input: 10, output: 5, cacheRead: 100 },
+    ...(turnTotal ? { turnUsage: { ...cacheUsage, output: 534 } } : {}),
   });
-
-  await persistCliAssistantTranscript({
-    runParams: {
-      ...target,
-      config: {},
-      sessionFile: `sqlite://agents/main/${target.sessionId}`,
-      workspaceDir: root,
-      prompt: "hi",
-      provider: "codex-cli",
-      runId: "cli-usage-run",
-      timeoutMs: 1_000,
-      persistAssistantTranscript: true,
-    },
-    text: "reply",
-    modelId: "gpt-5.4",
-    usage: { input: 10, output: 5, cacheRead: 100 },
-    stopReason: "stop",
-  });
-
-  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
-    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
-  );
+  await persist({ runParams: pricedRunParams, modelId, usage: priced.usage });
+  const messages = await transcriptMessages(target);
   expect(messages).toHaveLength(1);
-  // Without a separate turn total there is no proof the counters describe one model call.
-  expect((messages[0] as AssistantMessage).usage).toEqual({
-    input: 10,
-    output: 5,
-    cacheRead: 100,
-    cacheWrite: 0,
-    totalTokens: 115,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  });
-});
-
-it("persists the 1h cache-write subset of a Claude turn total", async () => {
-  const root = sessionDirs.make();
-  const target = {
-    agentId: "main",
-    sessionId: "cli-cache-ttl-session",
-    sessionKey: "agent:main:cli-cache-ttl",
-    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
-  };
-  await upsertSessionEntry({
-    ...target,
-    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-  });
-
-  await persistCliAssistantTranscript({
-    runParams: {
-      ...target,
-      config: {},
-      sessionFile: `sqlite://agents/main/${target.sessionId}`,
-      workspaceDir: root,
-      prompt: "hi",
-      provider: "claude-cli",
-      runId: "cli-cache-ttl-run",
-      timeoutMs: 1_000,
-      persistAssistantTranscript: true,
-    },
-    text: "reply",
-    modelId: "claude-opus-4-8",
-    usage: { input: 4418, output: 5, cacheWrite: 36955, cacheWrite1h: 36955 },
-    turnUsage: { input: 4418, output: 534, cacheWrite: 36955, cacheWrite1h: 36955 },
-    stopReason: "stop",
-  });
-
-  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
-    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  // One-hour cache writes bill at twice the input rate.
+  const turnCost = (4418 * rates.input + 534 * rates.output + 36955 * rates.input * 2) / 1e6;
+  expect((messages[0] as AssistantMessage).usage).toEqual(
+    turnTotal
+      ? expect.objectContaining({
+          output: 534,
+          cacheWrite: 36955,
+          cacheWrite1h: 36955,
+          cost: expect.objectContaining({ total: expect.closeTo(turnCost, 12) }),
+        })
+      : expect.objectContaining({ input: 10, output: 5, cacheRead: 100, cacheWrite: 0 }),
   );
-  // Usage estimates price 1h writes at twice the input rate, so the subset must survive.
-  expect((messages[0] as AssistantMessage).usage).toMatchObject({
-    output: 534,
-    cacheWrite: 36955,
-    cacheWrite1h: 36955,
-  });
+  expect(priced.costUsd).toEqual(turnTotal ? expect.closeTo(turnCost, 12) : undefined);
+  // Known rates cannot make an unmeasured turn free; a measured zero turn still prices at $0.
+  const turn = async (usage?: { input: number }) =>
+    (await buildCliAssistantTranscriptUsage({ runParams: pricedRunParams, modelId, usage }))
+      .costUsd;
+  expect(turnTotal ? await turn() : undefined).toBeUndefined();
+  expect(turnTotal ? await turn({ input: 0 }) : 0).toBe(0);
 });
 
 it.each([
@@ -189,78 +166,44 @@ it.each([
 ] as const)(
   "prepares the $kind CLI assistant before its first transcript publication",
   async ({ yielded, stopReason }) => {
-    const root = sessionDirs.make();
-    const target = {
-      agentId: "main",
-      sessionId: "cli-media-session",
-      sessionKey: "agent:main:cli-media",
-      storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
+    const { target, runParams, persist, updates } = await transcriptFixture("media");
     const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
-    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) =>
-      applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./artifact.json"] }),
+    const result = await persist({
+      runParams: {
+        ...runParams,
+        prepareAssistantTranscriptMessage: (message) =>
+          applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./artifact.json"] }),
+      },
+      text: sourceText,
+      stopReason,
+      yielded,
+    });
+    expect(result).toMatchObject({ owned: true, idempotencyKey: "cli-assistant:cli-media-run" });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.message).toMatchObject({
+      content: [{ type: "text", text: sourceText }],
+      idempotencyKey: result.idempotencyKey,
+      openclawDelivery: { mediaUrls: ["./artifact.json"] },
+    });
+    const messages = await transcriptMessages(target);
+    expect(messages).toHaveLength(1);
+    expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(
+      yielded === true && stopReason === "stop",
     );
-    const updates: InternalSessionTranscriptUpdate[] = [];
-    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    try {
-      const result = await persistCliAssistantTranscript({
-        runParams: {
-          ...target,
-          config: {},
-          sessionFile: `sqlite://agents/main/${target.sessionId}`,
-          workspaceDir: root,
-          prompt: "make an artifact",
-          provider: "claude-cli",
-          runId: "cli-media-run",
-          timeoutMs: 1_000,
-          persistAssistantTranscript: true,
-          prepareAssistantTranscriptMessage,
+    expect(messages[0]).toMatchObject({ stopReason });
+    if (yielded && stopReason === "stop") {
+      expect(messages[0]).toMatchObject({
+        openclawStreamFallback: {
+          replacementText: sourceText,
+          source: "segment",
+          itemId: "cli-media-run",
         },
-        text: sourceText,
-        modelId: "claude-sonnet-4-6",
-        stopReason,
-        yielded,
       });
-      expect(result.owned).toBe(true);
-      expect(result.idempotencyKey).toBe("cli-assistant:cli-media-run");
-      expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ content: [{ type: "text", text: sourceText }] }),
-        sourceText,
-      );
-      expect(updates).toHaveLength(1);
-      expect(updates[0]?.message).toMatchObject({
-        content: [{ type: "text", text: sourceText }],
-        idempotencyKey: result.idempotencyKey,
-        openclawDelivery: { mediaUrls: ["./artifact.json"] },
-      });
-      const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
-        typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
-      );
-      expect(messages).toHaveLength(1);
-      expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(
-        yielded === true && stopReason === "stop",
-      );
-      expect(messages[0]).toMatchObject({ stopReason });
-      if (yielded && stopReason === "stop") {
-        expect(messages[0]).toMatchObject({
-          openclawStreamFallback: {
-            replacementText: sourceText,
-            source: "segment",
-            itemId: "cli-media-run",
-          },
-        });
-      } else {
-        expect(messages[0]).not.toHaveProperty("openclawStreamFallback");
-      }
-      expect(sanitizeChatHistoryMessages(messages)).toMatchObject([
-        { content: [{ type: "text", text: "Artifacts ready" }] },
-      ]);
-    } finally {
-      unsubscribe();
+    } else {
+      expect(messages[0]).not.toHaveProperty("openclawStreamFallback");
     }
+    expect(sanitizeChatHistoryMessages(messages)).toMatchObject([
+      { content: [{ type: "text", text: "Artifacts ready" }] },
+    ]);
   },
 );

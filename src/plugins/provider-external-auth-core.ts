@@ -4,7 +4,6 @@ import {
   getCurrentPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
-import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import {
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotAsync,
@@ -29,9 +28,7 @@ export function createProviderExternalAuthResolver(
     const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
     const env = params.env ?? process.env;
     const config = params.config ?? {};
-    const assertPrepared = await preparePluginMetadataMachineStateAsync({ env });
     const snapshot = await resolvePluginMetadataSnapshotAsync({ config, workspaceDir, env });
-    assertPrepared();
     return withPluginMetadataSnapshotScope(snapshot, run, { config, workspaceDir, env });
   };
 

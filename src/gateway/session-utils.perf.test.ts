@@ -423,10 +423,7 @@ describe("session list resolver cache", () => {
         });
         try {
           for (let request = 0; request < 2; request++) {
-            const result = await listProjectedSessions({
-              projection,
-              opts: { limit, search },
-            });
+            const result = await listProjectedSessions({ projection, opts: { limit, search } });
             expect(result.sessions.map((row) => row.key)).toEqual(
               !search ? Object.keys(store).toReversed().slice(0, limit) : [],
             );

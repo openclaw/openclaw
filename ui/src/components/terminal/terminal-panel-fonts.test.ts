@@ -3,11 +3,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
-import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
 import {
   createTerminalController,
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
+  registerTestTerminalViewport,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 
@@ -23,6 +23,7 @@ afterEach(async () => {
 });
 
 it("adopts the newest font after asynchronous recovery without another panel render", async () => {
+  const { bootTerminalPanelSession } = await import("./terminal-panel-session-boot.ts");
   const original = createTerminalController();
   const replacement = createTerminalController();
   const creating = createDeferred();
@@ -41,6 +42,7 @@ it("adopts the newest font after asynchronous recovery without another panel ren
   document.body.append(panel);
   await panel.updateComplete;
   const viewport = document.body.appendChild(document.createElement("div"));
+  registerTestTerminalViewport(viewport, create);
   const client: TerminalGatewayClient = {
     forceReconnect: vi.fn(),
     request: vi.fn(),
@@ -63,6 +65,7 @@ it("adopts the newest font after asynchronous recovery without another panel ren
     isCurrent: () => true,
     onReady: vi.fn(),
     onExit: vi.fn(),
+    captureDeliveryError: () => () => undefined,
   });
   boot.tab.status = "live";
   vi.useFakeTimers();

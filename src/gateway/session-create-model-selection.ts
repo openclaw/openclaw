@@ -11,8 +11,8 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
+import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -45,6 +45,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
   >;
   agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   sessionKey: string;
   storePath: string;
   entry: SessionEntry;
@@ -63,6 +64,8 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   const selection = await prepareSessionPatchRuntimeSelection({
     cfg: request.cfg,
     agentId: params.agentId,
+    operatorAuthority: params.operatorAuthority,
+    validateInheritedRuntime: true,
     callerCanConsent: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
     patch: { key: sessionKey, agentRuntime: request.agentRuntime, model: request.model },
     entry,
@@ -91,6 +94,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
       existingEntry,
       entry,
       sessionKey,
+      agentId: params.agentId,
       storePath: params.storePath,
       lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
     });

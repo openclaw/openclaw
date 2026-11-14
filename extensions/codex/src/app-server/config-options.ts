@@ -36,7 +36,6 @@ import {
   DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
   DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   assertCodexAppServerCommandHasNoInlineArgs,
-  readCodexPluginConfig,
 } from "./config-parsing.js";
 import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
@@ -80,11 +79,8 @@ export function resolveCodexAppServerHomeScope(params: {
     : "agent";
 }
 
-export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: unknown): number {
-  return resolvePositiveTimerTimeoutMs(
-    readCodexPluginConfig(pluginConfig).appServer?.requestTimeoutMs,
-    60_000,
-  );
+export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: CodexPluginConfig): number {
+  return resolvePositiveTimerTimeoutMs(pluginConfig?.appServer?.requestTimeoutMs, 60_000);
 }
 
 // Registration binds the host's canonical resolver; cold callers use config-runtime.ts.
@@ -105,8 +101,6 @@ export function createCodexAppServerConfig({
       agentDir?: string;
       codexConfigToml?: string | null;
       requirementsToml?: string | null;
-      requirementsPath?: string;
-      readRequirementsFile?: (path: string) => string | undefined;
       platform?: NodeJS.Platform;
       hostName?: string;
       openClawSandboxActive?: boolean;
@@ -504,6 +498,10 @@ export function codexAppServerStartOptionsKey(
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
+    managedGitConfigParameters: hashSecretForKey(
+      options.managedGitConfigParameters,
+      "managedGitConfigParameters",
+    ),
     authProfileId: params.authProfileId ?? null,
     authBindingFingerprint: params.authBindingFingerprint ?? null,
     agentDir: params.agentDir ?? null,

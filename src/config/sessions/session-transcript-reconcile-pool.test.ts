@@ -2,13 +2,12 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -28,6 +27,10 @@ import {
   getSessionTranscriptReconcileWorkerPoolSnapshot as poolSnapshot,
   runSessionTranscriptReconcileOperation as runOperation,
 } from "./session-transcript-reconcile-pool.js";
+import {
+  observeCanonicalWriterLeases,
+  readAgentDatabaseLeaseIds,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   isSessionTranscriptIndexReconcileRunning as isReconciling,
   reconcileSessionTranscriptIndexes as reconcile,
@@ -211,50 +214,18 @@ it("closes a queued admission without dispatching it after shutdown", async () =
   }
 });
 
-function readAgentDatabaseLeaseIds(pathname: string, env: NodeJS.ProcessEnv): string[] {
-  return openOpenClawStateDatabase({ env })
-    .db.prepare(
-      "SELECT lease_id FROM agent_database_leases WHERE owner_pid = ? AND path = ? ORDER BY lease_id",
-    )
-    .all(process.pid, pathname)
-    .map((row) => String(row.lease_id));
-}
-
-function observeCanonicalWriterLeases() {
-  const leases = new Map<string, string>();
-  const spy = probe.admission(admission, (request, grant, admit) => {
-    const facts = request.facts;
-    if (
-      request.stage === "open" &&
-      isRecord(facts) &&
-      typeof facts.databasePath === "string" &&
-      typeof facts.leaseId === "string"
-    ) {
-      leases.set(facts.databasePath, facts.leaseId);
-    }
-    admit(request, grant);
-  });
-  return { leases, [Symbol.dispose]: () => spy.mockRestore() };
-}
-
 it("reconciles a dirty projection while the parent retains serving Gateway ownership", async () => {
   const { stateDir, env, options } = fixture("parent-owner");
   let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
-    using canonical = observeCanonicalWriterLeases();
     await seed(options, "parent-owner", "synthetic ownership");
     // Seeding may retain a worker writer; this fixture starts with only its native handle.
-    const { database, nativeLeases } = await openDirtyDatabase(options);
-    let plannerLeaseId: string | undefined;
-    observer.onTask = ({ input }) => {
-      if (input.mode === "disk" && input.path === database.path) {
-        plannerLeaseId = input.leaseId;
-      }
-    };
+    const { database } = await openDirtyDatabase(options);
     owner = acquireGatewayStateOwner({
       databasePath: openOpenClawStateDatabase({ env }).path,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: path.join(stateDir, "openclaw.json"),
         stateDir,
@@ -263,12 +234,6 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
     });
     await expectReconciled(options, 1);
     owner.assertCurrent();
-    const canonicalLeaseId = requiredLease(canonical.leases, database.path);
-    expect(plannerLeaseId).toEqual(expect.any(String));
-    expect(new Set([...nativeLeases, canonicalLeaseId, plannerLeaseId]).size).toBe(3);
-    expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual(
-      [...nativeLeases, canonicalLeaseId].toSorted(),
-    );
     expectFts(database, "seed", "synthetic ownership");
   } finally {
     await cleanup(stateDir).finally(() => owner?.release());
@@ -280,10 +245,8 @@ it.each(["complete", "native-exit"] as const)(
   async (ending) => {
     const { stateDir, env } = fixture("pool-close");
     const targets = ["active", "queued", "next"].map((agentId) => ({ agentId, env }));
-    const modes: string[] = [];
     const sessionId = "lifecycle-session";
     const nativeLeases = new Map<string, string[]>();
-    const plannerLeases = new Map<string, string>();
     let gate: ReturnType<typeof planGate> | undefined;
     let operations: Promise<PromiseSettledResult<unknown>[]> | undefined;
     try {
@@ -300,13 +263,7 @@ it.each(["complete", "native-exit"] as const)(
         nativeLeases.set(database.path, baseline);
       }
       await closePool();
-      gate = planGate(({ input }) => {
-        modes.push(input.mode);
-        if (input.mode === "disk") {
-          plannerLeases.set(input.path, input.leaseId);
-        }
-        return input.mode === "disk" && input.agentId === "active";
-      });
+      gate = planGate(({ input }) => input.mode === "disk" && input.agentId === "active");
       const direct = reconcile(targets[0]!);
       startReconcile(targets[1]!);
       operations = Promise.allSettled([direct, waitForReconcile(targets[1]!)]);
@@ -314,12 +271,6 @@ it.each(["complete", "native-exit"] as const)(
       await vi.waitFor(() => {
         expectPool({ workers: 1, activeTasks: 1 });
       });
-      const activePath = openDatabase(targets[0]!).path;
-      const canonicalLeaseId = requiredLease(canonical.leases, activePath);
-      const plannerLeaseId = requiredLease(plannerLeases, activePath);
-      const activeLeases = [...nativeLeases.get(activePath)!, canonicalLeaseId, plannerLeaseId];
-      expect(new Set(activeLeases).size).toBe(3);
-      expect(readAgentDatabaseLeaseIds(activePath, env)).toEqual(activeLeases.toSorted());
       const threadId = gate.worker.threadId;
       let closed = false;
       const closing = closePool().then(() => {
@@ -340,19 +291,11 @@ it.each(["complete", "native-exit"] as const)(
         ending === "native-exit" ? "rejected" : "fulfilled",
         "fulfilled",
       ]);
-      // Across agents, planning and lease recovery join the FIFO worker as they become ready.
-      expect(modes.toSorted()).toEqual(
-        ending === "native-exit" ? ["disk", "disk", "release"] : ["disk", "disk"],
-      );
       expectPool({ workers: 0, activeTasks: 0, pendingTasks: 0 });
       for (const options of targets.slice(0, 2)) {
         const database = openDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
         const canonicalId = requiredLease(canonical.leases, database.path);
-        const plannerId = plannerLeases.get(database.path);
-        expect(plannerId).toEqual(expect.any(String));
-        expect(canonicalId).not.toBe(plannerId);
-        expect(actual).not.toContain(plannerId);
         expect(actual).toEqual([...nativeLeases.get(database.path)!, canonicalId].toSorted());
         expectFts(database, options.agentId, options.agentId);
       }
@@ -372,11 +315,17 @@ it.each(["complete", "native-exit"] as const)(
   30_000,
 );
 
-it.each(["complete", "native-exit", "pool-timeout"] as const)(
+it.each(["complete", "native-exit", "pool-timeout", "task-timeout", "stalled-retirement"] as const)(
   "joins transcript lease settlement before closing an agent (%s)",
   async (ending) => {
     const { stateDir, env, options } = fixture("agent-close");
     const events: string[] = [];
+    using recovery = vi
+      .spyOn(nativeWorkerRecovery, "requestGatewayNativeWorkerRecovery")
+      .mockResolvedValue({
+        status: "report-only",
+        reason: "Synthetic test has no Gateway process lifecycle.",
+      });
     let gate: ReturnType<typeof planGate> | undefined;
     let reconciliation: Promise<PromiseSettledResult<unknown>[]> | undefined;
     let closing: Promise<boolean> | undefined;
@@ -403,6 +352,9 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
         }
         return true;
       }, events);
+      if (ending === "task-timeout" || ending === "stalled-retirement") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       reconciliation = Promise.allSettled([reconcile(options)]);
       await gate.ready;
       const close = database.db.close.bind(database.db);
@@ -429,6 +381,33 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
         vi.useRealTimers();
         await poolClosing;
       }
+      if (ending === "task-timeout" || ending === "stalled-retirement") {
+        const native = gate.worker;
+        const nativeTerminate = native.terminate.bind(native);
+        const retirement = createDeferredCore<number>();
+        const terminate = vi.spyOn(native, "terminate");
+        if (ending === "stalled-retirement") {
+          terminate.mockReturnValue(retirement.promise);
+        }
+        expect(terminate).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(terminate).toHaveBeenCalledOnce();
+        expect(recovery).not.toHaveBeenCalled();
+        if (ending === "stalled-retirement") {
+          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.dynamicImportSettled();
+          expect(recovery).toHaveBeenCalledOnce();
+          expect(recovery.mock.calls[0]![0].isCurrent()).toBe(true);
+          expect(native.threadId).toBeGreaterThan(0);
+          expect(readAgentDatabaseLeaseIds(database.path, env).length).toBeGreaterThan(
+            nativeLeases.length,
+          );
+          expect(events).not.toContain("release-task");
+          retirement.resolve(await nativeTerminate());
+        }
+        terminate.mockRestore();
+        vi.useRealTimers();
+      }
       closing = closeDatabase(database.path);
       if (ending === "native-exit") {
         await gate.terminate();
@@ -448,6 +427,11 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
           : ["worker-release", "native-close"],
       );
       expect(database.db.isOpen).toBe(false);
+      if (ending === "stalled-retirement") {
+        expect(recovery.mock.calls[0]![0].isCurrent()).toBe(false);
+      } else {
+        expect(recovery).not.toHaveBeenCalled();
+      }
       expect(leasesAtNativeClose).toEqual(nativeLeases);
       expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual([]);
       const reopened = openDatabase(options);

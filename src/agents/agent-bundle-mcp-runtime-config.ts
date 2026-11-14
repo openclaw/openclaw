@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeMcpToolDenials } from "../config/sessions/session-tool-overrides.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,46 +13,6 @@ import {
 import { createMcpServerToolDenyMatcher } from "./tool-policy-match.js";
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
-
-function digestSafeServerNameAssignments(
-  safeServerNamesByServer?: ReadonlyMap<string, string>,
-): Record<string, string> | undefined {
-  if (!safeServerNamesByServer || safeServerNamesByServer.size === 0) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    [...safeServerNamesByServer.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
-  );
-}
-
-function filterMcpServers<T>(
-  mcpServers: Record<string, T>,
-  options: {
-    includeServerNames?: ReadonlySet<string>;
-    excludeServerNames?: ReadonlySet<string>;
-    safeServerNamesByServer: ReadonlyMap<string, string>;
-    toolDenylist?: string[];
-  },
-): Record<string, T> {
-  if (!options.includeServerNames && !options.excludeServerNames && !options.toolDenylist?.length) {
-    return mcpServers;
-  }
-  const filtered: Record<string, T> = {};
-  const isDenied = createMcpServerToolDenyMatcher(options.toolDenylist);
-  for (const [serverName, rawServer] of Object.entries(mcpServers)) {
-    if (options.includeServerNames && !options.includeServerNames.has(serverName)) {
-      continue;
-    }
-    if (options.excludeServerNames?.has(serverName)) {
-      continue;
-    }
-    if (isDenied(options.safeServerNamesByServer.get(serverName) ?? serverName)) {
-      continue;
-    }
-    filtered[serverName] = rawServer;
-  }
-  return filtered;
-}
 
 export function loadSessionMcpConfig(params: {
   workspaceDir: string;
@@ -88,15 +48,33 @@ export function loadSessionMcpConfig(params: {
   }
   const safeServerNamesByServer =
     params.safeServerNamesByServer ?? assignSafeServerNames(Object.keys(loaded.mcpServers));
-  const safeServerNames = digestSafeServerNameAssignments(safeServerNamesByServer);
+  const safeServerNames =
+    safeServerNamesByServer.size === 0
+      ? undefined
+      : Object.fromEntries(
+          [...safeServerNamesByServer.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
+        );
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const mcpToolsDeny = normalizeMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
-  const mcpServers = filterMcpServers(loaded.mcpServers, {
-    includeServerNames: params.includeServerNames,
-    excludeServerNames: params.excludeServerNames,
-    safeServerNamesByServer,
-    toolDenylist: params.toolDenylist,
-  });
+  let mcpServers = loaded.mcpServers;
+  const { includeServerNames, excludeServerNames, toolDenylist } = params;
+  if (includeServerNames || excludeServerNames || toolDenylist?.length) {
+    const filtered: typeof mcpServers = {};
+    const isDenied = createMcpServerToolDenyMatcher(toolDenylist);
+    for (const [serverName, rawServer] of Object.entries(mcpServers)) {
+      if (includeServerNames && !includeServerNames.has(serverName)) {
+        continue;
+      }
+      if (excludeServerNames?.has(serverName)) {
+        continue;
+      }
+      if (isDenied(safeServerNamesByServer.get(serverName) ?? serverName)) {
+        continue;
+      }
+      filtered[serverName] = rawServer;
+    }
+    mcpServers = filtered;
+  }
   const prepareDataDirsByServer = Object.fromEntries(
     Object.entries(loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
       Object.hasOwn(mcpServers, serverName),
@@ -115,17 +93,14 @@ export function loadSessionMcpConfig(params: {
       prepareDataDirsByServer,
     },
     // This hash only invalidates in-memory catalogs; requester URLs/headers are already redacted.
-    fingerprint: crypto
-      .createHash("sha256")
-      .update(
-        JSON.stringify({
-          servers: fingerprintServers,
-          mcpAppsEnabled,
-          ...(safeServerNames ? { safeServerNames } : {}),
-          mcpToolsDeny,
-        }),
-      )
-      .digest("hex"),
+    fingerprint: sha256Hex(
+      JSON.stringify({
+        servers: fingerprintServers,
+        mcpAppsEnabled,
+        ...(safeServerNames ? { safeServerNames } : {}),
+        mcpToolsDeny,
+      }),
+    ),
   };
 }
 

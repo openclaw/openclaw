@@ -8,11 +8,13 @@ import {
   button,
   candidate,
   expectRequestCounts,
+  makeDetection,
   runningStep,
   runningWizard,
   setupContext,
   setupPages,
   setupRpc as rpc,
+  waitText,
 } from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
@@ -22,16 +24,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const withPage = setupPages(suite, () => setupContext({ viewport: { width: 1080, height: 850 } }));
-const detection = {
+const detection = makeDetection({
   candidates: [
-    {
-      kind: "codex-cli",
-      label: "Codex",
+    candidate("codex-cli", "Codex", "openai/gpt-5", {
       detail: "Available credentials",
-      modelRef: "openai/gpt-5",
-      credentials: true,
       recommended: true,
-    },
+    }),
     candidate("anthropic-api-key", "Anthropic", "anthropic/claude-sonnet-4-6", {
       detail: "Available credentials",
     }),
@@ -48,7 +46,7 @@ const detection = {
   nativeSessionCatalogPreferenceRequired: true,
   setupComplete: false,
   workspace: "/tmp/onboarding-fixture",
-};
+});
 
 suite.define(() => {
   it.each(["", "?firstRun=1", "?firstRun=explicit"])(
@@ -71,25 +69,23 @@ suite.define(() => {
         } else {
           await openModelSetup(page, suite.server.baseUrl);
         }
-        await page.getByRole("heading", { name: "Found on this Gateway" }).waitFor();
+        await page.locator('.model-setup h2:text-is("Available models")').waitFor();
         const choices = page.locator("[data-candidate-kind]");
         expect(await choices.first().textContent()).toContain("Anthropic");
-        expect(await page.getByLabel("Show existing native conversations").isChecked()).toBe(false);
+        expect(await page.getByLabel("Show existing sessions").isChecked()).toBe(false);
         expect(await page.locator("openclaw-model-setup-page [data-selected]").count()).toBe(0);
         await button(page, "Check again").click();
         await gateway.waitForRequest(rpc.detect, { after: 1 });
-        await page.getByRole("heading", { name: "Found on this Gateway" }).waitFor();
-        for (const method of [
-          rpc.activate,
-          rpc.auth,
-          "plugins.install",
-          rpc.verify,
-          "config.set",
-          "config.patch",
-          "config.apply",
-        ]) {
-          expect(await gateway.getRequests(method)).toHaveLength(0);
-        }
+        await page.locator('.model-setup h2:text-is("Available models")').waitFor();
+        await expectRequestCounts(gateway, {
+          [rpc.activate]: 0,
+          [rpc.auth]: 0,
+          "plugins.install": 0,
+          [rpc.verify]: 0,
+          "config.set": 0,
+          "config.patch": 0,
+          "config.apply": 0,
+        });
 
         await page.locator('[data-candidate-kind="anthropic-api-key"] button').click();
         const activation = await gateway.waitForRequest(rpc.activate);
@@ -97,9 +93,7 @@ suite.define(() => {
           kind: "anthropic-api-key",
           nativeSessionCatalogsEnabled: false,
         });
-        await page
-          .getByText("HTTP 401: review this provider credential and try again.", { exact: false })
-          .waitFor();
+        await waitText(page, "HTTP 401: review this provider credential and try again.", false);
         expect(await gateway.getRequests(rpc.activate)).toHaveLength(1);
       });
     },
@@ -133,21 +127,19 @@ suite.define(() => {
           .getByRole("button", { name: "Set up endpoint" })
           .isVisible(),
       ).toBe(true);
-      await page.getByLabel("Show existing native conversations").check();
+      await page.getByLabel("Show existing sessions").check();
       await install.click();
       expect((await gateway.waitForRequest(rpc.auth)).params).toMatchObject({
         authChoice: "meta-api-key",
         nativeSessionCatalogsEnabled: true,
       });
       const dialog = page.locator("openclaw-modal-dialog");
-      await dialog
-        .getByText("Allow this provider plugin to call its inference endpoint?", { exact: true })
-        .waitFor();
+      await waitText(dialog, "Allow this provider plugin to call its inference endpoint?");
       const next = await gateway.getRequests(rpc.next);
       expect(next).toHaveLength(1);
       expect(next[0]!.params).not.toHaveProperty("answer");
 
-      await button(dialog, "Cancel").click();
+      await button(dialog.locator("openclaw-modal-actions"), "Cancel").click();
       await gateway.waitForRequest(rpc.cancel);
       expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
     });
@@ -178,7 +170,7 @@ suite.define(() => {
         nativeSessionCatalogsEnabled: false,
       });
       const dialog = page.locator("openclaw-modal-dialog");
-      await dialog.getByText("Accept Meta provider capabilities?", { exact: true }).waitFor();
+      await waitText(dialog, "Accept Meta provider capabilities?");
 
       await gateway.setMethodResponse(
         rpc.next,
@@ -259,11 +251,11 @@ suite.define(() => {
             const diagnostic = alert.getByText(diagnosticText, { exact: true });
             await diagnostic.waitFor();
             expect(
-              await diagnostic.evaluate((element) => getComputedStyle(element).userSelect),
-            ).toBe("text");
-            expect(
-              await diagnostic.evaluate((element) => getComputedStyle(element).overflowY),
-            ).toBe("auto");
+              await diagnostic.evaluate((element) => {
+                const { userSelect, overflowY } = getComputedStyle(element);
+                return { userSelect, overflowY };
+              }),
+            ).toEqual({ userSelect: "text", overflowY: "auto" });
 
             await button(alert, "Copy").click();
             await expect
@@ -276,7 +268,7 @@ suite.define(() => {
           await dialog.getByLabel("API base URL", { exact: true }).fill("http://127.0.0.1:9876/v1");
 
           if (outcome === "cancel") {
-            await button(dialog, "Cancel").click();
+            await button(dialog.locator("openclaw-modal-actions"), "Cancel").click();
             await gateway.waitForRequest(rpc.cancel);
             expect(await gateway.getRequests(rpc.next)).toHaveLength(1);
           } else {

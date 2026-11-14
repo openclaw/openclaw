@@ -1,3 +1,8 @@
+export const DIAL_BUNDLES = new Set([
+  "com.apple.FaceTime",
+  "com.apple.FaceTime.FTConversationService",
+]);
+
 export type FaceTimeHelperPeer = {
   bundleIdentifier: string;
   processId: number;
@@ -49,8 +54,8 @@ export function assertFaceTimeNativeAction(
 ): void {
   const results = requireCompleteTopology(result);
   const present = results.filter((entry) => entry.outcome !== "absent");
-  // FaceTime and Phone can both proxy the same system TUCall. Accept shared
-  // visibility only when every helper that found the exact call proves the postcondition.
+  // FaceTime and its conversation service can both proxy the same system TUCall.
+  // Every helper that found the exact call must prove the postcondition.
   if (present.length === 0) {
     throw new FaceTimeHelperAmbiguousError(`FaceTime ${action} carrier owner is missing`, result);
   }
@@ -89,10 +94,7 @@ export function assertFaceTimeNativeAction(
   throw new Error(`FaceTime ${action} postcondition was not observed`);
 }
 
-export function projectCompleteFaceTimeAbsence(result: HelperActionResult): {
-  status: "absent";
-  topologyGeneration: number;
-} {
+export function projectCompleteFaceTimeAbsence(result: HelperActionResult): number {
   const results = requireCompleteTopology(result);
   if (!results.every((entry) => entry.outcome === "absent" && entry.found === false)) {
     throw new FaceTimeHelperAmbiguousError("FaceTime carrier is still present", result);
@@ -100,5 +102,5 @@ export function projectCompleteFaceTimeAbsence(result: HelperActionResult): {
   if (result.topologyGeneration === undefined) {
     throw new FaceTimeHelperAmbiguousError("FaceTime topology generation is missing", result);
   }
-  return { status: "absent", topologyGeneration: result.topologyGeneration };
+  return result.topologyGeneration;
 }

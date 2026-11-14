@@ -1,21 +1,42 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import type {
+  EmbeddedAgentRunMeta,
+  EmbeddedAgentRunResult,
+} from "../../agents/embedded-agent-runner/types.js";
 import { resolveModelAuthModeAsync } from "../../agents/model-auth.js";
+import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-usage.js";
+import { formatTokenCount } from "../../utils/token-format.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
-import {
-  accumulateSessionUsageFromTranscript,
-  buildInlineRawTracePayload,
-  derivePromptSegments,
-} from "./agent-runner-trace.js";
+import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 import type { FollowupRun } from "./queue.js";
+
+type TraceUsageView = Pick<
+  NormalizedUsage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+>;
+
+const TRACE_USAGE_FIELDS = [
+  ["input", "⬇️"],
+  ["output", "⬆️"],
+  ["cacheRead", "♻️"],
+  ["cacheWrite", "🆕"],
+  ["total", "🔢"],
+] as const;
 
 /** Builds the same authorized diagnostic supplement for immediate and queued replies. */
 export async function buildReplyDiagnosticsPayload(params: {
@@ -121,41 +142,317 @@ export async function buildReplyDiagnosticsPayload(params: {
           }
         : undefined);
     const contextManagement = runResult.meta?.contextManagement;
-    const sessionUsage = await accumulateSessionUsageFromTranscript({
-      agentId: followupRun.run.agentId,
-      sessionId: runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
-      sessionKey: followupRun.run.sessionKey,
-      storePath,
-      sessionFile: followupRun.run.sessionFile,
-    });
-    const rawTracePayload = buildInlineRawTracePayload({
-      rawUserText,
-      rawAssistantText,
-      sessionUsage,
-      usage: runResult.meta?.agentMeta?.usage,
+    let sessionUsage: TraceUsageView | undefined;
+    const sessionId = normalizeOptionalString(
+      runResult.meta?.agentMeta?.sessionId ?? followupRun.run.sessionId,
+    );
+    if (sessionId) {
+      try {
+        const artifactFile = followupRun.run.sessionFile?.trim();
+        const useArtifactFile = Boolean(
+          artifactFile && path.isAbsolute(artifactFile) && artifactFile.endsWith(".jsonl"),
+        );
+        const usage = await readLatestSessionUsageFromTranscriptAsync({
+          agentId: followupRun.run.agentId,
+          sessionId,
+          sessionKey: useArtifactFile ? undefined : followupRun.run.sessionKey,
+          storePath,
+          sessionFile: followupRun.run.sessionFile,
+        });
+        if (usage) {
+          sessionUsage = {
+            input: usage.inputTokens,
+            output: usage.outputTokens,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+            total: usage.totalTokens,
+          };
+        }
+      } catch {
+        // Session usage is an optional diagnostic; rendering must still complete.
+      }
+    }
+    const usage = runResult.meta?.agentMeta?.usage;
+    const lastTurnCompactions =
+      contextManagement?.lastTurnCompactions ?? runResult.meta?.agentMeta?.compactionCount;
+    const resolvedPromptTokens = deriveContextPromptTokens({
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      contextLimit: contextTokensUsed,
       promptTokens,
-      executionTrace,
-      requestShaping,
-      promptSegments,
-      toolSummary,
-      completion,
-      contextManagement: {
-        sessionCompactions: activeSessionEntry?.compactionCount,
-        lastTurnCompactions:
-          contextManagement?.lastTurnCompactions ?? runResult.meta?.agentMeta?.compactionCount,
-        preflightCompactionApplied:
-          contextManagement?.preflightCompactionApplied ??
-          (preflightCompactionApplied || undefined),
-        postCompactionContextInjected: contextManagement?.postCompactionContextInjected,
-      },
+      usage,
     });
+    let requestContextBlock: string | undefined;
+    const contextLimit = asFiniteNumber(contextTokensUsed);
+    const contextUsed = asFiniteNumber(resolvedPromptTokens);
+    if (
+      (contextLimit !== undefined && contextLimit > 0) ||
+      (contextUsed !== undefined && contextUsed > 0) ||
+      providerUsed ||
+      modelUsed
+    ) {
+      const headroom =
+        contextLimit !== undefined && contextUsed !== undefined
+          ? Math.max(0, contextLimit - contextUsed)
+          : undefined;
+      const percent =
+        contextLimit !== undefined && contextLimit > 0 && contextUsed !== undefined
+          ? Math.round((contextUsed / contextLimit) * 100)
+          : undefined;
+      requestContextBlock = `🔎 Context Window (Last Model Request):\n~~~text\n${[
+        `provider=${providerUsed ?? "n/a"}`,
+        `model=${modelUsed ?? "n/a"}`,
+        formatTraceUsageLine("used", contextUsed),
+        formatTraceUsageLine("limit", contextLimit),
+        `headroom=${headroom !== undefined ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
+        `usage=${percent !== undefined ? `${percent}%` : "n/a"}`,
+      ].join("\n")}\n~~~`;
+    }
+    let promptSegmentsBlock: string | undefined;
+    if (promptSegments?.length || rawUserText?.length) {
+      const promptSegmentLines = (promptSegments ?? []).map(
+        (segment) => `${segment.key}=${segment.chars.toLocaleString()} chars`,
+      );
+      if (rawUserText?.length) {
+        promptSegmentLines.push(`totalPromptText=${rawUserText.length.toLocaleString()} chars`);
+      }
+      promptSegmentsBlock = `🔎 Prompt Segments:\n~~~text\n${promptSegmentLines.join("\n")}\n~~~`;
+    }
+    const usageBlocks = [
+      formatUsageTraceBlock("Usage (Session Total)", sessionUsage),
+      formatUsageTraceBlock("Usage (Last Turn Total)", usage),
+      requestContextBlock,
+      !executionTrace?.winnerProvider && !executionTrace?.winnerModel
+        ? undefined
+        : formatKeyValueTraceBlock("Execution Result", [
+            [
+              "winner",
+              executionTrace.winnerProvider && executionTrace.winnerModel
+                ? `${executionTrace.winnerProvider}/${executionTrace.winnerModel}`
+                : undefined,
+            ],
+            ["fallbackUsed", executionTrace.fallbackUsed],
+            ["attempts", executionTrace.attempts?.length],
+            ["runner", executionTrace.runner],
+          ]),
+      formatFallbackChainTraceBlock(executionTrace),
+      formatKeyValueTraceBlock("Request Shaping", [
+        ["provider", providerUsed],
+        ["model", modelUsed],
+        ["auth", requestShaping.authMode],
+        ["thinking", requestShaping.thinking],
+        ["reasoning", requestShaping.reasoning],
+        ["verbose", requestShaping.verbose],
+        ["trace", requestShaping.trace],
+        ["fallbackEligible", requestShaping.fallbackEligible],
+        ["blockStreaming", requestShaping.blockStreaming],
+      ]),
+      promptSegmentsBlock,
+      !toolSummary || toolSummary.calls <= 0
+        ? undefined
+        : formatKeyValueTraceBlock("Tool Summary", [
+            ["calls", toolSummary.calls],
+            ["tools", toolSummary.tools.length > 0 ? toolSummary.tools.join(", ") : undefined],
+            ["failures", toolSummary.failures],
+            ["totalToolTimeMs", toolSummary.totalToolTimeMs],
+          ]),
+      formatKeyValueTraceBlock("Completion", [
+        ["finishReason", completion?.finishReason],
+        ["stopReason", completion?.stopReason],
+        ["refusal", completion?.refusal],
+      ]),
+      formatKeyValueTraceBlock("Context Management", [
+        ["sessionCompactions", activeSessionEntry?.compactionCount],
+        ["lastTurnCompactions", lastTurnCompactions],
+        [
+          "preflightCompactionApplied",
+          contextManagement?.preflightCompactionApplied ??
+            (preflightCompactionApplied || undefined),
+        ],
+        ["postCompactionContextInjected", contextManagement?.postCompactionContextInjected],
+      ]),
+    ].filter((value): value is string => Boolean(value));
+    const thinking = normalizeOptionalString(requestShaping.thinking);
+    const used = asPositiveFiniteNumber(resolvedPromptTokens);
+    const limit = asPositiveFiniteNumber(contextTokensUsed);
+    const summaryFields = [
+      executionTrace?.winnerModel
+        ? `winner=${executionTrace.winnerModel}${thinking ? ` 🧠 ${thinking}` : ""}`
+        : undefined,
+      executionTrace?.fallbackUsed !== undefined
+        ? `fallback=${executionTrace.fallbackUsed ? "yes" : "no"}`
+        : undefined,
+      executionTrace?.attempts !== undefined
+        ? `attempts=${executionTrace.attempts.length.toLocaleString()}`
+        : undefined,
+      completion?.stopReason ? `stop=${completion.stopReason}` : undefined,
+      used !== undefined && limit !== undefined
+        ? `prompt=${formatTokenCount(used)}/${formatTokenCount(limit)}`
+        : undefined,
+      ...TRACE_USAGE_FIELDS.map(([key, icon]) => {
+        const value = usage?.[key];
+        return value !== undefined && value > 0 ? `${icon} ${formatTokenCount(value)}` : undefined;
+      }),
+      toolSummary && toolSummary.calls > 0
+        ? `tools=${toolSummary.calls.toLocaleString()}`
+        : undefined,
+      lastTurnCompactions !== undefined && lastTurnCompactions > 0
+        ? `compactions=${lastTurnCompactions.toLocaleString()}`
+        : undefined,
+    ].filter((value): value is string => Boolean(value));
+    const rawTracePayload = {
+      text: [
+        ...usageBlocks,
+        formatRawTraceBlock("Model Input (User Role)", rawUserText),
+        formatRawTraceBlock("Model Output (Assistant Role)", rawAssistantText),
+        summaryFields.length > 0 ? `Summary: ${summaryFields.join(" ")}` : undefined,
+      ].join("\n\n\n"),
+    };
     diagnosticsPayload = diagnosticsPayload
       ? { text: `${diagnosticsPayload.text}\n\n${rawTracePayload.text}` }
       : rawTracePayload;
   }
   return diagnosticsPayload ? { ...diagnosticsPayload, isStatusNotice: true } : undefined;
+}
+
+function formatRawTraceBlock(title: string, value: string | undefined): string {
+  const body = value?.trim() ? value.replace(/^~~~/gm, "\\~~~") : "<empty>";
+  return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
+}
+
+function formatTraceUsageLine(label: string, value: number | undefined): string {
+  const finite = asFiniteNumber(value);
+  return `${label}=${finite !== undefined ? `${finite.toLocaleString()} tok (${formatTokenCount(finite)})` : "n/a"}`;
+}
+
+function formatUsageTraceBlock(
+  title: string,
+  usage: TraceUsageView | undefined,
+): string | undefined {
+  if (!usage || TRACE_USAGE_FIELDS.every(([key]) => asFiniteNumber(usage[key]) === undefined)) {
+    return undefined;
+  }
+  return `🔎 ${title}:\n~~~text\n${TRACE_USAGE_FIELDS.map(([key]) =>
+    formatTraceUsageLine(key, usage[key]),
+  ).join("\n")}\n~~~`;
+}
+
+function formatTraceScalar(value: string | number | boolean | undefined): string | undefined {
+  if (typeof value === "boolean") {
+    return value ? "yes" : "no";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toLocaleString() : undefined;
+  }
+  return normalizeOptionalString(value);
+}
+
+function formatKeyValueTraceBlock(
+  title: string,
+  fields: Array<[string, string | number | boolean | undefined]>,
+): string | undefined {
+  const lines = fields.flatMap(([key, rawValue]) => {
+    const value = formatTraceScalar(rawValue);
+    return value ? [`${key}=${value}`] : [];
+  });
+  if (lines.length === 0) {
+    return undefined;
+  }
+  return `🔎 ${title}:\n~~~text\n${lines.join("\n")}\n~~~`;
+}
+
+function formatFallbackChainTraceBlock(
+  executionTrace: EmbeddedAgentRunMeta["executionTrace"],
+): string | undefined {
+  const attempts = executionTrace?.attempts ?? [];
+  if (attempts.length <= 1) {
+    return undefined;
+  }
+  const body = attempts
+    .map((attempt, index) =>
+      [
+        `${index + 1}. ${attempt.provider}/${attempt.model}`,
+        `   result=${attempt.result}`,
+        ...(attempt.reason ? [`   reason=${attempt.reason}`] : []),
+        ...(attempt.stage ? [`   stage=${attempt.stage}`] : []),
+        ...(attempt.elapsedMs !== undefined
+          ? [`   elapsed=${(attempt.elapsedMs / 1000).toFixed(1)}s`]
+          : []),
+        ...(attempt.status !== undefined ? [`   status=${attempt.status}`] : []),
+      ].join("\n"),
+    )
+    .join("\n\n");
+  return `🔎 Fallback Chain:\n~~~text\n${body}\n~~~`;
+}
+
+function resolveMetadataSegmentKey(label: string): string {
+  const normalized = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (normalized === "conversation_info") {
+    return "conversation_metadata";
+  }
+  if (normalized === "sender") {
+    return "sender_metadata";
+  }
+  return normalized.endsWith("_metadata") ? normalized : `${normalized}_metadata`;
+}
+
+function derivePromptSegments(prompt: string | undefined): EmbeddedAgentRunMeta["promptSegments"] {
+  const text = prompt ?? "";
+  if (!text.trim()) {
+    return undefined;
+  }
+  const lines = text.split("\n");
+  const segments = new Map<string, number>();
+  let userChars = 0;
+  const addChars = (key: string, chars: number) => {
+    segments.set(key, (segments.get(key) ?? 0) + chars);
+  };
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    let segmentKey: string | undefined;
+    let end = index + 2;
+    if (line === "Context:") {
+      const tagLine = lines[index + 1] ?? "";
+      const tagMatch = tagLine.trim().match(/^<([a-z0-9_:-]+)>$/i);
+      if (tagMatch) {
+        segmentKey = expectDefined(tagMatch[1], "tag match capture group 1");
+        const closeTag = `</${tagMatch[1]}>`;
+        while (end < lines.length && lines[end]?.trim() !== closeTag) {
+          end += 1;
+        }
+      }
+    } else if (line.trim().endsWith(INBOUND_CONTEXT_MARKER)) {
+      const fence = lines[index + 1] ?? "";
+      // Generated metadata blocks always use ```json fences (inbound-meta.ts,
+      // channel-prompt-context.ts); other fence languages are user content and must
+      // stay attributed to user_message.
+      if (fence.trim() === "```json") {
+        while (end < lines.length && !(lines[end] ?? "").startsWith("```")) {
+          end += 1;
+        }
+        const headerWithoutMarker = line.trim().slice(0, -INBOUND_CONTEXT_MARKER.length).trim();
+        segmentKey = resolveMetadataSegmentKey(headerWithoutMarker || "metadata");
+      }
+    }
+    if (segmentKey && end < lines.length) {
+      addChars(segmentKey, lines.slice(index, end + 1).join("\n").length);
+      index = end + 1;
+      while (index < lines.length && lines[index] === "") {
+        index += 1;
+      }
+      continue;
+    }
+    if (line.trim()) {
+      userChars += line.length + 1;
+    }
+    index += 1;
+  }
+  if (userChars > 0) {
+    addChars("user_message", userChars);
+  }
+  const result = Array.from(segments.entries()).map(([key, chars]) => ({ key, chars }));
+  return result.length > 0 ? result : undefined;
 }

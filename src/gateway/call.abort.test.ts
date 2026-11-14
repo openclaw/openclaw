@@ -22,8 +22,8 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   loadDeviceIdentityIfPresentAsync: () => fixture.identity,
 }));
 
-vi.mock("./client.js", () => ({
-  prepareGatewayClientDeviceAuth: async () => {},
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   isGatewayConnectAssemblyError: () => false,
   GatewayClient: class {
     constructor(private readonly options: GatewayClientOptions) {

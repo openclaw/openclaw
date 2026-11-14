@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
-  errorShape,
   type ValidationError,
   validateSecretsResolveParams,
   validateSecretsResolveResult,
@@ -39,6 +38,7 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayClient,
@@ -243,21 +243,18 @@ export function createSecretsHandlers(params: {
         respond(true, result);
       } catch (error) {
         if (!committed && error instanceof SecretStoreValidationError) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
           return;
         }
         params.log?.warn?.(`${method} failed: ${errorMessage(error)}`);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            !committed
-              ? `${method} failed`
-              : action !== "delete"
-                ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
-                : "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          !committed
+            ? `${method} failed`
+            : action !== "delete"
+              ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
+              : "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload.",
         );
       }
     })();
@@ -270,25 +267,25 @@ export function createSecretsHandlers(params: {
         respond(true, { ok: true, warningCount: result.warningCount });
       } catch (error) {
         params.log?.warn?.(`secrets.reload failed: ${errorMessage(error)}`);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.reload failed"));
+        respondError(respond, ErrorCodes.UNAVAILABLE, "secrets.reload failed");
       }
     },
     "secrets.resolve": async ({ params: requestParams, respond }) => {
       if (!validateSecretsResolveParams(requestParams)) {
         const field = invalidSecretsResolveField(validateSecretsResolveParams.errors);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `invalid secrets.resolve params: ${field}`),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `invalid secrets.resolve params: ${field}`,
         );
         return;
       }
       const commandName = requestParams.commandName.trim();
       if (!commandName) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid secrets.resolve params: commandName"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "invalid secrets.resolve params: commandName",
         );
         return;
       }
@@ -315,13 +312,10 @@ export function createSecretsHandlers(params: {
       // so callers cannot probe arbitrary config paths through this method.
       for (const targetId of targetIds) {
         if (!isKnownCoreSecretTargetId(targetId) && !isKnownSecretTargetId(targetId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `invalid secrets.resolve params: unknown target id "${String(targetId)}"`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `invalid secrets.resolve params: unknown target id "${String(targetId)}"`,
           );
           return;
         }
@@ -350,7 +344,7 @@ export function createSecretsHandlers(params: {
         respond(true, payload);
       } catch (error) {
         params.log?.warn?.(`secrets.resolve failed: ${errorMessage(error)}`);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.resolve failed"));
+        respondError(respond, ErrorCodes.UNAVAILABLE, "secrets.resolve failed");
       }
     },
     "secrets.store.list": defineValidatedGatewayHandler(
@@ -372,11 +366,7 @@ export function createSecretsHandlers(params: {
           respond(true, result);
         } catch (error) {
           params.log?.warn?.(`secrets.store.list failed: ${errorMessage(error)}`);
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "secrets.store.list failed"),
-          );
+          respondError(respond, ErrorCodes.UNAVAILABLE, "secrets.store.list failed");
         }
       },
     ),

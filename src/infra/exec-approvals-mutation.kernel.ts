@@ -1,4 +1,4 @@
-import { mergeExecApprovalsSocketDefaults } from "./exec-approvals-config.js";
+import { stripExecApprovalsSocketCredentials } from "./exec-approvals-config.js";
 import type {
   ExecApprovalsAgent,
   ExecApprovalsDefaults,
@@ -23,9 +23,7 @@ export function applyExecApprovalsUpdate(
   update: ExecApprovalsUpdate,
 ): ExecApprovalsFile | null {
   if (update.kind === "replace") {
-    return update.preserveSocket
-      ? mergeExecApprovalsSocketDefaults({ normalized: update.file, current: file })
-      : update.file;
+    return stripExecApprovalsSocketCredentials(update.file);
   }
   if (update.kind === "ensure-agent") {
     return file.agents?.[update.agentId]

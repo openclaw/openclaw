@@ -83,7 +83,7 @@ cached only when OpenCode Zen or Go is configured or explicitly selected with
 OpenCode credentials; it is never fetched at startup or while using unrelated
 providers.
 
-Example refs include `opencode-go/deepseek-v4-flash`, `opencode-go/kimi-k3`, and
+Example refs include `opencode-go/deepseek-v4.1-flash`, `opencode-go/kimi-k3`, and
 `opencode-go/qwen3.8-max`. Use the CLI for the current lineup rather than treating
 these examples as an inventory. OpenClaw excludes deprecated rows from active
 discovery and applies refreshed lifecycle status to its offline fallback.
@@ -100,6 +100,13 @@ replayed history; enabled thinking preserves the reasoning needed for follow-up 
 Both paths also omit unsupported controls for MiniMax models with fixed reasoning
 and remove Kimi K2 reasoning replay fields.
 
+## Endpoint outages
+
+A 403 response containing `Upstream request failed: Endpoint is unavailable.` is
+treated as a service failure, so configured fallbacks can run and the shared API
+key stays available to other models. Genuine authentication refusals still follow
+the normal sign-in and credential-cooldown behavior.
+
 ## Privacy
 
 Retention and training policies vary by model. Review the current
@@ -110,8 +117,17 @@ model, because provider policy can change independently of OpenClaw.
 
 <AccordionGroup>
   <Accordion title="Routing behavior">
-    OpenClaw routes any `opencode-go/...` model ref automatically. No extra
-    provider config is required.
+    OpenClaw selects each model’s API family and endpoint automatically; no extra
+    provider config is required. Chat Completions and Responses use
+    `https://opencode.ai/inference/go/openai/v1`, Anthropic Messages uses
+    `https://opencode.ai/inference/go/anthropic` (the transport appends `/v1/messages`),
+    and Gemini uses `https://opencode.ai/inference/go/google/v1beta`.
+
+    Model discovery uses the separate
+    `https://opencode.ai/inference/go/v1/models` inventory endpoint, not the
+    inference base plus `/models`. Saved native Go URLs are normalized by each
+    model’s API family; custom proxy URLs are left unchanged.
+
   </Accordion>
 
   <Accordion title="Runtime ref convention">

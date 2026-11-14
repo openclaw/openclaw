@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsLibraryReadResult } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -115,15 +116,7 @@ describe("skills library CLI", () => {
                   revision,
                   ...(name === "rollback" ? ["--revision", "b".repeat(64)] : []),
                 ];
-      const flags = [
-        "--url",
-        "ws://127.0.0.1:12345",
-        "--port",
-        "12345",
-        "--timeout",
-        "14000",
-        "--json",
-      ];
+      const flags = "--url ws://127.0.0.1:12345 --port 12345 --timeout 14000 --json".split(" ");
       for (const command of [
         [...flags, name, ...args],
         [name, ...args, ...flags],
@@ -200,22 +193,111 @@ describe("skills library CLI", () => {
       "skills.library.list",
       expect.anything(),
       { scope: "all", sessionKey },
-      undefined,
+      { signal: undefined },
     );
     await parse(["read", skillId, "--session", sessionKey, "--revision", revision, "--json"]);
     expect(mocks.call).toHaveBeenLastCalledWith(
       "skills.library.read",
       expect.anything(),
       { skillId, sessionKey, revision },
-      undefined,
+      { signal: undefined },
     );
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
+    const work = new AsyncWorkScope();
+    mocks.call.mockImplementationOnce(async () => {
+      work.beginClose(); // the read settles after Ctrl+C
+      return read;
+    });
+    await work.run(() => parse(["read", skillId, "--session", sessionKey, "--revision", revision]));
+    expect(mocks.writeStdout).not.toHaveBeenCalled();
     mocks.call.mockClear();
     await parse(["read", skillId, "--session", sessionKey]);
     expect(mocks.error).toHaveBeenCalledWith(
       expect.stringContaining("--session requires --revision"),
     );
     expect(mocks.call).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes remote-controlled fields in human list output but keeps raw values in JSON", async () => {
+    const nameInjection = "\u001b]52;c;QQ==\u0007red\u001b[2J\r\nforged\tname";
+    const slugInjection = "a\u001b]52;c;QQ==\u0007b\r\nforged\tentry";
+    const ownerInjection = "b\u001b[2Jc";
+    const injection = {
+      ...read.entry,
+      name: nameInjection,
+      slug: slugInjection,
+      ownerLabel: ownerInjection,
+    };
+    const listResult = {
+      entries: [injection],
+      profileId: "profile-alice",
+      multipleProfiles: true,
+      defaultTarget: "personal",
+      canManageWorkspace: false,
+      defaultSelectionLimit: 64,
+      session: { sessionKey: nameInjection, selections: [injection], attachable: [injection] },
+    };
+    mocks.call.mockResolvedValue(listResult);
+    await parse(["list"]);
+    const listOut = mocks.writeStdout.mock.calls[0]?.[0] ?? "";
+    expect(listOut.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(listOut).not.toContain("\u001b]52;c;QQ==");
+    expect(listOut).toContain("ab\\r\\nforged\\tentry");
+    expect(listOut).toContain("owner=bc");
+    mocks.call.mockClear();
+    mocks.writeStdout.mockClear();
+    mocks.call.mockResolvedValue({
+      ...read,
+      entry: injection,
+      files: [{ path: nameInjection, content: "raw\r\ncontent", encoding: "utf8" }],
+    });
+    await parse(["read", skillId]);
+    const readOut = mocks.writeStdout.mock.calls[0]?.[0] ?? "";
+    expect(readOut.split("--- SKILL.md ---")[0]?.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(readOut).not.toContain("\u001b]52;c;QQ==");
+    expect(readOut).toContain("Command: red\\r\\nforged\\tname");
+    expect(readOut).toContain(read.content);
+    expect(readOut).toContain("--- red\\r\\nforged\\tname (utf8) ---\nraw\r\ncontent");
+    mocks.call.mockClear();
+    mocks.writeStdout.mockClear();
+    mocks.call.mockResolvedValue(listResult);
+    await parse(["list", "--json"]);
+    expect(mocks.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entries: [
+          expect.objectContaining({
+            name: nameInjection,
+            slug: slugInjection,
+            ownerLabel: ownerInjection,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("sanitizes receipt and activation metadata", async () => {
+    const unsafe = "Alice\u001b]0;title\u0007\u001b[2J\r\nAdmin\tgroup";
+    const safe = "Alice\\r\\nAdmin\\tgroup";
+    mocks.call.mockResolvedValue({
+      ...receipt,
+      state: "removed",
+      entry: { ...read.entry, ownerLabel: unsafe },
+    });
+    await parse(["remove", skillId, "--expected-revision", revision]);
+    const removed = mocks.writeStdout.mock.lastCall?.[0] ?? "";
+    expect(removed.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(removed).toContain(`owner ${safe}`);
+
+    mocks.call.mockResolvedValue({
+      sessionKey: unsafe,
+      selections: [{ ...read.entry, name: unsafe }],
+      sessionActivation: "next-turn",
+    });
+    await parse(["attach", "--session", "agent:main:test", "--skill-id", skillId]);
+    const attached = mocks.writeStdout.mock.lastCall?.[0] ?? "";
+    expect(attached.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(attached).toContain(`Queued for next turn: ${safe}`);
+    expect(attached).toContain(`${skillId}  ${safe}  ${revision}`);
   });
 
   it("imports a directory named x.zip as a complete bundle", async () => {

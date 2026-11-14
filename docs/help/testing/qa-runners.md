@@ -57,6 +57,10 @@ inside every shard.
     temporary root and are removed after its processes stop. Parent temporary
     paths and runtime environment patches do not redirect this scratch storage.
     `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    Gateway stdout and stderr are streamed to debug files with at most 4 MiB of
+    pending writes per stream. If a sink stops keeping up, the suite fails with
+    a `log backlog exceeded` error and stops its child. Check the output disk
+    before retrying. The in-memory diagnostic tail remains bounded separately.
     If the controller dies, the current Gateway's parent watchdog exits without
     deleting runtime files that descendants may still use. A surviving owner or
     host maintenance must confirm that those writers stopped before removing the
@@ -67,6 +71,9 @@ inside every shard.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+  - Live runs copy selected provider overrides from the normal JSON5 OpenClaw
+    config. `OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH` overrides
+    `OPENCLAW_CONFIG_PATH`; otherwise QA reads `~/.openclaw/openclaw.json`.
 - `pnpm openclaw qa coverage --match <query>`
   - Searches scenario IDs, titles, surfaces, coverage IDs, docs refs, code
     refs, plugins, and provider requirements, then prints matching suite
@@ -103,8 +110,10 @@ inside every shard.
   - Runs the same QA suite inside a disposable Multipass Linux VM, keeping
     the same scenario-selection and provider/model flags as `qa suite`.
   - Live runs forward the QA auth inputs practical for the guest:
-    env-based provider keys, the QA live provider config path, and
-    `CODEX_HOME` when present.
+    env-based provider keys (including ordinary `*_API_KEY` names), QA
+    Anthropic setup-token inputs and profile selection, the QA live provider
+    config path, and `CODEX_HOME` when present. Unrelated environment variables
+    are not forwarded.
   - Output dirs must stay under the repo root so the guest can write back
     through the mounted workspace.
   - Writes the normal QA report + summary plus Multipass logs under

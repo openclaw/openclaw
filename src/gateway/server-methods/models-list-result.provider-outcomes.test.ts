@@ -6,7 +6,10 @@ import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtim
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
+import {
+  createModelsListTestContext,
+  modelAuthStore,
+} from "./models-list-result.openai-routes.test-support.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
 const modelConfig: OpenClawConfig = {
@@ -34,10 +37,6 @@ function oauth(label: string): AuthProfileStore["profiles"][string] {
   };
 }
 const emptyAuthStore = { version: 1, profiles: {} } as const;
-const authStore = (
-  profiles: AuthProfileStore["profiles"],
-  usageStats?: AuthProfileStore["usageStats"],
-): AuthProfileStore => ({ version: 1, profiles, ...(usageStats ? { usageStats } : {}) });
 const rejectedKey = { type: "api_key" as const, provider: "openai", key: "rejected-api-key" };
 const rejected = (profileId: string) => ({
   provider: "openai",
@@ -133,7 +132,7 @@ it.each([false, true])(
     });
     const projector = decisions(
       snapshot,
-      authStore(
+      modelAuthStore(
         {
           "openai:chatgpt": rejectedKey,
           "openai:other": oauth("accepted"),
@@ -178,7 +177,7 @@ it("does not apply one profile rejection to a different selected profile", () =>
   };
   const projector = decisions(
     snapshot,
-    authStore({ "openai:rejected": oauth("rejected"), "openai:accepted": oauth("accepted") }),
+    modelAuthStore({ "openai:rejected": oauth("rejected"), "openai:accepted": oauth("accepted") }),
     modelConfig,
     "openai:accepted",
   );
@@ -208,13 +207,18 @@ it.each([false, true])("projects cooldown only when unavailable (%s)", async (av
   const evaluateNative = vi.spyOn(projector, "evaluateNative");
   const prepared = await prepareModelsListResult(preloaded(config, snapshot, projector));
 
+  const agentRuntime = expect.objectContaining({ id: "openclaw", source: "implicit" });
   expect(prepared.read().models).toEqual([
-    { ...model, tags: ["configured"], available, ...(available ? {} : cooldown) },
+    { ...model, agentRuntime, tags: ["configured"], available, ...(available ? {} : cooldown) },
   ]);
   const hostEvaluations = evaluateEntry.mock.calls.length;
   evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+  expect(prepared.read().models).toEqual([
+    { ...model, agentRuntime, tags: ["configured"], available: true },
+  ]);
   evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+  expect(prepared.read().models).toEqual([
+    { ...model, agentRuntime, tags: ["configured"], available: false },
+  ]);
   expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
 });

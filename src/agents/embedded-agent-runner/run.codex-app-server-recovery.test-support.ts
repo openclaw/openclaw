@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -11,10 +12,12 @@ import {
   mockedClassifyFailoverReason,
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
-  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
@@ -78,16 +81,6 @@ function runNative(runId: string, overrides: Partial<Parameters<typeof runEmbedd
   return runCodex(runId, { provider: "openai", model: "gpt-5.6-luna", ...overrides });
 }
 
-function replyWithAbort(abortByUser: () => boolean) {
-  return {
-    abortByUser,
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-  } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
-}
-
 function expectIncompleteTimeout(
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>,
   message: string,
@@ -107,11 +100,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.codex-app-server-recovery" });
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    state = await createFreshRunIntegrationState("run.codex-app-server-recovery");
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
 
@@ -132,23 +121,18 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     try {
       run = runNative("runtime-deadline-handoff", { timeoutMs: 1 });
-      let settled = false;
-      const markSettled = () => {
-        settled = true;
-      };
-      void run.then(markSettled, markSettled);
-      const params = await Promise.race([
+      const settled = observeSettlement(run);
+      const params = await awaitGateBeforeSettlement(
         entered.promise,
-        run.then(() => {
-          throw new Error("Run completed before reaching the native attempt");
-        }),
-      ]);
+        run,
+        "Run completed before reaching the native attempt",
+      );
       await vi.advanceTimersByTimeAsync(30_001);
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       expect(params.onAttemptTimeout).toBeTypeOf("function");
       params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: Date.now() + 120_000 });
       await vi.advanceTimersByTimeAsync(125_000);
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       finish.resolve(successAttempt());
       await expect(run).resolves.toMatchObject({ meta: { aborted: false } });
 
@@ -229,7 +213,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     "retries without a durable writer only while its exact native admission is active (%s)",
     async (owner) => {
       const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-      const { createReplyOperation } = await import("../../auto-reply/reply/reply-run-registry.js");
+      const { createReplyOperation } = await import("../../sessions/session-controller.js");
       const runId = `run-native-retry-${owner}`;
       const sessionKey = `agent:main:${runId}`;
       const admission = prepareSystemAgentRunAdmission({}, runId, "main", "native-retry-test");
@@ -284,7 +268,20 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     async (kind) => {
       const controller = new AbortController();
       const upstreamAbort = new Error("upstream cancelled");
-      const abortByUser = vi.fn(() => true);
+      const { createReplyOperation } = await import("../../sessions/session-controller.js");
+      const runId = `run-codex-cancel-${kind}`;
+      const replyOperation =
+        kind === "ordinary"
+          ? undefined
+          : createReplyOperation({
+              sessionKey: `agent:main:${runId}`,
+              sessionId: runId,
+              resetTriggered: false,
+              ...(kind === "upstream" ? { upstreamAbortSignal: controller.signal } : {}),
+            });
+      const abortByUser = replyOperation
+        ? vi.spyOn(replyOperation, "abortByUser")
+        : vi.fn(() => true);
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
         if (kind === "upstream") {
           controller.abort(upstreamAbort);
@@ -297,26 +294,32 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
             })
           : codexFailure("closed");
       });
-      const pending = runCodex(
-        `run-codex-cancel-${kind}`,
-        kind === "ordinary"
-          ? {}
-          : {
-              isFinalFallbackAttempt: false,
-              ...(kind === "upstream" ? { abortSignal: controller.signal } : {}),
-              replyOperation: replyWithAbort(abortByUser),
-            },
-      );
-      if (kind === "upstream") {
-        await expect(pending).rejects.toBe(upstreamAbort);
-      } else {
-        await expect(pending).rejects.toMatchObject({
-          name: "AbortError",
-          message: "agent run aborted",
-        });
+      try {
+        const pending = runCodex(
+          runId,
+          replyOperation
+            ? {
+                sessionId: replyOperation.sessionId,
+                sessionKey: replyOperation.key,
+                isFinalFallbackAttempt: false,
+                ...(kind === "upstream" ? { abortSignal: controller.signal } : {}),
+                replyOperation,
+              }
+            : {},
+        );
+        if (kind === "upstream") {
+          await expect(pending).rejects.toBe(upstreamAbort);
+        } else {
+          await expect(pending).rejects.toMatchObject({
+            name: "AbortError",
+            message: "agent run aborted",
+          });
+        }
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+        expect(abortByUser).toHaveBeenCalledTimes(kind === "replay-safe" ? 1 : 0);
+      } finally {
+        replyOperation?.complete();
       }
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      expect(abortByUser).toHaveBeenCalledTimes(kind === "replay-safe" ? 1 : 0);
     },
   );
 

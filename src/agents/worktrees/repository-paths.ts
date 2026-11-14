@@ -9,7 +9,7 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 export async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<{ root: string; commit: string }> {
+): Promise<{ root: string }> {
   const rootResult = await runGit(requested, [
     "rev-parse",
     "--show-toplevel",
@@ -50,7 +50,6 @@ export async function resolveCheckoutRootFromRealPath(
   }
   return {
     root: await fs.realpath(normalizeGitPathForFilesystem(root)),
-    commit: output.slice(separator + 1),
   };
 }
 

@@ -5,6 +5,12 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessOperations),
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.worker.js").then(
+      (m) => m.sandboxPersistentExecOperations,
+    ),
   sandboxRegistry: () =>
     import("../agents/sandbox/registry-write.worker.js").then((m) => m.sandboxRegistryOperations),
   workspace: () =>
@@ -14,6 +20,10 @@ const loaders = {
   tui: () => import("../tui/tui-last-session.kernel.js").then((m) => m.tuiLastSessionOperations),
   sessionState: () =>
     import("../sessions/session-state-events.worker.js").then((m) => m.sessionStateOperations),
+  "sessionState.record": () =>
+    import("../sessions/session-state-events-record.worker.js").then(
+      (m) => m.sessionStateRecordOperations,
+    ),
   sessionUpstream: () =>
     import("../sessions/session-upstream-links.worker.js").then((m) => m.sessionUpstreamOperations),
   subagents: () =>
@@ -30,9 +40,13 @@ const loaders = {
     ),
   sessionGroups: () =>
     import("../gateway/session-group-catalog.kernel.js").then((m) => m.sessionGroupOperations),
-  claws: () =>
-    import("../claws/provenance-runtime-read.worker.js").then((m) => m.clawInstallSchemaOperations),
+  templates: () =>
+    import("../templates/provenance-runtime-read.worker.js").then(
+      (m) => m.templateInstallSchemaOperations,
+    ),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
+  quarantine: () =>
+    import("./openclaw-quarantine-store.worker.js").then((m) => m.quarantineOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   localOnboarding: () =>
@@ -74,6 +88,10 @@ const loaders = {
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  "githubPublications.personalRestart": () =>
+    import("../gateway/github-personal-publication-store.worker.js").then(
+      ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+    ),
   githubPublications: () =>
     import("./github-publication.worker.js").then((m) => m.publicationOperations),
   userBackground: async () =>
@@ -103,8 +121,14 @@ const loaders = {
     import("../skills/library/store.worker.js").then((m) => m.skillLibraryOperations),
   skillUploads: () =>
     import("../skills/lifecycle/upload-store.worker.js").then((m) => m.skillUploadOperations),
-  skills: () =>
-    import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
+  // Workshop changes and generic skill usage share the `skills.` operation domain.
+  skills: async () => {
+    const [workshop, usage] = await Promise.all([
+      import("../skills/workshop-changes/changes.worker.js").then((m) => m.skillWorkshopOperations),
+      import("../skills/runtime/skill-usage.worker.js").then((m) => m.skillUsageOperations),
+    ]);
+    return { ...workshop, ...usage };
+  },
   transcripts: async () => {
     const [read, write] = await Promise.all([
       import("../transcripts/store-worker-read.js").then((m) => m.transcriptReadOperations),
@@ -128,9 +152,7 @@ const loaders = {
       (m) => m.nativeHookRelayOperations,
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
-  promotions: () => import("../infra/promotions-feed.worker.js").then((m) => m.promotionOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
-  doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>
     import("../model-catalog/remote-store.worker.js").then((m) => m.modelCatalogOperations),
   managedImages: () =>
@@ -158,6 +180,15 @@ const loaders = {
     import("../infra/delivery-queue.worker.js").then((m) => m.deliveryQueueOperations),
   sessionDelivery: () =>
     import("../infra/session-delivery-queue.worker.js").then((m) => m.sessionDeliveryOperations),
+  // Queue recovery does not need the subagent completion runtime.
+  "sessionDelivery.admitSubagentCompletion": () =>
+    import("../agents/subagents/completion/subagent-completion-admission.worker.js").then(
+      (m) => m.subagentCompletionDeliveryOperations,
+    ),
+  "sessionDelivery.mutateSubagentCompletion": () =>
+    import("../agents/subagents/completion/subagent-completion-admission.worker.js").then(
+      (m) => m.subagentCompletionDeliveryOperations,
+    ),
   conversationBindings: () =>
     import("../infra/outbound/current-conversation-bindings.worker.js").then(
       (m) => m.conversationBindingOperations,
@@ -167,10 +198,33 @@ const loaders = {
       (m) => m.workerInferenceOperations,
     ),
   workerPlacements: () =>
-    import("../gateway/worker-environments/placement-lifecycle.worker.js").then((m) => ({
-      ...m.placementLifecycleOperations,
-      ...m.placementReadOperations,
-    })),
+    import("../gateway/worker-environments/placement-lifecycle.worker.js").then(
+      (m) => m.placementLifecycleOperations,
+    ),
+  "workerPlacements.clearLocalTurnClaims": () =>
+    import("../gateway/worker-environments/placement-recovery.worker.js").then(
+      (m) => m.placementRecoveryOperations,
+    ),
+  "workerPlacements.read": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readIdentities": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readMove": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readReconcile": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readWithMove": () =>
+    import("../gateway/worker-environments/placement-projection.worker.js").then(
+      (m) => m.placementProjectionOperations,
+    ),
   placementTools: () =>
     import("../gateway/worker-environments/placement-session-tool-operations.worker.js").then(
       (m) => m.placementSessionToolOperations,
@@ -201,5 +255,6 @@ export type RegisteredStateWorkerOperations = WorkerOperationsFromLoaders<typeof
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
-  WorkerWriteOperationContext
+  WorkerWriteOperationContext,
+  keyof typeof loaders
 >(loaders);

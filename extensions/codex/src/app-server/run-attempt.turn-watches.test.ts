@@ -162,6 +162,7 @@ it.each(["asynchronous assistant output", "tool events buffered during turn star
         started.resolve();
       }
     });
+    // Codex owns liveness for this quiet wait only through core's tool-authority boundary.
     const { run, settled } = startAttempt(
       makeTestParams({
         timeoutMs: buffered ? 60 * 60_000 : MAX_TIMER_TIMEOUT_MS,
@@ -390,9 +391,8 @@ it("lets queued terminal projection finish within its settlement window", async 
   const params = makeTestParams({ timeoutMs: 60_000, onReasoningStream });
   const { run, settled } = startAttempt(params);
   try {
-    await vi.waitFor(() => {
-      expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
-    }, fastWait);
+    // The controller reports the session active from admission; native events need the turn.
+    await run.waitForTurnAccepted();
     const blockedProjection = harness.notify(reasoningDelta());
     await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
     const queuedTerminal = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });

@@ -6,6 +6,7 @@ import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -29,6 +30,9 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -65,7 +69,10 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 // both process transports inert while exercising its synthetic one-shot fence.
 vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
-  inspectUpdateDoctorChildSupport: async () => true,
+  inspectUpdateDoctorChildSupport: async () => ({
+    doctorConfigWrites: true,
+    doctorRetirementOnly: true,
+  }),
   withUpdateDoctorChild: async (
     params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
     operation: Parameters<
@@ -133,6 +140,9 @@ beforeEach(async () => {
   });
   await state.writeConfig({ plugins: { enabled: false } });
   await state.writeJson("package.json", { name: "openclaw", version: VERSION, type: "module" });
+  const control = state.path("control");
+  await fs.mkdir(control, { mode: 0o700 });
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
   dispatched = [];
   mocks.entrypoint.mockReset().mockResolvedValue(state.path("dist/index.js"));
   mocks.plugins.mockReset().mockResolvedValue(pluginUpdate);
@@ -160,11 +170,11 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-function resume() {
+function resume(run?: Parameters<typeof resumePostCoreUpdate>[0]["opts"]["run"]) {
   return resumePostCoreUpdate({
     root: state.root,
     channel: "stable",
-    opts: { json: true, yes: true },
+    opts: { json: true, yes: true, ...(run ? { run } : {}) },
     timeoutMs: 5_000,
   });
 }
@@ -197,6 +207,88 @@ function firstRefusal() {
 }
 
 describe("unproved Doctor authority callers", () => {
+  it.each(["configured-owner", "profile", "profile-revoked"] as const)(
+    "releases its real maintenance owner before resumed %s policy reads",
+    async (source) => {
+      await state.writeConfig({
+        plugins: { enabled: false },
+        commands: { ownerAllowFrom: source === "configured-owner" ? ["owner"] : [] },
+        gateway: {
+          mode: "local",
+          roles: {
+            default: "member",
+            definitions: {
+              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+              member: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
+            },
+          },
+        },
+      });
+      const profile = ensureProfileForEmail("owner@example.test");
+      setUserProfileRole(profile.id, "admin");
+      const identity = { channelId: "telegram", senderId: "owner", accountId: "default" };
+      linkUserChannelIdentity(profile.id, identity);
+      const requester = {
+        channel: identity.channelId,
+        senderId: identity.senderId,
+        accountId: identity.accountId,
+        authorizationSource: source === "configured-owner" ? source : `profile:${profile.id}`,
+      };
+      const authority = await requesterAuthority.createManagedUpdateRequesterAuthority(requester);
+      expect(authority.isCurrent()).toBe(true);
+      const run = createUpdateRun({ trigger: "chat", origin: { requester } });
+      await closeOpenClawStateDatabaseAsync();
+      const resultPath = state.statePath("scoped-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      await state.writeJson("handoff.json", { completionOwner: "parent" });
+      if (source === "profile-revoked") {
+        const begin = doctorMaintenance.beginDoctorMaintenance;
+        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async (params) => {
+          const owned = await begin(params);
+          const release = owned!.releaseState;
+          vi.spyOn(owned!, "releaseState").mockImplementation(async () => {
+            await release();
+            setUserProfileRole(profile.id, "member");
+          });
+          return owned;
+        });
+      }
+      const resumed = executorOwner.withUpdateCommandExecutor(run.runId, async (owner) => {
+        const executorFence = await owner.enter(state.root);
+        await resumePostCoreUpdate({
+          root: state.root,
+          channel: "stable",
+          opts: {
+            json: true,
+            yes: true,
+            run: {
+              runId: run.runId,
+              env: state.env,
+              executorFence,
+              requesterAuthority: authority,
+            },
+          },
+          timeoutMs: 5_000,
+        });
+      });
+      if (source === "profile-revoked") {
+        await expect(resumed).rejects.toBeInstanceOf(
+          requesterAuthority.UpdateRequesterRevokedError,
+        );
+        expect(mocks.plugins).not.toHaveBeenCalled();
+        expect(authority.isCurrent()).toBe(false);
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+          error: "requester-revoked",
+        });
+      } else {
+        await resumed;
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({ status: "ok" });
+        expect(mocks.plugins).toHaveBeenCalledOnce();
+        expect(authority.isCurrent()).toBe(true);
+      }
+    },
+  );
   it.each([false, true])(
     "rechecks legacy requester authority after executor settlement (revoked=%s)",
     async (revoked) => {
@@ -307,6 +399,7 @@ describe("unproved Doctor authority callers", () => {
       databasePath,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         role: "gateway",
@@ -429,7 +522,9 @@ describe("unproved Doctor authority callers", () => {
 
   it("keeps the shipped 9.3 child-owned completion route outside the 9.2 bridge", async () => {
     const run = createResumingRun({ before: { version: "2026.9.3" } });
+    const executor = vi.spyOn(executorOwner, "withUpdateCommandExecutor");
     await resume();
+    expect(executor).toHaveBeenCalledExactlyOnceWith(run.runId, expect.any(Function), undefined);
     expect(dispatched).toEqual(["repair", "validate", "readiness"]);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -450,7 +545,7 @@ describe("unproved Doctor authority callers", () => {
   it.each([false, true])(
     "publishes settled phase evidence only for older parents (parent owns completion=%s)",
     async (parentOwnsCompletion) => {
-      const run = createUpdateRun({ trigger: "cli" });
+      const run = createResumingRun({});
       adoptUpdateRun(run.runId);
       recordUpdateRunStep(run.runId, {
         step: "finalize:doctor:model-retirement",
@@ -515,7 +610,14 @@ describe("unproved Doctor authority callers", () => {
           await writeResult(...args);
         });
 
-      await resume();
+      if (parentOwnsCompletion) {
+        await executorOwner.withUpdateCommandExecutor(run.runId, async (executor) => {
+          const executorFence = await executor.enter(state.root);
+          await resume({ runId: run.runId, env: state.env, executorFence });
+        });
+      } else {
+        await resume();
+      }
 
       expect(publication).toHaveBeenCalledOnce();
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();

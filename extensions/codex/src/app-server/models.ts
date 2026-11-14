@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
@@ -9,6 +10,13 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadRequest = createLazyRuntimeModule(() => import("./request.js"));
+
+type CyberAccessProgram = NonNullable<
+  import("openclaw/plugin-sdk/provider-catalog-shared").ProviderCatalogOutcome["modelAccessPrograms"]
+>[number]["cyber"][number];
 
 // Allow Codex's five-second remote catalog refresh to finish or fall back,
 // with headroom for client acquisition, response transit, and account/read.
@@ -24,6 +32,7 @@ export type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   serviceTiers?: string[];
+  availableAccessPrograms?: { cyber: CyberAccessProgram[] };
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
@@ -87,8 +96,8 @@ async function withCodexAppServerModelRequest<T>(
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
   const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
-    await import("./shared-client.js");
-  const { requestCodexAppServerClientJson } = await import("./request.js");
+    await loadSharedClient();
+  const { requestCodexAppServerClientJson } = await loadRequest();
   // Standalone listing retains the initialize diagnostic and per-page budget;
   // catalog/account callers supply their shared operation scope above.
   const client = await getLeasedSharedCodexAppServerClient({
@@ -147,6 +156,19 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     ...(displayName ? { displayName } : {}),
     ...(description ? { description } : {}),
     hidden: value.hidden,
+    ...(value.availableAccessPrograms
+      ? {
+          availableAccessPrograms: {
+            cyber: value.availableAccessPrograms.cyber.map((program) =>
+              program === "daybreakBlue"
+                ? "daybreak_blue"
+                : program === "daybreakRed"
+                  ? "daybreak_red"
+                  : "standard",
+            ),
+          },
+        }
+      : {}),
     isDefault: value.isDefault,
     inputModalities: value.inputModalities ?? ["text", "image"],
     serviceTiers: normalizeUniqueTrimmedStringList(

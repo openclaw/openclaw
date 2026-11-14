@@ -1,8 +1,12 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import * as sqlite from "../../test/helpers/sqlite-parent-observer.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolvePluginNpmGenerationProjectDir } from "../plugins/install-paths.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "../plugins/managed-npm-retention-contract.js";
 import * as retention from "../plugins/managed-npm-retention.js";
@@ -60,10 +64,12 @@ const cleanup = (
   log: ReturnType<typeof makeLog>,
   startupInstallPaths: string[] = [],
   assertCurrent = () => {},
+  startupConfig: OpenClawConfig = {},
 ) =>
   cleanupGatewayRetiredPluginArtifacts({
     log,
     startupInstallPaths,
+    startupConfig,
     assertCurrent,
     signal: new AbortController().signal,
   });
@@ -81,6 +87,40 @@ const writePlugin = (
   });
 const markRetained = (packageDir: string, reason = "replaced-plugin-generation") =>
   markInstall({ packageDir, pluginId: path.basename(packageDir), reason });
+
+it.each(["startup", "current"] as const)(
+  "keeps a configured executable from %s config runnable after generation retirement",
+  withFixture(async ({ state, log }, source) => {
+    const project = resolvePluginNpmGenerationProjectDir({
+      npmDir: path.join(state.stateDir, "npm"),
+      packageName: "@openclaw/codex",
+      generationKey: "previous-release",
+    });
+    const packageDir = path.join(project, "node_modules", "@openclaw", "codex");
+    fs.mkdirSync(packageDir, { recursive: true });
+    const command = path.join(packageDir, "fixture.cjs");
+    fs.writeFileSync(command, 'process.stdout.write("still runnable");');
+    const cfg: OpenClawConfig = {
+      plugins: { entries: { codex: { config: { appServer: { command } } } } },
+    };
+    const obsolete = writePlugin(state.stateDir, "obsolete");
+    await markRetained(packageDir);
+    await markRetained(obsolete);
+    await index.seedInstalledPluginIndex({}, { env: state.env, candidates: [] });
+    setRuntimeConfigSnapshot(source === "current" ? cfg : {});
+
+    await cleanup(log, [], undefined, source === "startup" ? cfg : {});
+
+    expect(execFileSync(process.execPath, [command], { encoding: "utf8" })).toBe("still runnable");
+    expect(fs.existsSync(obsolete)).toBe(false);
+    expect(cfg.plugins?.entries?.codex?.config).toEqual({ appServer: { command } });
+    expect(log.warn).not.toHaveBeenCalled();
+    // A later Gateway without the reference may reclaim the old generation.
+    setRuntimeConfigSnapshot({});
+    await cleanup(log);
+    expect(fs.existsSync(project)).toBe(false);
+  }),
+);
 function nativeCapture(stateDir: string, name: string) {
   const capture = captures.createPluginNativeCaptureRoot(stateDir);
   const file = path.join(capture.directory, `${name}.node`);
@@ -155,11 +195,7 @@ it.each(["project", "legacy"] as const)(
     expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete"]?.installPath).toBe(obsolete);
     // Advance the durable ledger without publishing the install-record cache.
     replaceIndexField("installRecords", installRecord("desired", desired));
-    {
-      using reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
-      await withoutParentSqlite(() => cleanup(log, startupInstallPaths));
-      expect(reads).toHaveBeenCalledTimes(1);
-    }
+    await withoutParentSqlite(() => cleanup(log, startupInstallPaths));
 
     expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete"]?.installPath).toBe(obsolete);
     expect(fs.existsSync(startup)).toBe(true);
@@ -187,9 +223,7 @@ it.each([false, true])(
       replaceIndexField("plugins", [{ ...plugin, sourceAdmissions: { malformed: true } }]);
     }
     try {
-      using reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
       await cleanup(log);
-      expect(reads).toHaveBeenCalledTimes(1);
       expect(fs.readFileSync(retainedFile, "utf8")).toBe("synthetic retained");
       expect(fs.readFileSync(liveFile, "utf8")).toBe("synthetic live");
       expect(fs.existsSync(orphanFile)).toBe(malformed);

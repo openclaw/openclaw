@@ -20,6 +20,7 @@ import {
   tail,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { hasExitWake } from "./bash-tools.exec-output.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
 export type ProcessObservationScope = { scopeKeys: readonly string[]; agentId: string };
@@ -31,6 +32,40 @@ function inScope(session: ProcessSession, scope: ProcessObservationScope): boole
     (session.agentId === undefined || session.agentId === scope.agentId) &&
     (session.scopeKey !== "global" || session.agentId === scope.agentId),
   );
+}
+
+/** Live row metadata must not inherit the process panel's output and row limits. */
+export function countRunningBackgroundProcesses(scope: ProcessObservationScope): number {
+  return listRunningSessions().filter((session) => !session.exited && inScope(session, scope))
+    .length;
+}
+
+/** One synchronous presentation shares a snapshot; recreate after yielding. */
+export function prepareRunningBackgroundProcessCount() {
+  const counts = new Map<string, Map<string | undefined, number>>();
+  for (const session of listRunningSessions()) {
+    const { scopeKey, agentId } = session;
+    if (session.exited || !scopeKey || (scopeKey === "global" && agentId === undefined)) {
+      continue;
+    }
+    let agents = counts.get(scopeKey);
+    if (!agents) {
+      counts.set(scopeKey, (agents = new Map()));
+    }
+    agents.set(agentId, (agents.get(agentId) ?? 0) + 1);
+  }
+  return ({ scopeKeys, agentId }: ProcessObservationScope): number => {
+    let count = 0;
+    for (let i = 0; i < scopeKeys.length; i++) {
+      const key = scopeKeys[i]!;
+      if (scopeKeys.indexOf(key) !== i) {
+        continue;
+      }
+      const agents = counts.get(key);
+      count += (agents?.get(agentId) ?? 0) + (agents?.get(undefined) ?? 0);
+    }
+    return count;
+  };
 }
 
 /** Non-consuming observation: never drains poll output or acknowledges an exit notification. */
@@ -60,6 +95,15 @@ export function readBackgroundProcesses(scope: ProcessObservationScope): {
       tail: output,
       truncated: session.truncated || session.totalOutputChars > output.length,
       canStop: isBackgroundExecCancellable(session) && !session.cancellationRequested,
+      // Mirrors the completion owner's guards; a requested Stop never wakes the chat.
+      ...(session.backgrounded &&
+      !session.exited &&
+      !session.exitNotified &&
+      !session.cancellationRequested &&
+      !session.requestCancelled &&
+      hasExitWake(session)
+        ? { wakesSession: true as const }
+        : {}),
       ...(session.exitCode !== undefined ? { exitCode: session.exitCode } : {}),
       ...(session.exitSignal !== undefined ? { exitSignal: session.exitSignal } : {}),
       ...(session.exitReason !== undefined ? { exitReason: session.exitReason } : {}),

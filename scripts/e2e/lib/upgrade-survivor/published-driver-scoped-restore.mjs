@@ -4,7 +4,21 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 /** Exercise candidate recovery only after the intact published updater has settled. */
-export async function provePublishedDriverScopedRestore({ state, env, artifacts, run, writeJson }) {
+export async function provePublishedDriverScopedRestore({
+  packageRoot,
+  state,
+  env,
+  artifacts,
+  run,
+  writeJson,
+}) {
+  const candidateAgentSchemaVersion = JSON.parse(
+    fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+  ).openclaw.schemaVersions.agent;
+  assert(
+    Number.isSafeInteger(candidateAgentSchemaVersion) && candidateAgentSchemaVersion > 26,
+    "Candidate agent schema must advance the v26 fixture",
+  );
   const config = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
   const schema = fs.readFileSync(
     new URL("../../../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
@@ -65,7 +79,11 @@ export async function provePublishedDriverScopedRestore({ state, env, artifacts,
     "Doctor failed outside the intended outbox migration",
   );
   const committed = inspect(healthy.pathname);
-  assert.equal(committed.version, 27, "Healthy member did not commit before the failure");
+  assert.equal(
+    committed.version,
+    candidateAgentSchemaVersion,
+    "Healthy member did not commit before the failure",
+  );
   assert.deepEqual(committed.outbox, before.outbox);
   assert.equal(inspect(broken.pathname).version, 26, "Failed member escaped its transaction");
   const backups = fs

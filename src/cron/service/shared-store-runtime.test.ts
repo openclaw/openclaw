@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createBoundedChildOutput } from "../../../test/helpers/bounded-child-output.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
@@ -8,6 +11,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
@@ -39,7 +43,6 @@ function createDisabledService(storePath: string, extra: Partial<CronServiceDeps
     storePath,
     log,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok", summary: "unused" }),
     ...extra,
   });
@@ -72,7 +75,6 @@ for (const run of runs) {
     storePath: run.storePath,
     log,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduler child completed" }),
   });
   try {
@@ -187,6 +189,57 @@ it("rejects a stale config mutation instead of overwriting its peer", async () =
   expect(persisted?.name).toBe("peer-update");
   expect(persisted?.delivery).toBeUndefined();
   cron.stop();
+});
+
+it("updates a resident job with one worker mutation", async () => {
+  const { storePath } = await makeStorePath();
+  const cron = createDisabledService(storePath, { cronEnabled: true });
+  const target = await addJob(cron, "resident", true);
+  const commands: string[] = [];
+  // oxlint-disable-next-line typescript/unbound-method -- Preserve the real Worker receiver.
+  const nativePost = Worker.prototype.postMessage;
+  const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request: SqliteWorkerRequest,
+    transferList,
+  ) {
+    const command: unknown = request.type === "execute" ? deserialize(request.input) : undefined;
+    if (isRecord(command) && typeof command.type === "string") {
+      commands.push(command.type);
+    }
+    nativePost.call(this, request, transferList);
+  });
+  try {
+    const updated = await cron.update(target.id, { name: "resident-updated" });
+    expect(updated.name).toBe("resident-updated");
+    expect(commands).toEqual(["cron.mutateJobs"]);
+    post.mockRestore();
+    expect((await readJob(storePath, target.id))?.name).toBe("resident-updated");
+  } finally {
+    post.mockRestore();
+    cron.stop();
+  }
+});
+
+it("prepares from a peer publication received during channel validation", async () => {
+  const { storePath, target } = await seedTarget("validation-publication");
+  const cron = createDisabledService(storePath, {
+    listConfiguredChannels: async () => {
+      await rewritePeer(storePath, target.id, { name: "peer-update" });
+      return [];
+    },
+  });
+  try {
+    await cron.update(target.id, {
+      delivery: { mode: "webhook", to: "https://example.com/cron" },
+    });
+    expect(await readJob(storePath, target.id)).toMatchObject({
+      name: "peer-update",
+      delivery: { mode: "webhook", to: "https://example.com/cron" },
+    });
+  } finally {
+    cron.stop();
+  }
 });
 
 it("rejects deleting a row whose config a peer rewrote", async () => {

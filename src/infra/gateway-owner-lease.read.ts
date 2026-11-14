@@ -16,6 +16,34 @@ export const gatewayOwnerKey = { scope: "gateway-owner", key: "global" } as cons
 
 export type GatewayOwnerLeaseRow = NonNullable<ReturnType<typeof readOpenClawStateLease>>;
 
+export const GATEWAY_OWNER_LEASE_COLUMNS_SQL = `SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+  WHERE n.nspname = $1 AND c.relname = 'state_leases' AND c.relkind IN ('r', 'p')
+    AND a.attnum > 0 AND NOT a.attisdropped`;
+
+export function assertGatewayOwnerLeaseColumns(
+  columns: readonly { name?: unknown; type?: unknown }[],
+): void {
+  const required = {
+    scope: "text",
+    lease_key: "text",
+    owner: "text",
+    expires_at: "bigint",
+    heartbeat_at: "bigint",
+    payload_json: "text",
+    created_at: "bigint",
+  };
+  if (
+    Object.entries(required).some(
+      ([name, type]) => !columns.some((column) => column.name === name && column.type === type),
+    )
+  ) {
+    throw new Error("PostgreSQL Gateway owner lease table is missing or incompatible");
+  }
+}
+
 function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
   if (value === null) {
     return null;
@@ -79,6 +107,9 @@ export function decodeGatewayOwnerLease(
     mode: payload.mode,
     supervisor,
     ...(typeof payload.listeningAt === "number" ? { listeningAt: payload.listeningAt } : {}),
+    ...(typeof payload.stateDatabaseProvenance === "string"
+      ? { stateDatabaseProvenance: payload.stateDatabaseProvenance }
+      : {}),
     // Expiry cannot revoke the separate physical Gateway coordinator.
     state: readStateLeaseProcessOwnerStatus(processOwner, row.heartbeatAt ?? row.createdAt),
     expired: row.expiresAt === null || row.expiresAt <= Date.now(),

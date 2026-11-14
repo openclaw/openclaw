@@ -126,7 +126,7 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
     lines.push("");
   }
   if (overview.rows.length > 0) {
-    lines.push(overview.orderTitle);
+    lines.push("Auth order");
     for (const [index, row] of overview.rows.entries()) {
       lines.push(
         `  ${index + 1}. ${row.label}   ${row.kind}   — ${row.billingNote ? `${row.status} · ${row.billingNote}` : row.status}`,
@@ -143,11 +143,11 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
     `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
-    `Installation: ${formatCodexDisplayText(status.installation.status)} (${status.installation.ok ? "ok" : "not ok"})`,
+    `Installation: ${formatCodexDisplayText(status.installation)} (${status.installation === "installed" ? "ok" : "not ok"})`,
     `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
-    `Exposure: ${formatCodexDisplayText(status.exposure.status)} (${status.exposure.ok ? "ok" : "not ok"})`,
+    `Exposure: ${formatCodexDisplayText(status.exposure)} (${status.exposure === "available" ? "ok" : "not ok"})`,
     `Live test: ${formatCodexDisplayText(status.liveTest.status)} (${status.liveTest.attempted ? `${status.liveTest.attempts} attempt${status.liveTest.attempts === 1 ? "" : "s"}, ${status.liveTest.timeoutMs}ms` : "not run"})`,
   ];
   if (status.liveTest.retried || status.liveTest.repaired) {

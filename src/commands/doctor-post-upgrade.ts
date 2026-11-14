@@ -18,13 +18,24 @@ import {
   resolvePluginVersionDriftUpdateCommand,
 } from "../plugins/plugin-version-drift.js";
 import { VERSION } from "../version.js";
-import {
-  POST_UPGRADE_PROBE_CODES,
-  type PostUpgradeFinding,
-  type PostUpgradeReport,
-} from "./doctor-post-upgrade.types.js";
 
-function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
+type PostUpgradeFinding = {
+  level: "ok" | "warn" | "error";
+  code: string;
+  message: string;
+  plugin?: string;
+  entry?: string;
+};
+
+const POST_UPGRADE_PROBE_CODES = [
+  "plugin.index_unavailable",
+  "plugin.entry_unresolved",
+  "plugin.manifest_unavailable",
+  "plugin.manifest_drift",
+  "plugin.version_drift",
+] as const;
+
+function buildReport(findings: PostUpgradeFinding[]) {
   return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
 }
 
@@ -45,12 +56,9 @@ function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
   }
 }
 
-export async function runPostUpgradeProbes(params: {
-  stateDir?: string;
-  updateChannel?: UpdateChannel;
-}): Promise<PostUpgradeReport> {
+export async function runPostUpgradeProbes(updateChannel?: UpdateChannel) {
   const findings: PostUpgradeFinding[] = [];
-  const installs = await readPersistedInstalledPluginIndex(params);
+  const installs = await readPersistedInstalledPluginIndex();
   if (!installs) {
     findings.push({
       level: "error",
@@ -77,7 +85,7 @@ export async function runPostUpgradeProbes(params: {
     detectPluginVersionDrift({
       gatewayVersion: VERSION,
       installRecords,
-      config: { update: { channel: params.updateChannel } },
+      config: { update: { channel: updateChannel } },
     }),
   );
   for (const entry of drift.drifts) {

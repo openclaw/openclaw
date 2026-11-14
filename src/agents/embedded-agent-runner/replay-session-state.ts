@@ -5,6 +5,7 @@ import type {
   ProviderReplaySessionStateV2,
 } from "../../plugins/provider-replay.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { withSessionManagerWriteAssertion } from "../sessions/session-manager-write-admission.js";
 import type { SessionManager } from "../sessions/session-manager.js";
 import { warnSessionPersistenceDeprecation } from "../sessions/session-persistence-deprecation.js";
@@ -57,11 +58,9 @@ export function createProviderReplaySessionState(sessionManager: SessionManager)
       async appendCustomEntryAsync(customType: string, data: unknown) {
         assertCurrent();
         const append = () => sessionManager.appendCustomEntryAsync(customType, data);
-        const id = await withSessionManagerWriteAssertion(sessionManager, assertCurrent, () =>
+        return await withSessionManagerWriteAssertion(sessionManager, assertCurrent, () =>
           target ? withSessionTranscriptWriteAssertion(target, assertCurrent, append) : append(),
         );
-        assertCurrent();
-        return id;
       },
     },
   };
@@ -83,7 +82,7 @@ export function readModelSnapshotState(sessionManager: SessionManager): ModelSna
   let lastSnapshot: ModelSnapshotEntry | null = null;
   let latestSwitchTimestamp: number | null = null;
   try {
-    for (const entry of sessionManager.getBranch()) {
+    for (const entry of sessionManager[sessionManagerReadTranscriptBranch]()) {
       if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
         continue;
       }

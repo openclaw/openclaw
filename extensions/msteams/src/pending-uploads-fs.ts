@@ -55,18 +55,6 @@ function buildChunkKey(id: string, index: number): string {
   return `${buildUploadKey(id)}:chunk:${String(index).padStart(4, "0")}`;
 }
 
-function recordToUpload(record: PendingUploadMetaRecord, buffer: Buffer): PendingUpload {
-  return {
-    id: record.id,
-    buffer,
-    filename: record.filename,
-    contentType: record.contentType,
-    conversationId: record.conversationId,
-    consentCardActivityId: record.consentCardActivityId,
-    createdAt: record.createdAt,
-  };
-}
-
 async function deleteUploadRows(
   id: string,
   metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
@@ -99,14 +87,11 @@ async function registerUploadRows(
   await pruneUploadStore(metaStore, chunkStore, chunkCount);
   for (let index = 0; index < chunkCount; index += 1) {
     const chunk = buffer.subarray(index * RAW_CHUNK_BYTES, (index + 1) * RAW_CHUNK_BYTES);
-    await chunkStore.register(
-      buildChunkKey(record.id, index),
-      toPluginJsonValue({
-        id: record.id,
-        index,
-        dataBase64: chunk.toString("base64"),
-      }),
-    );
+    await chunkStore.register(buildChunkKey(record.id, index), {
+      id: record.id,
+      index,
+      dataBase64: chunk.toString("base64"),
+    });
   }
   await metaStore.register(
     buildMetaKey(record.id),
@@ -154,7 +139,16 @@ async function readUploadRows(
     }
     chunks.push(Buffer.from(chunk.dataBase64, "base64"));
   }
-  return recordToUpload(meta, Buffer.concat(chunks, meta.byteLength));
+  const buffer = Buffer.concat(chunks, meta.byteLength);
+  return {
+    id: meta.id,
+    buffer,
+    filename: meta.filename,
+    contentType: meta.contentType,
+    conversationId: meta.conversationId,
+    consentCardActivityId: meta.consentCardActivityId,
+    createdAt: meta.createdAt,
+  };
 }
 
 async function pruneUploadStore(
@@ -261,9 +255,6 @@ export async function setPendingUploadActivityIdFs(id: string, activityId: strin
     if (!record || Date.now() - record.createdAt > PENDING_UPLOAD_TTL_MS) {
       return;
     }
-    await metaStore.register(
-      buildMetaKey(id),
-      toPluginJsonValue({ ...record, consentCardActivityId: activityId }),
-    );
+    await metaStore.register(buildMetaKey(id), { ...record, consentCardActivityId: activityId });
   });
 }

@@ -19,6 +19,7 @@ export type SessionArchivePruningRead = {
   env: NodeJS.ProcessEnv;
   expectedIdentity: { physicalIdentity: string; nativeLocation: string };
   limit?: number;
+  offset?: number;
 };
 
 export type SessionArchivePruningSnapshot = {
@@ -34,7 +35,7 @@ export type SessionArchiveRetentionDelete = {
 export type SessionArchivePruningOperations = {
   withWriter: <T>(run: () => Promise<T>) => Promise<T>;
   read: () => Promise<PublishedSessionTranscriptArchive | null>;
-  readRetentionCandidates: () => Promise<PublishedSessionTranscriptArchive[]>;
+  readRetentionCandidates: (offset?: number) => Promise<PublishedSessionTranscriptArchive[]>;
   pruneRetention: (input: SessionArchiveRetentionDelete) => Promise<number>;
   removeLegacy: (filePath: string) => Promise<SessionLegacyArchiveRemovalResult>;
   deletePublished: (archive: PublishedSessionTranscriptArchive) => Promise<void>;

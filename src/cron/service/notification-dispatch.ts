@@ -4,7 +4,6 @@ import { DEFAULT_AGENT_TIMEOUT_MS } from "../../agents/timeout.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
 import { locked } from "./locked.js";
 import {
@@ -76,7 +75,7 @@ async function requestFailureRepair(
       if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
         return;
       }
-      const storeKey = cronStoreKey(state.deps.storePath);
+      const storeKey = state.deps.storeKey;
       await runCronRuntimeMutation({
         context: captureOpenClawStateWorkerContext(),
         type: "cron.recordFailureRepairSettlement",
@@ -149,7 +148,7 @@ async function recordFailureAlertOutcome(
         return "stale";
       }
       const context = captureOpenClawStateWorkerContext();
-      const storeKey = cronStoreKey(state.deps.storePath);
+      const storeKey = state.deps.storeKey;
       let result: FailureAlertRecordResult = "stale";
       await runCronRuntimeMutation({
         context,

@@ -76,9 +76,10 @@ beforeEach(() => {
   });
 });
 
-it("bridges regular replies to shared outbound with Discord package deps", async () => {
+it.each([false, true])("bridges outbound Discord dependencies (voice=%s)", async (voice) => {
   const rest = {} as RequestClient;
-  const replies = [{ text: "shared path" }];
+  const body = voice ? "https://example.com/voice.ogg" : "probe";
+  const replies = voice ? [{ mediaUrl: body, audioAsVoice: true }] : [{ text: body }];
   const onPlatformSendDispatch = vi.fn(async () => undefined);
 
   await deliver(replies, {
@@ -95,23 +96,25 @@ it("bridges regular replies to shared outbound with Discord package deps", async
     channel: "discord",
     to: "channel:101",
     accountId: "default",
-    payloads: replies,
     replyToId: "reply-1",
     replyToMode: "all",
+    onPlatformSendDispatch,
   });
-  expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
   expect(params.payloads).toEqual(replies);
 
-  const deps = params.deps!;
-  await expectDefined(deps.discord, "Discord reply sender")("channel:101", "probe", {
-    verbose: false,
-  });
-  expect(sendMessageDiscordMock).toHaveBeenCalledExactlyOnceWith(
+  const sender = expectDefined(params.deps?.[voice ? "discordVoice" : "discord"], "sender");
+  const reply = { messageId: "reply-1", scope: "all" };
+  await sender("channel:101", body, voice ? { cfg, reply } : { verbose: false });
+  const mock = voice ? sendVoiceMessageDiscordMock : sendMessageDiscordMock;
+  expect(mock).toHaveBeenCalledExactlyOnceWith(
     "channel:101",
-    "probe",
-    expect.objectContaining({ token: "token", allowedMentions: { parse: [] } }),
+    body,
+    expect.objectContaining({
+      token: "token",
+      ...(voice ? { reply } : { allowedMentions: { parse: [] } }),
+    }),
   );
-  const sendOptions = sendMessageDiscordMock.mock.calls[0]![2];
+  const sendOptions = mock.mock.calls[0]![2];
   expect(sendOptions.cfg).toBe(params.cfg);
   expect(sendOptions.rest).toBe(rest);
 });
@@ -296,13 +299,7 @@ find /tmp -type f
 });
 
 it("passes media roots and explicit off-mode payload reply tags to shared outbound", async () => {
-  const replies = [
-    {
-      text: "explicit reply",
-      replyToId: "reply-explicit-1",
-      replyToTag: true,
-    },
-  ];
+  const replies = [{ text: "explicit reply", replyToId: "reply-explicit-1", replyToTag: true }];
 
   await deliver(replies, {
     target: "channel:202",
@@ -317,34 +314,6 @@ it("passes media roots and explicit off-mode payload reply tags to shared outbou
     replyToMode: "off",
     mediaAccess: { localRoots: ["/tmp/openclaw-media"] },
   });
-});
-
-it("bridges Discord voice sends through the outbound dependency bag", async () => {
-  await deliver(
-    [{ text: "voice", mediaUrl: "https://example.com/voice.ogg", audioAsVoice: true }],
-    {
-      target: "channel:123",
-      replyToId: "reply-1",
-    },
-  );
-
-  const deps = firstDeliverParams().deps!;
-  await expectDefined(deps.discordVoice, "Discord voice reply sender")(
-    "channel:123",
-    "https://example.com/voice.ogg",
-    {
-      cfg,
-      reply: { messageId: "reply-1", scope: "all" },
-    },
-  );
-
-  expect(sendVoiceMessageDiscordMock).toHaveBeenCalledExactlyOnceWith(
-    "channel:123",
-    "https://example.com/voice.ogg",
-    expect.objectContaining({ token: "token", reply: { messageId: "reply-1", scope: "all" } }),
-  );
-  const voiceOptions = sendVoiceMessageDiscordMock.mock.calls[0]![2];
-  expect(voiceOptions.cfg).toBe(cfg);
 });
 
 it("rewrites bound thread replies to parent target plus thread id and persona", async () => {

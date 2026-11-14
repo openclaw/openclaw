@@ -4,13 +4,14 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import { createAgentSession, type CreateAgentSessionOptions } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
@@ -22,7 +23,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
 }));
 export const streamMocks = hoistedStreamMocks;
 
-export const testModel: Model = makeProviderModelFixture({
+export const testModel = makeProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",
@@ -63,19 +64,26 @@ export function createAssistant(
 }
 
 export function createAssistantResultStream(message: AssistantMessage) {
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
+  return createQueuedAssistantStream((push) => {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
-      stream.push({ type: "error", reason: message.stopReason, error: message });
+      push({ type: "error", reason: message.stopReason, error: message });
     } else {
-      stream.push({ type: "done", reason: message.stopReason, message });
+      push({ type: "done", reason: message.stopReason, message });
     }
-    stream.end();
   });
-  return stream;
 }
 
-export function holdAssistantResponse(text: string) {
+export function mockToolTurn(content: AssistantMessage["content"]) {
+  streamMocks.streamSimple
+    .mockImplementationOnce((model: Model) =>
+      createAssistantResultStream(createAssistant(model, content, "toolUse")),
+    )
+    .mockImplementation((model: Model) =>
+      createAssistantResultStream(createAssistant(model, "Done.")),
+    );
+}
+
+export function holdAssistantResponse(text: string | (() => AssistantMessage)) {
   const response = createAssistantMessageEventStream();
   let released = false;
   return {
@@ -89,7 +97,7 @@ export function holdAssistantResponse(text: string) {
       response.push({
         type: "done",
         reason: "stop",
-        message: createAssistant(testModel, text),
+        message: typeof text === "string" ? createAssistant(testModel, text) : text(),
       });
       response.end();
     },
@@ -143,9 +151,10 @@ type TestSessionOptions = Partial<
     | "resolveCompactionThinkingLevel"
     | "withSessionWriteSettlement"
   >
->;
+> & { extension?: Parameters<typeof createResourceLoader>[0] };
 
 export async function createTestSession(options: TestSessionOptions = {}) {
+  const { extension, ...sessionOptions } = options;
   const model = options.model ?? testModel;
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey(model.provider, "test-api-key");
@@ -163,12 +172,12 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     streamSimple: streamMocks.streamSimple,
   });
   const result = await createAgentSession({
-    ...options,
+    ...sessionOptions,
     systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
-    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? "medium",
     tools: options.customTools?.map((tool) => tool.name) ?? [],
-    resourceLoader: options.resourceLoader ?? createResourceLoader(),
+    resourceLoader: options.resourceLoader ?? (await createResourceLoader(extension)),
     sessionManager,
     settingsManager,
     modelRegistry,
@@ -179,6 +188,35 @@ export async function createTestSession(options: TestSessionOptions = {}) {
   });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
+}
+
+export async function createModelSelectionSession({
+  model,
+  models,
+  onModelSelect,
+  onThinkingSelect,
+  ...options
+}: Pick<TestSessionOptions, "thinkingLevel" | "sessionManager"> & {
+  model: Model;
+  models: NonNullable<Parameters<ModelRegistry["registerProvider"]>[1]["models"]>;
+  onModelSelect?: (event: Extract<ExtensionEvent, { type: "model_select" }>) => Promise<void>;
+  onThinkingSelect?: (event: ThinkingLevelSelectEvent) => Promise<void>;
+}) {
+  const resourceLoader = await createResourceLoader((api) => {
+    if (onModelSelect) {
+      api.on("model_select", onModelSelect);
+    }
+    if (onThinkingSelect) {
+      api.on("thinking_level_select", onThinkingSelect);
+    }
+  });
+  const fixture = await createTestSession({ ...options, model, resourceLoader });
+  fixture.modelRegistry.registerProvider(model.provider, {
+    api: model.api,
+    baseUrl: model.baseUrl,
+    models,
+  });
+  return { ...fixture, extensionRuntime: resourceLoader.getExtensions().runtime };
 }
 
 export async function appendHistory(

@@ -117,9 +117,6 @@ it("reads host files for a session writer and hides them from view-only callers"
         });
       }
     }
-    expect([rpc.context.chatAbortControllers.size, rpc.context.chatQueuedTurns.size]).toEqual([
-      0, 0,
-    ]);
     expect(rpc.context.addChatRun).not.toHaveBeenCalled();
   });
 });

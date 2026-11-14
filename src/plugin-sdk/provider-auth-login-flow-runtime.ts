@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import type { PreparedProviderModelAccess } from "../commands/models/auth-model-policy.js";
 import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
@@ -21,7 +20,7 @@ import {
   ProviderCredentialsSavedError,
 } from "../shared/provider-auth-result.js";
 import { formatProviderLoginCommand } from "../shared/provider-login-command.js";
-import { buildCommandChoiceReply, createLoginChoicePrompt } from "../wizard/command-choice.js";
+import { buildCommandChoiceReply } from "../wizard/command-choice.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { RuntimeEnv } from "./runtime-env.js";
@@ -30,7 +29,6 @@ export type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
-export type { PreparedProviderModelAccess } from "../commands/models/auth-model-policy.js";
 export type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 export { ProviderAuthConfigApplyError, ProviderCredentialsSavedError };
 export {
@@ -63,15 +61,8 @@ type ProviderLoginFlowRecord = {
   cancel: (message?: string) => void;
 };
 
-type ProviderModelAccessRecord = {
-  expiresAt: number;
-  prepared: PreparedProviderModelAccess;
-  prompt: ReturnType<typeof createLoginChoicePrompt<"all" | "keep">>;
-};
-
 type ProviderLoginFlowRegistry = {
   logins: Map<string, ProviderLoginFlowRecord>;
-  modelAccess: Map<string, ProviderModelAccessRecord>;
 };
 
 type ProviderLoginFlowReservation =
@@ -79,7 +70,7 @@ type ProviderLoginFlowReservation =
   | { status: "reserved"; record: ProviderLoginFlowRecord };
 
 export function createProviderLoginFlowRegistry(): ProviderLoginFlowRegistry {
-  return { logins: new Map(), modelAccess: new Map() };
+  return { logins: new Map() };
 }
 
 const loadProviderAuthLoginFlowRuntime = createLazyRuntimeModule(
@@ -152,164 +143,14 @@ export function releaseProviderLoginFlow(params: {
   params.record.cancel();
 }
 
-export function offerProviderLoginModelAccess(params: {
-  flows: ProviderLoginFlowRegistry;
-  flowKey: string;
-  prepared: PreparedProviderModelAccess;
-  terminalMessage: string;
-}): ProviderLoginReply {
-  const signal = AbortSignal.timeout(PROVIDER_LOGIN_FLOW_TTL_MS);
-  const prompt = createLoginChoicePrompt(
-    {
-      ...params.prepared.prompt,
-      message: `${params.terminalMessage}\n\n${params.prepared.prompt.message}`,
-    },
-    signal,
-    params.prepared.provider,
-  );
-  const record: ProviderModelAccessRecord = {
-    expiresAt: Date.now() + PROVIDER_LOGIN_FLOW_TTL_MS,
-    prepared: params.prepared,
-    prompt,
-  };
-  params.flows.modelAccess.set(params.flowKey, record);
-  signal.addEventListener(
-    "abort",
-    () => {
-      if (params.flows.modelAccess.get(params.flowKey) === record) {
-        params.flows.modelAccess.delete(params.flowKey);
-      }
-    },
-    { once: true },
-  );
-  return prompt.reply;
-}
-
-export async function answerProviderLoginModelAccess(params: {
-  flows: ProviderLoginFlowRegistry;
-  flowKey: string;
-  agentId: string;
-  command: string;
-  runtime: RuntimeEnv;
-  readConfig: () => OpenClawConfig;
-  signal?: AbortSignal;
-  assertCurrent: (config?: OpenClawConfig) => void;
-}): Promise<ProviderLoginReply | undefined> {
-  const match = /^\/login (?:access|choice [a-f0-9]+ \d+) (\S+)$/u.exec(params.command.trim());
-  const provider = match?.[1];
-  if (!provider) {
-    return undefined;
-  }
-  const assertAuthority = (config = params.readConfig()) => {
-    params.signal?.throwIfAborted();
-    params.assertCurrent(config);
-  };
-  assertAuthority();
-  const {
-    completeProviderModelAccess,
-    prepareProviderModelAccess,
-    ProviderModelPolicyChangedError,
-  } = await import("../commands/models/auth-model-policy.js");
-  const renew = (message: string, config = params.readConfig()): ProviderLoginReply => {
-    assertAuthority();
-    assertAuthority(config);
-    const resolved = resolveProviderChannelLoginChoice(provider, { config });
-    const providerLabel =
-      resolved.status === "resolved" && resolved.choice.providerId === provider
-        ? resolved.choice.providerLabel
-        : resolved.status === "ambiguous" &&
-            resolved.choices.every((choice) => choice.providerId === provider)
-          ? resolved.choices[0]?.providerLabel
-          : undefined;
-    if (!providerLabel) {
-      return {
-        text: "This connection is no longer available. Send /models to choose another provider.",
-      };
-    }
-    const prepared = prepareProviderModelAccess({
-      config,
-      agentId: params.agentId,
-      provider,
-      providerLabel,
-    });
-    return prepared
-      ? offerProviderLoginModelAccess({ ...params, prepared, terminalMessage: message })
-      : {
-          text: `All ${providerLabel} models are already allowed. Send /models to choose a model.`,
-        };
-  };
-  const record = params.flows.modelAccess.get(params.flowKey);
-  if (!record || record.expiresAt <= Date.now() || record.prepared.provider !== provider) {
-    return renew(
-      "Choose model access using your current restrictions. You do not need to sign in again.",
-    );
-  }
-  const assertCurrent = (config?: OpenClawConfig) => {
-    assertAuthority(config);
-    if (params.flows.modelAccess.get(params.flowKey) !== record || record.expiresAt <= Date.now()) {
-      throw new Error("This model access choice is no longer available.");
-    }
-  };
-  // Authorization precedes token consumption; the answering command owns all effects.
-  assertCurrent();
-  const answer = record.prompt.answer(params.command);
-  if (!answer) {
-    return renew(
-      "Choose model access using your current restrictions. You do not need to sign in again.",
-    );
-  }
-  try {
-    const outcome = await completeProviderModelAccess({
-      prepared: record.prepared,
-      prompter: {
-        select: async ({ options }) => {
-          const option = options.find((entry) => entry.value === answer.value);
-          if (!option) {
-            throw new Error("The selected model access option is no longer available.");
-          }
-          return option.value;
-        },
-      },
-      runtime: params.runtime,
-      assertCurrent,
-    });
-    return {
-      text: `${outcome.message}\n\nSend /models to choose a model. To update saved sign-in status, send /login refresh.`,
-    };
-  } catch (error) {
-    assertCurrent();
-    if (error instanceof ProviderModelPolicyChangedError) {
-      return renew(
-        "Your model restrictions changed. Choose again using the current restrictions.",
-        error.config,
-      );
-    }
-    params.runtime.error(error instanceof Error ? error.message : String(error));
-    return buildCommandChoiceReply(
-      "Your model-access choice could not be applied. Choose model access again.",
-      [
-        {
-          label: "Choose model access",
-          action: { type: "command", command: `/login access ${provider}` },
-        },
-      ],
-    );
-  } finally {
-    if (params.flows.modelAccess.get(params.flowKey) === record) {
-      params.flows.modelAccess.delete(params.flowKey);
-    }
-  }
-}
-
 export function cancelProviderLoginFlow(params: {
   flows: ProviderLoginFlowRegistry;
   flowKey: string;
-}): "login" | "model-access" | "both" | undefined {
+}): boolean {
   const record = params.flows.logins.get(params.flowKey);
-  const pending = params.flows.modelAccess.delete(params.flowKey);
   params.flows.logins.delete(params.flowKey);
   record?.cancel("Provider login cancelled from chat.");
-  return record ? (pending ? "both" : "login") : pending ? "model-access" : undefined;
+  return record !== undefined;
 }
 
 export async function prepareProviderChannelLogin(params: {
@@ -324,7 +165,6 @@ export async function prepareProviderChannelLogin(params: {
   hasAdminScope?: boolean;
   refreshAuth: () => Promise<void>;
   cancelLogin?: () => ReturnType<typeof cancelProviderLoginFlow>;
-  answerChoice?: (command: string) => Promise<ProviderLoginReply | undefined>;
 }): Promise<ProviderChannelLoginPreparation | null> {
   const match = params.commandText.trim().match(/^\/login(?:\s+(.+))?$/u);
   if (!match) {
@@ -379,23 +219,9 @@ export async function prepareProviderChannelLogin(params: {
     return {
       status: "reply",
       reply: {
-        text:
-          cancelled === "model-access"
-            ? "Model-access choice cancelled. Your saved connection is unchanged. Send /models to choose a model."
-            : cancelled === "both"
-              ? "Sign-in and model-access choice cancelled. Send /login to connect a provider."
-              : cancelled
-                ? "Provider login cancelled for this chat."
-                : "No provider login is active in this chat.",
-      },
-    };
-  }
-  if (/^(?:choice|access)(?:\s|$)/u.test(match[1]?.trim() ?? "")) {
-    const reply = await params.answerChoice?.(params.commandText.trim());
-    return {
-      status: "reply",
-      reply: reply ?? {
-        text: "This model access choice is no longer available. Open Models to change which models are allowed.",
+        text: cancelled
+          ? "Provider login cancelled for this chat."
+          : "No provider login is active in this chat.",
       },
     };
   }
@@ -504,11 +330,27 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
     result.defaultModel === undefined
       ? undefined
       : parseRequiredString(result.defaultModel, "default model");
+  const access: unknown = result.modelAccess;
+  let modelAccess: ModelsAuthLoginFlowResult["modelAccess"];
+  if (access !== undefined) {
+    if (
+      !access ||
+      typeof access !== "object" ||
+      !("message" in access) ||
+      !("applied" in access) ||
+      typeof access.message !== "string" ||
+      typeof access.applied !== "boolean"
+    ) {
+      throw new Error("Provider login returned an invalid model access result.");
+    }
+    modelAccess = { message: access.message, applied: access.applied };
+  }
   return {
     providerId,
     methodId,
     authRefresh,
     ...(defaultModel ? { defaultModel } : {}),
+    ...(modelAccess ? { modelAccess } : {}),
     profiles,
   };
 }
@@ -543,7 +385,6 @@ export async function runProviderChannelLoginFlow(params: {
   assertCurrent?: (config: OpenClawConfig) => void;
   unsupportedPromptMessage: string;
   runLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
-  onModelAccessRequested?: ModelsAuthLoginFlowOptions["onModelAccessRequested"];
 }): Promise<ModelsAuthLoginFlowResult> {
   const openUrl = async (url: string) => {
     assertCurrent();
@@ -601,7 +442,6 @@ export async function runProviderChannelLoginFlow(params: {
       method: choice.methodId,
       ownerPluginId: choice.pluginId,
       credentialOnly: true,
-      onModelAccessRequested: params.onModelAccessRequested,
       refreshAfterLogin: (agentId) =>
         refreshProviderLoginAuthState({ agentId, readConfig, assertCurrent }),
       assertCurrent,

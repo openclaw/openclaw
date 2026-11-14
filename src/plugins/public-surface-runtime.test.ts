@@ -6,13 +6,15 @@ import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
+import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import {
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
-  resolvePluginRootPublicSurfacePath,
+  resolvePluginRootPublicSurfaceLocation,
 } from "./public-surface-runtime.js";
 import { writeArtifact } from "./public-surface.test-support.js";
-import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -39,6 +41,72 @@ function resolveSource(sourceRoot: string, artifactBasename: string, dirName = "
 }
 
 describe("bundled plugin public surface runtime", () => {
+  it.each([false, true])(
+    "loads sidecars from the selected artifact (runtime registered: %s)",
+    async (runtimeRegistrationComplete) => {
+      const root = tempDirs.make("openclaw-public-surface-selected-");
+      const sourceRoot = path.join(root, "extensions/demo");
+      const builtRoot = path.join(root, "dist/extensions/demo");
+      const source = writeArtifact(path.join(sourceRoot, "index.ts"));
+      writeArtifact(path.join(sourceRoot, "api.ts"), 'export const family = "source";');
+      writeArtifact(path.join(builtRoot, "package.json"), '{"type":"module"}');
+      const builtSource = writeArtifact(path.join(builtRoot, "index.js"));
+      const builtSurface = writeArtifact(
+        path.join(builtRoot, "api.js"),
+        'export const family = "built";',
+      );
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({
+        id: "demo",
+        origin: "bundled",
+        source,
+        rootDir: sourceRoot,
+      });
+      registry.plugins.push(record);
+      bindPluginRuntimeArtifactSelection(record, {
+        runtimeEntry: runtimeRegistrationComplete
+          ? { source: builtSource, rootDir: builtRoot }
+          : { source, rootDir: sourceRoot },
+        setupEntry: { source: builtSource, rootDir: builtRoot },
+      }).runtimeRegistrationComplete = runtimeRegistrationComplete;
+      const instance = new PluginInstance(record.id, { record, registry });
+      const cache = createPluginCache();
+      try {
+        withPluginCache(cache, () => {
+          bindPluginInstanceModuleLoader({
+            instance,
+            origin: record.origin,
+            source: builtSource,
+            rootDir: builtRoot,
+          });
+        });
+        const resolved = withPluginRuntimeRegistryScope(registry, () =>
+          withPluginCache(cache, () =>
+            resolvePluginRootPublicSurfaceLocation({
+              pluginRoot: sourceRoot,
+              pluginId: record.id,
+              artifactBasename: "api.js",
+            }),
+          ),
+        );
+        expect(resolved).toEqual({ modulePath: builtSurface, boundaryRoot: builtRoot });
+        const loaded = withPluginRuntimeRegistryScope(registry, () =>
+          withPluginCache(cache, () =>
+            loadPluginPublicArtifactModuleSync<{ family: string }>({
+              pluginRoot: sourceRoot,
+              artifactBasename: "api.js",
+              origin: "bundled",
+            }),
+          ),
+        );
+        expect(loaded.family).toBe("built");
+      } finally {
+        await instance.dispose();
+        await retirePluginCache(cache);
+      }
+    },
+  );
+
   it.each<[string, string, string[], string | null]>([
     ["absent artifact", "index.js", [], null],
     ["JavaScript dist", "index.js", ["api.ts", "dist/api.js"], "dist/api.js"],
@@ -52,33 +120,34 @@ describe("bundled plugin public surface runtime", () => {
         writeArtifact(path.join(rootDir, relativePath), "export default {};\n");
       }
       const cache = createPluginCache();
-      const builder = createTestPluginRegistry();
+      const registry = createEmptyPluginRegistry();
       const record = createPluginRecord({
         id: "captured-path-probes",
         rootDir,
         source,
         origin: "global",
       });
-      builder.registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry: builder.registry });
-      const provider = { id: record.id, label: "Captured path probes", auth: [] };
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
       try {
         withPluginCache(cache, () => {
           bindPluginInstanceModuleLoader({ instance, origin: record.origin, source, rootDir });
-          instance.run(() => builder.createApi(record, { config: {} }).registerProvider(provider));
         });
-        expect(builder.registry.providers[0]?.provider.id).toBe(record.id);
         const hasSource = vi.spyOn(instance, "hasModuleSource");
-        const resolved = withPluginRuntimeRegistryScope(builder.registry, () =>
+        const resolved = withPluginRuntimeRegistryScope(registry, () =>
           withPluginCache(cache, () =>
-            resolvePluginRootPublicSurfacePath({
+            resolvePluginRootPublicSurfaceLocation({
               pluginRoot: rootDir,
               pluginId: record.id,
               artifactBasename: "api.js",
             }),
           ),
         );
-        expect(resolved).toBe(expected === null ? null : path.join(rootDir, expected));
+        expect(resolved).toEqual(
+          expected === null
+            ? null
+            : { modulePath: path.join(rootDir, expected), boundaryRoot: rootDir },
+        );
         const paths = hasSource.mock.calls.map(([filename]) => filename);
         expect(paths.length).toBeGreaterThan(0);
         expect(paths).toHaveLength(new Set(paths).size);
@@ -133,7 +202,10 @@ describe("bundled plugin public surface runtime", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     const params = { pluginRoot: alias, entrySource, artifactBasename: "api.js" };
-    expect(resolvePluginRootPublicSurfacePath(params)).toBe(publicSurface);
+    expect(resolvePluginRootPublicSurfaceLocation(params)).toEqual({
+      modulePath: publicSurface,
+      boundaryRoot: alias,
+    });
   });
 
   it.each(["my-ngc:nvidia", "../outside", "..\\outside", ".", ".."])(

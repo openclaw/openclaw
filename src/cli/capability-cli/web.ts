@@ -1,27 +1,23 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
-import { registerLocalProvidersCommand } from "./providers-command.js";
+import { formatEnvelopeForText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 function describeWebResultFailure(result: Record<string, unknown>): string | undefined {
-  const statusCode =
-    typeof result.statusCode === "number" && Number.isFinite(result.statusCode)
-      ? result.statusCode
-      : undefined;
+  const statusCode = asFiniteNumber(result.statusCode);
   const error = result.error;
   const errorMessage =
-    typeof error === "string"
-      ? error
-      : error &&
-          typeof error === "object" &&
-          typeof (error as { message?: unknown }).message === "string"
-        ? (error as { message: string }).message
-        : undefined;
+    readStringValue(error) ?? readStringValue(asOptionalObjectRecord(error)?.message);
   if (result.ok !== false && (statusCode === undefined || statusCode < 400) && !errorMessage) {
     return undefined;
   }
@@ -31,16 +27,19 @@ function describeWebResultFailure(result: Record<string, unknown>): string | und
   );
 }
 
-function runWebCommand(
+async function runWebCommand(
   capability: "web.search" | "web.fetch",
   json: boolean | undefined,
-  run: () => Promise<{ provider: string; result: Record<string, unknown> }>,
+  run: (signal?: AbortSignal) => Promise<{ provider: string; result: Record<string, unknown> }>,
 ): Promise<void> {
-  return runCommandWithRuntime(defaultRuntime, async () => {
-    const { provider, result } = await run();
+  const signal = getAsyncWorkSignal();
+  let failed = false;
+  await runCapabilityCommand(json, formatEnvelopeForText, async () => {
+    const { provider, result } = await run(signal);
     const error = describeWebResultFailure(result);
-    const envelope = {
-      ok: error === undefined,
+    failed = error !== undefined;
+    return {
+      ok: !failed,
       capability,
       transport: "local" as const,
       provider,
@@ -48,11 +47,10 @@ function runWebCommand(
       outputs: [{ result }],
       ...(error ? { error } : {}),
     } satisfies CapabilityEnvelope;
-    emitJsonOrText(defaultRuntime, Boolean(json), envelope, formatEnvelopeForText);
-    if (!envelope.ok) {
-      exitCliAfterOutput(defaultRuntime, 1);
-    }
   });
+  if (failed && !signal?.aborted) {
+    exitCliAfterOutput(defaultRuntime, 1);
+  }
 }
 
 export function registerWebCapabilityCommands(capability: Command): void {
@@ -66,8 +64,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--limit <n>", "Result limit")
     .option("--json", "Output JSON", false)
     .action((opts) =>
-      runWebCommand("web.search", opts.json, async () => {
-        const { parseOptionalPositiveInteger } = await import("./shared.js");
+      runWebCommand("web.search", opts.json, async (signal) => {
         const query = String(opts.query);
         const provider = opts.provider as string | undefined;
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");
@@ -88,6 +85,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
         return runWebSearch({
           config: cfg,
           providerId: provider,
+          signal,
           args: {
             query,
             count: limit,
@@ -105,7 +103,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--format <format>", "Format hint")
     .option("--json", "Output JSON", false)
     .action((opts) =>
-      runWebCommand("web.fetch", opts.json, async () => {
+      runWebCommand("web.fetch", opts.json, async (signal) => {
         const url = String(opts.url);
         const provider = opts.provider as string | undefined;
         const format = opts.format as string | undefined;
@@ -130,10 +128,11 @@ export function registerWebCapabilityCommands(capability: Command): void {
           if (!tool) {
             throw new Error(disabledMessage);
           }
-          const { details: result } = await tool.execute("infer-web-fetch", {
-            url,
-            extractMode: format,
-          });
+          const { details: result } = await tool.execute(
+            "infer-web-fetch",
+            { url, extractMode: format },
+            signal,
+          );
           if (!isRecord(result)) {
             throw new Error("web.fetch returned no structured result.");
           }
@@ -158,10 +157,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
               : `web.fetch provider "${provider}" is not available; check it with \`openclaw infer web providers\`.`,
           );
         }
-        const result = await resolved.definition.execute({
-          url,
-          extractMode: format,
-        });
+        const result = await resolved.definition.execute({ url, extractMode: format }, { signal });
         return { provider: resolved.provider.id, result };
       }),
     );

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -139,9 +140,7 @@ export function createPublicationOwner(
     try {
       currentAnchor = privatePackageActivationIdentity(custodyPath("anchor"), "anchor");
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       currentAnchor = null;
     }
     if (

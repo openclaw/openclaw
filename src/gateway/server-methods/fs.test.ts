@@ -26,12 +26,7 @@ async function call(
 const writeClient = { connect: { scopes: ["operator.write"] } };
 
 function workspaceContext(workspace: string) {
-  return {
-    getRuntimeConfig: () => ({
-      agents: { entries: { main: { workspace } } },
-    }),
-    nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
-  };
+  return nodeContext(vi.fn(), null, { agents: { entries: { main: { workspace } } } });
 }
 
 const connectedNode = {
@@ -127,12 +122,12 @@ describe("fs.listDir", () => {
   });
 
   it("rejects relative paths and invalid params", async () => {
-    const [relativeOk, , relativeError] = await call({ path: "relative/dir" });
-    expect(relativeOk).toBe(false);
-    expect(String((relativeError as { message?: string })?.message)).toContain("absolute");
-
-    const [invalidOk] = await call({ path: 42 });
-    expect(invalidOk).toBe(false);
+    expect(await call({ path: "relative/dir" })).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("absolute") },
+    ]);
+    expect((await call({ path: 42 }))[0]).toBe(false);
   });
 
   it("reports missing directories as request errors", async () => {
@@ -201,11 +196,7 @@ describe("fs.listDir", () => {
   it("routes node listings through the connected node capability", async () => {
     const invoke = vi.fn().mockResolvedValue({
       ok: true,
-      payloadJSON: JSON.stringify({
-        path: "/Users/peter",
-        home: "/Users/peter",
-        entries: [],
-      }),
+      payloadJSON: JSON.stringify({ path: "/Users/peter", home: "/Users/peter", entries: [] }),
     });
     const context = nodeContext(invoke, {
       ...connectedNode,
@@ -226,35 +217,25 @@ describe("fs.listDir", () => {
     });
   });
 
-  it("keeps node path errors as request errors and transport failures as unavailable", async () => {
-    const node = {
-      connId: "conn-1",
-      nodeId: "macbook",
-      platform: "macos",
-      deviceFamily: "Mac",
-      commands: ["fs.listDir"],
-    };
-    const missing = "Error: ENOENT: no such file or directory, scandir '/Users/de'";
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, error: { code: "INVALID_REQUEST", message: missing } })
-      .mockResolvedValueOnce({ ok: false, error: { code: "TIMEOUT", message: "node timed out" } });
-    const context = {
-      getRuntimeConfig: () => ({}),
-      nodeRegistry: { get: vi.fn().mockReturnValue(node), invoke },
-    };
-
-    const pathError = expectDefined(
-      await call({ nodeId: "macbook", path: "/Users/de" }, context),
-      "missing node directory response",
-    )[2];
-    expect(pathError).toMatchObject({ code: "INVALID_REQUEST", message: missing });
-    const transportError = expectDefined(
-      await call({ nodeId: "macbook" }, context),
-      "node transport failure response",
-    )[2];
-    expect(transportError).toMatchObject({ code: "UNAVAILABLE", message: "node timed out" });
-  });
+  it.each([
+    [
+      "INVALID_REQUEST",
+      "Error: ENOENT: no such file or directory, scandir '/Users/de'",
+      "INVALID_REQUEST",
+    ],
+    ["TIMEOUT", "node timed out", "UNAVAILABLE"],
+  ])(
+    "preserves node %s errors with the appropriate availability code",
+    async (code, message, expectedCode) => {
+      const context = nodeContext(
+        vi.fn().mockResolvedValueOnce({ ok: false, error: { code, message } }),
+      );
+      expect((await call({ nodeId: "macbook", path: "/Users/de" }, context))[2]).toMatchObject({
+        code: expectedCode,
+        message,
+      });
+    },
+  );
 
   it("rejects node listings blocked by the live command policy", async () => {
     const invoke = vi.fn();
@@ -263,7 +244,6 @@ describe("fs.listDir", () => {
     });
 
     const [ok, , error] = await call({ nodeId: "macbook" }, context);
-
     expect(ok).toBe(false);
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",

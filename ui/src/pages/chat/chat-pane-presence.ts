@@ -33,21 +33,10 @@ function chatPresencePresentation(payload: PresencePayload | undefined, scope: C
   ]);
 }
 
-function sameChatPanePresence(
-  previous: PresencePayload | undefined,
-  next: PresencePayload | undefined,
-  scope: ChatPresenceScope,
-): boolean {
-  return (
-    previous === next ||
-    chatPresencePresentation(previous, scope) === chatPresencePresentation(next, scope)
-  );
-}
-
 /** Own raw presence synchronously; only chat-visible changes publish to retained views. */
 export function createChatPanePresence(scope: () => ChatPresenceScope) {
   let payload: PresencePayload | undefined;
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   return {
     get snapshot() {
       return payload;
@@ -55,15 +44,20 @@ export function createChatPanePresence(scope: () => ChatPresenceScope) {
     update(next: PresencePayload | undefined) {
       const previous = payload;
       payload = next;
-      if (!sameChatPanePresence(previous, next, scope())) {
-        for (const listener of listeners) {
-          listener();
-        }
+      const currentScope = scope();
+      if (
+        previous !== next &&
+        chatPresencePresentation(previous, currentScope) !==
+          chatPresencePresentation(next, currentScope)
+      ) {
+        render?.();
       }
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
   };
 }

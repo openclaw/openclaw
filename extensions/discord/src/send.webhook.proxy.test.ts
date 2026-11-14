@@ -3,29 +3,33 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordError } from "./internal/rest-errors.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
-import { sendWebhookMessageDiscord } from "./send.webhook.js";
+import { sendWebhookMessageDiscord as sendWebhook } from "./send.webhook.js";
 
-const { makeProxyFetchMock, recordChannelActivityMock } = vi.hoisted(() => ({
-  makeProxyFetchMock: vi.fn(),
-  recordChannelActivityMock: vi.fn(),
-}));
+const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   makeProxyFetch: makeProxyFetchMock,
 }));
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-activity-runtime")>()),
-  recordChannelActivity: recordChannelActivityMock,
+  recordChannelActivity: vi.fn(),
 }));
 
 const cfg: OpenClawConfig = { channels: { discord: { token: "Bot test-token" } } };
 const opts = { cfg, webhookId: "123", webhookToken: "abc" };
 let fetchMock: MockInstance<typeof fetch>;
 
+async function expectDeadline() {
+  const rejection = expect(sendWebhook("hello", opts)).rejects.toMatchObject({
+    name: "TimeoutError",
+    message: "request timed out",
+  });
+  await Promise.all([vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS), rejection]);
+}
+
 describe("Discord webhook transport", () => {
   beforeEach(() => {
     makeProxyFetchMock.mockReset();
-    recordChannelActivityMock.mockClear();
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     fetchMock = vi
@@ -37,27 +41,25 @@ describe("Discord webhook transport", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    {
-      name: "account opt-out",
-      config: { suppressEmbeds: true, accounts: { runtime: { suppressEmbeds: false } } },
-      flags: undefined,
-    },
-  ])("applies $name link-preview suppression", async ({ config, flags }) => {
-    await sendWebhookMessageDiscord("https://example.com", {
+  it("applies account opt-out of link-preview suppression", async () => {
+    await sendWebhook("https://example.com", {
       ...opts,
-      cfg: { channels: { discord: config } },
+      cfg: {
+        channels: {
+          discord: { suppressEmbeds: true, accounts: { runtime: { suppressEmbeds: false } } },
+        },
+      },
       accountId: "runtime",
     });
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
-      JSON.stringify({ content: "https://example.com", flags }),
+      JSON.stringify({ content: "https://example.com" }),
     );
   });
 
   it("uses the configured proxy fetch", async () => {
     const proxiedFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ id: "proxied" }));
     makeProxyFetchMock.mockReturnValue(proxiedFetch);
-    await sendWebhookMessageDiscord("hello", {
+    await sendWebhook("hello", {
       ...opts,
       cfg: { channels: { discord: { proxy: "http://proxy.test:8080" } } },
     });
@@ -70,7 +72,7 @@ describe("Discord webhook transport", () => {
     const response = new Response(null, { status: 204 });
     const jsonSpy = vi.spyOn(response, "json");
     fetchMock.mockResolvedValue(response);
-    expect((await sendWebhookMessageDiscord("hello", { ...opts, wait: false })).messageId).toBe("");
+    expect((await sendWebhook("hello", { ...opts, wait: false })).messageId).toBe("");
     expect(jsonSpy).not.toHaveBeenCalled();
   });
 
@@ -80,7 +82,7 @@ describe("Discord webhook transport", () => {
       headers: { "content-type": "application/json" },
     });
     fetchMock.mockResolvedValue(tracked.response);
-    expect((await sendWebhookMessageDiscord("hello", opts)).messageId).toBe("");
+    expect((await sendWebhook("hello", opts)).messageId).toBe("");
     expect(tracked.wasCanceled()).toBe(true);
   });
 
@@ -99,7 +101,7 @@ describe("Discord webhook transport", () => {
           Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
         );
       }
-      const sent = sendWebhookMessageDiscord("hello", { ...opts, threadId: "thread-1" });
+      const sent = sendWebhook("hello", { ...opts, threadId: "thread-1" });
       const result =
         failure === "rate limit"
           ? expect(sent).rejects.toMatchObject({
@@ -126,9 +128,7 @@ describe("Discord webhook transport", () => {
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     fetchMock.mockResolvedValue(tracked.response);
-    const error: unknown = await sendWebhookMessageDiscord("hello", opts).catch(
-      (reason: unknown) => reason,
-    );
+    const error: unknown = await sendWebhook("hello", opts).catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(DiscordError);
     if (!(error instanceof DiscordError)) {
       throw error;
@@ -157,11 +157,7 @@ describe("Discord webhook transport", () => {
         }
       });
     });
-    const rejection = expect(sendWebhookMessageDiscord("hello", opts)).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
-    await Promise.all([vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS), rejection]);
+    await expectDeadline();
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -180,22 +176,14 @@ describe("Discord webhook transport", () => {
         { status },
       );
     });
-    const rejection = expect(sendWebhookMessageDiscord("hello", opts)).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
-    await Promise.all([vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS), rejection]);
+    await expectDeadline();
   });
 
   it("aborts rate-limit backoff at the deadline without leaving a retry timer", async () => {
     fetchMock.mockImplementation(async () =>
       Response.json({ message: "Slow down", retry_after: 60 }, { status: 429 }),
     );
-    const rejection = expect(sendWebhookMessageDiscord("hello", opts)).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
-    await Promise.all([vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS), rejection]);
+    await expectDeadline();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });

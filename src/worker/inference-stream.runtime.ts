@@ -16,7 +16,7 @@ import type {
 import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
-} from "../agents/tools/computer-tool.js";
+} from "../agents/tools/computer-tool-shared.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type {
   AssistantMessage,
@@ -40,6 +40,7 @@ type WorkerInferenceStreamAdapterOptions = {
   turnId: string;
   modelRef: WorkerInferenceModelRef;
   computerContextEpoch?: ComputerContextEpoch;
+  onCancelled?: (reason: Error) => void;
 };
 
 type WorkerInferenceStreamRequest = {
@@ -366,6 +367,12 @@ export function createWorkerInferenceStreamAdapter(
           stream.push({ type: "done", reason, message });
           stream.end();
           return;
+        }
+        if (outcome.reason === "cancelled") {
+          // Remote cancellation can precede local delivery. Stop the turn before
+          // the agent persists its terminal message, without sending a cancel back.
+          inferenceRequest.signal?.removeEventListener("abort", abort);
+          adapter.onCancelled?.(new Error(outcome.message));
         }
         finishError(
           outcome.message,

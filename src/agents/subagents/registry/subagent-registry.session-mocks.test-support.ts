@@ -22,6 +22,7 @@ const { captureSessionEntryCurrentRead: captureCanonicalSessionEntryCurrent } =
 export function resetSubagentRegistrySessionMocks(
   mocks: ReturnType<typeof createSubagentRegistryMockState>,
 ) {
+  mocks.hasLiveAgentRunContext.mockReset().mockReturnValue(false);
   vi.mocked(prepareSessionGenerationFacts)
     .mockReset()
     .mockImplementation((input) =>

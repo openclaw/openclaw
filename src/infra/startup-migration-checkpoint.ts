@@ -19,6 +19,7 @@ import {
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -60,13 +61,12 @@ export type StartupMigrationLease = {
 
 type StartupMigrationLeaseParams = {
   env?: NodeJS.ProcessEnv;
-  nowMs?: number;
   owner?: string;
   /** Process id that owns the startup migration work. */
   ownerPid?: number;
 };
 
-type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"> & {
+type StartupMigrationLeaseWaitParams = StartupMigrationLeaseParams & {
   timeoutMs?: number;
   pollIntervalMs?: number;
   now?: () => number;
@@ -158,13 +158,13 @@ function acquireStartupMigrationLease(
   return withOpenClawStateStartupMigrationCheckpointDatabase(
     (connection) => {
       // Integrity verification may outlast a lease; start its lifetime at the actual claim.
-      const admitted = { ...params, env, nowMs: now(), owner };
-      const nowMs = admitted.nowMs ?? Date.now();
-      const ownerPid = admitted.ownerPid ?? process.pid;
+      const nowMs = now();
+      const ownerPid = params.ownerPid ?? process.pid;
       const leaseOwner: StateLeaseProcessOwner = {
         pid: ownerPid,
         host: hostname(),
         startedAt: getFileLockProcessStartTime(ownerPid),
+        processNamespace: readGatewayLockProcessNamespace(),
       };
       const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
       const identity = { ...STARTUP_MIGRATION_LEASE, owner };

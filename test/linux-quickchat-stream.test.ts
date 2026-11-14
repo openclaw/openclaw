@@ -152,7 +152,6 @@ function createQuickChatHarness(
   let maxActiveWidgetSyncs = 0;
   const windowListeners = new Map<string, () => void>();
   let syncedWidgets: unknown[] = [];
-  let syncedExpanded = false;
   let widgetSyncCount = 0;
   let widgetSurfaceRefreshCount = 0;
   let widgetSurfaceRefreshFails = false;
@@ -224,7 +223,6 @@ function createQuickChatHarness(
           }
           if (method === "quickchat_sync_widgets") {
             syncedWidgets = args?.widgets ?? [];
-            syncedExpanded = args?.expanded === true;
             widgetSyncCount += 1;
             if (deferWidgetSync) {
               activeWidgetSyncs += 1;
@@ -322,7 +320,6 @@ this.harness = {
   handleChatEvent(payload) { handleChatEvent({gatewayGeneration: 1, ...payload}); },
   requestHide,
   clearReply,
-  toggleReply,
   setGatewayUp(surface = "https://gateway.example/__openclaw__/cap/fixture-capability", gatewayGeneration = 1) {
     setGatewayState({state: "up", canvasSurfaceUrl: surface, gatewayGeneration});
     if (visibilitySequence === 0) reveal();
@@ -337,7 +334,6 @@ this.harness = {
   replyError() { return elements.replyError.textContent; },
   readOnly() { return elements.input.readOnly; },
   sendDisabled() { return elements.send.disabled; },
-  replyVisible() { return !elements.reply.hidden; },
   thinking() { return !elements.replyThinking.hidden; },
   draft() { return elements.input.value; },
   error() { return elements.status.textContent; },
@@ -417,7 +413,6 @@ ${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""
       pendingAt(refreshes, index, "refresh").reject(new Error("stale refresh failed"));
     },
     syncedWidgets: () => syncedWidgets,
-    syncedExpanded: () => syncedExpanded,
     widgetSyncCount: () => widgetSyncCount,
     deferWidgetSync: () => {
       deferWidgetSync = true;
@@ -684,54 +679,6 @@ test("a buffered matching final wins over terminal history recovery", async () =
   expectState(harness, { replyText: "Live final", readOnly: false });
 });
 
-test("collapse preserves live replies, drafts, and widget instances and wins a delayed acknowledgement", async () => {
-  const harness = readyHarness("Show the current status");
-  const target = chatTarget("first-run");
-  await acknowledge(harness, target.runId);
-  await harness.advanceTime(450);
-  harness.handleChatEvent({
-    ...target,
-    state: "delta",
-    message: canvasMessage("assistant", documentUrl("status"), {}, "Checking the project."),
-  });
-  await harness.drain();
-  const widget = { ...harness.syncedWidgets()[0] };
-  assert.equal(widget.visible, true);
-  harness.setMessage("Keep this\nnext draft.");
-  harness.toggleReply();
-  await harness.drain();
-  expectState(harness, { replyVisible: false, syncedExpanded: false });
-  assert.deepEqual({ ...harness.syncedWidgets()[0] }, { ...widget, visible: false });
-  assert.equal(harness.draft(), "Keep this\nnext draft.");
-  harness.handleChatEvent({ ...target, state: "delta", deltaText: " Still working." });
-  await harness.drain();
-  assert.equal(harness.replyVisible(), false);
-  harness.toggleReply();
-  await harness.drain();
-  expectState(harness, {
-    replyVisible: true,
-    replyText: "Checking the project. Still working.",
-    draft: "Keep this\nnext draft.",
-  });
-  assert.deepEqual({ ...harness.syncedWidgets()[0] }, widget);
-  assert.equal(harness.sendCount(), 1);
-
-  harness.handleChatEvent({ ...target, state: "final" });
-  const next = harness.send(false);
-  harness.toggleReply();
-  const followup = { ...target, runId: "follow-up-run" };
-  harness.handleChatEvent({
-    ...followup,
-    state: "delta",
-    message: { role: "assistant", content: "A new reply." },
-  });
-  harness.resolveSend(followup);
-  await next;
-  await harness.drain();
-  assert.equal(harness.replyVisible(), false, "the acknowledgement cannot undo a newer collapse");
-  expectState(harness, { replyText: "A new reply.", draft: "" });
-});
-
 function widgetFinal(gatewayGeneration = 1, document = "owner-a") {
   return {
     gatewayGeneration,
@@ -909,22 +856,15 @@ test("widget sync reports a current failure once and accepts later work", async 
   assert.equal(harness.activeWidgetSyncs(), 0);
 });
 
-for (const timing of ["same-frame", "awaiting-frame"] as const) {
-  test(`widget sync uses the latest ${timing} bounds`, async () => {
-    const harness = await createSlowWidgetHarness();
-    harness.resizeWidget(54);
-    if (timing === "awaiting-frame") {
-      await harness.drain();
-    }
-    harness.resizeWidget(57);
-    if (timing === "same-frame") {
-      await harness.drain();
-    }
-    const latest = await settleWidgetSync(harness);
-    assert.equal(latest.widgets[0].x, 57);
-    await finishWidgetSync(harness);
-  });
-}
+test("widget sync uses the latest same-frame bounds", async () => {
+  const harness = await createSlowWidgetHarness();
+  harness.resizeWidget(54);
+  harness.resizeWidget(57);
+  await harness.drain();
+  const latest = await settleWidgetSync(harness);
+  assert.equal(latest.widgets[0].x, 57);
+  await finishWidgetSync(harness);
+});
 
 test("retained widgets reconnect only to their original generation, including same-URL roundtrips", async () => {
   const harness = createQuickChatHarness();

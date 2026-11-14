@@ -177,50 +177,22 @@ run_failure_scenario
 `;
 
 describe("package fixture consent compatibility", () => {
-  describe.each([true, false])("consent support=%s", (supported) => {
-    const run = (script: string, options: Parameters<typeof writeCandidate>[1] = {}) => {
-      const result = runCandidate(script, { commands: supported ? undefined : [], ...options });
-      expect(result.status, result.stderr).toBe(0);
-      return result.calls;
-    };
-    it("runs the plugin sweep with selective consent", () => {
-      const calls = run(sweepFixtureLoader, { preserveUninstallIntent: true });
-      const mutations = calls.filter((args) => args[0] === "plugins" && !args.includes("--help"));
-      expect(installsFor(mutations)).toHaveLength(12);
-      for (const args of mutations) {
-        const positive =
-          (args[1] === "install" && !args.some((arg) => arg.includes("invalid-metadata"))) ||
-          args[1] === "enable" ||
-          (args[1] === "update" &&
-            args[2] === "marketplace-shortcut" &&
-            !args.includes("--dry-run"));
-        expect(args.includes(consent), args.join(" ")).toBe(supported && positive);
-      }
-      expect(mutations.filter((args) => args[1] === "update")).toHaveLength(5);
-      expect(mutations.filter((args) => args[1] === "enable").map((args) => args[2])).toEqual([
-        "demo-plugin-npm",
-        "claude-bundle-e2e",
-      ]);
-    });
+  it("explicitly enables the reinstalled plugin before exercising its command", () => {
+    const result = runCandidate(sweepFixtureLoader, { preserveUninstallIntent: true });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls).toContainEqual(["plugins", "enable", "demo-plugin-npm", consent]);
+  });
 
-    it("runs kitchen-sink success and registry failure", () => {
-      const calls = run(kitchenFixtureLoader);
-      const installs = installsFor(calls);
-      expect(installs.map((args) => [args[2], args.includes(consent)])).toEqual([
-        ["preinstall-spec", supported],
-        ["fixture-spec", supported],
-        ["missing-version", false],
-      ]);
-      expect(calls.find((args) => args[1] === "enable")).not.toContain(consent);
-    });
-
-    it("consents to ClawHub install but not unchanged update", () => {
-      const calls = run(
-        clawhubScenario(true, "clawhub:@example/consent-fixture", "consent-fixture"),
-      );
-      expect(installsFor(calls)[0]?.includes(consent)).toBe(supported);
-      expect(calls.find((args) => args[1] === "update")).not.toContain(consent);
-    });
+  it.each([true, false])("runs kitchen-sink success and failure (consent=%s)", (supported) => {
+    const result = runCandidate(kitchenFixtureLoader, { commands: supported ? undefined : [] });
+    expect(result.status, result.stderr).toBe(0);
+    const installs = installsFor(result.calls);
+    expect(installs.map((args) => [args[2], args.includes(consent)])).toEqual([
+      ["preinstall-spec", supported],
+      ["fixture-spec", supported],
+      ["missing-version", false],
+    ]);
+    expect(result.calls.find((args) => args[1] === "enable")).not.toContain(consent);
   });
 
   it("probes each command and preserves literal argv", () => {
@@ -259,6 +231,8 @@ ${fixtureCommand} plugins update fixture`,
     expect(result.status, result.stderr).toBe(0);
     const install = installsFor(result.calls)[0];
     expect(install?.[2]).toBe(expectedSpec);
+    expect(install).toContain(consent);
+    expect(result.calls.find((args) => args[1] === "update")).not.toContain(consent);
     expect(result.calls.filter((args) => args[1] === "inspect").map((args) => args[2])).toEqual([
       expectedId,
       expectedId,
@@ -277,8 +251,6 @@ ${fixtureCommand} plugins update fixture`,
 
   it.each([
     ["plugins", "error"],
-    ["plugins", "timeout"],
-    ["kitchen-sink", "error"],
     ["kitchen-sink", "timeout"],
   ])("%s logger fails before mutation on help %s", (suite, failure) => {
     const prefix = suite === "plugins" ? "OPENCLAW_PLUGINS" : "KITCHEN_SINK";

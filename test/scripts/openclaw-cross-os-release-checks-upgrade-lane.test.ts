@@ -107,7 +107,6 @@ import {
   runFreshLane,
   runUpgradeLane,
 } from "../../scripts/lib/cross-os-release-checks/lanes.ts";
-import { writeSummary } from "../../scripts/lib/cross-os-release-checks/reporting.ts";
 
 const { createTempDir, trackTempDir } = createScriptTestHarness();
 
@@ -172,7 +171,7 @@ function expectUpdateEnv(env: NodeJS.ProcessEnv) {
 
 const updateTimeout = () =>
   new Error(
-    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+    "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 1200",
   );
 
 function expectPhases(
@@ -233,16 +232,6 @@ function arrangeSuccessfulLane() {
 }
 
 describe("cross-OS manual gateway lane evidence", () => {
-  it("preserves native socket implementations for later shared-worker consumers", () => {
-    const nativeNet = process.getBuiltinModule("node:net");
-    expect(vi.isMockFunction(nativeNet.Socket)).toBe(false);
-    expect(vi.isMockFunction(nativeNet.Server)).toBe(false);
-    expect(nativeNet.Socket.prototype).toHaveProperty(
-      "write",
-      expect.toSatisfy((method) => !vi.isMockFunction(method)),
-    );
-  });
-
   beforeEach(() => {
     logsDir = createTempDir("openclaw-upgrade-lane-test-");
     mocks.ensureLocalNpmShim.mockImplementation(({ rootDir }) => trackTempDir(rootDir));
@@ -577,7 +566,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       mocks.runCommand.mockImplementationOnce(realProcess.runCommand);
       mocks.runOpenClaw.mockImplementationOnce(realRuntime.runOpenClaw);
       const running = runUpgradeLane(upgradeParams());
-      await vi.advanceTimersByTimeAsync(1_320_000);
+      await vi.advanceTimersByTimeAsync(2_520_000);
       expect(spawnSync).toHaveBeenCalledWith(
         expect.stringMatching(/taskkill\.exe$/u),
         ["/PID", "4242", "/T", "/F"],
@@ -771,16 +760,6 @@ describe("cross-OS manual gateway lane evidence", () => {
         expect(result.updateFallback).toEqual({ reason: "unsettled-exit", action });
         expect(result.updateTimings).toEqual(
           retryOutcome === "success" ? [{ name: "total", durationMs: 1234 }] : [],
-        );
-        writeSummary(logsDir, {
-          provider: "openai",
-          suite: "packaged-upgrade",
-          mode: "upgrade",
-          baselineSpec: params.baselineSpec,
-          result,
-        });
-        expect(readFileSync(join(logsDir, "summary.md"), "utf8")).toContain(
-          `- Updater fallback: \`unsettled-exit/${action}\``,
         );
       } else {
         expect(result).not.toHaveProperty("updateFallback");

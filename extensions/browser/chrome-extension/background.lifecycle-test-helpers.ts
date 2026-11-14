@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi, type Mock } from "vitest";
 import type { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
-import { FakeSocket } from "../src/browser/extension-relay/relay-bridge.test-support.js";
+import { createRelayClient } from "../src/browser/extension-relay/relay-runtime.test-support.js";
 import {
   loadBackground,
   loadRelayCommandHarness,
@@ -16,36 +16,21 @@ export function deferredScope() {
   return {
     deferred: <T>(fallback: T) => {
       const pending = createDeferred<T>();
-      const release = () => pending.resolve(fallback);
-      releases.add(release);
-      return {
-        promise: pending.promise,
-        resolve: (value = fallback) => {
-          releases.delete(release);
-          pending.resolve(value);
-        },
+      const resolve = (value = fallback) => {
+        releases.delete(resolve);
+        pending.resolve(value);
       };
+      releases.add(resolve);
+      return { promise: pending.promise, resolve };
     },
-    releaseAll: () => {
-      for (const release of releases) {
-        release();
-      }
-      releases.clear();
-    },
+    releaseAll: () => releases.forEach((release) => release()),
   };
 }
 
 export type CdpFrame = {
-  id?: number;
-  method?: string;
   result?: Record<string, unknown>;
   error?: { message: string };
-  params?: {
-    sessionId?: string;
-    requestId?: string;
-    targetId?: string;
-    targetInfo?: { targetId?: string };
-  };
+  params?: { requestId?: string; targetId?: string };
 };
 export function connectExtension(
   bridge: ExtensionRelayBridge,
@@ -65,71 +50,68 @@ export function connectExtension(
   extension.onMessage(JSON.stringify(hello));
 }
 export function connectCdpClient(bridge: ExtensionRelayBridge) {
-  const socket = new FakeSocket();
-  const handlers = bridge.attachCdpClientSocket(socket);
-  const frames = () => socket.frames() as CdpFrame[];
-  let id = 0;
-  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
-    const requestId = ++id;
-    handlers.onMessage(JSON.stringify({ id: requestId, method, params, sessionId }));
-    return requestId;
-  };
-  const response = (requestId: number) =>
-    vi.waitFor(() => {
-      const frame = frames().find((entry) => entry.id === requestId);
-      assert(frame, `missing CDP reply ${requestId}`);
-      return frame;
-    });
-  const request = async (
-    method: string,
-    params: Record<string, unknown> = {},
-    sessionId?: string,
-  ) => await response(send(method, params, sessionId));
+  const client = createRelayClient(bridge, undefined, vi.waitFor);
+  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
+    client.send(method, sessionId, params);
+  const response = async (id: number) => (await client.response(id)) as CdpFrame;
+  const request = async (...args: Parameters<typeof send>) => await response(send(...args));
   return {
-    frames,
     send,
     response,
     request,
-    close: handlers.onClose,
-    events: (method: string) => frames().filter((frame) => frame.method === method),
-    async requestResult(method: string, params: Record<string, unknown> = {}, sessionId?: string) {
-      const frame = await request(method, params, sessionId);
+    close: client.close,
+    events: (method: string) => client.frames(method) as CdpFrame[],
+    async requestResult(this: void, ...args: Parameters<typeof send>) {
+      const frame = await request(...args);
       expect(frame).not.toHaveProperty("error");
       return frame.result;
     },
-    root(targetId: string) {
-      const session = frames().find(
-        (frame) =>
-          frame.method === "Target.attachedToTarget" &&
-          frame.params?.targetInfo?.targetId === targetId,
-      )?.params?.sessionId;
-      assert(typeof session === "string");
-      return session;
-    },
+    root: (...args: Parameters<typeof client.child>) => client.child(...args),
   };
 }
 
 export const relayFrames = (socket: FakeWebSocket) =>
   socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
 
-export function relayRequest(socket: FakeWebSocket, firstSeq = 1000) {
-  let seq = firstSeq;
-  return async (message: Record<string, unknown>) => {
-    const id = ++seq;
-    socket.receive({ ...message, seq: id });
-    return await vi.waitFor(() => {
-      const response = relayFrames(socket).find((frame) => frame.seq === id);
-      expect(response).toBeDefined();
-      return response;
-    });
-  };
+export async function relayReply(socket: FakeWebSocket, message: Record<string, unknown>) {
+  const before = relayFrames(socket).length;
+  socket.receive(message);
+  return await vi.waitFor(() => {
+    const response = relayFrames(socket)
+      .slice(before)
+      .find((frame) =>
+        message.type === "ping" ? frame.type === "pong" : frame.seq === message.seq,
+      );
+    expect(response).toBeDefined();
+    return response;
+  });
+}
+
+type BackgroundOptions = NonNullable<Parameters<typeof loadBackground>[0]>;
+export function loadConfiguredBackground(
+  accessMode: string,
+  tabs: Array<number | NonNullable<BackgroundOptions["initialTabs"]>[number]> = [],
+  options: BackgroundOptions = {},
+) {
+  return loadBackground({
+    storedConfig: relayConfig(accessMode),
+    initialTabs: tabs.map((tab) => ({
+      url: "https://example.com/",
+      groupId: -1,
+      ...(typeof tab === "number" ? { id: tab } : tab),
+    })),
+    ...options,
+  });
 }
 
 export async function connectRelay(harness: Awaited<ReturnType<typeof loadBackground>>) {
   const socket = harness.relaySockets[0]!;
   expect(socket).toBeDefined();
   await harness.authenticate(socket);
-  return { socket, frames: () => relayFrames(socket), request: relayRequest(socket) };
+  let seq = 1000;
+  const request = async (message: Record<string, unknown>): Promise<Record<string, unknown>> =>
+    await relayReply(socket, { ...message, seq: ++seq });
+  return { socket, frames: () => relayFrames(socket), request };
 }
 
 export const runtime = (
@@ -153,24 +135,19 @@ export const cdp = (method: string, params?: Record<string, unknown>, tabId = 10
   ...(params === undefined ? {} : { params }),
 });
 
-export function expectType(response: unknown, type = "result") {
+export const expectType = (response: unknown, type = "result") =>
   expect(response).toMatchObject({ type });
-}
 
-export function expectUnused(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
+export const expectResult = (response: unknown, result: Record<string, unknown>) =>
+  expect(response).toMatchObject({ type: "result", result });
+
+export const expectUnused = (...mocks: unknown[]) =>
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
 
 export async function waitCalled(mock: unknown, ...args: unknown[]) {
-  await vi.waitFor(() => {
-    if (args.length) {
-      expect(mock).toHaveBeenCalledWith(...args);
-    } else {
-      expect(mock).toHaveBeenCalled();
-    }
-  });
+  await vi.waitFor(() =>
+    args.length ? expect(mock).toHaveBeenCalledWith(...args) : expect(mock).toHaveBeenCalled(),
+  );
 }
 
 export function holdNext<Args extends unknown[], Result>(

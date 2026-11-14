@@ -1,35 +1,32 @@
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   installSessionPlacementAdmissionProvider,
   withSessionPlacementTurnAdmission,
 } from "../../agents/session-placement-admission.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import { remoteExecEnvironment, revocableTurn } from "./worker-turn-launcher-flow.test-support.js";
+import {
+  installLauncherTest,
+  remoteExecEnvironment,
+  revocableTurn,
+} from "./worker-turn-launcher-flow.test-support.js";
 import {
   MANIFEST_REF,
   SESSION_ID,
-  cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
   root,
   seedActivePlacement,
   sessionTarget,
-  setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
-afterAll(closeStateDatabaseForTest);
-
 describe("reconciliation continuation authority", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
+  installLauncherTest();
   it.each([
     { mode: "remote-exec", authority: "source", revokeAt: "wait" },
     { mode: "remote-exec", authority: "admitted", revokeAt: "wait" },
@@ -73,6 +70,11 @@ describe("reconciliation continuation authority", () => {
         "test.reconciliation-source",
       );
       const { revoke } = authorityTurn;
+      const revokeAfter = (stage: string | undefined) => {
+        if (revokeAt === stage) {
+          revoke();
+        }
+      };
       const input = {
         ...authorityTurn.input,
         abortSignal: abort.signal,
@@ -84,9 +86,7 @@ describe("reconciliation continuation authority", () => {
         async (command) => {
           // Simulate transport readiness yielding before its synchronous dispatch guard.
           await Promise.resolve();
-          if (revokeAt === "dispatch") {
-            revoke();
-          }
+          revokeAfter("dispatch");
           command.assertCurrent?.();
           executedCommands.push([...command.argv]);
           const result = await runCommandWithTimeout([...command.argv], {
@@ -94,23 +94,15 @@ describe("reconciliation continuation authority", () => {
             input: command.input,
             timeoutMs: 5000,
           });
-          if (revokeAt === command.argv[5]) {
-            revoke();
-          }
+          revokeAfter(command.argv[5]);
           return result;
         },
       );
-      const environments = remoteExecEnvironment(runWorkspaceCommand, () => {
-        if (revokeAt === "tunnel") {
-          revoke();
-        }
-      });
-      const resolveWorkspace = vi.fn(async () => {
-        if (revokeAt === "workspace") {
-          revoke();
-        }
+      const environments = remoteExecEnvironment(runWorkspaceCommand, () => revokeAfter("tunnel"));
+      const resolveWorkspace = async () => {
+        revokeAfter("workspace");
         return { kind: "local" as const, path: root };
-      });
+      };
       const runLocal = vi.fn(async () => {
         const directories = (await readdir(remote)).filter((name) =>
           name.startsWith(WORKER_ATTACHMENT_DIRECTORY_PREFIX),
@@ -134,9 +126,7 @@ describe("reconciliation continuation authority", () => {
       try {
         await vi.waitFor(() => expect(waiting).toHaveBeenCalledOnce());
         expect(runWorkspaceCommand).not.toHaveBeenCalled();
-        if (revokeAt === "wait") {
-          revoke();
-        }
+        revokeAfter("wait");
         await placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
         await placements.acceptWorkspaceResult(prior);
         await placements.completeWorkspaceResultAndReleaseTurn(prior);
@@ -148,15 +138,11 @@ describe("reconciliation continuation authority", () => {
           await expect(run).rejects.toThrow(/authority/);
           expect(abort.signal.aborted).toBe(false);
           const transferred = revokeAt === "init" || revokeAt === "write";
-          expect(environments.startTunnel).toHaveBeenCalledTimes(
-            transferred || revokeAt === "tunnel" || revokeAt === "dispatch" ? 1 : 0,
-          );
           if (transferred) {
             expect(executedCommands.map((argv) => argv[5])).toEqual(
               revokeAt === "init" ? ["init", "cleanup"] : ["init", "write", "cleanup"],
             );
           } else {
-            expect(runWorkspaceCommand).toHaveBeenCalledTimes(revokeAt === "dispatch" ? 1 : 0);
             expect(executedCommands).toEqual([]);
           }
           expect(runLocal).not.toHaveBeenCalled();

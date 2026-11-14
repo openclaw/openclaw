@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
-  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
@@ -38,39 +34,21 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
-        const trigger = page.locator("#new-session-where-trigger");
         const picker = page.locator(".oc-popover.new-session-page__where-popover");
-        await trigger.click();
+        await page.locator("#new-session-where-trigger").click();
         await picker.getByRole("button", { name: "aws", exact: true }).click();
         await picker.locator('[data-value="cloud:aws"]').hover();
         await picker.locator('[data-value="machine:standard"]').waitFor();
         expect(await picker.locator('[data-value^="os:"]').count()).toBe(0);
-        const capturePicker = async (fileName: string) => {
-          if (captureUiProofEnabled) {
-            await writeFile(
-              path.join(suite.artifactDir, fileName),
-              await takeControlUiViewportScreenshot(
-                page,
-                picker.locator(".new-session-page__cloud-configuration"),
-                [picker.locator('[data-value="machine:standard"]')],
-              ),
-            );
-          }
-        };
-        await capturePicker("01-before-os-capability-metadata.png");
 
+        const operatingSystems = [
+          { id: "linux", label: "Linux", default: true },
+          { id: "macos", label: "macOS", disabledReason },
+          { id: "windows", label: "Windows", disabledReason },
+        ];
         await gateway.setMethodResponse("environments.list", {
           environments: [],
-          profiles: [
-            {
-              ...profile,
-              operatingSystems: [
-                { id: "linux", label: "Linux", default: true },
-                { id: "macos", label: "macOS", disabledReason },
-                { id: "windows", label: "Windows", disabledReason },
-              ],
-            },
-          ],
+          profiles: [{ ...profile, operatingSystems }],
         });
         await gateway.emitGatewayEvent("node.runnerInventory.changed");
         const linux = picker.locator('[data-value="os:linux"]');
@@ -79,11 +57,9 @@ suite.define(() => {
         expect(await linux.evaluate((element) => element.tagName)).toBe("SPAN");
         expect(await linux.getAttribute("aria-pressed")).toBeNull();
         expect(await linux.textContent()).toBe("Linux");
-        for (const os of ["macos", "windows"]) {
-          const option = picker.locator(`[data-value="os:${os}"]`);
-          expect(await option.count()).toBe(0);
-        }
-        await capturePicker("02-after-unavailable-operating-systems.png");
+        expect(
+          await picker.locator('[data-value="os:macos"], [data-value="os:windows"]').count(),
+        ).toBe(0);
         await page.keyboard.press("Escape");
         await page.locator(".new-session-page__message").fill("Continue on Linux");
         await page.getByRole("button", { name: "Start session" }).click();

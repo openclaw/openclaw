@@ -4,110 +4,34 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
-import type { QuestionAnswers, QuestionResolveResult } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
+  answeredPayload,
+  compactAnswer,
+  createQuestionHarness,
+  createQuestionResolver,
+  defaultRequestDeadline,
+  detailedAnswer,
+  expectPrompt,
+  questionNotFoundError,
+  recordQuestionResolution,
+  requestedPayload,
+  requestQuestion,
+  resolvedQuestion,
+  type QuestionState,
+  type RequestFn,
+} from "./question-prompt.test-support.ts";
+import {
   cancelQuestionPrompt,
-  createQuestionPromptState,
-  disposeQuestionPromptState,
-  handleQuestionPromptEvent,
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
   submitQuestionPrompt,
 } from "./question-prompt.ts";
 
-type RequestFn = (
-  method: string,
-  params?: unknown,
-  options?: GatewayProtocolRequestOptions,
-) => Promise<unknown>;
-type QuestionPromptState = ReturnType<typeof createQuestionPromptState>;
-
-const states: QuestionPromptState[] = [];
-const defaultRequestDeadline = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
-
-function createState(onChange = vi.fn()) {
-  const state = createQuestionPromptState(onChange);
-  states.push(state);
-  return state;
-}
-
-function requestedPayload(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "question-1",
-    questions: [
-      {
-        questionId: "format",
-        header: "Format",
-        question: "Which format should I use?",
-        options: [{ label: "Compact", description: "Keep it brief" }, { label: "Detailed" }],
-        isOther: true,
-      },
-    ],
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    runId: "run-question",
-    createdAtMs: 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    status: "pending",
-    ...overrides,
-  };
-}
-
-function requestQuestion(state: QuestionPromptState, overrides: Record<string, unknown> = {}) {
-  return handleQuestionPromptEvent(state, {
-    event: "question.requested",
-    payload: requestedPayload(overrides),
-  });
-}
-
-function recordQuestionResolution(state: QuestionPromptState, payload: unknown) {
-  return handleQuestionPromptEvent(state, { event: "question.resolved", payload });
-}
-
-const detailedAnswer = { answers: { format: ["Detailed"] } };
-function answeredPayload(overrides: Record<string, unknown> = {}) {
-  return requestedPayload({ status: "answered", answers: detailedAnswer, ...overrides });
-}
-
-function resolvedQuestion(params?: unknown): QuestionResolveResult {
-  const request = params as { answers?: QuestionAnswers; cancel?: true } | undefined;
-  return request?.cancel
-    ? { status: "cancelled" }
-    : {
-        status: "answered",
-        answers: request?.answers ?? { answers: { format: ["Compact"] } },
-      };
-}
-
-function createQuestionResolver() {
-  return vi.fn<RequestFn>(async (_method, params) => resolvedQuestion(params));
-}
-
-function createConnectedState(
-  request: RequestFn | { request: RequestFn },
-  overrides: Record<string, unknown> | null = {},
-) {
-  const state = createState();
-  const client = typeof request === "function" ? { request } : request;
-  setQuestionPromptClient(state, client);
-  if (overrides !== null) {
-    requestQuestion(state, overrides);
-  }
-  return { state, client };
-}
-
-function questionNotFoundError() {
-  return new GatewayRequestError({
-    code: "INVALID_REQUEST",
-    message: "question was not found",
-    details: { reason: "QUESTION_NOT_FOUND" },
-  });
-}
+const { createState, createConnectedState } = createQuestionHarness();
 
 function rejectAfterRequestDeadline(options?: GatewayProtocolRequestOptions): Promise<never> {
   return new Promise((_resolve, reject) => {
@@ -127,27 +51,27 @@ function createDeferredQuestionRequest() {
   return {
     request,
     resolve: () => pending.resolve(resolvedQuestion(request.mock.calls.at(-1)?.[1])),
-    reject: () => pending.reject(new Error("stale gateway unavailable")),
+    reject: (message = "stale gateway unavailable") => pending.reject(new Error(message)),
   };
 }
 
-function answerQuestion(state: QuestionPromptState) {
-  return submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
+function expectQuestionGet(request: RequestFn) {
+  expect(request).toHaveBeenCalledWith(
+    "question.get",
+    { id: "question-1" },
+    defaultRequestDeadline,
+  );
 }
 
-afterEach(() => {
-  for (const state of states.splice(0)) {
-    disposeQuestionPromptState(state);
-  }
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-});
+function answerQuestion(state: QuestionState) {
+  return submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
+}
 
 describe("question event parsing", () => {
   it("round-trips requested and resolved event payloads", () => {
     const state = createState();
     expect(requestQuestion(state)).toBe(true);
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       id: "question-1",
       runId: "run-question",
       sessionKey: "agent:main:main",
@@ -158,27 +82,38 @@ describe("question event parsing", () => {
       recordQuestionResolution(state, {
         id: "question-1",
         status: "answered",
-        answers: { answers: { format: ["Compact"] } },
+        answers: compactAnswer,
       }),
     ).toBe(true);
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       runId: "run-question",
       status: "answered",
-      answers: { answers: { format: ["Compact"] } },
+      answers: compactAnswer,
     });
   });
 
   it("preserves question and option display normalization for canonical Gateway records", () => {
     const state = createState();
     const question = requestedPayload().questions[0]!;
-    requestQuestion(state, {
-      questions: [
-        { ...question, question: "  Which format?  ", options: [{ label: "  Compact  " }] },
+    const media = {
+      presentation: "form",
+      resource: { viewId: "form-view", selection: "explicit" },
+      options: [
+        {
+          label: "  Compact  ",
+          thumbnail: "https://example.test/compact.png",
+          resourceUri: "https://example.test/compact",
+          preview: { type: "resource_link", uri: "https://example.test/compact", name: "Compact" },
+        },
       ],
+    };
+    requestQuestion(state, {
+      questions: [{ ...question, ...media, question: "  Which format?  " }],
     });
     expect(state.prompts.get("question-1")?.questions[0]).toMatchObject({
+      ...media,
       question: "Which format?",
-      options: [{ label: "Compact" }],
+      options: [{ ...media.options[0], label: "Compact" }],
     });
   });
 
@@ -229,79 +164,47 @@ describe("question prompt state", () => {
     recordQuestionResolution(state, {
       id: "question-1",
       status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
   });
 
-  it("marks a locally submitted answer as local when its broadcast arrives", async () => {
+  it.each([
+    { outcome: "confirmed local broadcast", answers: compactAnswer, error: null, local: true },
+    {
+      outcome: "concurrent remote winner",
+      answers: detailedAnswer,
+      error: "question already resolved",
+      local: false,
+    },
+    {
+      outcome: "lost local response",
+      answers: compactAnswer,
+      error: "connection closed",
+      local: false,
+    },
+  ])("preserves provenance after a $outcome", async ({ answers, error, local }) => {
     const pending = createDeferredQuestionRequest();
     const { state } = createConnectedState(pending.request);
-
-    const submitting = submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
-    recordQuestionResolution(state, {
-      id: "question-1",
-      status: "answered",
-      answers: { answers: { format: ["Compact"] } },
-    });
-    pending.resolve();
+    const submitting = answerQuestion(state);
+    recordQuestionResolution(state, { id: "question-1", status: "answered", answers });
+    if (error) {
+      pending.reject(error);
+    } else {
+      pending.resolve();
+    }
     await submitting;
-
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "answered",
-      answeredElsewhere: false,
-      localResolutionConfirmed: true,
+      answers,
       submitting: false,
-    });
-  });
-
-  it("marks a concurrent winning answer from another surface", async () => {
-    const pending = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>(() => pending.promise);
-    const { state } = createConnectedState(request);
-
-    const submitting = submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
-    recordQuestionResolution(state, {
-      id: "question-1",
-      status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
-    });
-    pending.reject(new Error("question already resolved"));
-    await submitting;
-
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      answeredElsewhere: true,
-      localResolutionConfirmed: false,
-      submitting: false,
-      answers: { answers: { format: ["Detailed"] } },
-    });
-  });
-
-  it("keeps local provenance when the accepted resolve response is lost", async () => {
-    const pending = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>(() => pending.promise);
-    const { state } = createConnectedState(request);
-
-    const submitting = submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
-    recordQuestionResolution(state, {
-      id: "question-1",
-      status: "answered",
-      answers: { answers: { format: ["Compact"] } },
-    });
-    pending.reject(new Error("connection closed"));
-    await submitting;
-
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      answeredElsewhere: false,
-      submitting: false,
-      answers: { answers: { format: ["Compact"] } },
+      answeredElsewhere: answers === detailedAnswer,
+      localResolutionConfirmed: local,
     });
   });
 
@@ -316,7 +219,7 @@ describe("question prompt state", () => {
 
     await submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "pending",
       submitting: false,
       error: "Localized reconnect guidance",
@@ -367,7 +270,7 @@ describe("question RPC helpers", () => {
       },
       defaultRequestDeadline,
     );
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "answered",
       localResolutionConfirmed: true,
       answeredElsewhere: false,
@@ -386,7 +289,7 @@ describe("question RPC helpers", () => {
       { id: "question-1", cancel: true },
       defaultRequestDeadline,
     );
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "cancelled",
       localResolutionConfirmed: true,
       submitting: false,
@@ -401,7 +304,7 @@ describe("question RPC helpers", () => {
 
       await submitQuestionPrompt(state, "question-1", { format: ["Compact"] });
 
-      expect(state.prompts.get("question-1")).toMatchObject({
+      expectPrompt(state, {
         status: "pending",
         submitting: false,
         error: "invalid question.resolve response",
@@ -420,7 +323,7 @@ describe("question RPC helpers", () => {
     expect(state.prompts.get("question-1")?.submitting).toBe(true);
     await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "pending",
       submitting: false,
       error: `gateway request timed out after ${DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS}ms`,
@@ -463,7 +366,7 @@ describe("question resolution connection ownership", () => {
       }
       await staleResolution;
 
-      expect(state.prompts.get("question-1")).toMatchObject({
+      expectPrompt(state, {
         status: "pending",
         submitting: true,
         localResolutionConfirmed: false,
@@ -498,7 +401,7 @@ describe("question resolution connection ownership", () => {
     const currentResolution = answerQuestion(state);
     await staleResolution;
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "pending",
       submitting: true,
       localResolutionConfirmed: false,
@@ -527,7 +430,7 @@ describe("question resolution connection ownership", () => {
     pending.resolve();
     await resolution;
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "answered",
       localResolutionConfirmed: true,
       submitting: false,
@@ -535,42 +438,24 @@ describe("question resolution connection ownership", () => {
     });
   });
 
-  it("does not carry an answered question into a replacement gateway", () => {
-    const firstClient = { request: createQuestionResolver() };
-    const secondClient = { request: createQuestionResolver() };
-    const { state } = createConnectedState(firstClient, requestedPayload());
-    recordQuestionResolution(state, {
-      id: "question-1",
-      status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
-    });
-    recordQuestionResolution(state, { id: "unmatched-first-gateway", status: "cancelled" });
-    setQuestionPromptClient(state, null);
-
-    setQuestionPromptClient(state, secondClient);
-
-    expect(state.prompts.size).toBe(0);
-    expect(state.unmatchedResolutions.size).toBe(0);
-  });
-
-  it("preserves authoritative question records when the same gateway reconnects", () => {
+  it.each([false, true])("retains records only for the same gateway: %s", (sameGateway) => {
     const client = { request: createQuestionResolver() };
-    const { state } = createConnectedState(client, requestedPayload());
+    const { state } = createConnectedState(client);
     recordQuestionResolution(state, {
       id: "question-1",
       status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
-    recordQuestionResolution(state, { id: "unmatched-same-gateway", status: "cancelled" });
-
+    recordQuestionResolution(state, { id: "unmatched", status: "cancelled" });
     setQuestionPromptClient(state, null);
-    setQuestionPromptClient(state, client);
-
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
-    });
-    expect(state.unmatchedResolutions.has("unmatched-same-gateway")).toBe(true);
+    setQuestionPromptClient(state, sameGateway ? client : { request: createQuestionResolver() });
+    if (sameGateway) {
+      expectPrompt(state, { status: "answered", answers: detailedAnswer });
+      expect(state.unmatchedResolutions.has("unmatched")).toBe(true);
+    } else {
+      expect(state.prompts.size).toBe(0);
+      expect(state.unmatchedResolutions.size).toBe(0);
+    }
   });
 });
 
@@ -626,7 +511,7 @@ describe("refreshPendingQuestions", () => {
     recordQuestionResolution(state, {
       id: "question-1",
       status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
     list.resolve({ questions: [requestedPayload()] });
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
@@ -645,20 +530,16 @@ describe("refreshPendingQuestions", () => {
     recordQuestionResolution(state, {
       id: "question-1",
       status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
     list.resolve({ questions: [] });
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
-    expect(request).toHaveBeenCalledWith(
-      "question.get",
-      { id: "question-1" },
-      defaultRequestDeadline,
-    );
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectQuestionGet(request);
+    expectPrompt(state, {
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
     expect(state.unmatchedResolutions.size).toBe(0);
   });
@@ -669,10 +550,7 @@ describe("refreshPendingQuestions", () => {
         return { questions: [] };
       }
       return {
-        question: requestedPayload({
-          status: "answered",
-          answers: { answers: { format: ["Detailed"] } },
-        }),
+        question: answeredPayload(),
       };
     });
     const { state, client } = createConnectedState(request, requestedPayload());
@@ -680,15 +558,11 @@ describe("refreshPendingQuestions", () => {
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
-    expect(request).toHaveBeenCalledWith(
-      "question.get",
-      { id: "question-1" },
-      defaultRequestDeadline,
-    );
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectQuestionGet(request);
+    expectPrompt(state, {
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
   });
 
@@ -712,10 +586,10 @@ describe("refreshPendingQuestions", () => {
 
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
   });
 
@@ -731,7 +605,7 @@ describe("refreshPendingQuestions", () => {
     refreshPendingQuestionsWithRetry(state, client);
     await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("unavailable"));
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "unavailable",
       answeredElsewhere: false,
       locallyExpired: false,
@@ -781,7 +655,7 @@ describe("refreshPendingQuestions", () => {
     recordQuestionResolution(state, {
       id: "question-1",
       status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
 
     refreshPendingQuestionsWithRetry(state, client);
@@ -789,10 +663,10 @@ describe("refreshPendingQuestions", () => {
     expect(state.unmatchedResolutions.has("question-1")).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(state.prompts.get("question-1")).toMatchObject({
+    expectPrompt(state, {
       status: "answered",
       answeredElsewhere: true,
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
     expect(state.unmatchedResolutions.size).toBe(0);
   });
@@ -817,107 +691,57 @@ describe("refreshPendingQuestions", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(state.prompts.get("question-2")).toMatchObject({
       status: "answered",
-      answers: { answers: { format: ["Detailed"] } },
+      answers: detailedAnswer,
     });
     expect(state.prompts.get("question-1")?.status).toBe("pending");
     await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
     expect(state.prompts.get("question-1")?.status).toBe("pending");
   });
 
-  it("reconciles a locally expired prompt with the authoritative record", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const request = vi.fn<RequestFn>(async (method) =>
-      method === "question.list"
-        ? { questions: [] }
-        : {
-            question: requestedPayload({
-              status: "answered",
-              answers: { answers: { format: ["Detailed"] } },
-            }),
-          },
-    );
-    const { state, client } = createConnectedState(
-      request,
-      requestedPayload({ expiresAtMs: Date.now() + 1_000 }),
-    );
-    vi.advanceTimersByTime(1_000);
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "expired",
-      locallyExpired: true,
-    });
-
-    refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
-
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      locallyExpired: false,
-      answeredElsewhere: true,
-      answers: { answers: { format: ["Detailed"] } },
-    });
-  });
-
-  it("applies a question.get answer when the local timer expires in flight", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const get = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>((method) => {
-      if (method === "question.list") {
-        return Promise.resolve({ questions: [] });
+  it.each(["before refresh", "during question.get", "during question.list"])(
+    "reconciles expiry %s with the authoritative answer",
+    async (phase) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
+      const list = createDeferred<unknown>();
+      const get = createDeferred<unknown>();
+      const request = vi.fn<RequestFn>((method) =>
+        method === "question.list"
+          ? phase === "during question.list"
+            ? list.promise
+            : Promise.resolve({ questions: [] })
+          : phase === "during question.get"
+            ? get.promise
+            : Promise.resolve({ question: answeredPayload() }),
+      );
+      const { state, client } = createConnectedState(request, { expiresAtMs: Date.now() + 1_000 });
+      if (phase === "before refresh") {
+        vi.advanceTimersByTime(1_000);
+        expectPrompt(state, { status: "expired", locallyExpired: true });
       }
-      return get.promise;
-    });
-    const { state, client } = createConnectedState(request, { expiresAtMs: Date.now() + 1_000 });
-
-    refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "question.get",
-        { id: "question-1" },
-        defaultRequestDeadline,
-      ),
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(state.prompts.get("question-1")?.locallyExpired).toBe(true);
-    get.resolve({ question: answeredPayload() });
-
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      locallyExpired: false,
-      answeredElsewhere: true,
-    });
-  });
-
-  it("reconciles local expiry that occurs while question.list is in flight", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
-    const list = createDeferred<unknown>();
-    const request = vi.fn<RequestFn>((method) => {
-      if (method === "question.list") {
-        return list.promise;
+      refreshPendingQuestionsWithRetry(state, client);
+      if (phase !== "before refresh") {
+        if (phase === "during question.get") {
+          await waitForFast(() => expectQuestionGet(request));
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(state.prompts.get("question-1")?.locallyExpired).toBe(true);
+        if (phase === "during question.get") {
+          get.resolve({ question: answeredPayload() });
+        } else {
+          list.resolve({ questions: [] });
+        }
       }
-      return Promise.resolve({ question: answeredPayload() });
-    });
-    const { state, client } = createConnectedState(request, { expiresAtMs: Date.now() + 1_000 });
-
-    refreshPendingQuestionsWithRetry(state, client);
-    await vi.advanceTimersByTimeAsync(1_000);
-    list.resolve({ questions: [] });
-
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
-    expect(request).toHaveBeenCalledWith(
-      "question.get",
-      { id: "question-1" },
-      defaultRequestDeadline,
-    );
-    expect(state.prompts.get("question-1")).toMatchObject({
-      status: "answered",
-      locallyExpired: false,
-      answeredElsewhere: true,
-    });
-  });
+      await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+      expectQuestionGet(request);
+      expectPrompt(state, {
+        status: "answered",
+        locallyExpired: false,
+        answeredElsewhere: true,
+        answers: detailedAnswer,
+      });
+    },
+  );
 
   it("publishes listed questions before older reconciliation finishes", async () => {
     const get = createDeferred<unknown>();
@@ -937,13 +761,7 @@ describe("refreshPendingQuestions", () => {
     onChange.mockClear();
 
     refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "question.get",
-        { id: "question-1" },
-        defaultRequestDeadline,
-      ),
-    );
+    await waitForFast(() => expectQuestionGet(request));
 
     expect(state.prompts.get("question-2")?.status).toBe("pending");
     expect(onChange).toHaveBeenCalled();

@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 import { UpdateRunRecordSchema } from "./update-runs.js";
 
@@ -355,6 +354,8 @@ const ConfigUiHintSchema = closedObject({
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
   multiline: Type.Optional(Type.Boolean()),
+  // The placeholder describes an inherited default, not an example input.
+  inheritedDefault: Type.Optional(Type.Boolean()),
   presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });

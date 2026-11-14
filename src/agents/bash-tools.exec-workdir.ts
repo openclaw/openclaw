@@ -5,7 +5,10 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { isPathInside, safeStatSync } from "../infra/path-guards.js";
@@ -353,7 +356,8 @@ export async function resolveExecWorkdir(params: {
   }
 
   if (params.host === "node") {
-    const remoteCwd = explicitWorkdir ?? normalizeOptionalString(params.nodeCwd);
+    const remoteCwd = readNonBlankString(params.workdir) ?? readNonBlankString(params.nodeCwd);
+    // Node-host cwd is forwarded verbatim; preserve whitespace (unlike local/sandbox).
     return remoteCwd ? { kind: "node", remoteCwd } : { kind: "node" };
   }
 

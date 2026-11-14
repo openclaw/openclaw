@@ -23,6 +23,7 @@ import {
 import {
   resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
 import { resolveDirectProviderCredentialMode } from "./model-auth-runtime-shared.js";
 import {
@@ -293,6 +294,32 @@ export function createProviderAuthResolver(
       return options?.excludeProfileIds?.includes(binding.profileId ?? "")
         ? { apiKey: undefined, mode: "none", source: "none" }
         : { ...binding, source: "profile" };
+    }
+    const configured = resolveProviderConfigSecretInput(
+      config,
+      authProvider,
+      sourceConfigForSecrets,
+    );
+    if (
+      configured.ref ||
+      (typeof configured.providerConfig?.apiKey === "string" &&
+        isKnownEnvApiKeyMarker(configured.providerConfig.apiKey)) ||
+      shouldPreferExplicitConfigApiKeyAuth(config, authProvider)
+    ) {
+      // Discovery must describe the configured credential that execution selects,
+      // not an unrelated saved profile or ambient environment key.
+      const direct = resolveConfigBackedProviderAuth({
+        provider: authProvider,
+        config,
+        sourceConfigForSecrets,
+        authStore,
+        env,
+        workspaceDir,
+        syntheticAuthEnv,
+      });
+      return direct
+        ? { ...direct, source: direct.source ?? "none" }
+        : { apiKey: undefined, mode: "none", source: "none" };
     }
     const excludedProfileIds = new Set(options?.excludeProfileIds);
     const ids = resolveCatalogAuthProfileOrder({

@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareForeignLiveSessionPendingInputEntries } from "./session-accessor.pending-inputs.js";
 import { prepareSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 
 it.each([
@@ -48,5 +49,19 @@ it.each([
     } finally {
       probes.forEach((probe) => probe.mockRestore());
     }
+  });
+});
+
+it("prepares foreign input exclusion before a session database is created", async () => {
+  await withOpenClawTestState({ label: "first-input-target" }, async (state) => {
+    const storePath = path.join(state.root, "uncreated", "openclaw-agent.sqlite");
+    const read = await prepareForeignLiveSessionPendingInputEntries({
+      agentId: "main",
+      sessionKey: "agent:main:first-turn",
+      sessionId: "first-turn",
+      storePath,
+    });
+    expect(read()).toEqual(new Map());
+    expect(fs.existsSync(storePath)).toBe(false);
   });
 });

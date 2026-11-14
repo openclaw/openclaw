@@ -6,6 +6,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayComputerService } from "../desktop/computer-service.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { computerHandlers } from "./computer.js";
 import type {
   GatewayClient,
@@ -14,26 +15,11 @@ import type {
 } from "./types.js";
 
 type ComputerMethods = Pick<GatewayComputerService, "status" | "invoke">;
-function computerService(methods: ComputerMethods): GatewayComputerService {
-  return {
-    ...methods,
-    close: async () => {},
-    reconcileRuntimePolicy: async () => {},
-    revokeRunAuthority: () => {},
-    preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
-  };
-}
 
 function createClient(identity?: AgentRuntimeIdentity): GatewayClient {
   return {
     connId: "computer-operator",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.write"],
-      client: { id: GATEWAY_CLIENT_IDS.CLI, version: "test", platform: "test", mode: "cli" },
-    },
+    connect: gatewayConnect(["operator.write"], { id: GATEWAY_CLIENT_IDS.CLI, mode: "cli" }),
     ...(identity ? { internal: { syntheticClient: true, agentRuntimeIdentity: identity } } : {}),
   };
 }
@@ -70,7 +56,7 @@ async function invoke(
     respond,
     client: createClient(),
     isWebchatConnect: () => false,
-    context: { gatewayComputerService: service && computerService(service), ...context },
+    context: { gatewayComputerService: service, ...context },
     ...requestOptions,
   } as GatewayRequestHandlerOptions);
   return respond.mock.calls[0];
@@ -104,6 +90,7 @@ const snapshot = {
   generation: "provider-one",
   idempotencyKey: "snapshot-one",
 };
+const unavailableStatus = [true, { available: false, configured: false }];
 
 describe("Gateway computer RPC", () => {
   it("retains one ingress execution owner across origin-free RPCs and fences deferred input", async () => {
@@ -124,10 +111,9 @@ describe("Gateway computer RPC", () => {
       };
       return client;
     };
-    expect(await invoke("computer.status", {}, undefined, { client: clientForRequest() })).toEqual([
-      true,
-      { available: false, configured: false },
-    ]);
+    expect(await invoke("computer.status", {}, undefined, { client: clientForRequest() })).toEqual(
+      unavailableStatus,
+    );
     const { owners, entered, prepared, sideEffect, service } = deferredInput(grant.signal, 2);
     const dispatch = (params = snapshot) =>
       invoke("computer.invoke", params, service, { client: clientForRequest() });
@@ -152,58 +138,33 @@ describe("Gateway computer RPC", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "allows capability discovery before run admission (synthetic=%s)",
-    async (synthetic) => {
-      const client = createClient();
-      if (synthetic) {
-        delete client.connId;
-        client.internal = { syntheticClient: true };
-      }
-      expect(await invoke("computer.status", {}, undefined, { client })).toEqual([
-        true,
-        { available: false, configured: false },
-      ]);
-    },
-  );
-
-  it.each([
-    ["false", false],
-    [true, true],
-  ] as const)("validates status probe %s", async (probe, valid) => {
-    const params = { probe };
-    const status = vi.fn(async () => ({ configured: false, available: false }));
-    const result = await invoke("computer.status", params, { status, invoke: vi.fn() });
-    expect(result?.[0]).toBe(valid);
-    if (valid) {
-      expect(status).toHaveBeenCalledWith(params);
-    } else {
-      expect(status).not.toHaveBeenCalled();
-    }
+  it("allows synthetic capability discovery before run admission", async () => {
+    const client = createClient();
+    delete client.connId;
+    client.internal = { syntheticClient: true };
+    const status = vi.fn(async () => ({ available: false, configured: false }));
+    expect(
+      await invoke("computer.status", { probe: true }, { status, invoke: vi.fn() }, { client }),
+    ).toEqual(unavailableStatus);
+    expect(status).toHaveBeenCalledExactlyOnceWith({ probe: true });
   });
 
   it.each([
-    [{ ...snapshot, command: "system.run" }, false],
-    [{ ...snapshot, owner: "forged-operator" }, false],
-    [snapshot, true],
-  ] as const)("rejects malformed or unadmitted invocations: %j", async (params, synthetic) => {
+    ["computer.status", { probe: "false" }, false],
+    ["computer.invoke", { ...snapshot, command: "system.run" }, false],
+    ["computer.invoke", { ...snapshot, owner: "forged-operator" }, false],
+    ["computer.invoke", snapshot, true],
+  ] as const)("rejects malformed or unadmitted %s: %j", async (method, params, synthetic) => {
     const client = createClient();
     if (synthetic) {
       client.internal = { syntheticClient: true };
     }
     const dispatch = vi.fn();
-    const result = await invoke(
-      "computer.invoke",
-      params,
-      { status: vi.fn(), invoke: dispatch },
-      { client },
-    );
+    const result = await invoke(method, params, { status: dispatch, invoke: dispatch }, { client });
     expect(result).toMatchObject([
       false,
       undefined,
-      {
-        code: synthetic ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-      },
+      { code: synthetic ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST },
     ]);
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -247,11 +208,11 @@ describe("Gateway computer RPC", () => {
       request.assertCurrent();
       return { captured: true };
     });
+    const service = {
+      invoke: dispatch,
+      status: async () => ({ configured: true, available: true }),
+    };
     const context: Partial<GatewayRequestContext> = {
-      gatewayComputerService: computerService({
-        invoke: dispatch,
-        status: async () => ({ configured: true, available: true }),
-      }),
       validateAgentRuntimeApprovalAuthority: (candidate: AgentRuntimeIdentity) =>
         candidate === identity && active,
     };
@@ -259,7 +220,7 @@ describe("Gateway computer RPC", () => {
     first.connectionSignal = new AbortController().signal;
     const second = { ...createClient(identity), connId: "computer-next-connection" };
     for (const client of [first, second]) {
-      expect(await invoke("computer.invoke", snapshot, undefined, { client, context })).toEqual([
+      expect(await invoke("computer.invoke", snapshot, service, { client, context })).toEqual([
         true,
         { payload: { captured: true } },
       ]);
@@ -267,7 +228,7 @@ describe("Gateway computer RPC", () => {
     expect(owners[0]).toBe(owners[1]);
     active = false;
     const invokeRetired = (params: Record<string, unknown>) =>
-      invoke("computer.invoke", params, undefined, { client: second, context });
+      invoke("computer.invoke", params, service, { client: second, context });
     expect((await invokeRetired(snapshot))?.[0]).toBe(false);
     expect(dispatch).toHaveBeenCalledTimes(2);
     const closed = await invokeRetired({

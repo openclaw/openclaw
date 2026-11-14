@@ -3,11 +3,14 @@ import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { serialize } from "node:v8";
 import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -25,6 +28,10 @@ import {
 } from "./sqlite-worker-state-context.js";
 
 export const SQLITE_WORKER_ADMISSION_TIMEOUT_MS = 10_000;
+
+export function waitForSqliteOpen<T>(pending: Promise<T>, signal?: AbortSignal) {
+  return racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+}
 
 export function createSqliteWorkerAdmissionWarning() {
   let nextWarning = 0;
@@ -137,9 +144,10 @@ export function captureSqliteWorkerOpen(
   }
   assertOpening?.();
   const carrier = resolveRuntimeProcessEntrypointUrl("sqliteStore");
-  const carrierUrl = options.runtimeGeneration?.resolve(carrier) ?? carrier;
+  const carrierUrl = resolveRuntimeWorkerGenerationUrl(carrier, options.runtimeGeneration);
   return {
     ...native,
+    carrierClass: custody.carrierClass ?? options.isolation,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
     maintenanceScope: custody.cleanupAccess
       ? undefined
@@ -154,6 +162,7 @@ export function captureSqliteWorkerOpen(
     ...(options.admission
       ? {
           expectedIdentity: options.admission.identity,
+          expectedBirthtime: options.admission.birthtime,
           createOpenAdmission: () => {
             let granted = false;
             return {
@@ -192,7 +201,11 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
   const inputHash = createHash("sha256").update(options.input).digest("hex");
   const identity = await readDatabasePathIdentity(databasePath);
   options.assertCurrent?.();
-  if (options.expectedIdentity && identity.key !== options.expectedIdentity) {
+  if (
+    options.expectedIdentity &&
+    (identity.key !== options.expectedIdentity ||
+      (options.expectedBirthtime !== undefined && identity.birthtime !== options.expectedBirthtime))
+  ) {
     throw new Error("SQLite Worker path no longer matches its borrowed native owner");
   }
   return { databasePath, inputHash, identity, key: identity.key };
@@ -272,7 +285,7 @@ export async function resolveOpenedSqliteWorkerIdentity(
   databasePath: string,
   previous: DatabasePathIdentity,
   isOwnedElsewhere: (key: string) => boolean,
-): Promise<string> {
+): Promise<DatabasePathIdentity> {
   const openedIdentity = await readDatabasePathIdentity(databasePath);
   const physical = openedIdentity.key;
   if (openedIdentity.canonicalPath !== previous.canonicalPath) {
@@ -287,7 +300,7 @@ export async function resolveOpenedSqliteWorkerIdentity(
   if (previous.key.startsWith("file:") && physical !== previous.key) {
     throw new Error("SQLite database file identity changed during open");
   }
-  return physical;
+  return openedIdentity;
 }
 
 export function findUnclaimedSharedStateActors(
@@ -333,7 +346,12 @@ function assertSqliteWorkerActorStateContext(
   actor: Actor,
   stateContext: SqliteWorkerStateContext | undefined,
 ): void {
-  if (actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath) {
+  const suppliedInstallation = stateContext?.gatewayServiceInstallation;
+  if (
+    actor.stateContext?.existingSchemaPath !== stateContext?.existingSchemaPath ||
+    (suppliedInstallation !== undefined &&
+      !isDeepStrictEqual(actor.stateContext?.gatewayServiceInstallation, suppliedInstallation))
+  ) {
     throw new Error("Shared-state worker schema policy changed; close its actor first");
   }
 }
@@ -344,9 +362,6 @@ export function assertSqliteWorkerActorReusable(
   inputHash: string,
   stateContext: SqliteWorkerStateContext | undefined,
 ): void {
-  if (actor.slot.failed) {
-    throw actor.slot.failed;
-  }
   if (actor.moduleUrl !== moduleUrl || actor.inputHash !== inputHash) {
     throw new Error("SQLite database already belongs to another worker backend");
   }
@@ -364,6 +379,9 @@ export function prepareSqliteWorkerActorContext(
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
     const delivered = {
       ...stateContext,
+      // Environment-only callers must retain the actor's observed older-service
+      // restriction. These facts belong to its open admission, not each callback.
+      gatewayServiceInstallation: actor.stateContext?.gatewayServiceInstallation,
       ...(actor.stateContext?.scheduledMaintenanceSuspension
         ? { scheduledMaintenanceSuspension: actor.stateContext.scheduledMaintenanceSuspension }
         : {}),

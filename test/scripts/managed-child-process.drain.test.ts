@@ -37,6 +37,7 @@ function createChild(withOutput = false) {
   return {
     child,
     kill,
+    close: () => child.emit("close", exitCode, null),
     exit: () => {
       exitCode = 0;
       child.emit("exit", 0, null);
@@ -94,7 +95,10 @@ function runChild(
     // The mocked process owns no filesystem resources.
     env: { TMPDIR: process.cwd() },
     requireProcessTreeExit: true,
-    onReady: fixture.exit,
+    onReady: () => {
+      fixture.exit();
+      fixture.close();
+    },
     ...options,
   }).then(
     (value) => ({ value }),
@@ -144,6 +148,25 @@ describe("managed child natural process-group drainage", () => {
     expect(await command).toEqual({ value: 0 });
     expect(group.signals).toEqual([]);
     fixture.child.stdout?.destroy();
+  });
+
+  it("waits for the actual child close event after the group drains", async () => {
+    const fixture = createChild();
+    const group = observeGroup();
+    let settled = false;
+    const command = runChild(fixture, { onReady: fixture.exit }).then((result) => {
+      settled = true;
+      return result;
+    });
+    setTimeout(() => group.setState("gone"), 100);
+    setTimeout(fixture.close, 150);
+
+    await vi.advanceTimersByTimeAsync(125);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(await command).toEqual({ value: 0 });
+    expect(group.signals).toEqual([]);
   });
 
   it.each(["live", "indeterminate"] as const)(
@@ -269,6 +292,7 @@ describe("managed child natural process-group drainage", () => {
     setTimeout(() => {
       group.setState("gone");
       fixture.exit();
+      fixture.close();
     }, 50);
 
     await vi.advanceTimersByTimeAsync(50);
@@ -325,3 +349,60 @@ describe("managed child natural process-group drainage", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+it.each([false, true])(
+  "observes exit, actual pipe close and output before timeout cancellation (observer throws: %s)",
+  async (observerThrows) => {
+    const fixture = createChild(true);
+    const stderr = new PassThrough();
+    fixture.child.stderr = stderr;
+    const group = observeGroup();
+    const observations: unknown[] = [];
+    const signalsAtObservation: unknown[] = [];
+    const observe = vi.fn((snapshot: unknown) => {
+      observations.push(snapshot);
+      signalsAtObservation.push([...group.signals], fixture.kill.mock.calls.length);
+      if (observerThrows) {
+        throw new Error("observer failed");
+      }
+    });
+    group.onSignal.mockImplementation(() => {
+      group.setState("gone");
+      fixture.child.stdout?.emit("data", Buffer.from("after timeout"));
+      fixture.child.stdout?.emit("close");
+      fixture.close();
+    });
+    const command = runChild(fixture, {
+      timeoutMs: 100,
+      onReady() {
+        // A true property is not an observed native close callback.
+        Object.defineProperty(fixture.child.stdout, "closed", { get: () => true });
+      },
+      onTimeout: observe,
+    });
+    setTimeout(() => {
+      fixture.child.stdout?.emit("data", Buffer.from("abc"));
+      stderr.emit("data", Buffer.from("de"));
+      stderr.emit("close");
+      fixture.exit();
+    }, 25);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await command).toMatchObject({ error: { code: "ETIMEDOUT" } });
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(signalsAtObservation).toEqual([[], 0]);
+    expect(observations).toEqual([
+      {
+        elapsedMs: 100,
+        exit: { code: 0, signal: null, elapsedMs: 25 },
+        stdout: { bytes: 3, lastDataElapsedMs: 25, closed: false },
+        stderr: { bytes: 2, lastDataElapsedMs: 25, closed: true },
+      },
+    ]);
+    expect(group.signals).toEqual([{ signal: "SIGTERM", at: 100 }]);
+    expect(vi.getTimerCount()).toBe(0);
+    fixture.child.stdout?.destroy();
+    stderr.destroy();
+  },
+);

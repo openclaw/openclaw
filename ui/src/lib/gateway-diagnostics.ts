@@ -4,13 +4,6 @@ import type { HealthSnapshot, ModelCatalogResult, StatusSummary } from "../api/t
 
 export type CommandLaneDiagnostics = ReturnType<typeof getCommandLaneDiagnostics>;
 
-type GatewayDiagnosticsSnapshot = CommandLaneDiagnostics & {
-  status: StatusSummary;
-  health: HealthSnapshot;
-  models: unknown[];
-  heartbeat: unknown;
-};
-
 export async function loadCommandLaneDiagnostics(
   client: GatewayBrowserClient,
   signal?: AbortSignal,
@@ -22,7 +15,7 @@ export async function loadGatewayDiagnostics(
   client: GatewayBrowserClient,
   agentId: string | null,
   signal?: AbortSignal,
-): Promise<GatewayDiagnosticsSnapshot> {
+) {
   // Diagnostics sample the Gateway itself, independently of cached picker choices.
   const modelsRequest = agentId
     ? client.request<ModelCatalogResult>(

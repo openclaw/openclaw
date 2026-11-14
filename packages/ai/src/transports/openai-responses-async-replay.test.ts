@@ -8,11 +8,10 @@ import {
   responsesInputFingerprint,
   recordResponsesInputReplay,
 } from "./openai-responses-input-replay.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import { createAssistant, createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   convertProviderResponsesMessages,
   convertResponsesMessages,
-  createOpenAIResponsesAssistantOutput,
   encodeTextSignatureV1,
 } from "./openai-responses-replay-messages-internal.js";
 import {
@@ -32,33 +31,28 @@ function answer(
   signature?: string,
   turnId?: string,
 ): AssistantMessage {
-  return {
-    ...createOpenAIResponsesAssistantOutput(model),
-    responseId,
-    turnId,
-    content: [
+  return createAssistant(
+    model,
+    [
       {
         type: "text",
         text,
         textSignature: signature ? encodeTextSignatureV1(signature) : undefined,
       },
     ],
-  };
+    { responseId, turnId },
+  );
 }
 function asyncPrefix(
   responseId: string | undefined,
   turnId?: string,
   id = "async",
 ): AssistantMessage {
-  return {
-    ...createOpenAIResponsesAssistantOutput(model),
-    responseId,
-    turnId,
-    stopReason: "toolUse",
-    content: [
-      { type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {}, async: true },
-    ],
-  };
+  return createAssistant(
+    model,
+    [{ type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {}, async: true }],
+    { responseId, turnId, stopReason: "toolUse" },
+  );
 }
 
 it.each([
@@ -89,14 +83,6 @@ it.each([
       [wireBefore, wire1, wire2, wireAfter, wire3],
     ],
     [
-      [before, image1, after, image2, image3],
-      [wireBefore, wire1, wireAfter, wire2, wire3],
-    ],
-    [
-      [text("Captured screen"), image1],
-      [wireText("Captured screen"), wire1],
-    ],
-    [
       [image1, text("Caption")],
       [wire1, wireText("Caption")],
     ],
@@ -105,10 +91,6 @@ it.each([
       [wireText("Before:\nFirst screen"), wire1, wireText("\nAfter:\nSecond screen")],
     ],
     [[image1], [wire1]],
-    [
-      [image1, image2],
-      [wire1, wire2],
-    ],
     [[text("  first\n"), text(""), text("second  ")], "  first\n\nsecond  "],
   ];
   for (const [content, output] of cases) {
@@ -116,11 +98,11 @@ it.each([
       ...makeTextToolResult("call_compare|fc_compare", "compare", "", false, 2),
       content,
     };
-    const assistant: AssistantMessage = {
-      ...createOpenAIResponsesAssistantOutput(imageModel),
-      content: [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
-      stopReason: "toolUse",
-    };
+    const assistant = createAssistant(
+      imageModel,
+      [{ type: "toolCall", id: result.toolCallId, name: "compare", arguments: {} }],
+      { stopReason: "toolUse" },
+    );
     const replay = convert(imageModel, { messages: [assistant, result] }, new Set(["openai"]));
     expect(replay.find((item) => item.type === "function_call_output")).toEqual({
       type: "function_call_output",

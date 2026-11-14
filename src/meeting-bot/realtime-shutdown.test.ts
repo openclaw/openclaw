@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
@@ -11,18 +8,19 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeBridge } from "../talk/session-runtime.test-support.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
+import { TEST_MEETING_PLATFORM_METADATA } from "./observation-provenance.test-support.js";
 import { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
 import * as audioFormat from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 
-const environment = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
-let stateDir: string;
+let state: OpenClawTestState;
 const spokenResult = {
   success: true,
   audioBuffer: Buffer.from([1, 0, 2, 0]),
@@ -43,12 +41,12 @@ async function createFixture(
   const textToSpeechTelephony = vi.fn(async () => spokenResult);
   const runtime = {
     agent: {
-      resolveAgentDir: () => path.join(stateDir, "agent"),
-      resolveAgentWorkspaceDir: () => path.join(stateDir, "workspace"),
+      resolveAgentDir: () => state.statePath("agent"),
+      resolveAgentWorkspaceDir: () => state.statePath("workspace"),
       ensureAgentWorkspace: async () => {},
       resolveAgentTimeoutMs: () => 30_000,
       session: {
-        resolveStorePath: () => path.join(stateDir, "sessions.json"),
+        resolveStorePath: () => state.statePath("sessions.json"),
         getSessionEntry: ({ sessionKey: key }: { sessionKey: string }) =>
           key === sessionKey ? entry : undefined,
         getSessionEntryAsync: async ({ sessionKey: key }: { sessionKey: string }) =>
@@ -71,20 +69,7 @@ async function createFixture(
   } as unknown as PluginRuntime;
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const bindings = createMeetingRealtimeEngineBindings({
-    platform: {
-      id: "test-meeting",
-      displayName: "Test Meeting",
-      logScope: "[test-meeting]",
-      agentConsult: {
-        surface: "a synthetic meeting",
-        userLabel: "Participant",
-        assistantLabel: "Agent",
-        questionSourceLabel: "participant",
-        workingResponseLabel: "participant",
-        extraSystemPrompt: "Answer briefly.",
-      },
-      session: { idPrefix: "test_meeting", participantIdentity: () => "Test participant" },
-    },
+    platform: TEST_MEETING_PLATFORM_METADATA,
     config: { realtime: { toolPolicy: "safe-read-only" } },
     fullConfig: {},
     runtime,
@@ -178,20 +163,17 @@ async function createFixture(
 
 describe("meeting shutdown", () => {
   beforeEach(async () => {
-    stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "meeting-shutdown-")));
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n");
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    state = await createOpenClawTestState({
+      label: "meeting-shutdown",
+      layout: "state-only",
+      scenario: "minimal",
+    });
     vi.useFakeTimers();
   });
   afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    environment.restore();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    await state.cleanup();
   });
 
   it.each([true, false])(

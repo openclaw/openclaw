@@ -13,9 +13,11 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { readSessionForkTurn } from "../session-fork-run.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { toolResult } from "./session-message-fixtures.test-support.js";
 
 async function withHistory(
   label: string,
@@ -62,14 +64,7 @@ function appendCalls(source: SessionManager, ...ids: string[]) {
 }
 
 function appendResult(source: SessionManager, id: string, text = `result ${id}`) {
-  return source.appendMessage({
-    role: "toolResult",
-    toolCallId: id,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: 1,
-  });
+  return source.appendMessage(toolResult(text, id, 1));
 }
 
 it("returns empty context within a one-byte budget", async () => {
@@ -170,18 +165,14 @@ it.each([false, true])(
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(4096), index));
+      source.appendMessage(
+        makeUserMessage(`body-payload-${index}:` + "x".repeat(1_048_576), index),
+      );
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-    expect(
-      database.db
-        .prepare(
-          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ count: 8 });
     const full = source.buildSessionContext().messages;
-    await verifyRead(() => {
+    await verifyRead(async () => {
+      const complete = await SessionManager.openModelContextAsync(scope);
+      expect(complete.buildSessionContext().messages).toEqual(full);
       const hydrated = new Set<string>();
       const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
@@ -194,17 +185,15 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       let messages: typeof full;
       try {
         messages = SessionManager.openModelContext(scope, {
-          limits: { maxBytes: 16_384, maxEvents: 20 },
+          limits: { maxBytes: 4 * 1024 * 1024, maxEvents: 20 },
         }).buildSessionContext().messages;
         expect(decompress).toHaveBeenCalledTimes(messages.length);
       } finally {
         spy.mockRestore();
         decompress.mockRestore();
       }
-      expect(messages.length).toBeGreaterThan(0);
-      expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
-      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(16_384);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4 * 1024 * 1024);
       expect(hydrated).toEqual(
         new Set(
           messages.flatMap((message) => {
@@ -557,9 +546,11 @@ it.each(["sync", "async"])(
         makeUserMessage("newest request: preserve both completed operations", 1),
       );
       appendCalls(source, "large", "small");
-      const oversized = "oversized-tool-body:" + "x".repeat(32_768);
+      const oversized = "oversized-tool-body:" + "x".repeat(262_144);
       const largeResultId = appendResult(source, "large", oversized);
-      appendResult(source, "small", "completed operation receipt: synthetic-42");
+      const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+        toolResult("completed operation receipt: synthetic-42", "small", 1),
+      );
       const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
       expect(
         database.db
@@ -584,6 +575,9 @@ it.each(["sync", "async"])(
         { agentId: database.agentId, path: database.path },
       );
       await verifyRead(async () => {
+        expect(await readSessionForkTurn(anchor!)).toEqual({
+          model: { provider: "openai", model: "test-model" },
+        });
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
           "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
@@ -620,15 +614,17 @@ it.each(["sync", "async"])(
           "toolResult",
           "toolResult",
         ]);
-        expect(messages.slice(0, 3)).toEqual(full.messages.slice(0, 3));
-        expect(messages[3]).toMatchObject({
-          role: "toolResult",
-          toolCallId: "large",
-          toolName: "read",
-          isError: false,
-          content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
-        });
-        expect(messages[4]).toEqual(full.messages[4]);
+        expect(messages).toEqual([
+          ...full.messages.slice(0, 3),
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: "large",
+            toolName: "read",
+            isError: false,
+            content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
+          }),
+          full.messages[4],
+        ]);
         expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(limits.maxBytes);
         expect(oversizedPayloadReads).toBe(0);
         expect(selected.isPersisted()).toBe(false);

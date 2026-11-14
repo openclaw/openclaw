@@ -1,10 +1,15 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  type CliHistoryWriter,
+} from "../../config/sessions/cli-history-boundary.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
   SessionManagerIncognitoDatabase,
 } from "../../config/sessions/session-manager-write-contract.js";
+import { createSessionWorkerExecutionSource } from "../../config/sessions/session-worker-execution-source.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
@@ -14,7 +19,6 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
@@ -52,19 +56,12 @@ export async function withSessionMetadataWorker<T>(
   };
   const admission = captureSessionMessageAdmission(assertMetadataCurrent, controls);
   await runOpenClawAgentWorkerWrite(options, () =>
-    database.prepare({
-      assertCurrent: assertMetadataCurrent,
-      createAdmission: (binding) => () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          assertMetadataCurrent();
-          if (!grant()) {
-            throw new Error("Session metadata preparation admission expired");
-          }
-        }, binding.attachment),
-      }),
-    }),
+    database.prepare(
+      createSessionWorkerExecutionSource(
+        assertMetadataCurrent,
+        "Session metadata preparation admission expired",
+      ),
+    ),
   );
   const transcriptPublication = createSessionManagerPublicationHooks({
     agentId: database.agentId,
@@ -79,8 +76,16 @@ export async function withSessionMetadataWorker<T>(
     {
       moduleUrl,
       input: undefined,
-      assertAdmission: (request) =>
-        admission.assertAdmission(transcriptPublication.unwrap(request)),
+      assertAdmission: (request) => {
+        let admitted = request;
+        // The worker's coverage check, answered by the host right before the grant.
+        if (isRecord(request.facts) && "cliHistoryOwnerProbe" in request.facts) {
+          const { cliHistoryOwnerProbe, ...facts } = request.facts;
+          answerCliHistoryOwnerProbe(cliHistoryOwnerProbe, cliWriter);
+          admitted = { ...request, facts: Object.keys(facts).length ? facts : undefined };
+        }
+        return admission.assertAdmission(transcriptPublication.unwrap(admitted));
+      },
       onAdmitted: transcriptPublication.onAdmitted,
       observeAdmission: transcriptPublication.observeAdmission,
     },

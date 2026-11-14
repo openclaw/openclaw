@@ -5,6 +5,7 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { createPassthroughEngineMethods } from "../../context-engine/context-engine.test-support.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { registerContextEngineInRegistry } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -162,9 +163,7 @@ async function createAcceptedTurn(
         turnAdvancementIdempotency: "atomic-idempotent-v1",
       },
     },
-    ingest: async () => ({ ingested: true }),
-    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-    compact: async () => ({ ok: true, compacted: false }),
+    ...createPassthroughEngineMethods(),
     commitTurn,
     maintain,
     dispose,

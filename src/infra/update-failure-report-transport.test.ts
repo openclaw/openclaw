@@ -24,6 +24,10 @@ const tempDirs = useStateDatabaseTempDirs();
 const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
 const authSuccess = { started: true, status: 0, stdout: Buffer.alloc(0) };
 
+function expectFenced(result: unknown, change: "attempt" | "authority") {
+  expect(result).toMatchObject(change === "attempt" ? { status: "stale" } : expect.any(Error));
+}
+
 function wrapWorkerExecute(wrap: (execute: DomainScope["execute"]) => DomainScope["execute"]) {
   const run = stateWorker.runOpenClawStateWorkerOperation;
   vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
@@ -159,11 +163,7 @@ it.each(["attempt", "authority"] as const)("fences %s at persist", async (change
     hasCurrentAuthority: () => change !== "authority" || current,
     validateCurrentAttempt: () => change !== "attempt" || current,
   });
-  if (change === "attempt") {
-    expect(result).toMatchObject({ status: "stale" });
-  } else {
-    expect(result).toBeInstanceOf(Error);
-  }
+  expectFenced(result, change);
   expect(result).not.toHaveProperty("fallbackUrl");
   expect(await fixture.receipt()).toMatchObject({
     status: "fallback",
@@ -196,14 +196,15 @@ it("permits saved-only finalization from prepared without widening created or st
 
 it.each(["host", "browser"] as const)("binds Unicode body via %s", async (publicationMode) => {
   const stateDir = tempDirs.make("openclaw-report-long-body-");
+  const long = "🦞".repeat(150);
   const input = {
     attemptId: "long-report-A",
     result: {
       mode: "npm" as const,
       status: "error" as const,
-      reason: "🦞".repeat(150),
+      reason: long,
       steps: Array.from({ length: 3 }, (_, i) => ({
-        name: `${i}${"🦞".repeat(150)}`,
+        name: `${i}${long}`,
         command: "private command must not appear",
         cwd: "/Users/private/report",
         durationMs: 1,
@@ -211,7 +212,7 @@ it.each(["host", "browser"] as const)("binds Unicode body via %s", async (public
       })),
       durationMs: 1,
     },
-    target: "🦞".repeat(150),
+    target: long,
   };
   const prepared = await prepareUpdateFailureReport(input, { stateDir });
   const other = await prepareUpdateFailureReport({ ...input, attemptId: "B" }, { stateDir });
@@ -325,11 +326,7 @@ it.each(["authority", "attempt"] as const)("fences paused-auth %s", async (chang
     current = false;
     auth.release();
     const result = await observed;
-    if (change === "authority") {
-      expect(result).toBeInstanceOf(Error);
-    } else {
-      expect(result).toMatchObject({ status: "stale" });
-    }
+    expectFenced(result, change);
     expect(fixture.runGh).toHaveBeenCalledOnce();
     await expectUnpublished(fixture);
   } finally {

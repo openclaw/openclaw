@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
@@ -96,7 +96,8 @@ it("retains a completed result through temporary lifecycle unavailability", asyn
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const { generation, update, send, dispatch, queued } = fixture();
     const gate = createDeliveryBarrier();
-    const mutation = runExclusiveSessionLifecycleMutation("reset", {
+    const mutation = runSessionMutation({
+      kind: "reset",
       scope: generation.storePath,
       identities: [generation.sessionKey, generation.sessionId],
       prepare: gate.hold,

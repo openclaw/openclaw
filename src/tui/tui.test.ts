@@ -1,22 +1,19 @@
-import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { isTuiBusyActivityStatus } from "./tui-activity-status.js";
+import { resolveLocalAuthSpawnInvocation } from "./tui-auth-invocation.js";
 import { resolveFinalAssistantText } from "./tui-formatters.js";
 import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
   formatTuiAuthCommandArgv,
-  resolveLocalAuthSpawnInvocation,
-  withEmbeddedTuiStateLock,
   createBackspaceDeduper,
   createDeferredTuiFinish,
   createTuiConnectionLineage,
@@ -35,15 +32,17 @@ import {
 } from "./tui.js";
 
 afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
+  try {
+    vi.useRealTimers();
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
-it("resolveFinalAssistantText formats malformed fragments when final and streamed text are empty", () => {
+it("resolveFinalAssistantText formats malformed fragments when final text is empty", () => {
   expect(
     resolveFinalAssistantText({
       finalText: "",
-      streamedText: "",
       errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
     }),
   ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
@@ -51,16 +50,17 @@ it("resolveFinalAssistantText formats malformed fragments when final and streame
 
 it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CLI runtime context", () => {
   const originalArgv = [...process.argv];
+  const originalExecArgv = process.execArgv;
   try {
     const cliEntry = path.resolve("openclaw.mjs");
     const loaderArgs = ["--import", "/repo/node_modules/tsx/dist/loader.mjs"];
     const authArgs = ["models", "auth", "login", "--provider", "test-provider"];
     process.argv[1] = cliEntry;
+    process.execArgv = [...loaderArgs, "--inspect-brk=0", "--trace-warnings"];
 
     expect(
       resolveTuiLocalAuthCliInvocation({
         provider: "test-provider",
-        execArgv: [...loaderArgs, "--inspect-brk=0", "--trace-warnings"],
       }),
     ).toStrictEqual({
       command: process.execPath,
@@ -69,6 +69,7 @@ it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CL
     });
   } finally {
     process.argv = originalArgv;
+    process.execArgv = originalExecArgv;
   }
 });
 
@@ -99,8 +100,9 @@ describe("resolveInitialTuiAgentId", () => {
     ["agent:main:incident", "ops", "/tmp/openclaw/projects/ops/src", "main"],
     ["global", "ops", "/tmp/openclaw", "ops"],
   ])("resolves initial owner for %s", (initialSessionInput, agentId, cwd, expected) => {
+    vi.spyOn(process, "cwd").mockReturnValue(cwd);
     expect(
-      resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", initialSessionInput, agentId, cwd }),
+      resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", initialSessionInput, agentId }),
     ).toBe(expected);
   });
 
@@ -112,13 +114,15 @@ describe("resolveInitialTuiAgentId", () => {
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
+    vi.spyOn(process, "cwd").mockReturnValue("/var/tmp/unrelated");
     const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
-    expect(() => resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toThrow(
+    expect(() => resolveInitialTuiAgentId({ cfg: retained })).toThrow(
       "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
 
   it("uses the persisted fixed-store owner for an unscoped global session", () => {
+    vi.spyOn(process, "cwd").mockReturnValue("/tmp/openclaw");
     const restartConfig: OpenClawConfig = {
       session: { scope: "global", store: "/tmp/shared.sqlite" },
       agents: {
@@ -129,9 +133,7 @@ describe("resolveInitialTuiAgentId", () => {
     };
 
     for (const initialSessionInput of ["global", undefined]) {
-      expect(
-        resolveInitialTuiAgentId({ cfg: restartConfig, initialSessionInput, cwd: "/tmp/openclaw" }),
-      ).toBe("ops");
+      expect(resolveInitialTuiAgentId({ cfg: restartConfig, initialSessionInput })).toBe("ops");
     }
   });
 });
@@ -237,7 +239,8 @@ function dedupeKeys(input: readonly string[], interval: number, windowsTerminal 
     },
     () => {
       let now = 1000;
-      const dedupe = createBackspaceDeduper({ dedupeWindowMs: 8, now: () => now });
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const dedupe = createBackspaceDeduper();
       return input.map((data) => {
         const result = dedupe(data);
         now += interval;
@@ -391,13 +394,22 @@ describe("TUI shutdown safety", () => {
     const stdout = new EventEmitter();
     const requestExit = vi.fn();
 
-    const cleanup = installTuiTerminalLossExitHandler(requestExit, { stdin, stdout });
-    stdin.emit("end");
-    stdout.emit("close");
-    cleanup();
-    stdin.emit("close");
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin")!;
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process, "stdout")!;
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    try {
+      const cleanup = installTuiTerminalLossExitHandler(requestExit);
+      stdin.emit("end");
+      stdout.emit("close");
+      cleanup();
+      stdin.emit("close");
 
-    expect(requestExit).toHaveBeenCalledTimes(1);
+      expect(requestExit).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(process, "stdin", stdinDescriptor);
+      Object.defineProperty(process, "stdout", stdoutDescriptor);
+    }
   });
 
   it("resolves terminal-loss exits requested before the TUI finish handler is installed", () => {
@@ -527,117 +539,10 @@ it.each([
   ["linux", "/usr/local/bin/codex"],
   ["win32", "C:\\tools\\codex.exe"],
 ] as const)("directly executes non-wrapper commands on %s", (platform, command) => {
-  expect(resolveLocalAuthSpawnInvocation({ command, args: ["login"], platform })).toStrictEqual({
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  expect(resolveLocalAuthSpawnInvocation({ command, args: ["login"] })).toStrictEqual({
     command,
     args: ["login"],
     options: {},
-  });
-});
-
-function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    readProcessStartTime: () => 123_456,
-    // Live-owner inspection and uncontended acquisition never wait on this; it only
-    // bounds lock-file inspection, which loaded small hosts can push past 100ms.
-    timeoutMs: 5_000,
-  };
-}
-
-describe("embedded TUI state ownership", () => {
-  it.each([
-    { outcome: "success", releaseFails: false },
-    { outcome: "early return", releaseFails: false },
-    { outcome: "error", releaseFails: false },
-    { outcome: "success", releaseFails: true },
-    { outcome: "early return", releaseFails: true },
-    { outcome: "error", releaseFails: true },
-  ])(
-    "removes signal handlers after $outcome (releaseFails=$releaseFails)",
-    async ({ outcome, releaseFails }) => {
-      const embeddedStateLock = await import("../infra/embedded-state-lock.js");
-      const release = vi.fn(async () => {
-        if (releaseFails) {
-          throw new Error("state lock release failed");
-        }
-      });
-      vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockResolvedValue({
-        release,
-      });
-      const signals = new EventEmitter();
-      const run = withEmbeddedTuiStateLock(
-        async () => {
-          expect(signals.listenerCount("SIGINT")).toBe(1);
-          expect(signals.listenerCount("SIGTERM")).toBe(1);
-          if (outcome === "error") {
-            throw new Error("local TUI failed");
-          }
-          return outcome === "success" ? "complete" : undefined;
-        },
-        { process: signals },
-      );
-      if (releaseFails || outcome === "error") {
-        await expect(run).rejects.toThrow(
-          releaseFails ? "state lock release failed" : "local TUI failed",
-        );
-      } else {
-        await expect(run).resolves.toBe(outcome === "success" ? "complete" : undefined);
-      }
-      expect(release).toHaveBeenCalledOnce();
-      expect(signals.listenerCount("SIGINT")).toBe(0);
-      expect(signals.listenerCount("SIGTERM")).toBe(0);
-    },
-  );
-
-  it("refuses local startup while a live Gateway owns the state directory", async () => {
-    await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
-      const lockOptions = createGatewayLockOptions(stateDir);
-      const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-      assert(gatewayLock, "Expected live Gateway fixture lock");
-      const run = vi.fn(async () => undefined);
-      try {
-        await expect(
-          withEmbeddedTuiStateLock(run, { gatewayLockOptions: lockOptions }),
-        ).rejects.toThrow(
-          `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Run without --local to use it, or stop the Gateway first (openclaw gateway stop).`,
-        );
-        expect(run).not.toHaveBeenCalled();
-      } finally {
-        await gatewayLock.release();
-      }
-    });
-  });
-
-  it("releases embedded state ownership when the local TUI receives SIGTERM", async () => {
-    await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
-      const lockOptions = createGatewayLockOptions(stateDir);
-      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const signals = new EventEmitter();
-      const started = createDeferredCore();
-      const run = withEmbeddedTuiStateLock(
-        async (signal) => {
-          const payload: unknown = JSON.parse(await fs.readFile(stateLockPath, "utf8"));
-          expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-          started.resolve();
-          return await new Promise<never>((_, reject) => {
-            signal.addEventListener("abort", () => reject(new Error("local TUI interrupted")), {
-              once: true,
-            });
-          });
-        },
-        { gatewayLockOptions: lockOptions, process: signals },
-      );
-      await started.promise;
-      signals.emit("SIGTERM");
-
-      await expect(run).rejects.toThrow("local TUI interrupted");
-      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
   });
 });

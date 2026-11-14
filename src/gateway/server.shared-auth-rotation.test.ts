@@ -133,7 +133,9 @@ describe("gateway shared auth rotation", () => {
   async function openDeviceTokenClient(
     params: { issuerGeneration?: string; browserClient?: boolean } = {},
   ) {
-    const identity = loadOrCreateDeviceIdentity({ path: state.path("device-identity.sqlite") });
+    const identity = loadOrCreateDeviceIdentity({
+      path: state.path("device-identity", "client", "credentials.sqlite"),
+    });
     const clientName = params.browserClient ? "openclaw-control-ui" : "test";
     const mode = params.browserClient ? "webchat" : "test";
     const pending = await requestDevicePairing({

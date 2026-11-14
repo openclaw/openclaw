@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -41,3 +42,28 @@ export const emptyJournal = (
   abort: async () => {},
   ...overrides,
 });
+
+export function workspaceJournal(
+  baseManifestRef: string,
+  currentManifestRef: string,
+  overrides: Partial<
+    Pick<
+      WorkerWorkspaceReconciliationJournal,
+      "temporaryNonce" | "baseEntries" | "appliedEntries" | "baseTree" | "basePack"
+    >
+  > = {},
+): WorkerWorkspaceReconciliationJournal {
+  const basePack = overrides.basePack ?? Buffer.alloc(0);
+  return {
+    version: 1,
+    temporaryNonce: "a".repeat(32),
+    baseManifestRef,
+    currentManifestRef,
+    baseEntries: [],
+    appliedEntries: [],
+    baseTree: "f".repeat(40),
+    basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+    basePack,
+    ...overrides,
+  };
+}

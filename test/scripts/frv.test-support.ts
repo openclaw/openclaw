@@ -88,7 +88,12 @@ export function executionPlanArtifact({
       ]),
     ),
     dockerPreflightResult: "success",
+    dockerPreparationResult: "success",
     evidenceReuse: evidenceReuse.requested === true,
+    npmPreparationResult: "success",
+    npmQualificationResult: "success",
+    pluginNpmPreflightRequired: false,
+    pluginNpmPreparationResult: "skipped",
     candidateBindingResult: "success",
     resolveTargetResult: "success",
   });

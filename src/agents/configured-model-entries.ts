@@ -6,6 +6,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { parseModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listAgentEntriesWithSource, resolveAgentConfig } from "./agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -48,7 +49,7 @@ export function collectConfiguredCatalogModels(cfg: OpenClawConfig) {
   }));
   const aliases = new Map<string | undefined, ModelAliasIndex>();
   for (const { path, value, kind } of collectConfiguredModelRefs(cfg)) {
-    if (value.endsWith("/*")) {
+    if (parseModelPolicyWildcardRef(value)) {
       continue;
     }
     const agentId = agents.find(({ prefix }) => path.startsWith(prefix))?.agentId;
@@ -186,7 +187,7 @@ export function resolveConfiguredModelEntries(
   const configuredRefs = new Map<string, string[] | undefined>();
   for (const models of [params.cfg.agents?.defaults?.models, agentModels]) {
     for (const [raw, settings] of Object.entries(models ?? {})) {
-      if (!raw.trim().endsWith("/*")) {
+      if (!parseModelPolicyWildcardRef(raw)) {
         configuredRefs.set(raw, settings.pickerRuntimes ?? configuredRefs.get(raw));
       }
     }

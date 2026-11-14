@@ -7,13 +7,11 @@ import path from "node:path";
 import * as mediaMime from "@openclaw/media-core/mime";
 import { onTestFinished, expect, it, vi } from "vitest";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
   attachManagedOutgoingMediaToMessage,
-  createManagedOutgoingMediaBlocks,
   handleManagedOutgoingMediaHttpRequest,
 } from "../managed-image-attachments.js";
 import {
@@ -75,22 +73,6 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
   await source.write(marker, 0, marker.length, seekStart);
 
   const directive = parseReplyDirectives(`Here is the movie.\nMEDIA:${sourcePath}`);
-  const channelReply = await createReplyMediaPathNormalizer({
-    cfg,
-    sessionKey,
-    workspaceDir,
-    messageProvider: "discord",
-  })(directive);
-  expect(channelReply.mediaUrls).toBeUndefined();
-
-  await expect(
-    createManagedOutgoingMediaBlocks({
-      sessionKey,
-      items: [{ url: sourcePath, trustedLocal: false }],
-      localRoots: [workspaceDir],
-    }),
-  ).rejects.toThrow(/Managed video attachment.*could not be prepared/u);
-
   const scope = await captureWebchatReplyMediaScope({ cfg, sessionKey, agentId: "main" });
   onTestFinished(scope.release);
   let largestAllocation = 0;

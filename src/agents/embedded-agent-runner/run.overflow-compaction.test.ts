@@ -28,7 +28,6 @@ import {
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,15 +68,6 @@ const recoveryRequest = {
   attempt: 1,
   maxAttempts: 3,
 } satisfies Parameters<typeof compactForRecovery>[1];
-
-function makeAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
-  return makeAttemptResult({
-    terminal: { kind: "failed", source: "prompt", error: new Error("context overflow") },
-    sessionIdUsed: "session-1",
-    assistantTexts: [],
-    ...overrides,
-  });
-}
 
 function makeContextEngine(
   compact: ContextEngine["compact"] | ReturnType<typeof vi.fn> = vi.fn(),
@@ -125,7 +115,7 @@ function makeRecoveryInput(
     prepareRecoverySession: vi.fn<EmbeddedRunCompactionRecoveryInput["prepareRecoverySession"]>(),
     contextEngine: makeContextEngine(),
     genericCompactionRecoveryAllowed: true,
-    attempt: makeAttempt(),
+    attempt: makeAttemptResult(),
     runtimeAuthPlan: {
       providerForAuth: "openai",
       authProfileProviderForAuth: "openai",
@@ -147,7 +137,7 @@ function makeRecoveryInput(
         promptTokenBudget: tokenBudget,
         degradedReason,
       }),
-    onCompactionHookMessages: vi.fn(async () => {}),
+    onCompactionHookMessages: vi.fn(),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
     adoptCompactionTranscript: vi.fn(async () => undefined),
@@ -167,18 +157,20 @@ function recover(
 }
 
 describe("compactEmbeddedRunForRecovery", () => {
-  beforeEach(() => {
-    compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    for (const mock of Object.values(completionMocks)) {
-      mock.mockReset();
-    }
-  });
+  beforeEach(() => vi.resetAllMocks());
 
   it("carries locked model, auth, fallback, cache, and overflow facts into compaction", async () => {
+    const qualityFacts = { qualityDegraded: true, summaryRefused: true } as const;
+    const onAgentEvent = vi.fn();
     const compact = vi.fn<ContextEngine["compact"]>(async () => ({
       ok: true as const,
       compacted: true as const,
-      result: { summary: "compacted", tokensBefore: 150_000, tokensAfter: 80_000 },
+      result: {
+        summary: "compacted",
+        tokensBefore: 150_000,
+        tokensAfter: 80_000,
+        details: { readFiles: [], modifiedFiles: [], ...qualityFacts },
+      },
     }));
     const promptCache = {
       retention: "short" as const,
@@ -190,6 +182,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       {
         runParams: {
           ...baseRunParams,
+          onAgentEvent,
           trigger: "user",
           sandboxSessionKey: "global",
           sandboxAgentId: "main",
@@ -198,7 +191,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         },
         contextEngine: makeContextEngine(compact),
         contextTokenBudget: 200_000,
-        attempt: makeAttempt({ promptCache }),
+        attempt: makeAttemptResult({ promptCache }),
         thinkLevel: "ultra",
         modelSelection: {
           provider: "openai",
@@ -211,6 +204,12 @@ describe("compactEmbeddedRunForRecovery", () => {
     );
 
     expect(result.result).toMatchObject({ ok: true, compacted: true });
+    expect(onAgentEvent.mock.lastCall?.[0].data).toEqual({
+      phase: "end",
+      itemId: "diag-1",
+      completed: true,
+      ...qualityFacts,
+    });
     expect(compact).toHaveBeenCalledOnce();
     expect(compact.mock.calls[0]?.[0]).toMatchObject({
       sessionId: "session-1",
@@ -512,7 +511,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
   it("forwards non-empty compaction hook messages as agent events", async () => {
     const fixture = await createRuntime();
 
-    await fixture.runtime.onCompactionHookMessages({
+    fixture.runtime.onCompactionHookMessages({
       phase: "after",
       messages: ["", "Compaction complete"],
     });
@@ -520,8 +519,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     expect(fixture.onAgentEvent).toHaveBeenCalledWith({
       stream: "compaction",
       data: {
-        phase: "end",
-        completed: true,
+        phase: "notice",
         messages: ["Compaction complete"],
       },
       sessionKey: "agent:main:session-1",

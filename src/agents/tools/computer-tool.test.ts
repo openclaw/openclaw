@@ -153,6 +153,28 @@ async function executeComputerAction(params: Record<string, unknown>) {
 describe("createComputerTool v1 execution", () => {
   beforeEach(resetComputerToolMocks);
 
+  it.each([false, true])(
+    "accepts older-node cursor receipts (JSON string: %s)",
+    async (encoded) => {
+      const receipt = { ok: true, cursorX: 12.5, cursorY: -4 };
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+        if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
+          return { payload: encoded ? JSON.stringify(receipt) : receipt };
+        }
+        throw new Error("fixture capture unavailable");
+      });
+
+      const result = await createVisionComputerTool().execute("act", { action: "key", text: "a" });
+
+      expect(result.details).toMatchObject({ action: "key", result: receipt });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: `${JSON.stringify({ action: "key", ...receipt })}\nfollow-up screenshot failed: fixture capture unavailable`,
+      });
+      expect(computerActBodies()).toHaveLength(1);
+    },
+  );
+
   it.each([
     [
       "maps left click through the computer.act execution path",

@@ -1,48 +1,24 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
-import {
-  childLineageDigest,
-  type UpdateCommandChildGrant,
-} from "./update-command-executor-children.js";
+import { childLineageDigest } from "./update-command-executor-children.js";
+import { readUpdateCommandChildGrant } from "./update-command-executor-grant-input.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export async function resolveUpdateCommandChildBinding(
-  grant: UpdateCommandChildGrant,
+  input: unknown,
   runId: string,
   root: string,
   onProcessIdentityWarning?: NonNullable<
     Parameters<typeof prepareManagedHandoffLeaseStore>[0]
   >["onProcessIdentityWarning"],
 ) {
+  const grant = readUpdateCommandChildGrant(input);
   const slot = grant.slot;
-  if (
-    Object.hasOwn(grant, "slot") &&
-    (!isRecord(slot) ||
-      !isRecord(slot.parent) ||
-      !isRecord(slot.spawner) ||
-      typeof slot.parent.key !== "string" ||
-      typeof slot.spawner.key !== "string" ||
-      typeof slot.childKey !== "string" ||
-      (Object.hasOwn(slot, "reserver") &&
-        (!isRecord(slot.reserver) || typeof slot.reserver.key !== "string")))
-  ) {
-    throw new UpdateCommandRecoveryPendingError("Candidate occupied slot pair is malformed.");
-  }
-  const retainedFields =
-    Object.hasOwn(grant, "retainedParent") || Object.hasOwn(grant, "retainedChildKey");
-  if (
-    retainedFields &&
-    (!isRecord(grant.retainedParent) ||
-      typeof grant.retainedParent.key !== "string" ||
-      typeof grant.retainedChildKey !== "string")
-  ) {
-    throw new UpdateCommandRecoveryPendingError("Candidate retained owner pair is malformed.");
-  }
+  const retainedFields = grant.retainedParent !== undefined || grant.retainedChildKey !== undefined;
   const original = grant.originalParent ?? grant.parent;
   const spawner = grant.spawner ?? original;
   const slotReserver = slot?.reserver;

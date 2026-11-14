@@ -2,16 +2,18 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
 
 it("runs only the requested SDK closures from an independent package host", async () => {
   const sourceRoot = tempDirs.make("openclaw-sdk-source-");
-  const files = {
+  writeTree(path.join(sourceRoot, "dist"), {
     "plugin-sdk/first.js": `
 import { createRequire } from "node:module";
 import { value } from "../shared.js";
@@ -34,6 +36,7 @@ export const load = () => import("../dynamic.js").then((module) => module.value)
     "nested.cjs": "module.exports = { value: 3 };",
     "dynamic.js": "export const value = 7;",
     "worker.js": "export const value = 11;",
+    "process/spawn-broker/worker.js": "export const value = 19;",
     "node_modules/embedded-package/index.cjs": `
 const fs = require("node:fs");
 const path = require("node:path");
@@ -45,36 +48,28 @@ module.exports = {
 };
 `,
     "node_modules/embedded-package/child.cjs": "module.exports = { value: 13 };",
-    "node_modules/embedded-package/package.json": JSON.stringify({ name: "embedded-package" }),
+    "node_modules/embedded-package/package.json": { name: "embedded-package" },
     "node_modules/embedded-package/assets/fixture.txt": "embedded asset",
-    "node_modules/embedded-sibling/package.json": JSON.stringify({ main: "index.cjs" }),
+    "node_modules/embedded-sibling/package.json": { main: "index.cjs" },
     "node_modules/embedded-sibling/index.cjs": "module.exports = { value: 17 };",
-    "build-info.json": JSON.stringify({ buildId: "fixture-build" }),
+    "build-info.json": { buildId: "fixture-build" },
     "unrelated.js": 'throw new Error("unrelated SDK output must remain absent");',
-  };
-  for (const [relative, source] of Object.entries(files)) {
-    const filename = path.join(sourceRoot, "dist", relative);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, source);
-  }
+  });
   const entrypoint = (name: string) => ({
     root: sourceRoot,
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: `../plugin-sdk/${name}`,
-    distWorkerPath: `plugin-sdk/${name}.js`,
+    sourceWorkerName: `../${name}`,
+    distWorkerPath: `${name}.js`,
   });
-  const host = createCompiledSdkHost([entrypoint("first"), entrypoint("second")], (prefix) =>
-    tempDirs.make(prefix),
-  );
-  if (!host) {
-    throw new Error("Expected a compiled SDK host");
-  }
-  const narrowHost = createCompiledSdkHost([entrypoint("second")], (prefix) =>
-    tempDirs.make(prefix),
-  );
-  if (!narrowHost) {
-    throw new Error("Expected a compiled SDK host without embedded dependencies");
-  }
+  const createHost = (first: string, ...rest: string[]) =>
+    expectDefined(
+      prepareCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)])((prefix) =>
+        tempDirs.make(prefix),
+      ),
+      "compiled SDK host",
+    );
+  const host = createHost("plugin-sdk/first", "plugin-sdk/second", "process/spawn-broker/worker");
+  const narrowHost = createHost("plugin-sdk/second");
   expect(fs.existsSync(path.join(narrowHost, "dist/node_modules"))).toBe(false);
   expect(require(path.join(narrowHost, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
   expect(fs.existsSync(path.join(host, "dist/unrelated.js"))).toBe(false);
@@ -89,16 +84,17 @@ module.exports = {
     workerUrl: URL;
     load: () => Promise<number>;
   };
-  expect(first.result).toBe(5);
+  expect(first).toMatchObject({ result: 5, buildId: "fixture-build", packageName: "openclaw" });
   expect(first.embeddedResult).toEqual({
     value: 13,
     name: "embedded-package",
     asset: "embedded asset",
     sibling: 17,
   });
-  expect(first.buildId).toBe("fixture-build");
-  expect(first.packageName).toBe("openclaw");
   await expect(first.load()).resolves.toBe(7);
   expect(require(fileURLToPath(first.workerUrl))).toMatchObject({ value: 11 });
   expect(require(path.join(host, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
+  expect(require(path.join(host, "dist/process/spawn-broker/worker.js"))).toMatchObject({
+    value: 19,
+  });
 });

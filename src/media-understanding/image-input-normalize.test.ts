@@ -1,25 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
-import type { ImageCompressionModelPolicy } from "../media/web-media.js";
-
-const mocks = vi.hoisted(() => ({
-  resolveImageCompressionModelPolicy: vi.fn(async (): Promise<ImageCompressionModelPolicy> => ({
-    maxSidePx: 32,
-    preferredSidePx: 32,
-  })),
-}));
-
-vi.mock("../agents/image-compression-policy.js", () => ({
-  resolveImageCompressionModelPolicy: mocks.resolveImageCompressionModelPolicy,
-}));
-
 import { optimizeImageDescriptionInput } from "./image-input-normalize.js";
-
-afterEach(() => {
-  mocks.resolveImageCompressionModelPolicy.mockClear();
-});
 
 describe("image description input optimization", () => {
   it("downscales recognized images to the selected model policy", async () => {
@@ -27,16 +10,10 @@ describe("image description input optimization", () => {
       buffer: createSolidPngBuffer(64, 48, { r: 24, g: 96, b: 208 }),
       fileName: "phone.png",
       mime: "image/png",
-      cfg: {},
-      provider: "vision-plugin",
-      model: "vision-v1",
-      agentDir: "/tmp/agent",
+      modelPolicy: { maxSidePx: 32, preferredSidePx: 32 },
       maxBytes: 1024 * 1024,
     });
 
-    expect(mocks.resolveImageCompressionModelPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "vision-plugin", model: "vision-v1" }),
-    );
     expect(result.mime).toBe("image/jpeg");
     expect(result.fileName).toBe("phone.jpg");
     expect(result.buffer).not.toEqual(createSolidPngBuffer(64, 48, { r: 24, g: 96, b: 208 }));
@@ -49,25 +26,21 @@ describe("image description input optimization", () => {
       optimizeImageDescriptionInput({
         buffer,
         mime: "image/x-custom",
-        provider: "vision-plugin",
-        model: "vision-v1",
+        modelPolicy: { maxSidePx: 32, preferredSidePx: 32 },
         maxBytes: buffer.length,
       }),
     ).resolves.toEqual({ buffer, fileName: undefined, mime: "image/x-custom" });
 
-    mocks.resolveImageCompressionModelPolicy.mockResolvedValueOnce({ maxBytes: buffer.length - 1 });
     await expect(
       optimizeImageDescriptionInput({
         buffer,
         mime: "image/x-custom",
-        provider: "vision-plugin",
-        model: "vision-v1",
+        modelPolicy: { maxBytes: buffer.length - 1 },
         maxBytes: buffer.length,
       }),
     ).rejects.toMatchObject({
       name: ImageOptimizationLimitError.name,
       maxBytes: buffer.length - 1,
     });
-    expect(mocks.resolveImageCompressionModelPolicy).toHaveBeenCalledTimes(2);
   });
 });

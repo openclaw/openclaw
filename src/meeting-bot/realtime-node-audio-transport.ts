@@ -129,8 +129,8 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       try {
         await invoke("stop");
       } catch (error) {
-        params.logger.debug?.(
-          `${params.logScope} node audio bridge stop ignored: ${formatErrorMessage(error)}`,
+        params.logger.warn(
+          `${params.logScope} node audio bridge stop did not complete: ${formatErrorMessage(error)}`,
         );
       }
     },

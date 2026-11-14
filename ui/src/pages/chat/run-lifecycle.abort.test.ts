@@ -1,12 +1,15 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import {
+  gatewayHelloForMethods,
+  sessionMutationGatewayHello,
+} from "../../test-helpers/gateway-methods.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import {
   handleAbortChat,
@@ -72,6 +75,10 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     connected: true,
     sessionKey: "agent:main",
     chatRunId: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
@@ -101,6 +108,7 @@ describe("handleAbortChat", () => {
     expect(hasAbortableSessionRun(host)).toBe(true);
     await handleAbortChat(host, { preserveDraft: false });
     expect(request).toHaveBeenCalledWith("sessions.abort", {
+      userInitiated: true,
       key: "agent:main",
       clearQueued: true,
     });
@@ -165,6 +173,7 @@ describe("handleAbortChat", () => {
     });
     await handleAbortChat(host, { preserveDraft: true });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.abort", {
+      userInitiated: true,
       key: "agent:main",
       runId: "run-embedded-finished",
     });
@@ -218,6 +227,7 @@ describe("handleAbortChat", () => {
           operation = handleAbortChat(host, { preserveDraft: true });
         }
         expect(request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+          userInitiated: true,
           sessionKey: "main",
           ...(mainSessionKey === "global" ? { agentId: "work" } : {}),
           runId: "finished-run",
@@ -260,6 +270,7 @@ describe("handleAbortChat", () => {
     });
     const stopped = handleAbortChat(host, { preserveDraft: true });
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.abort", {
+      userInitiated: true,
       key: "global",
       agentId: "main",
     });
@@ -287,7 +298,7 @@ describe("handleAbortChat", () => {
     expect(hasAbortableSessionRun(host)).toBe(true);
     await handleAbortChat(host, { preserveDraft: true });
 
-    expect(host.chatError).toBe("Not connected. Try again after reconnecting.");
+    expect(host.chatError).toBe("Reconnect to try again.");
     expect(host.lastError).toBe(host.chatError);
     expect(host.chatMessage).toBe("keep this draft");
     expect(host.pendingAbort).toBeUndefined();
@@ -307,12 +318,7 @@ describe("replayPendingChatAbort", () => {
       chatRunId: "run-main",
       chatError: "Current scope warning",
       lastError: "Current scope warning",
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["chat.abort"] },
-      },
+      hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
       pendingAbort: {
         sourceClient: client,
         recoveryScope: client.recoveryScope,
@@ -377,6 +383,7 @@ describe("abort rejection publication ownership", () => {
       try {
         expect(host.pendingAbort).toBeNull();
         expect(request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+          userInitiated: true,
           sessionKey: "global",
           agentId: "main",
           runId: "original-run",
@@ -441,6 +448,7 @@ it.each([false, true])(
     await operation;
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("chat.abort", {
+      userInitiated: true,
       sessionKey: "agent:main:main",
       runId: "run-1",
     });

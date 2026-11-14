@@ -1,3 +1,4 @@
+import type { SummarizationConversationSource } from "../../packages/agent-core/src/harness/compaction/summarization-completion.js";
 import {
   CompactionError,
   SummaryOutputBudgetError,
@@ -7,8 +8,12 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
+import type { ModelRequestHeaders } from "../llm/types.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
+import { isCompactionSummaryRefusal } from "./compaction-summary-refusal.js";
+import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
 import { isTimeoutError } from "./failover-error.js";
+import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import type {
   AgentMessage,
   CompactionSummaryPrompt,
@@ -31,10 +36,10 @@ export type CompactionSummarizationInstructions = {
 };
 
 type CompactionSummaryParams = {
-  messages: AgentMessage[];
+  messages: AgentMessage[] | SummarizationConversationSource;
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal: AbortSignal;
   reserveTokens: number;
   customInstructions?: string;
@@ -71,7 +76,11 @@ function buildCompactionSummarizationInstructions(
  */
 export async function summarizeCompactionHistory(params: CompactionSummaryParams): Promise<string> {
   // SECURITY: toolResult.details and runtime-context entries never reach the summarizer.
-  const messages = sanitizeCompactionMessages(params.messages);
+  // Indexed sources are sanitized by their snapshot owner before serialization;
+  // they never transfer raw transcript payloads into this host-side request.
+  const messages = Array.isArray(params.messages)
+    ? sanitizeCompactionMessages(params.messages)
+    : params.messages;
   if (messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
@@ -107,10 +116,17 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
         sleep: (ms) => sleepWithAbort(ms, params.signal),
         // Caller aborts and transport timeouts are terminal; provider-side
         // AbortErrors without caller cancellation remain retryable.
-        shouldRetry: (err) =>
-          !params.signal.aborted &&
-          !(err instanceof SummaryOutputBudgetError) &&
-          (isAbortError(err) || !isTimeoutError(err)),
+        shouldRetry: (err) => {
+          const { status, reason } = describeCompactionFailure(err);
+          return (
+            !params.signal.aborted &&
+            reason !== "format" &&
+            (status === undefined || isRetryableProviderHttpStatus(status)) &&
+            !isCompactionSummaryRefusal(err) &&
+            !(err instanceof SummaryOutputBudgetError) &&
+            (isAbortError(err) || !isTimeoutError(err))
+          );
+        },
       },
     );
   } catch (err) {

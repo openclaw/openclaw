@@ -1,4 +1,5 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type {
   DB as OpenClawAgentKyselyDatabase,
   SessionReactions,
@@ -49,18 +50,10 @@ export function listSessionReactionsInDatabase(
   sessionKey: string,
   params: { sessionId: string },
 ): Record<string, StoredMessageReactionSummary[]> {
-  const messages = new Map<string, SessionReactions[]>();
-  for (const row of executeSqliteQuerySync(
-    database.db,
-    reactionRows(database, sessionKey, params.sessionId),
-  ).rows) {
-    const rows = messages.get(row.message_id);
-    if (rows) {
-      rows.push(row);
-    } else {
-      messages.set(row.message_id, [row]);
-    }
-  }
+  const messages = groupRecords(
+    executeSqliteQuerySync(database.db, reactionRows(database, sessionKey, params.sessionId)).rows,
+    (row) => row.message_id,
+  );
   return Object.fromEntries(
     [...messages].map(([messageId, rows]) => [messageId, summarizeReactions(rows)]),
   );

@@ -113,7 +113,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
   temporaryDirectories?: readonly string[];
   repair: boolean;
   assertCurrent: () => void;
-  assertResourcesSettled?: () => void;
+  assertResourcesSettled?: (directory: string) => void;
 }): Promise<string[]> {
   const messages: string[] = [];
   // Native spelling matches the projection, registration, and marker realpaths
@@ -168,16 +168,21 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses();
+          const census = inspectOtherOpenClawProcesses(directory);
           if ("error" in census) {
             throw new Error(census.error);
+          }
+          for (const warning of census.warnings ?? []) {
+            if (!messages.includes(warning)) {
+              messages.push(warning);
+            }
           }
           if (census.pids.length) {
             throw new Error(
               `other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}); let these holders finish, then rerun openclaw doctor --fix`,
             );
           }
-          params.assertResourcesSettled?.();
+          params.assertResourcesSettled?.(directory);
           params.assertCurrent();
           let failure: string | undefined;
           await removeTemporaryArtifacts(directory, "Updater runtime", (error) => {

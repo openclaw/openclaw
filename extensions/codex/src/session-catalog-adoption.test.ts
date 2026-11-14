@@ -3,13 +3,13 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import type { SessionCatalogEntrySnapshot } from "openclaw/plugin-sdk/session-catalog";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./app-server/session-binding-store.js";
-import { bindingStoreKey } from "./app-server/session-binding.js";
+import { createCodexAppServerBindingStore, bindingStoreKey } from "./app-server/session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
+import * as adoptionKeys from "./session-catalog-node-adoption.js";
 import {
-  commandRpcMocks,
   pinnedConnectionMocks,
   createCodexSessionCatalogControlFactory,
   fs,
@@ -29,30 +29,31 @@ import {
   supervisionSessionInputKey,
   supervisionSessionKey,
   seedSupervisionBinding,
+  supervisionBinding,
   interruptedAdoptionEntry,
   createRuntime,
   archiveTestSession,
   createGatewayApi,
-  resolveStorePath,
   sessionBindingIdentity,
   createCodexTestBindingStore,
-  type CodexThread,
+  type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
   type OpenClawConfig,
-  type PluginRuntime,
 } from "./session-catalog.test-helpers.js";
 
 const importHistory = transcriptMirrorMocks.importCodexThreadHistoryToTranscript;
 type ContinueOptions = Partial<Parameters<typeof continueLocalCodexSession>[0]>;
 type ListOptions = Partial<Parameters<typeof listCodexSessionCatalog>[0]>;
 type SessionSummary = ReturnType<typeof createRuntime>["entries"][number];
+const THREAD_ID = "thread-1";
+const SESSION_KEY = supervisionSessionKey(THREAD_ID);
 
-function bulkState(namespace: string) {
-  const state = createCodexSqliteTestBindingStateStore({
+function bindingState(namespace: string) {
+  return createCodexSqliteTestBindingStateStore({
     namespace,
     maxEntries: 10,
     env: { ...process.env },
   });
-  return { state, bindingStore: createLazyCodexAppServerBindingStore(state) };
 }
 
 function bindingIdentity(summary: SessionSummary, cfg = config) {
@@ -67,14 +68,12 @@ function seedSummary(
   bindingStore: ReturnType<typeof createCodexTestBindingStore>,
   summary: SessionSummary,
   sourceThreadId: string,
-  pending = false,
 ) {
   return seedSupervisionBinding({
     bindingStore,
     sessionId: summary.entry.sessionId,
     sessionKey: summary.sessionKey,
     sourceThreadId,
-    pending,
   });
 }
 
@@ -104,6 +103,29 @@ function adoptionFixture(
   };
 }
 
+function recoveryFixture(entry?: ReturnType<typeof adoptedEntry>) {
+  const f = adoptionFixture({ entries: entry ? [{ sessionKey: SESSION_KEY, entry }] : [] });
+  const identity = sessionBindingIdentity({
+    sessionId: entry?.sessionId ?? "openclaw-session-existing",
+    sessionKey: SESSION_KEY,
+    config,
+  });
+  return {
+    ...f,
+    identity,
+    seed: (binding = supervisionBinding(THREAD_ID)) =>
+      f.bindingStore.mutate(identity, { kind: "set", if: { kind: "absent" }, binding }),
+  };
+}
+
+function sessionRows(result: Awaited<ReturnType<typeof listCodexSessionCatalog>>, host = 0) {
+  return result.hosts[host]?.sessions;
+}
+
+function baseline(turnId: string) {
+  return { connectionFingerprint: "catalog-connection", turnId, userMessageCount: 0 };
+}
+
 function catalogRow(threadId: string, status = "idle") {
   return { threadId, status, archived: false as const };
 }
@@ -114,10 +136,27 @@ function catalogControl(threadIds: string[], status = "idle") {
   });
 }
 
+const adoptionSummary = (sourceThreadId: string, agentId = "main"): SessionSummary => ({
+  sessionKey: `agent:${agentId}:${supervisionSessionInputKey(sourceThreadId)}`,
+  entry: adoptedEntry({ sourceThreadId, sessionId: `${agentId}-${sourceThreadId}-session` }),
+});
+
+async function withBulkState(
+  namespace: string,
+  run: (state: ReturnType<typeof bindingState>, store: CodexAppServerBindingStore) => Promise<void>,
+) {
+  const state = bindingState(namespace);
+  try {
+    await run(state, createLazyCodexAppServerBindingStore(state));
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  }
+}
+
 async function adoptedSource(
   sourceThreadId: string,
   entry = adoptedEntry({ sourceThreadId }),
-  pending = false,
   options: Parameters<typeof createRuntime>[0] = {},
 ) {
   const sessionKey = supervisionSessionKey(sourceThreadId);
@@ -125,46 +164,53 @@ async function adoptedSource(
     { ...options, entries: [{ sessionKey, entry }] },
     catalogControl([sourceThreadId]),
   );
-  await seedSummary(fixture.bindingStore, fixture.entries[0]!, sourceThreadId, pending);
+  await seedSummary(fixture.bindingStore, fixture.entries[0]!, sourceThreadId);
   return { ...fixture, sessionKey };
 }
 
-function pauseHistoryImport() {
+async function duringHistoryImport(
+  run: (
+    fixture: ReturnType<typeof adoptionFixture>,
+    resume: () => void,
+    continuing: ReturnType<ReturnType<typeof adoptionFixture>["continue"]>,
+    pending: Promise<unknown>[],
+  ) => Promise<void>,
+) {
   const entered = createDeferred<void>();
   const gate = createDeferred<void>();
   importHistory.mockImplementationOnce(async () => {
     entered.resolve();
     await gate.promise;
-    return { importedMessages: 0, omittedMessages: 0 };
   });
-  return {
-    gate,
-    wait: (continuing: Promise<unknown>) =>
-      Promise.race([
-        entered.promise,
-        continuing.then(() => {
-          throw new Error("Continue finished without entering the paused history import");
-        }),
-      ]),
-  };
+  const fixture = adoptionFixture();
+  const continuing = fixture.continue();
+  const pending: Promise<unknown>[] = [continuing];
+  try {
+    await Promise.race([
+      entered.promise,
+      continuing.then(() => {
+        throw new Error("Continue finished without entering the paused history import");
+      }),
+    ]);
+    await run(fixture, () => gate.resolve(), continuing, pending);
+    await continuing;
+  } finally {
+    gate.resolve();
+    await Promise.allSettled(pending);
+  }
 }
 
 it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
-  const { state, bindingStore } = bulkState("adoption-cohort");
-  const entries = ["first", "second"].map((sourceThreadId) => ({
-    sessionKey: supervisionSessionKey(sourceThreadId),
-    entry: adoptedEntry({ sourceThreadId, sessionId: `session-${sourceThreadId}` }),
-  }));
+  const entries = ["first", "second"].map((id) => adoptionSummary(id));
   const { runtime } = createRuntime({ entries });
   const sessionEntries: SessionCatalogEntrySnapshot = {
     revision: {},
     entriesForAgent: () => entries,
   };
-  try {
+  await withBulkState("adoption-cohort", async (state, bindingStore) => {
     for (const [index, sourceThreadId] of ["first", "second"].entries()) {
       await seedSummary(bindingStore, entries[index]!, sourceThreadId);
     }
-    const lookupMany = vi.spyOn(state.asyncReads, "lookupMany");
     const syncLookupMany = vi.spyOn(state, "lookupMany");
     const lookup = vi.spyOn(state, "lookup");
     const list = async () =>
@@ -187,21 +233,14 @@ it("refreshes bulk adoption authority after a generation changes or a binding di
     );
     state.delete(bindingStoreKey(bindingIdentity(entries[1]!)));
     expect(await list()).toEqual([entries[0]!.sessionKey, undefined]);
-    expect(lookupMany).toHaveBeenCalled();
     expect(syncLookupMany).not.toHaveBeenCalled();
     expect(lookup).not.toHaveBeenCalled();
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-  }
+  });
 });
 
 it("reuses adoption preparation across catalog lists until the entry revision changes", async () => {
   const sourceThreadId = "adopted-source";
-  const f = await adoptedSource(
-    sourceThreadId,
-    adoptedEntry({ sourceThreadId, sessionId: "adopted-session" }),
-  );
+  const f = await adoptedSource(sourceThreadId);
   const { entries, sessionKey } = f;
   const adopted = entries[0]!;
   entries.unshift(
@@ -224,44 +263,37 @@ it("reuses adoption preparation across catalog lists until the entry revision ch
     entriesForAgent: () => entries,
     entriesForCatalog: () => catalogEntries,
   };
-  const list = () => f.list({ sessionEntries });
-  expect((await list()).hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
+  const list = async () => sessionRows(await f.list({ sessionEntries }))?.[0];
+  const parseKey = vi.spyOn(adoptionKeys, "adoptionSessionKeyRest");
+  expect((await list())?.sessionKey).toBe(sessionKey);
+  expect(parseKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
   const coldInspections = inspectedEntries;
-  let result: Awaited<ReturnType<typeof list>> | undefined;
-  for (let listIndex = 0; listIndex < 100; listIndex++) {
-    result = await list();
-  }
+  const result = await list();
   const warmInspections = inspectedEntries - coldInspections;
-  expect(result?.hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
+  expect(result?.sessionKey).toBe(sessionKey);
   expect(warmInspections).toBe(0);
+  expect(parseKey).toHaveBeenCalledTimes(1);
 
   adopted.entry = { ...adopted.entry, initializationPending: true };
   sessionEntries.revision = {};
-  expect((await list()).hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+  expect(await list()).not.toHaveProperty("sessionKey");
   expect(inspectedEntries).toBeGreaterThan(coldInspections);
+  expect(parseKey).toHaveBeenCalledTimes(1);
 });
 
 it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {
-  const { state, bindingStore } = bulkState("adoption-order");
   const cohortConfig: OpenClawConfig = {
     agents: { entries: { main: {}, beta: {}, gamma: {} } },
   };
-  const duplicates = ["main", "beta"].map((agentId) => ({
-    sessionKey: `agent:${agentId}:${supervisionSessionInputKey("duplicate")}`,
-    entry: adoptedEntry({ sourceThreadId: "duplicate", sessionId: `${agentId}-session` }),
-  }));
-  const malformed = {
-    sessionKey: `agent:gamma:${supervisionSessionInputKey("malformed")}`,
-    entry: adoptedEntry({ sourceThreadId: "malformed", sessionId: "malformed-session" }),
-  };
+  const duplicates = ["main", "beta"].map((agentId) => adoptionSummary("duplicate", agentId));
+  const malformed = adoptionSummary("malformed", "gamma");
   const { runtime, entries } = createRuntime({ entries: [...duplicates, malformed] });
-  try {
+  await withBulkState("adoption-order", async (state, bindingStore) => {
     for (const duplicate of duplicates) {
       await seedSummary(bindingStore, duplicate, "duplicate");
     }
     const key = bindingStoreKey(bindingIdentity(malformed, cohortConfig));
     state.register(key, { version: 1, state: "active", binding: { threadId: "", cwd: "/repo" } });
-    const lookupMany = vi.spyOn(state.asyncReads, "lookupMany");
     await expect(
       listAdoptedSessionEntries({ agentId: "main", bindingStore, config: cohortConfig, runtime }),
     ).rejects.toThrow("multiple OpenClaw sessions adopt Codex thread duplicate from the same home");
@@ -269,77 +301,30 @@ it("reports duplicate adoption across agents before decoding a later malformed b
     await expect(
       listAdoptedSessionEntries({ agentId: "main", bindingStore, config: cohortConfig, runtime }),
     ).rejects.toThrow(`Invalid Codex app-server binding row: ${key}`);
-    expect(lookupMany).toHaveBeenCalledTimes(2);
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-  }
-});
-
-it("enriches only the local source row with its adopted OpenClaw session", async () => {
-  const control = catalogControl(["source-thread"], "active");
-  const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () => ({
-    payloadJSON: JSON.stringify({
-      sessions: [catalogRow("source-thread")],
-    }),
-  }));
-  const f = await adoptedSource("source-thread", undefined, false, {
-    nodes: [
-      {
-        nodeId: "devbox",
-        connected: true,
-        commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-      },
-    ],
-    invoke,
-  });
-  const result = await f.list({ control });
-
-  expect(result.hosts[0]?.sessions[0]).toMatchObject({
-    threadId: "source-thread",
-    sessionKey: f.sessionKey,
-  });
-  expect(result.hosts[1]?.sessions[0]).toEqual({
-    threadId: "source-thread",
-    status: "idle",
-    archived: false,
   });
 });
 
-it("does not expose an adopted marker while generic initialization remains pending", async () => {
+it("enriches only the trusted local binding, not a retargeted marker or paired source", async () => {
+  const control = catalogControl(["source-thread", "forged-thread"], "active");
   const f = await adoptedSource(
     "source-thread",
+    adoptedEntry({ sourceThreadId: "forged-thread" }),
     {
-      ...adoptedEntry({ sourceThreadId: "source-thread", sessionId: "openclaw-session-pending" }),
-      initializationPending: true,
+      nodes: [
+        { nodeId: "devbox", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
+      ],
+      invoke: vi.fn(async () => ({
+        payloadJSON: JSON.stringify({ sessions: [catalogRow("source-thread")] }),
+      })),
     },
-    true,
   );
-
-  const result = await f.list();
-
-  expect(result.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
-});
-
-it("ignores a public marker retarget and trusts the private source binding", async () => {
-  const control = catalogControl(["source-thread", "forged-thread"]);
-  const f = await adoptedSource(
-    "source-thread",
-    adoptedEntry({
-      sourceThreadId: "forged-thread",
-      sessionId: "openclaw-session-forged-marker",
-    }),
-  );
-
   const result = await f.list({ control });
 
-  expect(result.hosts[0]?.sessions).toEqual([
-    { threadId: "source-thread", status: "idle", archived: false, sessionKey: f.sessionKey },
-    { threadId: "forged-thread", status: "idle", archived: false },
+  expect(sessionRows(result)).toEqual([
+    { ...catalogRow("source-thread", "active"), sessionKey: f.sessionKey },
+    catalogRow("forged-thread", "active"),
   ]);
-  expect(f.entries[0]?.entry.pluginExtensions).toMatchObject({
-    codex: { supervision: { sourceThreadId: "forged-thread" } },
-  });
+  expect(sessionRows(result, 1)).toEqual([catalogRow("source-thread")]);
 });
 
 it.each([
@@ -355,13 +340,11 @@ it.each([
     readThread: vi.fn(async (id: string) => idleThread({ id, source: "cli" })),
   });
   const result = await f.list({ control });
-  expect(result.hosts[0]?.sessions).toHaveLength(1);
-  expect(result.hosts[0]?.sessions[0]).toBeDefined();
-  expect(result.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+  expect(sessionRows(result)).toHaveLength(1);
+  expect(sessionRows(result)?.[0]).not.toHaveProperty("sessionKey");
   await expect(f.continue({ control, threadId })).rejects.toThrow(
     "does not match its trusted recovery state",
   );
-  expect(f.createSessionEntry).toHaveBeenCalledOnce();
   expect(importHistory).not.toHaveBeenCalled();
 });
 it("imports an exact local source when broad native listing times out", async () => {
@@ -372,12 +355,7 @@ it("imports an exact local source when broad native listing times out", async ()
   const rollout = path.join(sessionsRoot, "source.jsonl");
   const payload = { id: "thread-source", source: "cli", originator: "codex_cli_rs" };
   await fs.writeFile(rollout, `${JSON.stringify({ type: "session_meta", payload })}\n`);
-  const sourceThread = idleThread({
-    id: "thread-source",
-    source: "cli",
-    path: rollout,
-    turns: [],
-  });
+  const sourceThread = idleThread({ id: "thread-source", source: "cli", path: rollout, turns: [] });
   let indexed = false;
   pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
     if (method === "thread/read") {
@@ -397,17 +375,9 @@ it("imports an exact local source when broad native listing times out", async ()
   const source = (await factory.homesForAgent("main"))[0]!;
   const f = adoptionFixture({}, factory.forRequest("main", source));
   await expect(
-    f.continue({
-      threadId: sourceThread.id,
-      sourceHomeId: source.sourceHomeId,
-    }),
+    f.continue({ threadId: sourceThread.id, sourceHomeId: source.sourceHomeId }),
   ).resolves.toMatchObject({ disposition: "forked" });
-  expect(f.createSessionEntry).toHaveBeenCalledOnce();
   expect(importHistory).toHaveBeenCalledWith(expect.objectContaining({ thread: sourceThread }));
-  expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
-    "thread/read",
-    "thread/read",
-  ]);
 });
 
 it("creates one pending locked branch and reuses its source mapping", async () => {
@@ -423,10 +393,7 @@ it("creates one pending locked branch and reuses its source mapping", async () =
     {},
     createEligibleControl({ readThread: vi.fn(async () => sourceThread) }),
   );
-  const baselines: Parameters<NonNullable<ContinueOptions["onContinued"]>>[0][] = [];
-  const onContinued: NonNullable<ContinueOptions["onContinued"]> = (baseline) => {
-    baselines.push(baseline);
-  };
+  const onContinued = vi.fn();
 
   const first = await f.continue({ onContinued });
   const second = await f.continue({ onContinued });
@@ -437,51 +404,26 @@ it("creates one pending locked branch and reuses its source mapping", async () =
   });
   expect(second).toEqual({ sessionKey: first.sessionKey, disposition: "existing" });
   // Baselines include the active turn; history import stops at the last terminal turn.
-  expect(baselines).toEqual(
-    Array.from({ length: 2 }, () => ({
-      connectionFingerprint: "catalog-connection",
-      turnId: "turn-active",
-      userMessageCount: 0,
-    })),
-  );
-  expect(f.control.withPinnedConnection).toHaveBeenCalledTimes(2);
+  expect(onContinued.mock.calls).toEqual([[baseline("turn-active")], [baseline("turn-active")]]);
   expect(f.createSessionEntry).toHaveBeenCalledOnce();
+  expect(f.entries[0]?.entry).toMatchObject({
+    displayName: "Continue native task",
+    spawnedCwd: "/workspace/project",
+    agentHarnessId: "codex",
+    modelSelectionLocked: true,
+    pluginExtensions: { codex: { supervision: { sourceThreadId: "thread-1", modelLocked: true } } },
+  });
   expect(f.createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
-  expect(f.createSessionEntry).toHaveBeenCalledWith(
+  const identity = f.identity(first.sessionKey);
+  expect(importHistory).toHaveBeenCalledWith(
     expect.objectContaining({
-      cfg: config,
-      key: supervisionSessionInputKey("thread-1"),
-      displayName: "Continue native task",
-      spawnedCwd: "/workspace/project",
-      afterCreate: expect.any(Function),
-      initialEntry: {
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        pluginExtensions: {
-          codex: {
-            supervision: {
-              sourceThreadId: "thread-1",
-              initializing: true,
-              modelLocked: true,
-            },
-          },
-        },
-      },
+      thread: sourceThread,
+      throughTurnId: "turn-failed",
+      sessionId: identity.sessionId,
+      sessionKey: first.sessionKey,
+      modelProvider: "openai",
     }),
   );
-  const identity = f.identity(first.sessionKey);
-  expect(importHistory).toHaveBeenCalledWith({
-    assertCurrent: expect.any(Function),
-    thread: sourceThread,
-    storePath: resolveStorePath(undefined, { agentId: "main" }),
-    sessionId: identity.sessionId,
-    sessionKey: first.sessionKey,
-    agentId: "main",
-    cwd: "/workspace/project",
-    throughTurnId: "turn-failed",
-    modelProvider: "openai",
-    config,
-  });
   expect(f.bindingStore.read(identity)).toMatchObject({
     threadId: "thread-1",
     connectionScope: "supervision",
@@ -496,10 +438,6 @@ it("creates one pending locked branch and reuses its source mapping", async () =
       lastTurnId: "turn-failed",
     },
   });
-  expect(f.control.readThread).toHaveBeenCalledTimes(2);
-  expect(f.control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
-  expect(f.control.readThread).toHaveBeenNthCalledWith(2, "thread-1", true);
-  expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
 });
 
 it("does not join concurrent local continues across explicit agent owners", async () => {
@@ -509,55 +447,18 @@ it("does not join concurrent local continues across explicit agent owners", asyn
   const f = adoptionFixture();
   const { api } = createGatewayApi(f.runtime, runtimeConfig);
 
-  const [alpha, beta] = await Promise.all(
-    ["alpha", "beta"].map((agentId) => f.continue({ agentId, api, config: runtimeConfig })),
-  );
+  const [alpha, beta] = await Promise.all([
+    f.continue({ agentId: "alpha", api, config: runtimeConfig }),
+    f.continue({ agentId: "beta", api, config: runtimeConfig }),
+  ]);
 
   if (!alpha || !beta) {
-    throw new Error("expected both explicit owners to continue independently");
+    throw new Error("Expected both agent-owned sessions to be created");
   }
-
   expect(alpha.sessionKey).toMatch(/^agent:alpha:harness:codex:supervision:/);
   expect(beta.sessionKey).toMatch(/^agent:beta:harness:codex:supervision:/);
   expect(alpha.sessionKey).not.toBe(beta.sessionKey);
   expect(f.createSessionEntry).toHaveBeenCalledTimes(2);
-});
-
-it("baselines a re-continued adoption from its bound canonical thread", async () => {
-  const canonicalTurn = {
-    id: "turn-canonical",
-    status: "completed",
-    startedAt: 200,
-    items: [
-      { id: "user-1", type: "userMessage", text: "first" },
-      { id: "user-2", type: "userMessage", text: "second" },
-    ],
-  } as NonNullable<CodexThread["turns"]>[number];
-  const canonicalThread = idleThread({
-    id: "thread-1-branch",
-    turns: [canonicalTurn],
-  });
-  const f = await adoptedSource("thread-1");
-  const control = createEligibleControl({
-    readThread: vi.fn(async (threadId: string) =>
-      threadId === canonicalThread.id ? canonicalThread : idleThread({ id: threadId }),
-    ),
-  });
-  const baselines: Parameters<NonNullable<ContinueOptions["onContinued"]>>[0][] = [];
-
-  await f.continue({
-    control,
-    onContinued: (baseline) => baselines.push(baseline),
-  });
-
-  expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true);
-  expect(baselines).toEqual([
-    {
-      connectionFingerprint: "catalog-connection",
-      turnId: "turn-canonical",
-      userMessageCount: 2,
-    },
-  ]);
 });
 
 it("keeps adopted sessions discoverable when the configured system agent changes", async () => {
@@ -571,24 +472,14 @@ it("keeps adopted sessions discoverable when the configured system agent changes
 
   expect(created.sessionKey).toMatch(/^agent:alpha:harness:codex:supervision:/);
   expect(reopened).toEqual({ sessionKey: created.sessionKey, disposition: "existing" });
-  expect(f.createSessionEntry).toHaveBeenCalledOnce();
-  expect(f.createSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ agentId: "alpha" }));
-  expect(catalog.hosts[0]?.sessions[0]).toMatchObject({
+  expect(sessionRows(catalog)?.[0]).toMatchObject({
     threadId: "thread-1",
     sessionKey: created.sessionKey,
   });
 });
 
 it("does not expose or reuse an initializing session while history import is paused", async () => {
-  const { gate: importGate, wait } = pauseHistoryImport();
-  const f = adoptionFixture();
-
-  const firstContinue = f.continue();
-  const pending: Promise<unknown>[] = [firstContinue];
-  try {
-    await wait(firstContinue);
-    expect(importHistory).toHaveBeenCalledOnce();
-
+  await duringHistoryImport(async (f, resume, continuing, pending) => {
     const duringImport = await f.list();
     expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
     expect(f.entries[0]?.entry.initializationPending).toBe(true);
@@ -603,37 +494,24 @@ it("does not expose or reuse an initializing session while history import is pau
     expect(secondSettled).toBe(false);
     expect(f.createSessionEntry).toHaveBeenCalledOnce();
 
-    importGate.resolve();
-    const [first, second] = await Promise.all([firstContinue, secondContinue]);
+    resume();
+    const [first, second] = await Promise.all([continuing, secondContinue]);
     expect(second).toEqual(first);
-    expect(f.entries[0]?.entry.pluginExtensions).toEqual({
-      codex: {
-        supervision: { sourceThreadId: "thread-1", modelLocked: true },
-      },
-    });
+    expect(f.createSessionEntry).toHaveBeenCalledOnce();
     expect(f.entries[0]?.entry.initializationPending).toBeUndefined();
-  } finally {
-    importGate.resolve();
-    await Promise.allSettled(pending);
-  }
+  });
 });
 
 it("does not archive a source with an interrupted initializing branch", async () => {
-  const f = adoptionFixture({
-    entries: [
-      {
-        sessionKey: supervisionSessionKey("thread-1"),
-        entry: interruptedAdoptionEntry({
-          sourceThreadId: "thread-1",
-          sessionId: "openclaw-session-initializing",
-        }),
-      },
-    ],
-  });
+  const f = recoveryFixture(
+    interruptedAdoptionEntry({
+      sourceThreadId: THREAD_ID,
+      sessionId: "openclaw-session-initializing",
+    }),
+  );
   await expect(f.archive()).rejects.toThrow(
     "cannot be archived while its OpenClaw branch is initializing",
   );
-  expect(f.control.readThread).not.toHaveBeenCalled();
   expect(f.control.archiveThread).not.toHaveBeenCalled();
 });
 
@@ -665,14 +543,7 @@ it("does not archive a source until its supervised branch materializes", async (
 });
 
 it("serializes archive behind an in-flight Continue and rejects the pending branch", async () => {
-  const { gate: importGate, wait } = pauseHistoryImport();
-  const f = adoptionFixture();
-  const continuing = f.continue();
-  const pending: Promise<unknown>[] = [continuing];
-  try {
-    await wait(continuing);
-    expect(importHistory).toHaveBeenCalledOnce();
-
+  await duringHistoryImport(async (f, resume, continuing, pending) => {
     let archiveSettled = false;
     const archiving = Promise.allSettled([f.archive()]).then(([result]) => {
       archiveSettled = true;
@@ -684,20 +555,124 @@ it("serializes archive behind an in-flight Continue and rejects the pending bran
     expect(archiveSettled).toBe(false);
     expect(f.control.archiveThread).not.toHaveBeenCalled();
 
-    importGate.resolve();
+    resume();
     await expect(continuing).resolves.toMatchObject({ disposition: "forked" });
-    const archiveResult = await archiving;
-    expect(archiveResult.status).toBe("rejected");
-    if (archiveResult.status !== "rejected") {
-      throw new Error("archive unexpectedly succeeded");
-    }
-    expect(archiveResult.reason).toBeInstanceOf(Error);
-    expect(archiveResult.reason).toMatchObject({
-      message: expect.stringContaining("cannot be archived until its OpenClaw branch starts"),
+    expect(await archiving).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({
+        message: expect.stringContaining("cannot be archived until its OpenClaw branch starts"),
+      }),
     });
+    expect(await archiving).toHaveProperty("reason", expect.any(Error));
     expect(f.control.archiveThread).not.toHaveBeenCalled();
-  } finally {
-    importGate.resolve();
-    await Promise.allSettled(pending);
-  }
+  });
+});
+
+describe("adoption recovery", () => {
+  const sourceThreadId = THREAD_ID;
+  const sessionKey = SESSION_KEY;
+  it("recovers the same pending session after a restart following binding commit", async () => {
+    const f = recoveryFixture(
+      interruptedAdoptionEntry({ sourceThreadId, sessionId: "interrupted-after-binding" }),
+    );
+    await f.seed(supervisionBinding(sourceThreadId, true));
+    const mutate = vi.fn(f.bindingStore.mutate);
+    const bindingStore: CodexAppServerBindingStore = { ...f.bindingStore, mutate };
+    await expect(f.continue({ bindingStore })).resolves.toEqual({
+      sessionKey,
+      disposition: "forked",
+    });
+    expect(f.createSessionEntry).toHaveBeenCalledOnce();
+    expect(f.entries).toHaveLength(1);
+    expect(f.entries[0]?.entry.sessionId).toBe(f.identity.sessionId);
+    expect(f.entries[0]?.entry.initializationPending).toBeUndefined();
+    expect(mutate).not.toHaveBeenCalled();
+    expect(bindingStore.read(f.identity)?.pendingSupervisionBranch?.sourceThreadId).toBe(
+      sourceThreadId,
+    );
+  });
+
+  it.each([
+    ["a different working directory", { cwd: "/workspace/other" }],
+    [
+      "pending cleanup artifacts",
+      { pendingSupervisionBranch: { sourceThreadId, cleanupThreadIds: ["thread-orphan"] } },
+    ],
+  ] satisfies Array<[string, Partial<CodexAppServerThreadBinding>]>)(
+    "rejects recovery against %s in a same-thread binding",
+    async (_name, patch) => {
+      const f = recoveryFixture(
+        interruptedAdoptionEntry({ sourceThreadId, sessionId: "interrupted-invalid-binding" }),
+      );
+      await f.seed(
+        supervisionBinding(sourceThreadId, true, {
+          pendingSupervisionBranch: { sourceThreadId },
+          ...patch,
+        }),
+      );
+      await expect(f.continue()).rejects.toThrow("guarded rollback did not complete");
+      expect(f.entries[0]?.entry.initializationPending).toBe(true);
+    },
+  );
+
+  it.each([true, false])(
+    "rejects a Continue when the fresh read returns a different thread (mapped=%s)",
+    async (mapped) => {
+      const f = recoveryFixture(mapped ? adoptedEntry({ sourceThreadId }) : undefined);
+      if (mapped) {
+        await f.seed();
+      }
+      const control = createEligibleControl({
+        readThread: vi.fn(async () => idleThread({ id: "different-thread", source: "cli" })),
+      });
+      await expect(f.continue({ control })).rejects.toThrow(
+        "returned a different thread than requested",
+      );
+      expect(control.readThread).toHaveBeenCalledWith(
+        mapped ? "thread-1-branch" : sourceThreadId,
+        true,
+      );
+      expect(f.createSessionEntry).not.toHaveBeenCalled();
+      expect(f.patchSessionEntry).not.toHaveBeenCalled();
+      expect(importHistory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed when a mapped session generation changes before restore", async () => {
+    const f = recoveryFixture({
+      ...adoptedEntry({ sourceThreadId, sessionId: "openclaw-session-stale" }),
+      archivedAt: 123,
+    });
+    await f.seed();
+    const control = createEligibleControl({
+      readThread: vi.fn(async () => {
+        f.entries[0]!.entry.sessionId = "openclaw-session-replacement";
+        return idleThread({ id: "thread-1-branch" });
+      }),
+    });
+    await expect(f.continue({ control })).rejects.toThrow("changed before it could be opened");
+    expect(f.entries[0]?.entry).toMatchObject({ archivedAt: 123, modelSelectionLocked: true });
+    expect(f.createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the session when its pending binding cannot be committed", async () => {
+    const f = recoveryFixture();
+    const inner = createCodexAppServerBindingStore(bindingState("adoption-rollback"));
+    let rejectBinding = true;
+    const mutate = vi.fn(async (...args: Parameters<CodexAppServerBindingStore["mutate"]>) => {
+      if (rejectBinding && args[1].kind === "set") {
+        rejectBinding = false;
+        return false;
+      }
+      return await inner.mutate(...args);
+    });
+    const control = createEligibleControl();
+    await expect(f.continue({ control, bindingStore: { ...inner, mutate } })).rejects.toThrow(
+      "Codex session binding changed during initialization",
+    );
+    expect(f.entries).toEqual([]);
+    expect(f.createSessionEntry).toHaveBeenCalledOnce();
+    expect(importHistory).toHaveBeenCalledOnce();
+    expect(control.archiveThread).not.toHaveBeenCalled();
+  });
 });

@@ -117,13 +117,10 @@ function scanWrapperInvocation(
   return argv.slice(commandIndex);
 }
 
-export function extractEnvAssignmentKeysFromDispatchWrappers(
-  argv: string[],
-  maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
-): string[] {
+export function extractEnvAssignmentKeysFromDispatchWrappers(argv: string[]): string[] {
   let current = argv;
   const assignmentKeys: string[] = [];
-  for (let depth = 0; depth < maxDepth; depth += 1) {
+  for (let depth = 0; depth < MAX_DISPATCH_WRAPPER_DEPTH; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
@@ -475,12 +472,8 @@ export function unwrapKnownDispatchWrapperInvocation(
   return unwrapped ? { kind: "unwrapped", wrapper, argv: unwrapped } : { kind: "blocked", wrapper };
 }
 
-export function unwrapDispatchWrappersForResolution(
-  argv: string[],
-  maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
-  const plan = resolveDispatchWrapperTrustPlan(argv, maxDepth, platform);
+export function unwrapDispatchWrappersForResolution(argv: string[]): string[] {
+  const plan = resolveDispatchWrapperTrustPlan(argv, MAX_DISPATCH_WRAPPER_DEPTH);
   return plan.argv;
 }
 

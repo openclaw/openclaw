@@ -3,12 +3,15 @@ import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
-import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
+import {
+  selectProfileAccessEntries,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
@@ -72,7 +75,14 @@ export function readUserProfileSnapshotCommand(
     { type: "userProfiles.reconcile" | "userProfiles.catalog" }
   >,
 ) {
-  return runSqliteDeferredTransactionSync(db, () =>
+  if (command.type === "userProfiles.catalog" && !tableExists(db, "user_profiles")) {
+    return {
+      type: command.type,
+      profiles: [],
+      emailBindings: readUserProfileEmailBindings(db),
+    };
+  }
+  return runSqliteReadSnapshotSync(db, () =>
     command.type === "userProfiles.reconcile"
       ? {
           type: command.type,
@@ -81,7 +91,7 @@ export function readUserProfileSnapshotCommand(
         }
       : {
           type: command.type,
-          profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
+          profiles: selectProfileAccessEntries(db),
           emailBindings: readUserProfileEmailBindings(db),
         },
   );
@@ -114,6 +124,27 @@ export function readCatalogUserProfileAuthority(
     display: projectUserProfileDisplay(row),
     ...(includeProfile ? { listItem: projectUserProfileListItem(row, bindings) } : {}),
   };
+}
+
+/** Exact verified email/account facts from the retained catalog, including secondary accounts. */
+export function readCatalogGitHubEmailIdentity(
+  catalog: Parameters<typeof readCatalogUserProfileAuthority>[0],
+  accountId: number,
+  email: string,
+) {
+  const alias = catalog.bindings.byEmail.get(email.trim().toLowerCase());
+  if (!alias) {
+    return undefined;
+  }
+  catalog.assertCurrent(alias.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, alias.profileId);
+  if (!profile) {
+    return undefined;
+  }
+  catalog.assertCurrent(profile.id);
+  return profile.githubAccountIds?.includes(accountId)
+    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    : undefined;
 }
 
 /** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */
@@ -206,7 +237,17 @@ export function selectUserProfileDisplaysInDatabase(
     }
     return displays;
   }
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const namelessIds = rows.filter((row) => !row.display_name?.trim()).map((row) => row.id);
+  const githubNames = selectUserProfileGitHubIdentities(db, namelessIds);
+  const byId = new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        ...row,
+        ...(githubNames.has(row.id) ? { githubIdentity: githubNames.get(row.id) } : {}),
+      },
+    ]),
+  );
   return new Map(
     ids.map((id) => {
       // Match native text binding before indexing the returned SQLite rows.

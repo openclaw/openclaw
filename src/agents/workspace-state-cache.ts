@@ -1,8 +1,8 @@
 import { resolveGlobalMap } from "../shared/global-singleton.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathCacheInvalidation } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { workspaceStatePublication } from "./workspace-state-publication.js";
-import type { WorkspaceStateSnapshot } from "./workspace-state-store.kernel.js";
+import type { WorkspaceStateSnapshot } from "./workspace-state-types.js";
 
 type Store = {
   identity: string;
@@ -24,23 +24,29 @@ workspaceStatePublication.subscribeFacts((change) => {
   }
   const identity = change.kind === "unknown" ? change.identity : change.receipt.source.identity;
   for (const [key, store] of stores) {
-    if (store.identity === identity) {
-      stores.delete(key);
+    if (store.identity !== identity) {
+      continue;
     }
-  }
-});
-
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    for (const [key, store] of stores) {
-      if (store.path === (event.identity?.canonicalPath ?? event.path)) {
-        stores.delete(key);
+    if (change.kind === "unknown" || change.receipt.facts.has("aliases")) {
+      stores.delete(key);
+      continue;
+    }
+    for (const [aliasKey, snapshot] of store.snapshots) {
+      const fact = change.receipt.facts.get(snapshot.identity.workspaceKey);
+      if (fact?.kind === "postimage") {
+        store.snapshots.set(aliasKey, fact.value);
+      } else if (fact) {
+        store.snapshots.delete(aliasKey);
       }
     }
+    // An in-flight read must not overwrite the committed postimage.
+    stores.set(key, { ...store });
   }
 });
 
-/** A workspace write invalidates the whole small projection, including alias resolution. */
+registerOpenClawStatePathCacheInvalidation(stores);
+
+/** Owning writes publish snapshots; alias changes retire the resolution cache. */
 export async function readCachedWorkspaceStateSnapshot(
   context: OpenClawStateWorkerContext,
   aliasKey: string,

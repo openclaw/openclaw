@@ -7,21 +7,19 @@ import { clearMaxDurationTimer, rejectTranscriptWaiter } from "./timers.js";
 
 const log = createSubsystemLogger("voice-call/lifecycle");
 
-type CallLifecycleContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "onCallUpdated"
-  | "providerCallIdMap"
-  | "storePath"
-  | "stateRuntime"
-  | "transcriptWaiters"
-  | "maxDurationTimers"
-  | "notifyHangupTimers"
->;
-
 /** Finalize under the manager mutation queue, publishing cleanup only after persistence. */
 export async function finalizeCall(params: {
-  ctx: CallLifecycleContext;
+  ctx: Pick<
+    CallManagerContext,
+    | "activeCalls"
+    | "onCallUpdated"
+    | "providerCallIdMap"
+    | "storePath"
+    | "stateRuntime"
+    | "transcriptWaiters"
+    | "maxDurationTimers"
+    | "notifyHangupTimers"
+  >;
   call: CallRecord;
   preparedCall?: CallRecord;
   endReason: EndReason;

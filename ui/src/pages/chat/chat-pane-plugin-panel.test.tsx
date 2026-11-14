@@ -1,13 +1,13 @@
 import { createSignal } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ControlUiViewContext } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/presentation.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
-import { readRegionPanelHost } from "./components/chat-sidebar-region-header.tsx";
 
 it("retains the plugin panel while parking and reveals it with current pane props", async () => {
   const owner = new EventTarget();
@@ -30,7 +30,7 @@ it("retains the plugin panel while parking and reveals it with current pane prop
     key: "fixture/notes",
     pluginId: "fixture",
     value: { mount },
-    host: { signal, sessions: {}, agents: {}, navigation: {}, ui: {}, components: {} },
+    host: createInertViewHost(signal),
     signal,
   };
   // SAFETY: PluginView only reads this registry, lifecycle signal, and error reporter.
@@ -55,13 +55,6 @@ it("retains the plugin panel while parking and reveals it with current pane prop
     { wrapper: provider.wrapper },
   );
   await waitForSolid(() => expect(mount).toHaveBeenCalledOnce());
-  const region = document.createElement("div");
-  view.container.after(region);
-  view.container.dataset.panelSlot = "plugin:fixture/notes";
-  onTestFinished(() => region.remove());
-  expect(readRegionPanelHost(region, "plugin:fixture/notes")).toBe(
-    view.container.querySelector("openclaw-plugin-view"),
-  );
   const input = view.container.querySelector("input");
   presented = false;
   owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));

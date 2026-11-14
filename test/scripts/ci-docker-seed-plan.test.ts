@@ -16,6 +16,7 @@ it("retains every Docker seed owner in full release validation", () => {
     "mcp-channels",
     "cron-mcp-cleanup",
     "mcp-code-mode-gateway",
+    "mcp-docker-custody",
     "update-channel-switch",
   ]);
 });
@@ -23,6 +24,12 @@ it("retains every Docker seed owner in full release validation", () => {
 it.each([
   ["scripts/e2e/mcp-channels-seed.ts", ["mcp-channels"]],
   ["scripts/e2e/lib/update-channel-switch/assertions.mjs", ["update-channel-switch"]],
+  ["src/agents/mcp-docker-custody.ts", ["mcp-docker-custody"]],
+  ["src/gateway/server-startup-bootstrap.ts", ["mcp-docker-custody"]],
+  ["src/cli/mcp-cli-state-owner.ts", ["mcp-docker-custody"]],
+  ["src/cli/mcp-cli.ts", ["mcp-docker-custody"]],
+  ["src/cli/mcp-cli-probe.ts", ["mcp-docker-custody"]],
+  ["scripts/e2e/lib/mcp-docker-custody/scenario.mjs", ["mcp-docker-custody"]],
   ["src/state/openclaw-state-schema.ts", []],
 ] as const)("selects only Docker owner lanes for %s", (file, expected) => {
   expect(resolveChangedDockerSeedLanes([file])).toEqual(expected);

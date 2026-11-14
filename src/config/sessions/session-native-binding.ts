@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import {
   readDatabasePathIdentitySync,
@@ -52,7 +52,7 @@ const unresolved = resolveGlobalSingleton(
 export function deleteSessionWithNativeBindingsInWorker(
   plan: SessionNativeBindingDeletion["plan"],
   captured: NativeDeletionCapture,
-  assertCurrent: () => void,
+  assertCurrent: (operation?: RetainedWorkerTransactionAdmission) => void,
   onResult?: (result: SessionNativeBindingCandidate["result"], identity: string) => void,
 ) {
   return runSessionNativeBindingWorkerOperation<
@@ -64,6 +64,7 @@ export function deleteSessionWithNativeBindingsInWorker(
     entries: collectReclamationDeletionEntries(plan),
     captured,
     assertCurrent,
+    assertCandidate: (_candidate, operation) => assertCurrent(operation),
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
@@ -267,13 +268,15 @@ export function runSessionNativeBindingWorkerOperation<
           }
         }
         if ((!committed && !rolledBack) || publicationFailure) {
-          const error = new SqliteWorkerError(
+          const error = wrapSqliteWorkerError(
             publicationFailure
               ? "Native binding settlement could not publish current lease facts; this generation cannot be reused"
               : "Native binding settlement is unknown; this generation cannot be reused",
             "outcome-unknown",
+            publicationFailure?.cause,
+            outcome.ok ? undefined : outcome.error,
+            settlement && settlement.kind !== "completed" ? settlement.error : undefined,
           );
-          error.cause = publicationFailure?.cause ?? (outcome.ok ? undefined : outcome.error);
           if (receipt?.compensationFailure) {
             const compensation = new Error("Native binding compensation failed");
             retainOpenClawStateWorkerErrorPayload(compensation, receipt.compensationFailure);

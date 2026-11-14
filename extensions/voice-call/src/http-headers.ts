@@ -1,7 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-// Case-insensitive HTTP header lookup for provider webhook handlers.
-
 type HttpHeaderMap = Record<string, string | string[] | undefined>;
 
 /** Return the first value for a header name regardless of caller casing. */

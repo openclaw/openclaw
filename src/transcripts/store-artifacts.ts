@@ -4,7 +4,7 @@ import path from "node:path";
 import { tempFile } from "@openclaw/fs-safe/advanced";
 import { root } from "@openclaw/fs-safe/root";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
@@ -84,17 +84,22 @@ export function normalizeExportText(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
 }
 
+export type TranscriptArtifactAuthority = {
+  prepareEffect(): Promise<void>;
+  assertCurrent(): void;
+};
+
 export async function writeTranscriptArtifact(
   rootDir: string,
   fileName: string,
   content: string,
-  assertBeforeMutation?: () => void,
+  authority: TranscriptArtifactAuthority,
 ): Promise<string> {
   await writeTranscriptArtifactFile({
     rootDir,
     fileName,
     write: (filePath) => fs.writeFile(filePath, content, { mode: 0o600 }),
-    assertBeforeMutation,
+    authority,
   });
   return sha256Hex(content);
 }
@@ -104,7 +109,7 @@ export async function writeTranscriptArtifactFile(params: {
   rootDir: string;
   fileName: string;
   write: (filePath: string) => Promise<void>;
-  assertBeforeMutation?: () => void;
+  authority: TranscriptArtifactAuthority;
   signal?: AbortSignal;
 }): Promise<void> {
   const target = await root(params.rootDir);
@@ -120,6 +125,7 @@ export async function writeTranscriptArtifactFile(params: {
   try {
     const source = await root(stage.dir);
     await params.write(stage.path);
+    await params.authority.prepareEffect();
     // copyIn retains the former best-effort file/parent fsync behavior on every platform.
     await target.copyIn(
       params.fileName,
@@ -130,7 +136,7 @@ export async function writeTranscriptArtifactFile(params: {
         maxBytes: Infinity,
         sourceHardlinks: "reject",
         signal: params.signal,
-        assertBeforeMutation: params.assertBeforeMutation,
+        assertBeforeMutation: () => params.authority.assertCurrent(),
       },
     );
   } finally {
@@ -141,13 +147,14 @@ export async function writeTranscriptArtifactFile(params: {
 export async function removeTranscriptArtifact(
   rootDir: string,
   fileName: string,
-  assertBeforeMutation?: () => void,
+  authority: TranscriptArtifactAuthority,
 ): Promise<void> {
+  await authority.prepareEffect();
   await removePathWithinRoot({
     rootDir,
     relativePath: fileName,
     force: true,
-    assertBeforeMutation,
+    assertBeforeMutation: () => authority.assertCurrent(),
   });
 }
 
@@ -162,10 +169,8 @@ export async function isCaseSensitiveDirectory(directory: string): Promise<boole
       await fs.access(alternatePath);
       return false;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return true;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      return true;
     }
   } finally {
     await fs.rm(probePath, { force: true });

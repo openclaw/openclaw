@@ -1,3 +1,4 @@
+import { createPluginConfigParser } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
@@ -48,7 +49,6 @@ const codexAppServerServiceTierSchema = z
   .optional();
 const codexAppServerCyberFailoverSchema = z.strictObject({
   mode: z.enum(["auto", "off"]).optional(),
-  model: z.string().trim().min(1).optional(),
   cooloffMs: z.number().positive().optional(),
 });
 const codexAppServerExperimentalSchema = z.strictObject({
@@ -75,6 +75,7 @@ const codexPluginEntryConfigSchema = z.strictObject({
   enabled: z.boolean().optional(),
   marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
   pluginName: z.string().trim().min(1).optional(),
+  read_only: z.boolean().optional(),
   allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
 });
 
@@ -141,6 +142,7 @@ const codexPluginConfigSchema = z.strictObject({
       mode: z.enum(["yolo", "guardian"]).optional(),
       transport: z.enum(["stdio", "websocket", "unix"]).optional(),
       homeScope: z.enum(["agent", "user"]).optional(),
+      workerHostedCloud: z.boolean().optional(),
       command: z.string().optional(),
       args: z.union([z.array(z.string()), z.string()]).optional(),
       url: z.string().optional(),
@@ -196,7 +198,12 @@ export type ParsedCodexPluginConfig = Omit<
   codexPlugins?: z.infer<typeof codexPluginsConfigSchema>;
 };
 
-export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
+export const readCodexPluginConfig = createPluginConfigParser<ParsedCodexPluginConfig>(
+  "codex",
+  parseCodexPluginConfig,
+);
+
+function parseCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   const appServer = asNullableRecord(asNullableRecord(value)?.appServer);
   if (appServer?.approvalPolicy === "untrusted") {
     throw new Error(
@@ -298,6 +305,7 @@ export function resolveCodexPluginsPolicy(
           marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
+          ...(entry.read_only === true ? { readOnly: true } : {}),
           ...resolveCodexPluginDestructivePolicy(
             entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
           ),

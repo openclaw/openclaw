@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import {
-  buildReplyUsageState,
-  recordReplyUsageState,
-} from "../auto-reply/reply/reply-usage-state.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import type { Message, Model } from "../llm/types.js";
+import type { Message } from "../llm/types.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
@@ -21,6 +16,7 @@ import {
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   prepareBtwRuntimeAuth,
+  prepareBtwHarnessToolPolicies,
   resolveBtwPreparedRuntimeAuth,
   resolveRuntimeModel,
   runCliBtwSideQuestion,
@@ -28,12 +24,9 @@ import {
   withBtwPreparedRuntime,
   type RunBtwSideQuestionParams,
 } from "./btw-runtime.js";
-import { runLightweightBtwStream } from "./btw-stream.js";
+import { recordBtwUsage, runBtwSessionFork, runLightweightBtwStream } from "./btw-stream.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js";
-import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
-import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
@@ -62,7 +55,6 @@ import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
-import { hasBillableUsage, toDiagnosticUsage, type NormalizedUsage } from "./usage.js";
 
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
@@ -183,55 +175,15 @@ export async function runBtwSideQuestion(
     const resolveRuntimeSelection = async () => {
       if (!runtimeSelection) {
         runtimeSelection = await resolveRuntimeModel({
+          ...params,
           abortSignal: params.opts?.abortSignal,
-          provider: params.provider,
-          model: params.model,
           agentId: sessionAgentId,
-          sessionEntry: params.sessionEntry,
-          sessionStore: params.sessionStore,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          isNewSession: params.isNewSession,
           harnessId: harness.id,
           harnessAuthBootstrap: harness.authBootstrap,
           preparedModelRuntime,
         });
       }
       return runtimeSelection;
-    };
-    const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
-      params.onUsage?.(usage);
-      if (params.onUsage) {
-        return;
-      }
-      if (!hasBillableUsage(usage)) {
-        return;
-      }
-      const usageState = buildReplyUsageState({
-        config: params.cfg,
-        agentDir: params.agentDir,
-        agentId: sessionAgentId,
-        sessionId,
-        provider: runtimeModel.provider,
-        model: runtimeModel.id,
-        chatType: params.chatType,
-        usage,
-      });
-      // Delivery hooks use the reply correlation ID, not the side run's authority ID.
-      recordReplyUsageState(params.opts?.runId, usageState);
-      if (isDiagnosticsEnabled(params.cfg)) {
-        emitTrustedDiagnosticEvent({
-          type: "model.usage",
-          sessionKey: params.sessionKey,
-          sessionId,
-          channel: params.messageChannel,
-          agentId: sessionAgentId,
-          provider: runtimeModel.provider,
-          model: runtimeModel.id,
-          usage: toDiagnosticUsage(usage),
-          costUsd: usageState.turnUsd,
-        });
-      }
     };
     type BtwHarnessSideQuestionDispatch =
       | { kind: "handled"; payload: ReplyPayload }
@@ -249,26 +201,6 @@ export async function runBtwSideQuestion(
       runtime: Awaited<ReturnType<typeof resolveRuntimeModel>>,
       routeFinalized = false,
     ): Promise<BtwHarnessSideQuestionDispatch> => {
-      const toolsAllow = await preparePluginHarnessPolicyToolsAllow({
-        config: params.cfg,
-        sessionId,
-        sessionKey: params.sessionKey,
-        sandboxSessionKey: params.sandboxSessionKey,
-        agentId: sessionAgentId,
-        provider: runtime.model.provider,
-        modelId: runtime.model.id,
-        messageProvider: params.messageProvider,
-        messageChannel: params.messageChannel,
-        spawnedBy: params.spawnedBy,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        agentAccountId: params.agentAccountId,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
       const authPreparation =
         selectedHarness.id === harness.id
           ? undefined
@@ -285,15 +217,17 @@ export async function runBtwSideQuestion(
             });
       const runtimeAuthPreparation = authPreparation?.preparation ?? runtime.runtimeAuthPreparation;
       const selectedAuthProfileStore = authPreparation?.store ?? runtime.authProfileStore;
+      const nativeAuth = runtime.nativeOwnership?.auth === "native";
+      const firstAuthAttempt = runtimeAuthPreparation.attempts[0];
       const implicitHarnessAuthPlan =
-        selectedHarness.authBootstrap === "harness" &&
         runtimeAuthPreparation.attempts.length === 1 &&
-        runtimeAuthPreparation.attempts[0]?.kind === "implicit" &&
-        runtimeAuthPreparation.attempts[0].plan.harnessAuthProvider
-          ? runtimeAuthPreparation.attempts[0].plan
+        firstAuthAttempt?.kind === "implicit" &&
+        (nativeAuth ||
+          (selectedHarness.authBootstrap === "harness" &&
+            firstAuthAttempt.plan.harnessAuthProvider))
+          ? firstAuthAttempt.plan
           : undefined;
-      // A native harness owns this deferred auth decision. Resolving it through
-      // OpenClaw would incorrectly require a host credential before handoff.
+      // Native authentication is already owned by the binding, not a host credential route.
       const resolvedAttempt = implicitHarnessAuthPlan
         ? { plan: implicitHarnessAuthPlan, model: runtime.model }
         : await resolveBtwPreparedRuntimeAuth({
@@ -312,12 +246,14 @@ export async function runBtwSideQuestion(
         resolvedAttempt.model,
         getProviderAuthAuthority("auth" in resolvedAttempt ? resolvedAttempt.auth : undefined),
       );
-      const finalizedHarness = await prepareHarness(runtimeModel.provider, runtimeModel.id, {
-        api: runtimeModel.api,
-        baseUrl: runtimeModel.baseUrl,
-        ...resolveAgentHarnessPreparedRouteSupport(runtimeAuthPlan),
-        preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: runtimeAuthPlan }),
-      });
+      const finalizedHarness = nativeAuth
+        ? selectedHarness
+        : await prepareHarness(runtimeModel.provider, runtimeModel.id, {
+            api: runtimeModel.api,
+            baseUrl: runtimeModel.baseUrl,
+            ...resolveAgentHarnessPreparedRouteSupport(runtimeAuthPlan),
+            preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: runtimeAuthPlan }),
+          });
       if (finalizedHarness.id !== selectedHarness.id) {
         if (routeFinalized) {
           throw new Error("Agent harness selection changed after route materialization.");
@@ -386,6 +322,15 @@ export async function runBtwSideQuestion(
         },
       };
       void sandboxLifetime;
+      const { toolsAllow, webSearchPolicy } = await prepareBtwHarnessToolPolicies({
+        ...params,
+        agentId: sessionAgentId,
+        sessionId,
+        runtimeModel,
+        nativeOwnership: runtime.nativeOwnership,
+        sandbox,
+      });
+      const { createAgentHarnessHostCapabilities } = await import("./harness/host-capability.js");
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         params.cfg,
         sideRunId,
@@ -424,6 +369,8 @@ export async function runBtwSideQuestion(
           model: runtimeModel.id,
           runtimeModel,
           preparedModelRuntime,
+          expectedSessionRuntimeOwnership: runtime.nativeOwnership,
+          preparedWebSearchPolicy: webSearchPolicy,
           preparedRuntimeAuth: {
             plan: runtimeAuthPlan,
             authProfileStore: scopeAuthProfileStoreToPreparedPlan(
@@ -469,7 +416,17 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
-        recordBtwUsage(runtimeModel, result.usage);
+        await recordBtwUsage(
+          { params, runtimeModel, agentId: sessionAgentId, sessionId },
+          result.usage,
+        );
+        placement.assertCurrent();
+        params.assertCurrent?.();
+        params.opts?.abortSignal?.throwIfAborted();
+        assertOperatorModelAllowed(params.operatorAuthority, {
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+        });
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -488,12 +445,12 @@ export async function runBtwSideQuestion(
       );
     }
 
-    const cacheParityFork = harness.id === "openclaw" && params.toolCalls === "deny";
-    const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
+    const sessionFork = harness.id === "openclaw" && params.toolCalls === "deny";
+    const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionFile);
     const imageLimits = resolveImageSanitizationLimits(params.cfg);
     let messages: Message[] = [];
     const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
-    if (!cacheParityFork) {
+    if (!sessionFork) {
       if (activeRunSnapshot?.messages?.length) {
         messages = await toSimpleContextMessages({
           messages: activeRunSnapshot.messages,
@@ -515,7 +472,7 @@ export async function runBtwSideQuestion(
       }
     }
     params.opts?.abortSignal?.throwIfAborted();
-    if (!cacheParityFork && messages.length === 0 && !inFlightPrompt?.trim()) {
+    if (!sessionFork && messages.length === 0 && !inFlightPrompt?.trim()) {
       throw new Error("No active session context.");
     }
 
@@ -687,15 +644,17 @@ export async function runBtwSideQuestion(
           throw new Error("Session fork admission is no longer active.");
         }
         assertCurrent();
-        const text = await runEmbeddedSessionFork({
-          sessionId,
-          agentId: sessionAgentId,
-          question: params.question,
-          model: runtimeModel,
+        const text = await runBtwSessionFork({
+          params: { ...params, agentId: sessionAgentId },
+          modelRegistry,
+          runtimeModel,
+          auth: { mode: apiKeyInfo.mode, authFlow: apiKeyInfo.authFlow },
           apiKey,
-          signal: params.opts?.abortSignal,
+          resolvedAuthProfileId,
+          sessionId,
+          sessionFile,
+          workspaceDir,
           assertCurrent,
-          onUsage: params.onUsage,
         });
         assertCurrent();
         return { text };
@@ -715,7 +674,7 @@ export async function runBtwSideQuestion(
       imageLimits,
       messages,
       inFlightPrompt,
-      recordBtwUsage,
+      agentId: sessionAgentId,
     });
   });
 }

@@ -61,6 +61,5 @@ export function buildArgumentChurnWarning(
     count: churn.count,
     message: `WARNING: ${toolName} has cycled through ${churn.variantCount} repeated argument patterns with the same stable outcome ${churn.count} times. Continued churn is treated as stalled run activity, but this tool call remains allowed.`,
     warningKey: `argument-churn:${toolName}`,
-    livenessSignal: "argument_churn" as const,
   };
 }

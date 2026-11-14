@@ -22,7 +22,6 @@ describe("voicewake config", () => {
     const baseDir = tempDirs.make("openclaw-voicewake-");
     await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
       triggers: defaultVoiceWakeTriggers(),
-      updatedAtMs: 0,
     });
   });
 
@@ -30,7 +29,6 @@ describe("voicewake config", () => {
     const baseDir = tempDirs.make("openclaw-voicewake-");
     const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
     expect(saved.triggers).toEqual(["hi", "there"]);
-    expect(saved.updatedAtMs).toBeGreaterThan(0);
 
     await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual(saved);
     const replacement = await setVoiceWakeTriggers(["wake"], baseDir);
@@ -52,7 +50,6 @@ describe("voicewake config", () => {
 
     await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
       triggers: defaultVoiceWakeTriggers(),
-      updatedAtMs: 0,
     });
   });
 

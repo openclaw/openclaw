@@ -103,28 +103,12 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
   it("checks the pinned bounded download before extraction and version execution", () => {
     const { result, commands, installDir } = runFixture("install-simslim.sh");
     expect(result.status, result.stderr).toBe(0);
-    expect(commands.map(({ tool }) => tool)).toEqual([
-      "uname",
-      "uname",
-      "curl",
-      "shasum",
-      "tar",
-      "simslim",
-    ]);
+    expect(commands.map(({ tool }) => tool)).toEqual(
+      "uname uname curl shasum tar simslim".split(" "),
+    );
     expect(commands.find(({ tool }) => tool === "curl")?.args).toEqual([
-      "--fail",
-      "--location",
-      "--silent",
-      "--show-error",
-      "--connect-timeout",
-      "10",
-      "--max-time",
-      "120",
-      "--retry",
-      "3",
-      "--retry-all-errors",
-      "--retry-max-time",
-      "120",
+      ..."--fail --location --silent --show-error --connect-timeout 10 --max-time 120".split(" "),
+      ..."--retry 3 --retry-all-errors --retry-max-time 120".split(" "),
       "--output",
       expect.stringContaining("simslim.tar.gz"),
       "https://github.com/MobAI-App/simslim/releases/download/v0.11.0/simslim-v0.11.0-macos-arm64.tar.gz",
@@ -167,10 +151,11 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
   it("boots the explicit simulator before applying and verifying the conservative profile", () => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh");
     expect(result.status, result.stderr).toBe(0);
+    const ready = { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] };
     expect(commands).toEqual([
-      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
+      ready,
       { tool: "simslim", args: ["on", simulatorId, "--except", keptCategories] },
-      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
+      ready,
       { tool: "simslim", args: ["verify", simulatorId, "--except", keptCategories] },
     ]);
   });
@@ -184,11 +169,7 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
     { options: { args: ["booted"] }, enabled: true },
   ])("makes no tool calls without valid opt-in admission: %j", ({ options, enabled }) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", options);
-    if (enabled) {
-      expect(result.status).not.toBe(0);
-    } else {
-      expect(result.status).toBe(0);
-    }
+    expect(result.status === 0).toBe(!enabled);
     expect(commands).toEqual([]);
   });
 

@@ -38,6 +38,9 @@ const runtimeFiles = collectRuntimeImportClosure(process.cwd(), [
   "cli-invocation.mjs",
   "node-version.mjs",
   "node-sqlite.mjs",
+  "node-sqlite-capabilities.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "node-runtime-update.mjs",
 ]);
 
@@ -120,7 +123,7 @@ describe("paired node worker Gateway upgrade wire", () => {
         path.join(runtimeRoot, "node_modules"),
         "junction",
       );
-      const provider = await startPairedNodeWorkerLifecycleProvider([]);
+      const provider = await startPairedNodeWorkerLifecycleProvider(["UPGRADE-BEFORE"]);
       const published = await createPublishedWireWorkspace(root);
       let blockedUploads = 0;
       const unavailableTransfer = createServer((_request, response) => {
@@ -202,8 +205,6 @@ describe("paired node worker Gateway upgrade wire", () => {
         if (!remoteWorkspaceDir) {
           throw new Error("node placement omitted its workspace");
         }
-        await fs.writeFile(path.join(remoteWorkspaceDir, RESULT_FILE), RESULT_BYTES);
-        transferUnavailable = true;
         phase = "retaining the completed result during the upload outage";
         const runId = `paired-node-upgrade-before-${Date.now()}`;
         const started = await operator.request("chat.send", {
@@ -213,6 +214,10 @@ describe("paired node worker Gateway upgrade wire", () => {
           idempotencyKey: runId,
         });
         expect(started).toMatchObject({ runId, status: "started" });
+        await provider.waitForHeld("UPGRADE-BEFORE");
+        await fs.writeFile(path.join(remoteWorkspaceDir, RESULT_FILE), RESULT_BYTES);
+        transferUnavailable = true;
+        provider.release("UPGRADE-BEFORE");
         const firstTurn = await operator.request(
           "agent.wait",
           { runId, timeoutMs: PROOF_TIMEOUT_MS },
@@ -281,13 +286,20 @@ describe("paired node worker Gateway upgrade wire", () => {
           deliver: false,
           idempotencyKey: continuation,
         });
-        const completed = await operator.request<{ status?: string }>(
-          "agent.wait",
-          {
-            runId: continuation,
-            timeoutMs: PROOF_TIMEOUT_MS,
+        const completionDeadline = Date.now() + PROOF_TIMEOUT_MS;
+        const continuationOperator = operator;
+        // Runtime refresh queues fresh input; agent.wait reports that custody immediately.
+        const completed = await vi.waitUntil(
+          async () => {
+            const timeoutMs = Math.max(0, completionDeadline - Date.now());
+            const result = await continuationOperator.request<{ status?: string }>(
+              "agent.wait",
+              { runId: continuation, timeoutMs },
+              { timeoutMs: timeoutMs + 5_000 },
+            );
+            return result.status === "pending" ? false : result;
           },
-          { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          { timeout: PROOF_TIMEOUT_MS, interval: 100 },
         );
         expect(completed, gateway.logs().slice(-12_000)).toMatchObject({ status: "ok" });
         const after = await describeSession(gateway);

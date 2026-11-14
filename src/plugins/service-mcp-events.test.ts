@@ -365,7 +365,14 @@ it("retains exact cleanup across benign refresh, removal, and connector config r
     }),
   ).rejects.toThrow("another webhook");
   // Object order is not subscription identity.
-  await prepared.subscribe({ arguments: { nested: { a: 1, b: 2 }, calendar: "work" } });
+  const callerArguments = { nested: { a: 1, b: 2 }, calendar: "work" };
+  const subscribing = prepared.subscribe({ arguments: callerArguments });
+  callerArguments.nested.a = 99;
+  await subscribing;
+  expect(mocks.request.mock.lastCall?.[0]).toMatchObject({
+    method: "events/subscribe",
+    params: { arguments: subscription.arguments },
+  });
   f.cfg = {
     mcp: { servers: { calendar: calendarServer("https://other.example/mcp") } },
   };
@@ -382,6 +389,7 @@ it("retains exact cleanup across benign refresh, removal, and connector config r
     server: { url: "https://calendar.example/mcp" },
     params: {
       name: subscription.name,
+      arguments: subscription.arguments,
       delivery: { mode: "webhook", url: subscription.delivery.url },
     },
   });

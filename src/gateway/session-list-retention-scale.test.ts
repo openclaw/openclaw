@@ -33,6 +33,10 @@ it("retains 25 readers' ten Team-scale queries and reports bounded reference cos
     clients.forEach((client) => prepareGatewayRecipientProfile(client));
     // This retention scenario owns 300 roots; reload fixtures also include child and cron rows.
     const rows = fixture.scenario.sessions!.slice(0, 300);
+    const owner = (index: number) => ({
+      type: "human" as const,
+      id: clients[index % 25]!.authenticatedUserProfile!.profileId,
+    });
     for (const [index, row] of rows.entries()) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: row.key },
@@ -44,22 +48,12 @@ it("retains 25 readers' ten Team-scale queries and reports bounded reference cos
           pinnedAt: row.pinnedAt,
           visibility: "shared",
           spawnedBy: index >= 2 && index < 12 ? rows[index % 2]!.key : undefined,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: clients[index % 25]!.authenticatedUserProfile!.profileId,
-          },
+          createdActor: { ...owner(index), source: "profile" },
         },
       );
       assignSessionOwner(
         { agentId: "main", sessionKey: row.key },
-        {
-          owner: { type: "human", id: clients[index % 25]!.authenticatedUserProfile!.profileId },
-          assignedBy: {
-            type: "human",
-            id: clients[0]!.authenticatedUserProfile!.profileId,
-          },
-        },
+        { owner: owner(index), assignedBy: owner(0) },
       );
     }
     let retained = { views: 0, refs: 0, estimatedBytes: 0 };
@@ -68,6 +62,11 @@ it("retains 25 readers' ten Team-scale queries and reports bounded reference cos
         retained = { views: event.views, refs: event.refs, estimatedBytes: event.estimatedBytes };
       }
     });
+    const report = async (stage: string) => {
+      await setImmediate();
+      await waitForDiagnosticEventsDrained();
+      console.log(`TEAM_VIEW_RETENTION_${stage}`, JSON.stringify(retained));
+    };
     const read = (
       client: (typeof clients)[number],
       query: SessionsListParams,
@@ -84,35 +83,23 @@ it("retains 25 readers' ten Team-scale queries and reports bounded reference cos
           ifRowsRevision: base && `delta:${base.rowsRevision}`,
         },
       });
-    const baseline: {
-      client: (typeof clients)[number];
-      query: SessionsListParams;
-      result: SessionsListResult;
-    }[] = [];
     const release = retainSessionListForegroundWork();
     try {
-      const general = {
-        client: clients[0]!,
-        query: { limit: 300 },
-        result: await read(clients[0]!, { limit: 300 }),
-      };
-      expect(general.result.count).toBe(300);
-      await setImmediate();
-      await waitForDiagnosticEventsDrained();
-      console.log("TEAM_VIEW_RETENTION_SINGLE_QUERY", JSON.stringify(retained));
+      const general = await read(clients[0]!, { limit: 300 });
+      const reread: (() => Promise<SessionsListResult>)[] = [];
+      expect(general.count).toBe(300);
+      await report("SINGLE_QUERY");
       const scope = { agentId: "main", sessionKey: rows[0]!.key };
       for (let revision = 0; revision < 32; revision++) {
         replaceSessionEntrySync(scope, {
           ...loadSessionEntry(scope)!,
           label: `Revision ${revision}`,
         });
-        expect(
-          (await read(general.client, general.query, general.result)).rowsDelta?.baseRevision,
-        ).toBe(general.result.rowsRevision);
+        expect((await read(clients[0]!, { limit: 300 }, general)).rowsDelta?.baseRevision).toBe(
+          general.rowsRevision,
+        );
       }
-      await setImmediate();
-      await waitForDiagnosticEventsDrained();
-      console.log("TEAM_VIEW_RETENTION_SINGLE_QUERY_32_GENERATIONS", JSON.stringify(retained));
+      await report("SINGLE_QUERY_32_GENERATIONS");
       for (const client of clients) {
         const queries: SessionsListParams[] = [
           { limit: 200 },
@@ -134,23 +121,17 @@ it("retains 25 readers' ten Team-scale queries and reports bounded reference cos
           if (query.ownerId || query.involvingMe) {
             expect(result.count).toBe(12);
           }
-          baseline.push({ client, query, result });
+          reread.push(() => read(client, query, result));
         }
         if (client === clients[0]) {
-          await setImmediate();
-          await waitForDiagnosticEventsDrained();
-          console.log("TEAM_VIEW_RETENTION_ONE_READER", JSON.stringify(retained));
+          await report("ONE_READER");
         }
       }
-      await setImmediate();
-      await waitForDiagnosticEventsDrained();
-      console.log("TEAM_VIEW_RETENTION_25_READERS", JSON.stringify(retained));
+      await report("25_READERS");
       expect(retained.views).toBeGreaterThan(32);
       expect(retained.estimatedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
-      for (const entry of baseline) {
-        expect(await read(entry.client, entry.query, entry.result)).toMatchObject({
-          rowsUnchanged: true,
-        });
+      for (const repeat of reread) {
+        expect(await repeat()).toMatchObject({ rowsUnchanged: true });
       }
     } finally {
       getSessionRowProjection(context)?.dispose();

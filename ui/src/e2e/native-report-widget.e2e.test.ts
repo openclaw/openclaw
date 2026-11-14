@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { BoardReport } from "../../../src/boards/board-report.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -10,6 +11,7 @@ import {
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({
   name: "Control UI native report dashboard widget",
   startServerBeforeBrowser: true,
@@ -34,19 +36,16 @@ function reportSnapshot(detailsUrl: string, revision = 1) {
     revision,
     tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
     widgets: [
-      {
+      createBoardWidget({
         name: "community-report",
-        tabId: "main",
         title: "Weekly community report",
         contentKind: "plugin",
         pluginKind: "session:report",
         props,
         sizeW: 12,
         sizeH: 20,
-        position: 0,
-        grantState: "none",
         revision,
-      },
+      }),
     ],
   };
 }
@@ -62,7 +61,10 @@ suite.define(() => {
     { height: 844, name: "mobile", width: 390 },
   ])("renders and refreshes a native report without a document on $name", async (viewport) => {
     await suite.withPage(
-      { viewport, recordVideo: { dir: suite.artifactDir, size: viewport } },
+      {
+        viewport,
+        ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+      },
       async ({ context, page }) => {
         const detailsUrl = new URL("/native-report-details", suite.server.baseUrl).href;
         const documents: string[] = [];
@@ -112,11 +114,14 @@ suite.define(() => {
         const details = report.getByRole("link", { name: "Details", exact: true });
         expect(await details.getAttribute("href")).toBe(detailsUrl);
         await assertNativeDocument(page, documents, dashboardUrl);
-        const screenshot = (name: string) =>
-          page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, `${name}-${viewport.name}.png`),
-          });
+        const screenshot = async (name: string) => {
+          if (captureUiProof) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, `${name}-${viewport.name}.png`),
+            });
+          }
+        };
         await screenshot("report");
 
         const originalReport = await report.evaluateHandle((element) => element);

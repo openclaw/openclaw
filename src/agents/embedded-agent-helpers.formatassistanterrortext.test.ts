@@ -1,17 +1,21 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
-  classifyAssistantFailoverReason,
-  formatBillingErrorMessage,
+  formatRawAssistantErrorForUi,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+} from "../shared/assistant-error-format.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
+import {
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
-  getApiErrorPayloadFingerprint,
-  formatRawAssistantErrorForUi,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/error-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
-import { isRawApiErrorPayload } from "./failover/user-copy.js";
+import {
+  formatBillingErrorMessage,
+  getApiErrorPayloadFingerprint,
+  isRawApiErrorPayload,
+} from "./failover/user-copy.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-generation.js";
 
@@ -41,6 +45,18 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe(expected);
     expect(formatUserFacingAssistantErrorText(msg)).toBe(expected);
   };
+
+  it.each([401, 403])(
+    "does not treat an upstream %s with a colliding code as a deployment denial",
+    (status) => {
+      const message = {
+        ...makeAssistantError(`HTTP ${status}: invalid API key`),
+        errorCode: "model_request_policy_denied",
+      };
+      expect(classifyAssistantFailoverReason(message)).toBe("auth");
+      expect(formatUserFacingAssistantErrorText(message)).toContain("sign in");
+    },
+  );
 
   it.each([
     [

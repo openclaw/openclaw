@@ -8,7 +8,7 @@ import type {
   LogbookFrame,
 } from "./types.js";
 
-export const LOGBOOK_SCHEMA_VERSION = 1;
+export const LOGBOOK_SCHEMA_VERSION = 3;
 
 export type LogbookDatabase = {
   frames: {

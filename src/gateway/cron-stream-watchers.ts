@@ -1,10 +1,9 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
-import type { CronConfig } from "../config/types.cron.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { applyJobPatch } from "../cron/service/jobs.js";
+import { describeCronHostExecutionRestriction } from "../cron/service/state.js";
 import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
-import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
-import type { CronJob, CronJobPatch } from "../cron/types.js";
+import type { CronStoredJob } from "../cron/types.js";
+import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import {
   CronStreamJobOwner,
   isCronStreamJob,
@@ -17,16 +16,10 @@ import type { CronStreamJob } from "./cron-stream-output.js";
 export type { CronStreamFireDisposition } from "./cron-stream-output.js";
 
 type CronStreamWatchers = {
-  reconcile: (jobs: CronJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
+  reconcile: (jobs: CronStoredJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
   resume: () => void;
-  start: (job: CronJob) => Promise<void>;
-  stop: (jobId: string, reason: CronStreamStopReason, job?: CronJob) => Promise<void>;
-  stopBeforeUpdate: (
-    current: CronJob,
-    patch: CronJobPatch,
-    nowMs: number,
-    cronConfig: CronConfig | undefined,
-  ) => Promise<void> | undefined;
+  start: (job: CronStoredJob) => Promise<void>;
+  stop: (jobId: string, reason: CronStreamStopReason, job?: CronStoredJob) => Promise<void>;
   stopAll: (reason: CronStreamStopReason) => Promise<void>;
   activeJobIds: () => string[];
   inspect: (jobId: string) => CronStreamOwnerSnapshot | undefined;
@@ -52,12 +45,15 @@ export function resolveStreamStopReason(input: {
 }
 
 /** Supervise line-producing cron sources through one serialized owner per job. */
-export function createCronStreamWatchers(
-  params: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
-    /** Test seams; production uses the built-in cadence and retry schedules. */
-    minIntervalMs?: number;
-  },
-): CronStreamWatchers {
+export function createCronStreamWatchers({
+  hostExecutionDisabled,
+  ...params
+}: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
+  hostExecutionDisabled?: boolean;
+  /** Test seams; production uses the built-in cadence and retry schedules. */
+  minIntervalMs?: number;
+}): CronStreamWatchers {
+  const spawnBroker = getSpawnBroker();
   const owners = new Map<string, CronStreamJobOwner>();
   let stopped = false;
 
@@ -67,7 +63,7 @@ export function createCronStreamWatchers(
   };
 
   const createOwner = (job: CronStreamJob): CronStreamJobOwner => {
-    const owner = new CronStreamJobOwner(job, ownerParams);
+    const owner = new CronStreamJobOwner(job, ownerParams, spawnBroker);
     owners.set(job.id, owner);
     return owner;
   };
@@ -100,7 +96,7 @@ export function createCronStreamWatchers(
   const stop = async (
     jobId: string,
     reason: CronStreamStopReason,
-    job?: CronJob,
+    job?: CronStoredJob,
   ): Promise<void> => {
     const streamJob = job && isCronStreamJob(job) ? job : undefined;
     const owner =
@@ -114,43 +110,16 @@ export function createCronStreamWatchers(
     }
   };
 
-  const stopBeforeUpdate = (
-    current: CronJob,
-    patch: CronJobPatch,
-    nowMs: number,
-    cronConfig: CronConfig | undefined,
-  ): Promise<void> | undefined => {
-    if (
-      current.schedule.kind !== "stream" ||
-      (patch.enabled !== false && patch.schedule === undefined)
-    ) {
-      return undefined;
-    }
-    // Validate before fencing the owner. A rejected conditional or malformed
-    // update must leave the live source and its buffered events untouched.
-    const validated = structuredClone(current);
-    applyJobPatch(validated, patch, {
-      defaultAgentId: params.getDefaultAgentId?.(),
-      scheduleValidationNowMs: nowMs,
-      cronConfig,
-    });
-    if (
-      validated.enabled &&
-      validated.schedule.kind === "stream" &&
-      cronStreamScheduleKey(validated.schedule) === cronStreamScheduleKey(current.schedule)
-    ) {
-      return undefined;
-    }
-    // Close admission synchronously, but drain outside the cron store lock.
-    // The caller observes rejection now and joins it after mutation settlement.
-    return stop(current.id, patch.schedule !== undefined ? "schedule-update" : "disabled");
-  };
-  const start = async (job: CronJob): Promise<void> => {
+  const start = async (job: CronStoredJob): Promise<void> => {
     if (stopped) {
       return;
     }
     if (!isCronStreamJob(job)) {
       await stop(job.id, "schedule-update");
+      return;
+    }
+    if (describeCronHostExecutionRestriction(job, hostExecutionDisabled)) {
+      await stop(job.id, "host-execution-disabled", job);
       return;
     }
     try {
@@ -214,7 +183,7 @@ export function createCronStreamWatchers(
   };
 
   const reconcile = async (
-    jobs: CronJob[],
+    jobs: CronStoredJob[],
     enabled: boolean,
     triggersEnabled = enabled,
   ): Promise<void> => {
@@ -282,7 +251,6 @@ export function createCronStreamWatchers(
     },
     start,
     stop,
-    stopBeforeUpdate,
     stopAll,
     activeJobIds: () =>
       Array.from(owners.values())

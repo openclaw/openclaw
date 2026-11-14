@@ -2,8 +2,17 @@ import { vi } from "vitest";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+
+export function emitGatewayEvent(
+  state: ChatPageHost,
+  event: Parameters<typeof handlePageGatewayEvent>[1]["event"],
+  payload: Parameters<typeof handlePageGatewayEvent>[1]["payload"],
+) {
+  handlePageGatewayEvent(state, { type: "event", event, payload });
+}
 
 export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
   const request = vi.fn().mockResolvedValue({
@@ -21,15 +30,13 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
     vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
   }
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     currentSessionId: "selected-session",
     chatMessagesBySession: new Map(),
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
     ...overrides,
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   return { request, state };
 }
 

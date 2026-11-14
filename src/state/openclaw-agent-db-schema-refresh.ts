@@ -1,7 +1,17 @@
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import {
+  readSqliteDatabaseIntegrityVerification,
+  settleSqliteDatabaseAdmissionPublication,
+} from "../infra/sqlite-database-admission.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  adoptSqliteSchemaFacts,
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import {
@@ -19,7 +29,6 @@ import {
   getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseSchema,
   invalidateOpenClawAgentDatabaseValidation,
-  publishOpenClawAgentDatabaseSchema,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 
@@ -27,6 +36,7 @@ import {
 export function refreshOpenClawAgentDatabaseSchema(
   database: OpenClawAgentDatabase,
   assertCurrent: () => void,
+  runtimeAdmission = true,
 ) {
   const { db, agentId, path: pathname } = database;
   assertCurrent();
@@ -47,20 +57,18 @@ export function refreshOpenClawAgentDatabaseSchema(
       const validation = getOpenClawAgentDatabaseValidation(database);
       return validation && adoptOpenClawAgentDatabaseSchema(database) ? validation : undefined;
     });
-    if (reused) {
+    const verification = readSqliteDatabaseIntegrityVerification(db);
+    if (reused && (runtimeAdmission || verification)) {
       return reused;
     }
     const validation = getOpenClawAgentDatabaseValidation(database);
     invalidateOpenClawAgentDatabaseSchema(database);
     const convergence = runSqliteIntegrityOperationSync(
-      agentDatabaseIntegrityBeforeMutationSteps(
-        db,
-        agentId,
-        pathname,
-        undefined,
-        undefined,
-        Boolean(validation),
-      ),
+      agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname, {
+        runtimeAdmission,
+        verification,
+        reuseRuntimeIntegrity: Boolean(validation),
+      }),
       assertCurrent,
     );
     assertCanonicalAgentPersistenceVersion(db, pathname);
@@ -68,16 +76,22 @@ export function refreshOpenClawAgentDatabaseSchema(
       ensureOpenClawAgentSchema(db, agentId, pathname);
     }
     // Integrity admission or same-version repair already checked the runtime schema.
-    return runSqliteSchemaReadSnapshotSync(db, () => {
+    const checkedSchema = runSqliteSchemaReadSnapshotSync(db, () => {
       admitSqliteSchema(db);
       assertCanonicalSessionValidationSchema(db);
       assertCurrent();
-      if (!validation) {
-        return setOpenClawAgentDatabaseValidation(database);
-      }
-      publishOpenClawAgentDatabaseSchema(database);
-      return validation;
+      return getAdmittedSqliteSchemaFacts(db);
     });
+    // Release the pin before host publication, retaining only the catalog we checked.
+    if (!checkedSchema || !adoptSqliteSchemaFacts(db, checkedSchema)) {
+      throw new AgentDatabaseSchemaAdmissionChangedError();
+    }
+    assertCurrent();
+    const refreshed = setOpenClawAgentDatabaseValidation(database);
+    if (!settleSqliteDatabaseAdmissionPublication(db)) {
+      throw new Error("Agent schema publication requires a settled connection");
+    }
+    return refreshed;
   } catch (error) {
     invalidateOpenClawAgentDatabaseValidation(pathname);
     throw error;

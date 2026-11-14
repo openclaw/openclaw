@@ -1,7 +1,9 @@
+import { composedAncestors } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
+import { observeTooltipContent } from "./tooltip-mutations.ts";
 
 interface TooltipProviderPolicy extends HTMLElement {
   delayed: boolean;
@@ -10,8 +12,6 @@ interface TooltipProviderPolicy extends HTMLElement {
   closeTooltip(): void;
 }
 
-const DESCRIBABLE_SELECTOR =
-  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
 const HOVER_DELAY = 150;
 const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
@@ -24,6 +24,8 @@ export interface TooltipPolicyProps {
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** The described control can differ from the wrapper that owns hover geometry. */
+  descriptionTarget?: () => Element | null;
   /** Read-only cards must not block nearby actions when their surface overlaps them. */
   pointerThrough?: boolean;
   autoSize?: boolean;
@@ -36,6 +38,7 @@ export interface TooltipPolicyOptions {
   trigger: () => HTMLElement | SVGElement | null;
   richContent: () => readonly Node[];
   richContainer: () => HTMLElement | null;
+  surface: HTMLElement;
   requestOpen: (open: boolean) => boolean;
   retire: () => void;
   preview: (anchor: HTMLElement | SVGElement, content: string) => void;
@@ -74,7 +77,12 @@ export class TooltipOwner {
       !containsComposed(active.#triggerElement ?? undefined, focused)
         ? active.#resolveDescribedElement()
         : null;
+    // Hiding an overlapping popup can expose its trigger under a stationary pointer.
+    active.#suppressHoverUntilLeave = active.#triggerHovered || active.#contentHovered;
     const accepted = active.#close();
+    if (!accepted) {
+      active.#suppressHoverUntilLeave = false;
+    }
     if (accepted && restoreTarget instanceof HTMLElement) {
       active.focusTriggerWithoutOpening(restoreTarget);
     }
@@ -92,7 +100,7 @@ export class TooltipOwner {
 
   #triggerElement: HTMLElement | SVGElement | null = null;
   #triggerListeners: (() => void)[] = [];
-  #stopEscape: (() => void) | undefined;
+  #stopDismissal: (() => void) | undefined;
   #pinned = false;
   #pending = false;
   #describedElement: Element | null = null;
@@ -104,18 +112,14 @@ export class TooltipOwner {
   #describedBy: string | null = null;
   #descriptionCaptured = false;
   #suppressNextFocusOpen = false;
+  #suppressHoverUntilLeave = false;
   #descriptionElement: HTMLSpanElement | null = null;
-  #richContentObserver: MutationObserver | null = null;
-  readonly #triggerContentObserver = new MutationObserver(() => this.#syncDescription());
+  #richContentNodes: readonly Node[] = [];
+  #stopRichContent: (() => void) | undefined;
+  #stopTriggerContent: (() => void) | undefined;
   #tooltipProvider: TooltipProviderPolicy | null = null;
   #presentationAncestors: Node[] = [];
-  readonly #presentationObserver = new MutationObserver(() => {
-    if (!this.#isPresented()) {
-      this.options.retire();
-    } else {
-      this.#observePresentation();
-    }
-  });
+  #presentationObserver: MutationObserver | undefined;
   readonly #tooltipId = createTooltipId();
   readonly #descriptionId = `${this.#tooltipId}-description`;
 
@@ -130,14 +134,35 @@ export class TooltipOwner {
     return this.#triggerElement;
   }
   get resolvedPlacement(): OverlayPlacement {
-    const placement = this.options.props().placement ?? "top";
+    const placement = this.options.props().placement ?? this.#inheritedPlacement() ?? "top";
     return (placement === "right-start" || placement === "right") &&
       this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
       : placement;
   }
+  /** Edge rails declare one hint side for every control, including adapted titles. */
+  #inheritedPlacement(): OverlayPlacement | undefined {
+    for (const node of composedAncestors(this.#triggerElement)) {
+      const side = node instanceof HTMLElement ? node.dataset.tooltipPlacement : undefined;
+      if (side === "top" || side === "right" || side === "bottom" || side === "left") {
+        return side;
+      }
+    }
+    return undefined;
+  }
   refresh() {
     this.#attachTrigger();
+    // Only caller-owned description resolvers can change targets inside a stable trigger.
+    if (this.#triggerElement && this.options.props().descriptionTarget) {
+      this.#stopTriggerContent ??= observeTooltipContent(
+        this.host.ownerDocument,
+        [this.#triggerElement],
+        () => this.#syncDescription(),
+      );
+    } else {
+      this.#stopTriggerContent?.();
+      this.#stopTriggerContent = undefined;
+    }
     this.contentChanged();
     if ((this.options.props().disabled ?? false) || !this.#tooltipText) {
       this.options.retire();
@@ -147,8 +172,9 @@ export class TooltipOwner {
   }
   dispose() {
     this.acceptedOpen(false);
-    this.#richContentObserver?.disconnect();
-    this.#richContentObserver = null;
+    this.#stopRichContent?.();
+    this.#stopRichContent = undefined;
+    this.#richContentNodes = [];
     this.#tooltipProvider = null;
     this.#detachTrigger();
   }
@@ -174,7 +200,6 @@ export class TooltipOwner {
       const root = owner.getRootNode();
       owner = root instanceof ShadowRoot ? root.host : null;
     }
-    this.#triggerContentObserver.observe(trigger, { childList: true, subtree: true });
     this.#triggerListeners = [
       listen(trigger, "pointerenter", this.#handlePointerEnter),
       listen(trigger, "pointerleave", this.#handlePointerLeave),
@@ -187,12 +212,14 @@ export class TooltipOwner {
   }
 
   #detachTrigger() {
-    this.#triggerContentObserver.disconnect();
+    this.#stopTriggerContent?.();
+    this.#stopTriggerContent = undefined;
     for (const stop of this.#triggerListeners.splice(0)) {
       stop();
     }
     this.#restoreDescription();
     this.#triggerElement = null;
+    this.#suppressHoverUntilLeave = false;
   }
 
   previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
@@ -210,6 +237,17 @@ export class TooltipOwner {
   }
 
   readonly #handlePointerEnter = (event: Event) => {
+    if (this.#suppressHoverUntilLeave) {
+      // Exposure from our popup is not fresh intent; entry from outside is.
+      const previous =
+        event instanceof MouseEvent && event.relatedTarget instanceof Node
+          ? event.relatedTarget
+          : null;
+      if (!(event instanceof MouseEvent) || this.#containsInteractionTarget(previous)) {
+        return;
+      }
+      this.#suppressHoverUntilLeave = false;
+    }
     if (!("pointerType" in event) || event.pointerType !== "touch") {
       this.#triggerHovered = true;
       this.#hoverExitPending = false;
@@ -220,6 +258,7 @@ export class TooltipOwner {
 
   readonly #handlePointerLeave = (event: Event) => {
     if (!("pointerType" in event) || event.pointerType !== "touch") {
+      this.#suppressHoverUntilLeave = false;
       this.#triggerHovered = false;
       this.#hoverExitPending = true;
       this.#clearTimers(false);
@@ -347,7 +386,7 @@ export class TooltipOwner {
     this.#pending = true;
     this.#observePresentation();
     TooltipOwner.#pendingByDocument.set(this.host.ownerDocument, this);
-    this.#listenForEscape();
+    this.#listenForDismissal();
   }
 
   /** Apply only lifecycle-admitted state; canceled requests never alter interaction policy. */
@@ -357,13 +396,13 @@ export class TooltipOwner {
       TooltipOwner.#pendingByDocument.delete(this.host.ownerDocument);
     }
     if (!open) {
-      this.#presentationObserver.disconnect();
+      this.#presentationObserver?.disconnect();
       this.#presentationAncestors = [];
       this.#pinned = false;
       this.host.removeAttribute("open");
       this.options.richContainer()?.setAttribute("inert", "");
-      this.#stopEscape?.();
-      this.#stopEscape = undefined;
+      this.#stopDismissal?.();
+      this.#stopDismissal = undefined;
       this.#clearTimers();
       if (TooltipOwner.#activeByDocument.get(this.host.ownerDocument) === this) {
         TooltipOwner.#activeByDocument.delete(this.host.ownerDocument);
@@ -378,14 +417,14 @@ export class TooltipOwner {
     this.#syncDescription();
     this.host.setAttribute("open", "");
     this.options.richContainer()?.removeAttribute("inert");
-    this.#listenForEscape();
+    this.#listenForDismissal();
   }
 
-  #listenForEscape() {
+  #listenForDismissal() {
     const view = this.host.ownerDocument.defaultView;
-    // Pending intent and its accepted view share one capture listener, ahead of dialogs.
-    if (view && !this.#stopEscape) {
-      this.#stopEscape = listen(
+    // Pending intent and its accepted view share dismissal listeners, ahead of dialogs.
+    if (view && !this.#stopDismissal) {
+      const stopEscape = listen(
         view,
         "keydown",
         (event) => {
@@ -395,6 +434,22 @@ export class TooltipOwner {
         },
         true,
       );
+      const stopInput = listen(
+        view,
+        "input",
+        (event) => {
+          const target = event.composedPath()[0];
+          // Layout can move a hovered action under the pointer while another field is typing.
+          if (target instanceof view.Node && !this.#containsInteractionTarget(target)) {
+            this.#close();
+          }
+        },
+        true,
+      );
+      this.#stopDismissal = () => {
+        stopEscape();
+        stopInput();
+      };
     }
   }
 
@@ -430,25 +485,10 @@ export class TooltipOwner {
     return this.options.requestOpen(false);
   }
 
-  #triggerAncestors() {
-    const ancestors: Node[] = [];
-    let node: Node | null = this.#triggerElement;
-    while (node) {
-      ancestors.push(node);
-      node =
-        node instanceof Element && node.assignedSlot
-          ? node.assignedSlot
-          : node instanceof ShadowRoot
-            ? node.host
-            : node.parentNode;
-    }
-    return ancestors;
-  }
-
   #isPresented() {
     return (
       this.#triggerElement?.isConnected === true &&
-      !this.#triggerAncestors().some(
+      !composedAncestors(this.#triggerElement).some(
         (node) =>
           node instanceof Element &&
           (node.hasAttribute("hidden") ||
@@ -459,13 +499,20 @@ export class TooltipOwner {
   }
 
   #observePresentation() {
-    const ancestors = this.#triggerAncestors();
+    const ancestors = composedAncestors(this.#triggerElement);
     if (
       ancestors.length === this.#presentationAncestors.length &&
       ancestors.every((node, index) => node === this.#presentationAncestors[index])
     ) {
       return;
     }
+    this.#presentationObserver ??= new MutationObserver(() => {
+      if (!this.#isPresented()) {
+        this.options.retire();
+      } else {
+        this.#observePresentation();
+      }
+    });
     this.#presentationObserver.disconnect();
     this.#presentationAncestors = ancestors;
     for (const node of ancestors) {
@@ -490,20 +537,15 @@ export class TooltipOwner {
     if (!trigger) {
       return null;
     }
-    return trigger.matches(DESCRIBABLE_SELECTOR)
-      ? trigger
-      : (trigger.querySelector(DESCRIBABLE_SELECTOR) ?? trigger);
+    return this.options.props().descriptionTarget?.() ?? trigger;
   }
 
   #syncDescription() {
     const richText = this.#richContentText;
-    this.options
-      .richContainer()
-      ?.closest<HTMLElement>(".tooltip-surface")
-      ?.style.setProperty(
-        "pointer-events",
-        richText && !this.options.props().pointerThrough ? "auto" : "none",
-      );
+    this.options.surface.style.setProperty(
+      "pointer-events",
+      richText && !this.options.props().pointerThrough ? "auto" : "none",
+    );
     if (!(this.options.props().describe ?? true)) {
       this.#restoreDescription();
       return;
@@ -650,16 +692,21 @@ export class TooltipOwner {
   }
 
   #observeRichContent() {
-    this.#richContentObserver?.disconnect();
-    this.#richContentObserver ??= new MutationObserver(() => this.#syncDescription());
     const nodes = this.options.richContent();
-    for (const node of nodes) {
-      this.#richContentObserver.observe(node, {
-        characterData: true,
-        childList: true,
-        subtree: true,
-      });
+    if (
+      nodes.length === this.#richContentNodes.length &&
+      nodes.every((node, index) => node === this.#richContentNodes[index])
+    ) {
+      return;
     }
+    this.#stopRichContent?.();
+    this.#richContentNodes = nodes;
+    this.#stopRichContent = observeTooltipContent(
+      this.host.ownerDocument,
+      nodes,
+      () => this.#syncDescription(),
+      { characterData: true },
+    );
   }
 
   readonly contentChanged = () => {

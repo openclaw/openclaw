@@ -1,34 +1,31 @@
 import "./port-command-worker.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as sourceSnapshots from "../sqlite-snapshot-source.js";
 import * as snapshots from "../sqlite-snapshot.js";
-import {
-  canonical,
-  connection,
-  credentialRef,
-  expectSafe,
-  fixture,
-  injected,
-  manifest,
-  payload,
-} from "./port-command.integration.test-support.js";
+import * as fixtures from "./port-command.integration.test-support.js";
 import * as tasks from "./port-command.worker.js";
+import { statePortProvider } from "./state-port.js";
 
-afterEach(() => vi.restoreAllMocks());
-
-describe.skipIf(!connection)("database port command PostgreSQL conformance", () => {
+describe.skipIf(!fixtures.connection)("database port command PostgreSQL conformance", () => {
   it("round-trips canonical cells, IDs, cursors and allocation facts through the command", async () => {
-    await fixture(
+    await fixtures.fixture(
       async ({ state, source, client }) => {
         assert(client);
-        const before = canonical(source);
+        const before = fixtures.canonical(source);
+        const query = async (sql: string) => (await client.query(sql)).rows;
         const privateSources = new Set<string>();
         const isolatedReads = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocationSync");
         const isolatedCopies = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocation");
@@ -45,20 +42,14 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         const sharedAnchor = readBackupEngine(sharedPath);
         assert(sharedAnchor.engine === "postgres");
         expect(
-          (
-            await client.query(
-              `SELECT value_json FROM "${sharedAnchor.namespace}".config_machine_state WHERE state_key = 'config.lastTouchedAt'`,
-            )
-          ).rows,
+          await query(
+            `SELECT value_json FROM "${sharedAnchor.namespace}".config_machine_state WHERE state_key = 'config.lastTouchedAt'`,
+          ),
         ).toEqual([{ value_json: expect.any(String) }]);
         const anchor = readBackupEngine(source);
         assert(anchor.engine === "postgres");
         expect(
-          (
-            await client.query(
-              `SELECT sequence FROM "${anchor.namespace}".workboard_card_notifications`,
-            )
-          ).rows,
+          await query(`SELECT sequence FROM "${anchor.namespace}".workboard_card_notifications`),
         ).toEqual([{ sequence: "9007199254740995" }]);
         const reverse = await doctorDatabasePort({ to: "sqlite" });
         expect(readBackupEngine(sharedPath)).toEqual({ engine: "sqlite" });
@@ -72,7 +63,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
               .get(),
           ).toEqual({ value_json: expect.any(String) });
         }
-        expect(canonical(source)).toEqual(before);
+        expect(fixtures.canonical(source)).toEqual(before);
         expect(privateSources.size).toBeGreaterThan(0);
         expect(
           [...isolatedReads.mock.calls, ...isolatedCopies.mock.calls].filter(([file]) =>
@@ -80,28 +71,64 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           ),
         ).toEqual([]);
         expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
-        const authored = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
-        expect(authored).toMatchObject({
-          plugins: { $include: "plugins.json" },
-          gateway: { auth: { mode: "token", token: credentialRef } },
-          database: {
-            engine: "sqlite",
-            postgres: { connection: "${OPENCLAW_P36_TEST_DATABASE_URL}" },
-          },
-        });
+        expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject(
+          fixtures.portConfig,
+        );
         expect(fs.readFileSync(state.statePath("plugins.json"), "utf8")).toBe(include);
         assert("manifest" in forward && typeof forward.manifest === "string");
         await expect(doctorDatabasePort({ rollback: forward.manifest })).rejects.toThrow(
           "Database port",
         );
-        expect(canonical(source)).toEqual(before);
+        expect(fixtures.canonical(source)).toEqual(before);
         const output = JSON.stringify({ forward, reverse });
-        expect(output).not.toContain(connection);
-        expect(output).not.toContain(payload);
+        expect(output).not.toContain(fixtures.connection);
+        expect(output).not.toContain(fixtures.payload);
         expect(output).not.toContain("synthetic-port-secret");
       },
       true,
-      1001,
+      { rows: 1001 },
+    );
+  }, 120_000);
+
+  it("keeps a resumed port refused when its verified copy fails owner admission", async () => {
+    await fixtures.fixture(
+      async ({ state, source }) => {
+        openOpenClawStateDatabase({ env: state.env });
+        await closeOpenClawStateDatabaseAsync();
+        {
+          using db = openNodeSqliteDatabase(source);
+          // SQLite admits an older content marker beneath the current header; PostgreSQL does not.
+          db.prepare(
+            "INSERT OR REPLACE INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
+          ).run(String(OPENCLAW_STATE_SCHEMA_VERSION - 1));
+        }
+        const before = fs.readFileSync(source);
+        const originalConfig = fs.readFileSync(state.configPath, "utf8");
+        const refused = async (options: Parameters<typeof doctorDatabasePort>[0]) => {
+          await expect(doctorDatabasePort(options)).rejects.toThrow(
+            /^stage: .*observed database validation/,
+          );
+          expect(fixtures.manifest(state).targets[0]?.verification).toBeNull();
+          expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
+        };
+        await refused({ to: "postgres", family: "state" });
+        const anchorPath = (
+          await fixtures.files(state.statePath("recovery", "database-port"))
+        ).find((file) => path.basename(file) === "target.sqlite");
+        assert(anchorPath, "Owner admission runs after the verified anchor is written");
+        const { admit } = await statePortProvider.loadDescriptor();
+        assert(admit);
+        const admitAnchor = () =>
+          admit(anchorPath, { connection: fixtures.connection!, schemaPrefix: "openclaw" });
+        await expect(admitAnchor()).rejects.toThrow("PostgreSQL state metadata mismatch");
+        const anchor = fs.readFileSync(anchorPath);
+        await refused({ resume: recovery.databasePortManifestPath(state.stateDir) });
+        expect(fs.readFileSync(anchorPath)).toEqual(anchor);
+        await expect(admitAnchor()).rejects.toThrow("PostgreSQL state metadata mismatch");
+        expect(fs.readFileSync(source)).toEqual(before);
+      },
+      true,
+      { store: "state" },
     );
   }, 120_000);
 
@@ -120,14 +147,15 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
   ])(
     "retains originals and recovers after a %s failure",
     async (point) => {
-      await fixture(async ({ state, source }) => {
-        const before = canonical(source);
+      await fixtures.fixture(async ({ state, source }) => {
+        const before = fixtures.canonical(source);
         const originalConfig = fs.readFileSync(state.configPath, "utf8");
         let fired = false;
         const fail = () => {
           fired = true;
-          throw new Error(injected);
+          throw new Error(fixtures.injected);
         };
+        const published = ["config", "config committed", "complete revision"].includes(point);
         if (["migrate", "stage", "verify"].includes(point)) {
           const run = tasks.runDatabasePortTask;
           vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
@@ -158,15 +186,13 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           const write = recovery.writeDatabasePortManifest;
           vi.spyOn(recovery, "writeDatabasePortManifest").mockImplementation((...args) => {
             const value = args[1];
-            if (
-              !fired &&
-              ((point === "initial manifest" && value.revision === 1) ||
-                (point === "preparing revision" &&
-                  value.state === "preparing" &&
-                  value.revision > 1) ||
-                (point === "publishing revision" && value.state === "publishing") ||
-                (point === "complete revision" && value.state === "complete"))
-            ) {
+            const matches =
+              point === "initial manifest"
+                ? value.revision === 1
+                : point === "preparing revision"
+                  ? value.state === "preparing" && value.revision > 1
+                  : point === `${value.state} revision`;
+            if (!fired && matches) {
               fail();
             }
             return write(...args);
@@ -176,9 +202,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           (failure: unknown) => failure,
         );
         expect(fired).toBe(true);
-        expectSafe(
+        fixtures.expectSafe(
           error,
-          ["config", "config committed", "complete revision"].includes(point)
+          published
             ? state.stateDir
             : point === "initial manifest"
               ? state.statePath("state", "openclaw.sqlite")
@@ -188,13 +214,11 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         vi.restoreAllMocks();
         const active = recovery.databasePortManifestPath(state.stateDir);
         if (fs.existsSync(active)) {
-          const saved = manifest(state);
-          const target = saved.targets[0];
+          const target = fixtures.manifest(state).targets[0];
           assert(target);
-          const captured = target.originalCapture.path;
-          expect(canonical(captured)).toEqual(before);
-          if (!["config", "config committed", "complete revision"].includes(point)) {
-            expect(canonical(source)).toEqual(before);
+          expect(fixtures.canonical(target.originalCapture.path)).toEqual(before);
+          if (!published) {
+            expect(fixtures.canonical(source)).toEqual(before);
             expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
           }
           const rollback = ["config", "complete revision"].includes(point);
@@ -203,11 +227,10 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           if (!rollback) {
             await doctorDatabasePort({ to: "sqlite" });
           }
-          expect(canonical(source)).toEqual(before);
         } else {
-          expect(canonical(source)).toEqual(before);
           expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
         }
+        expect(fixtures.canonical(source)).toEqual(before);
       }, true);
     },
     120_000,

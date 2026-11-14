@@ -33,33 +33,6 @@ export type QaWebOpenPageParams = {
   viewport?: { width: number; height: number };
 };
 
-type QaWebWaitParams = {
-  pageId: string;
-  selector?: string;
-  text?: string;
-  timeoutMs?: number;
-};
-
-type QaWebTypeParams = {
-  pageId: string;
-  selector: string;
-  text: string;
-  submit?: boolean;
-  timeoutMs?: number;
-};
-
-type QaWebSnapshotParams = {
-  pageId: string;
-  timeoutMs?: number;
-  maxChars?: number;
-};
-
-type QaWebEvaluateParams = {
-  pageId: string;
-  expression: string;
-  timeoutMs?: number;
-};
-
 const sessions = new Map<string, QaWebSession>();
 const closedSessionOwners = new WeakSet<Set<string>>();
 const DEFAULT_WEB_TIMEOUT_MS = 20_000;
@@ -276,7 +249,12 @@ export function createQaWebPageOpener(owner: Set<string>, signal?: AbortSignal) 
   return (params: QaWebOpenPageParams) => openPage(params, owner, signal);
 }
 
-export async function qaWebWait(params: QaWebWaitParams) {
+export async function qaWebWait(params: {
+  pageId: string;
+  selector?: string;
+  text?: string;
+  timeoutMs?: number;
+}) {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   if (params.selector) {
@@ -294,7 +272,13 @@ export async function qaWebWait(params: QaWebWaitParams) {
   throw new Error("web wait requires selector or text");
 }
 
-export async function qaWebType(params: QaWebTypeParams) {
+export async function qaWebType(params: {
+  pageId: string;
+  selector: string;
+  text: string;
+  submit?: boolean;
+  timeoutMs?: number;
+}) {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const locator = session.page.locator(params.selector).first();
@@ -306,7 +290,11 @@ export async function qaWebType(params: QaWebTypeParams) {
   return { ok: true };
 }
 
-export async function qaWebSnapshot(params: QaWebSnapshotParams) {
+export async function qaWebSnapshot(params: {
+  pageId: string;
+  timeoutMs?: number;
+  maxChars?: number;
+}) {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const body = session.page.locator("body");
@@ -321,7 +309,11 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   };
 }
 
-export async function qaWebEvaluate<T = unknown>(params: QaWebEvaluateParams): Promise<T> {
+export async function qaWebEvaluate<T = unknown>(params: {
+  pageId: string;
+  expression: string;
+  timeoutMs?: number;
+}): Promise<T> {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   return (await withTimeout(

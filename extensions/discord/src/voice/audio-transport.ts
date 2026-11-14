@@ -8,6 +8,7 @@ import type {
 import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   restoreDiscordAudioError,
   type DiscordAudioCommand,
@@ -68,7 +69,6 @@ export class DiscordAudioTransport extends EventEmitter<{
 }> {
   readonly speakingUsers = new Set<string>();
   playerStatus = "idle";
-  connectionStatus = "signalling";
   private readonly worker: DiscordAudioWorkerThread;
   private readonly adapter: DiscordGatewayAdapterImplementerMethods;
   private readonly captures = new Map<number, DiscordAudioCapture>();
@@ -221,18 +221,9 @@ export class DiscordAudioTransport extends EventEmitter<{
     this.stopping = true;
     this.send({ type: "stop" });
     const drained = (async () => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          this.exited,
-          new Promise<void>((resolve) => {
-            timer = setTimeout(() => {
-              void this.worker.terminate().then(() => resolve());
-            }, STOP_GRACE_MS);
-          }),
-        ]);
+        await raceWithTimeout(this.exited, STOP_GRACE_MS, () => this.worker.terminate());
       } finally {
-        clearTimeout(timer);
         this.finish(new Error("Discord voice session stopped."));
       }
     })();
@@ -263,7 +254,6 @@ export class DiscordAudioTransport extends EventEmitter<{
         this.finish(new Error("Discord voice session stopped."), true);
         break;
       case "connection":
-        this.connectionStatus = event.status;
         if (event.status === "destroyed") {
           this.emit("stopped");
         }
@@ -362,7 +352,6 @@ export class DiscordAudioTransport extends EventEmitter<{
       return;
     }
     this.terminal = true;
-    this.connectionStatus = "destroyed";
     this.playerStatus = "idle";
     this.readiness.reject(error);
     this.destroyAdapter();

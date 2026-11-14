@@ -1,5 +1,6 @@
 import type { UserProfile, UsersSelfResult } from "../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { userProfileDisplayName } from "../../../src/shared/user-profile-display-name.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { userProfileAvatarUrl } from "../pages/profile/profile-avatar-url.ts";
 import type { ApplicationGatewayConnection, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "./operator-access.ts";
@@ -68,7 +69,13 @@ export function createGatewaySelfProfile(options: {
         const selfUser = {
           id: profile.id,
           identity: { type: "profile" as const, id: profile.id },
-          name: newerDisplay ? newerDisplay.name : (profile.displayName ?? undefined),
+          name: newerDisplay
+            ? newerDisplay.name
+            : userProfileDisplayName(
+                profile.id,
+                profile.displayName,
+                profile.githubIdentity?.login,
+              ),
           email: profile.emails[0],
           // Refresh our timestamp fallback without replacing a precise presence/upload revision.
           avatarUrl,

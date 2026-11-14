@@ -1,5 +1,11 @@
 import { normalizeUpstreamModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
+import { resolveDefaultModelMaxTokens } from "../agents/defaults.js";
+import { asBoolean } from "../utils/boolean.js";
+import { readParsedField } from "../utils/string-readers.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
 export type UpstreamProviderCatalogModel = Record<string, unknown> & {
@@ -38,13 +44,7 @@ export function readLiveModelCatalogStringField(
   keys: string | readonly string[],
 ): string | undefined {
   const record = asOptionalRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, normalizeOptionalString);
 }
 
 export function readLiveModelCatalogBooleanField(
@@ -52,13 +52,7 @@ export function readLiveModelCatalogBooleanField(
   keys: string | readonly string[],
 ): boolean | undefined {
   const record = asOptionalRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, asBoolean);
 }
 
 export function readLiveModelCatalogPositiveSafeIntegerField(
@@ -66,13 +60,7 @@ export function readLiveModelCatalogPositiveSafeIntegerField(
   keys: string | readonly string[],
 ): number | undefined {
   const record = asOptionalRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-      return value;
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, asPositiveSafeInteger);
 }
 
 export function isUpstreamProviderCatalogModel(
@@ -138,16 +126,23 @@ function isSafeLiveModelId(value: string): boolean {
 const NON_TEXT_MODEL_ID_PATTERN =
   /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|realtime|moderation|guard|(?:audio|image|video)(?!-text-to-text)|dall-e|flux|sdxl|stable-diffusion|imagen|veo|sora|babbage|davinci|gpt-3[.]5-turbo-instruct)(?:$|[/_:.-])/i;
 
-function rowAdvertisesNonTextModel(
-  record: Record<string, unknown>,
-  nestedRecords: readonly (Record<string, unknown> | undefined)[],
-): boolean {
+export function readLiveModelChatCapability(row: unknown): boolean | undefined {
+  const record = asOptionalRecord(row);
+  if (!record) {
+    return undefined;
+  }
+  const nestedRecords = [
+    asOptionalRecord(record.capabilities),
+    asOptionalRecord(record.architecture),
+    asOptionalRecord(record.top_provider),
+    asOptionalRecord(record.model_info),
+  ];
   const outputModalities = readLiveModelStringArray(
-    [record, ...nestedRecords],
+    [record, asOptionalRecord(record.modalities), ...nestedRecords],
     ["output_modalities", "outputModalities", "output"],
   );
   if (outputModalities.length > 0 && !outputModalities.includes("text")) {
-    return true;
+    return false;
   }
   const kind = readLiveModelCatalogStringField(record, [
     "type",
@@ -156,20 +151,24 @@ function rowAdvertisesNonTextModel(
     "modelType",
     "pipeline_tag",
   ]);
-  return Boolean(kind && NON_TEXT_MODEL_ID_PATTERN.test(kind));
-}
-
-function rowAdvertisesChatModel(
-  record: Record<string, unknown>,
-  nestedRecords: readonly (Record<string, unknown> | undefined)[],
-): boolean | undefined {
+  if (kind && NON_TEXT_MODEL_ID_PATTERN.test(kind)) {
+    return false;
+  }
   const explicitChatCapability = readLiveModelCatalogBooleanField(nestedRecords[0], [
     "completion_chat",
     "chat_completion",
     "chatCompletion",
+    "chat",
+    "completion",
   ]);
   if (explicitChatCapability !== undefined) {
     return explicitChatCapability;
+  }
+  if (
+    outputModalities.includes("text") ||
+    (kind && /^(?:llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/i.test(kind))
+  ) {
+    return true;
   }
   const capabilityStrings = readLiveModelStringArray(
     [record, ...nestedRecords],
@@ -185,15 +184,6 @@ function rowAdvertisesChatModel(
     return true;
   }
   return undefined;
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < limit && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
 }
 
 function findLiveModelTemplate(
@@ -266,23 +256,20 @@ function buildOpenAICompatibleLiveModel(
   const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
   const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
-  const advertisedChatCapability = rowAdvertisesChatModel(record, nestedRecords);
-  if (
-    advertisedChatCapability === false ||
-    (advertisedChatCapability !== true &&
-      (rowAdvertisesNonTextModel(record, nestedRecords) || NON_TEXT_MODEL_ID_PATTERN.test(id)))
-  ) {
-    return undefined;
-  }
-
+  const advertisedChatCapability = readLiveModelChatCapability(record);
   const exact = fallback.models.find((model) => model.id === id);
+  const chat = advertisedChatCapability ?? (exact ? (exact.inference?.chat ?? true) : false);
+
   if (exact) {
     const contextWindow =
       exact.contextWindow ?? readLiveModelContextWindow([record, ...nestedRecords]);
     const resolvedParameterCount = exact.parameterCount ?? parameterCount;
-    return contextWindow !== exact.contextWindow || resolvedParameterCount !== exact.parameterCount
+    return chat !== (exact.inference?.chat ?? true) ||
+      contextWindow !== exact.contextWindow ||
+      resolvedParameterCount !== exact.parameterCount
       ? {
           ...exact,
+          inference: { ...exact.inference, chat },
           ...(contextWindow !== undefined ? { contextWindow } : {}),
           ...(resolvedParameterCount !== undefined
             ? { parameterCount: resolvedParameterCount }
@@ -291,7 +278,11 @@ function buildOpenAICompatibleLiveModel(
       : exact;
   }
   // Only unknown ids need the provider's request-shaping gate.
-  if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
+  if (
+    advertisedChatCapability !== false &&
+    acceptUnknownModel &&
+    !acceptUnknownModel({ id, record })
+  ) {
     return undefined;
   }
   const template = findLiveModelTemplate(id, fallback.models);
@@ -320,7 +311,7 @@ function buildOpenAICompatibleLiveModel(
     ) ??
     fallback.maxTokens ??
     template?.maxTokens ??
-    Math.min(contextWindow, 8192);
+    resolveDefaultModelMaxTokens(contextWindow);
   const explicitReasoning = readLiveModelCatalogBooleanField(record, [
     "reasoning",
     "supports_reasoning",
@@ -343,6 +334,7 @@ function buildOpenAICompatibleLiveModel(
   return {
     id,
     name: readLiveModelCatalogStringField(record, ["display_name", "displayName", "name"]) ?? id,
+    ...(!chat ? { inference: { chat: false } } : {}),
     ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(template?.api ? { api: template.api } : {}),
     reasoning,
@@ -394,6 +386,7 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (!model || !id || !contextWindow || !maxTokens) {
     return undefined;
   }
+  const chat = readLiveModelChatCapability(model) === true;
 
   const modelProvider = asOptionalRecord(model.provider);
   const npm =
@@ -456,6 +449,7 @@ export function projectUpstreamProviderCatalogModel(params: {
   return {
     id,
     name: readLiveModelCatalogStringField(model, "name") ?? id,
+    ...(!chat ? { inference: { chat: false } } : {}),
     ...(parameterCount !== undefined ? { parameterCount } : {}),
     provider: params.providerId,
     api,

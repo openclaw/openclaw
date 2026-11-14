@@ -6,8 +6,7 @@ import type {
   GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
 } from "../../packages/gateway-client/src/client.js";
-import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
-import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -15,7 +14,6 @@ import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceToken,
   loadOriginDeviceTokenReadOnly,
-  prepareDeviceAuthStore,
   storeDeviceAuthToken,
   storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
@@ -75,49 +73,6 @@ function shouldSuppressStoredDeviceAuth(opts: GatewayClientOptions): boolean {
       !opts.agentRuntimeIdentityToken?.trim() &&
       !opts.preferBootstrapToken)
   );
-}
-
-/** Prepare storage before the one-shot RPC budget; connection loads still observe current rows. */
-export async function prepareGatewayClientDeviceAuth(
-  opts: GatewayClientOptions & {
-    url: string;
-    deviceIdentity: NonNullable<GatewayClientOptions["deviceIdentity"]> | null;
-  },
-  signal?: AbortSignal,
-): Promise<void> {
-  signal?.throwIfAborted();
-  if (
-    opts.deviceIdentity === null ||
-    opts.preparedDeviceAuth ||
-    (opts.sharedStateMode === "read-only" && shouldSuppressStoredDeviceAuth(opts))
-  ) {
-    return;
-  }
-  // Leave transport rejection with the client, before it can open token storage.
-  try {
-    if (Object.keys(opts.edgeAuthHeaders ?? {}).length && new URL(opts.url).protocol !== "wss:") {
-      return;
-    }
-    resolveGatewayWebSocketTransport({
-      url: opts.url,
-      tlsFingerprint: opts.tlsFingerprint,
-      env: opts.env,
-      options: {},
-    });
-  } catch {
-    return;
-  }
-  try {
-    await prepareDeviceAuthStore({
-      env: opts.env,
-      signal,
-      readOnly: opts.sharedStateMode === "read-only",
-    });
-  } catch (error) {
-    throw markGatewayConnectAssemblyError(
-      error instanceof Error ? error : new Error(String(error)),
-    );
-  }
 }
 
 export class GatewayClient {
@@ -257,7 +212,8 @@ export class GatewayClient {
       registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
       logDebug,
       logError,
-      redactForLog: redactToolPayloadText,
+      redactForLog: (message) =>
+        redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(message))),
       ...baseOptions.hostDeps,
       ...(readOnly
         ? {

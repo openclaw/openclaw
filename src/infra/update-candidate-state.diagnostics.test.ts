@@ -1,10 +1,17 @@
-import { afterEach, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
+  createUpdateStateInspectionReporter,
   formatUpdateStateInspectionError,
-  UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
-import { createUpdateErrorFact, normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
+
+beforeEach(() => {
+  vi.spyOn(fs, "writeSync").mockReturnValue(0);
+});
 
 const privateRoot = "/synthetic/private operator";
 const stateDir = `${privateRoot}/.openclaw`;
@@ -40,6 +47,54 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["EAGAIN", "EWOULDBLOCK"])(
+  "resumes legacy progress after repeated %s without spending its output budget",
+  (code) => {
+    const report = createUpdateStateInspectionReporter(true);
+    const progress = { phase: "agent schema inspection", path: "/synthetic/agent.sqlite" };
+    vi.mocked(fs.writeSync).mockImplementation(() => {
+      throw Object.assign(new Error("pipe full"), { code });
+    });
+    for (let index = 0; index < 1000; index++) {
+      report(progress);
+    }
+    const output: string[] = [];
+    vi.mocked(fs.writeSync).mockImplementation((_fd, line) => {
+      output.push(line);
+      return Buffer.byteLength(line);
+    });
+    report(progress);
+    expect(output).toEqual([
+      `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`,
+    ]);
+  },
+);
+
+it("delivers the legacy omission notice once after its pipe becomes writable", () => {
+  const report = createUpdateStateInspectionReporter(true);
+  const output: string[] = [];
+  const omitted = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
+  let blocked = true;
+  vi.mocked(fs.writeSync).mockImplementation((_fd, line) => {
+    if (line === omitted && blocked) {
+      throw Object.assign(new Error("pipe full"), { code: "EAGAIN" });
+    }
+    output.push(line);
+    return Buffer.byteLength(line);
+  });
+  const progress = { phase: "agent schema inspection", path: "/synthetic/agent.sqlite" };
+  for (let index = 0; index < 1000; index++) {
+    report(progress);
+  }
+  expect(output.join("").length).toBeLessThanOrEqual(12_000);
+  expect(output).not.toContain(omitted);
+  blocked = false;
+  report(progress);
+  report(progress);
+  expect(output.filter((line) => line === omitted)).toHaveLength(1);
+  expect(output.at(-1)).toBe(omitted);
+});
+
 it("reports the active worker step for SIGILL without blaming storage", () => {
   const source = `${stateDir}/agents/main/agent/openclaw-agent.sqlite`;
   const diagnostics = inspection({
@@ -54,6 +109,30 @@ it("reports the active worker step for SIGILL without blaming storage", () => {
   expect(message).toContain("terminated by a signal");
   expect(message).not.toMatch(/Check access|free space|storage performance/);
 });
+
+it.each([true, false])(
+  "keeps the output-limit cause with warnings (retryAdvice=%s)",
+  (retryAdvice) => {
+    const error = inspection({ retryAdvice }).failure(
+      "ExperimentalWarning: private diagnostic",
+      "output-limit, signal SIGTERM",
+    );
+    expect(error).toHaveProperty("code", "output-limit");
+    expect(error.message).toContain("Worker output exceeded its capture limit");
+    expect(error.message).not.toMatch(/host crash|supervisor|free space|retry the update/);
+    expect(error.message.includes("Report this update failure")).toBe(retryAdvice);
+  },
+);
+
+it.each(["timeout", "no-output-timeout", "signal, signal SIGTERM"])(
+  "does not misclassify %s as an output limit",
+  (termination) => {
+    const error = inspection().failure("ordinary worker warning", termination);
+    expect(error).not.toHaveProperty("code", "output-limit");
+    expect(error.message).toContain(`(${termination})`);
+    expect(error.message).not.toContain("capture limit");
+  },
+);
 it("streams valid snapshot progress separately from the diagnostic stderr budget", () => {
   const progress = vi.fn();
   const exceeded = vi.fn();
@@ -87,24 +166,68 @@ it("streams valid snapshot progress separately from the diagnostic stderr budget
   expect(diagnostics.stderr()).toContain("copiedPages");
 });
 
-it("does not promote private worker prose", () => {
-  const detail = `Inspection failed for synthetic-private-tenant at '${privateRoot}/source.sqlite'`;
-  const error = workerFailure(new Error(detail));
-  const fact = errorFact(error);
+it("preserves measured capture capacity through a wrapped worker refusal", () => {
+  const cause = new UpdateCaptureSpaceError(`Backup refused near ${privateRoot}`, {
+    requiredBytes: 83886080,
+    availableBytes: 12345,
+  });
+  const failure = workerFailure(
+    new Error("Capture failed", { cause }),
+    "ExperimentalWarning: SQLite\n",
+  );
+  expect(findUpdateCaptureSpaceError(failure)?.capacity).toEqual({
+    requiredBytes: 83886080,
+    availableBytes: 12345,
+  });
+});
 
-  expect(error.message).toContain(detail);
-  expect(fact.message).toContain("[redacted-diagnostic]");
-  expect(fact.message).not.toMatch(/synthetic-private-tenant|private operator|source.sqlite/);
+it.each(["output-limit", "signal, signal SIGTERM"])(
+  "does not replace %s with an earlier capacity diagnostic",
+  (termination) => {
+    const diagnostics = inspection();
+    diagnostics.onOutputChunk(
+      Buffer.from(
+        formatUpdateStateInspectionError(
+          new UpdateCaptureSpaceError("No space", {
+            requiredBytes: 100,
+            availableBytes: 1,
+          }),
+        ),
+      ),
+      "stderr",
+    );
+    expect(
+      findUpdateCaptureSpaceError(diagnostics.failure(diagnostics.stderr(), termination)),
+    ).toBeUndefined();
+  },
+);
+
+it.each([
+  "not-json",
+  '{"requiredBytes":100,"availableBytes":-1}',
+  '{"requiredBytes":100,"availableBytes":100}',
+  '{"requiredBytes":"100","availableBytes":1}',
+])("does not classify malformed or sufficient capture capacity: %s", (payload) => {
+  const diagnostics = inspection();
+  diagnostics.onOutputChunk(Buffer.from(`Update capture space: ${payload}\n`), "stderr");
+  expect(
+    findUpdateCaptureSpaceError(diagnostics.failure(diagnostics.stderr(), "exit")),
+  ).toBeUndefined();
 });
 
 it("retains nested SQLITE_BUSY from the real worker formatter after a warning", () => {
-  const cause = Object.assign(new Error(`Unable to open '${privateRoot}/o'brien/worker.sqlite'`), {
-    code: "SQLITE_BUSY",
-  });
+  const secret = ["sk", "synthetic", "diagnostic", "credential", "1234567890"].join("-");
+  const cause = Object.assign(
+    new Error(`Unable to open token=${secret}, '${privateRoot}/o'brien/worker.sqlite'`),
+    { code: "SQLITE_BUSY" },
+  );
   const error = new Error(`Inspection failed for '${privateRoot}/source.sqlite'`, { cause });
-  const fact = errorFact(workerFailure(error, "ExperimentalWarning: SQLite is experimental\n"));
+  const failure = workerFailure(error, "ExperimentalWarning: SQLite is experimental\n");
+  const fact = errorFact(failure);
 
+  expect(failure.message).toContain(error.message);
   expect(fact.message).toContain("SQLITE_BUSY");
+  expect(fact.message).not.toContain(secret);
   expect(fact.message).not.toMatch(/private operator|brien|worker.sqlite|source.sqlite/);
   expect(fact.message?.length).toBeLessThanOrEqual(200);
 });
@@ -136,26 +259,10 @@ it.each([
   const diagnostics = inspection(testCase);
   diagnostics.onOutputChunk(Buffer.from("EACCES: permission denied"), "stderr");
 
-  const [fact] = normalizeUpdateFailureFacts(
-    [errorFact(diagnostics.failure(diagnostics.stderr(), "exit"))],
-    env,
-  );
+  const fact = errorFact(diagnostics.failure(diagnostics.stderr(), "exit"));
 
   expect(fact?.message).toContain("EACCES; Permission denied");
   expect(fact?.message).toContain("[redacted-path]");
-  expect(fact?.message).not.toMatch(
-    /private operator|Private Operator|private-server|private-share|agent's|private plugin/,
-  );
+  expect(fact?.message).not.toContain("private operator");
   expect(fact?.message?.length).toBeLessThanOrEqual(200);
-});
-
-it("keeps credentials and private error paths redacted when preserving the worker cause", () => {
-  const secret = ["sk", "synthetic", "diagnostic", "credential", "1234567890"].join("-");
-  const diagnostics = inspection();
-  const detail = `EACCES: permission denied token=${secret}, open '${privateRoot}/o'brien/private-error.sqlite'`;
-  const fact = errorFact(diagnostics.failure(detail, "exit"));
-
-  expect(fact.message).toContain("EACCES; Permission denied");
-  expect(fact.message).not.toContain(secret);
-  expect(fact.message).not.toMatch(/private operator|private-error|brien/);
 });

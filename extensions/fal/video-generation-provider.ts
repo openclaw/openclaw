@@ -1,3 +1,4 @@
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   readGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -8,6 +9,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   readProviderJsonResponse,
+  resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -21,6 +23,7 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
+  type VideoGenerationProviderCapabilities,
   type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
@@ -92,7 +95,6 @@ function readFalVideoPayload(payload: unknown) {
     video: video
       ? {
           url: normalizeFalVideoUrl(video.url),
-          content_type: normalizeOptionalString(video.content_type),
         }
       : undefined,
     videos: videos?.map((entry) => {
@@ -101,7 +103,6 @@ function readFalVideoPayload(payload: unknown) {
       }
       return {
         url: normalizeFalVideoUrl(entry.url),
-        content_type: normalizeOptionalString(entry.content_type),
       };
     }),
     prompt: normalizeOptionalString(payload.prompt),
@@ -124,7 +125,6 @@ function readFalQueueResponse(payload: unknown) {
     status_url: normalizeOptionalString(payload.status_url),
     detail: normalizeOptionalString(payload.detail),
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
-    prompt: normalizeOptionalString(payload.prompt),
     error: error ? { message: normalizeOptionalString(error.message) } : undefined,
   };
 }
@@ -133,82 +133,50 @@ function readFalCompletedQueueResult(payload: unknown) {
   if (!isRecord(payload)) {
     throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
   }
-  if (
-    payload.response !== undefined ||
-    (payload.video === undefined && payload.videos === undefined)
-  ) {
-    return readFalQueueResponse(payload);
+  const output =
+    payload.response !== undefined || (payload.video === undefined && payload.videos === undefined)
+      ? readFalQueueResponse(payload).response
+      : readFalVideoPayload(payload);
+  const url = output?.video?.url || output?.videos?.find((video) => video.url)?.url;
+  if (!output || !url) {
+    throw new Error("fal video generation response missing output URL");
   }
-  return {
-    response: readFalVideoPayload(payload),
-  };
-}
-
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
-async function downloadFalVideo(url: string, maxBytes: number): Promise<GeneratedVideoAsset> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-    auditContext: "fal-video-download",
-  });
-  try {
-    await assertOkOrThrowHttpError(response, "fal generated video download failed");
-    return {
-      url,
-      ...(await readGeneratedVideoAsset(response, {
-        label: "fal generated video download",
-        maxBytes,
-        validateBinaryResponse: true,
-        overflowUrl: url,
-        readOptions: { chunkTimeoutMs: 0 },
-      })),
-    };
-  } finally {
-    await release();
-  }
-}
-
-function resolveFalQueueBaseUrl(baseUrl: string): string {
-  const url = URL.parse(baseUrl);
-  if (!url) {
-    return DEFAULT_FAL_QUEUE_BASE_URL;
-  }
-  if (url.hostname === "fal.run") {
-    url.hostname = "queue.fal.run";
-    return url.toString().replace(/\/$/, "");
-  }
-  return baseUrl.replace(/\/$/, "");
+  return { url, prompt: output.prompt, seed: output.seed };
 }
 
 function isFalSeedance2Model(model: string): boolean {
   return SEEDANCE_2_VIDEO_MODELS.includes(model as (typeof SEEDANCE_2_VIDEO_MODELS)[number]);
 }
 
+function isFalPromptOnlyVideoModel(model: string): boolean {
+  const normalizedModel = normalizeLowercaseStringOrEmpty(model);
+  return (
+    normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL
+  );
+}
+
+function resolveFalVideoModelCapabilities(
+  model: string,
+): VideoGenerationProviderCapabilities | undefined {
+  const unsupported = isFalPromptOnlyVideoModel(model)
+    ? {
+        supportsAspectRatio: false,
+        supportsResolution: false,
+        supportsSize: false,
+        supportsAudio: false,
+      }
+    : isFalSeedance2Model(model)
+      ? undefined
+      : { supportsAudio: false };
+  return unsupported
+    ? { generate: unsupported, imageToVideo: { enabled: true, ...unsupported } }
+    : undefined;
+}
+
 function isFalSeedance2ReferenceModel(model: string): boolean {
   return SEEDANCE_2_REFERENCE_VIDEO_MODELS.includes(
     model as (typeof SEEDANCE_2_REFERENCE_VIDEO_MODELS)[number],
   );
-}
-
-function resolveFalDuration(
-  durationSeconds: number | undefined,
-  model: string,
-): number | string | undefined {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds });
-  if (duration === undefined) {
-    return undefined;
-  }
-  if (isFalSeedance2Model(model)) {
-    return SEEDANCE_2_DURATION_SECONDS.includes(
-      duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
-    )
-      ? String(duration)
-      : undefined;
-  }
-  return duration;
 }
 
 function resolveFalReferenceUrl(
@@ -223,7 +191,7 @@ function resolveFalReferenceUrl(
   if (!asset?.buffer) {
     throw new Error(`fal ${label} is missing media data.`);
   }
-  return toDataUrl(asset.buffer, normalizeOptionalString(asset.mimeType) ?? defaultMimeType);
+  return toImageDataUrl({ buffer: asset.buffer, mimeType: asset.mimeType, defaultMimeType });
 }
 
 function applyFalSeedanceControls(
@@ -242,9 +210,16 @@ function applyFalSeedanceControls(
   if (req.resolution) {
     body.resolution = isFalSeedance2Model(model) ? req.resolution.toLowerCase() : req.resolution;
   }
-  const duration = resolveFalDuration(req.durationSeconds, model);
-  if (duration) {
-    body.duration = duration;
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds });
+  const seedance = isFalSeedance2Model(model);
+  if (
+    duration &&
+    (!seedance ||
+      SEEDANCE_2_DURATION_SECONDS.includes(
+        duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
+      ))
+  ) {
+    body.duration = seedance ? String(duration) : duration;
   }
   if (isFalSeedance2Model(model) && req.audio !== undefined) {
     body.generate_audio = req.audio;
@@ -279,14 +254,13 @@ function buildFalVideoRequestBody(
     requestBody.image_url =
       normalizeOptionalString(input.url) ??
       (input.buffer
-        ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
+        ? toImageDataUrl({ buffer: input.buffer, mimeType: input.mimeType })
         : undefined);
   }
   // MiniMax Live on fal currently documents prompt + optional image_url only.
   // Keep the default model conservative so queue requests do not hang behind
   // unsupported knobs such as duration/resolution/aspect-ratio overrides.
-  const normalizedModel = normalizeLowercaseStringOrEmpty(model);
-  if (normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL) {
+  if (isFalPromptOnlyVideoModel(model)) {
     return requestBody;
   }
   applyFalSeedanceControls(req, model, requestBody);
@@ -327,111 +301,19 @@ function validateFalVideoReferenceInputs(req: VideoGenerationRequest, model: str
   }
 }
 
-async function fetchFalJson(params: {
-  url: string;
-  init?: RequestInit;
-  timeoutMs: number;
-  dispatcherPolicy: Parameters<typeof fetchWithSsrFGuard>[0]["dispatcherPolicy"];
-  auditContext: string;
-  errorContext: string;
-}): Promise<unknown> {
-  const { errorContext, ...request } = params;
-  const { response, release } = await fetchWithSsrFGuard(request);
-  try {
-    await assertOkOrThrowHttpError(response, errorContext);
-    try {
-      return await readProviderJsonResponse<unknown>(response, errorContext);
-    } catch (error) {
-      if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
-        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE, { cause: error });
-      }
-      throw error;
-    }
-  } finally {
-    await release();
-  }
-}
-
-async function waitForFalQueueResult(params: {
-  statusUrl: string;
-  responseUrl: string;
-  headers: Headers;
-  deadline: ProviderOperationDeadline;
-  dispatcherPolicy: Parameters<typeof fetchWithSsrFGuard>[0]["dispatcherPolicy"];
-}) {
-  let lastStatus = "unknown";
-  for (;;) {
-    const requestTimeoutMs = resolveFalQueueRemainingMs(
-      params.deadline,
-      lastStatus,
-      DEFAULT_HTTP_TIMEOUT_MS,
-    );
-    const payload = readFalQueueResponse(
-      await fetchFalJson({
-        url: params.statusUrl,
-        init: {
-          method: "GET",
-          headers: params.headers,
-        },
-        timeoutMs: requestTimeoutMs,
-        dispatcherPolicy: params.dispatcherPolicy,
-        auditContext: "fal-video-status",
-        errorContext: "fal video status request failed",
-      }),
-    );
-    const status = payload.status?.toUpperCase();
-    if (!status) {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
-    }
-    lastStatus = status;
-    if (status === "COMPLETED") {
-      return readFalCompletedQueueResult(
-        await fetchFalJson({
-          url: params.responseUrl,
-          init: {
-            method: "GET",
-            headers: params.headers,
-          },
-          timeoutMs: resolveFalQueueRemainingMs(
-            params.deadline,
-            lastStatus,
-            DEFAULT_HTTP_TIMEOUT_MS,
-          ),
-          dispatcherPolicy: params.dispatcherPolicy,
-          auditContext: "fal-video-result",
-          errorContext: "fal video result request failed",
-        }),
-      );
-    }
-    if (status === "FAILED" || status === "CANCELLED") {
-      throw new Error(
-        payload.detail ||
-          payload.error?.message ||
-          `fal video generation ${normalizeLowercaseStringOrEmpty(status)}`,
-      );
-    }
-    if (!FAL_VIDEO_PENDING_STATUSES.has(status)) {
-      throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
-    }
-    const pollDelayMs = resolveFalQueueRemainingMs(params.deadline, lastStatus, POLL_INTERVAL_MS);
-    await sleep(pollDelayMs);
-  }
-}
-
 function resolveFalQueueRemainingMs(
   deadline: ProviderOperationDeadline,
   lastStatus: string,
   defaultTimeoutMs: number,
 ): number {
-  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  if (typeof deadline.deadlineAtMs !== "number") {
-    return defaultMs;
-  }
-  const remainingMs = deadline.deadlineAtMs - Date.now();
-  if (remainingMs <= 0) {
+  try {
+    return resolveProviderOperationTimeoutMs({
+      deadline,
+      defaultTimeoutMs: resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1),
+    });
+  } catch {
     throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
   }
-  return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
 function buildFalVideoModeCapabilities(models: readonly string[]) {
@@ -461,6 +343,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       "fal-ai/wan/v2.2-a14b/image-to-video",
     ],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
+    resolveModelCapabilities: ({ model }) => resolveFalVideoModelCapabilities(model),
     capabilities: {
       generate: buildFalVideoModeCapabilities(SEEDANCE_2_VIDEO_MODELS),
       imageToVideo: {
@@ -487,8 +370,33 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         req,
         capability: "video",
       });
+      const fetchFalJson = async (params: {
+        url: string;
+        init?: RequestInit;
+        timeoutMs: number;
+        auditContext: string;
+        errorContext: string;
+      }): Promise<unknown> => {
+        const { errorContext, ...request } = params;
+        const { response, release } = await fetchWithSsrFGuard({ ...request, dispatcherPolicy });
+        try {
+          await assertOkOrThrowHttpError(response, errorContext);
+          return await readProviderJsonResponse<unknown>(response, errorContext, {
+            malformedResponseError: FAL_VIDEO_MALFORMED_RESPONSE,
+          });
+        } finally {
+          await release();
+        }
+      };
       const requestBody = buildFalVideoRequestBody(req, model);
-      const queueBaseUrl = resolveFalQueueBaseUrl(baseUrl);
+      const queueUrl = URL.parse(baseUrl);
+      let queueBaseUrl = baseUrl.replace(/\/$/, "");
+      if (!queueUrl) {
+        queueBaseUrl = DEFAULT_FAL_QUEUE_BASE_URL;
+      } else if (queueUrl.hostname === "fal.run") {
+        queueUrl.hostname = "queue.fal.run";
+        queueBaseUrl = queueUrl.toString().replace(/\/$/, "");
+      }
       const submitted = readFalQueueResponse(
         await fetchFalJson({
           url: `${queueBaseUrl}/${model}`,
@@ -498,7 +406,6 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
             body: JSON.stringify(requestBody),
           },
           timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-          dispatcherPolicy,
           auditContext: "fal-video-submit",
           errorContext: "fal video generation failed",
         }),
@@ -516,29 +423,91 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: operationTimeoutMs,
         label: "fal video generation",
       });
-      const payload = await waitForFalQueueResult({
-        statusUrl,
-        responseUrl,
-        headers,
-        deadline: operationDeadline,
-        dispatcherPolicy,
-      });
-      const videoPayload = payload.response || readFalVideoPayload(payload);
-      const entry = videoPayload.video?.url
-        ? videoPayload.video
-        : videoPayload.videos?.find((video) => video.url);
-      const url = entry?.url;
-      if (!url) {
-        throw new Error("fal video generation response missing output URL");
+      let completedResult: ReturnType<typeof readFalCompletedQueueResult>;
+      let lastStatus = "unknown";
+      for (;;) {
+        const requestTimeoutMs = resolveFalQueueRemainingMs(
+          operationDeadline,
+          lastStatus,
+          DEFAULT_HTTP_TIMEOUT_MS,
+        );
+        const statusPayload = readFalQueueResponse(
+          await fetchFalJson({
+            url: statusUrl,
+            init: { method: "GET", headers },
+            timeoutMs: requestTimeoutMs,
+            auditContext: "fal-video-status",
+            errorContext: "fal video status request failed",
+          }),
+        );
+        const status = statusPayload.status?.toUpperCase();
+        if (!status) {
+          throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+        }
+        lastStatus = status;
+        if (status === "COMPLETED") {
+          completedResult = readFalCompletedQueueResult(
+            await fetchFalJson({
+              url: responseUrl,
+              init: { method: "GET", headers },
+              timeoutMs: resolveFalQueueRemainingMs(
+                operationDeadline,
+                lastStatus,
+                DEFAULT_HTTP_TIMEOUT_MS,
+              ),
+              auditContext: "fal-video-result",
+              errorContext: "fal video result request failed",
+            }),
+          );
+          break;
+        }
+        if (status === "FAILED" || status === "CANCELLED") {
+          throw new Error(
+            statusPayload.detail ||
+              statusPayload.error?.message ||
+              `fal video generation ${normalizeLowercaseStringOrEmpty(status)}`,
+          );
+        }
+        if (!FAL_VIDEO_PENDING_STATUSES.has(status)) {
+          throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+        }
+        const pollDelayMs = resolveFalQueueRemainingMs(
+          operationDeadline,
+          lastStatus,
+          POLL_INTERVAL_MS,
+        );
+        await sleep(pollDelayMs);
       }
-      const video = await downloadFalVideo(url, resolveGeneratedMediaMaxBytes(req.cfg, "video"));
+      const { url } = completedResult;
+      const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+        auditContext: "fal-video-download",
+      });
+      let video: GeneratedVideoAsset;
+      try {
+        await assertOkOrThrowHttpError(response, "fal generated video download failed");
+        video = {
+          url,
+          ...(await readGeneratedVideoAsset(response, {
+            label: "fal generated video download",
+            maxBytes,
+            validateBinaryResponse: true,
+            overflowUrl: url,
+            readOptions: { chunkTimeoutMs: 0 },
+          })),
+        };
+      } finally {
+        await release();
+      }
       return {
         videos: [video],
         model,
         metadata: {
           ...(submitted.request_id ? { requestId: submitted.request_id } : {}),
-          ...(videoPayload.prompt ? { prompt: videoPayload.prompt } : {}),
-          ...(videoPayload.seed !== undefined ? { seed: videoPayload.seed } : {}),
+          ...(completedResult.prompt ? { prompt: completedResult.prompt } : {}),
+          ...(completedResult.seed !== undefined ? { seed: completedResult.seed } : {}),
         },
       };
     },

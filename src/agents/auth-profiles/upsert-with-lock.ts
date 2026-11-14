@@ -24,7 +24,10 @@ import {
 } from "./store-runtime.js";
 import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
-import { runAuthProfileStoreUpdate } from "./store-update.js";
+import {
+  createAuthProfileStoreUpdatePublisher,
+  runAuthProfileStoreUpdate,
+} from "./store-update.js";
 import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
 import type {
   AuthProfileCredential,
@@ -403,17 +406,7 @@ export async function persistAuthProfileBatch(
                   options: { filterExternalAuthProfiles: false, syncExternalCli: false },
                 };
               },
-              async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-                if (committed) {
-                  await publishAuthProfileStoreUpdate(
-                    owner,
-                    committed,
-                    assertCurrent,
-                    nativeCommits,
-                    committedIsCurrent,
-                  );
-                }
-              },
+              publish: createAuthProfileStoreUpdatePublisher(),
             });
             return { unrevertedProfileIds };
           })().catch((error: unknown) => {

@@ -26,11 +26,6 @@ export type ChatComposerPersistResult =
   | { status: "conflict" }
   | ({ status: "storage-failed" } & ChatComposerDraftRetry);
 
-export type StoredChatQueueReplacement = {
-  id: string;
-  expected: ChatQueueItem;
-};
-
 export type ChatComposerDraftRevisionState = ReturnType<typeof readDraftRevisionState>;
 
 export type StoredChatComposerSnapshot = {

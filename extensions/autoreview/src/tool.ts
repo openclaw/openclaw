@@ -1,11 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
@@ -213,14 +210,7 @@ function clearToolAllowances(byProvider: Record<string, unknown> | undefined) {
   };
 }
 
-type AutoReviewHost = {
-  runtime: { system: Pick<OpenClawPluginApi["runtime"]["system"], "runCommandWithTimeout"> };
-};
-
-export function createAutoReviewTool(
-  api: AutoReviewHost,
-  context: OpenClawPluginToolContext<2>,
-): AnyAgentTool | null {
+export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): AnyAgentTool | null {
   const sandbox = context.sandbox;
   const modelExecution = context.modelExecution;
   const skillRoot = sandbox?.installedSkillRoots.autoreview;
@@ -257,10 +247,9 @@ export function createAutoReviewTool(
         path.join(resolvePreferredOpenClawTmpDir(), "autoreview-"),
       );
       let helperRun: ReturnType<typeof python> | undefined;
-      let helperCompleted = false;
       const helperSettled = new AbortController();
       const finishHelper = async () => {
-        if (!helperCompleted) {
+        if (!helperSettled.signal.aborted) {
           operation.abort();
         }
         await helperRun?.catch((error: unknown) => {
@@ -321,11 +310,9 @@ export function createAutoReviewTool(
         );
         void helperRun.then(
           () => {
-            helperCompleted = true;
             helperSettled.abort();
           },
           () => {
-            helperCompleted = true;
             helperSettled.abort();
           },
         );
@@ -406,30 +393,28 @@ export function createAutoReviewTool(
                 if (helperSettled.signal.aborted) {
                   break;
                 }
-                const result = await api.runtime.system
-                  .runCommandWithTimeout(argv, {
-                    cwd,
-                    input: request.prompt,
-                    signal: AbortSignal.any([scope.signal, helperSettled.signal]),
-                    timeoutMs: timeoutSeconds === null ? undefined : timeoutSeconds * 1000,
-                    env: { OPENCLAW_NO_RESPAWN: "1" },
-                    outputCapture: "head",
-                    maxOutputBytes: { stdout: MAX_RESULT_BYTES, stderr: 64_000 },
-                    terminateOnOutputLimit: true,
-                    killProcessTree: true,
-                    // Native startup must finish its abort cleanup before forced termination.
-                    killGraceMs: 5_000,
-                    beforeInput: () => {
-                      scope.assertCurrent();
-                      helperSettled.signal.throwIfAborted();
-                    },
-                  })
-                  .catch((error: unknown) => {
-                    if (!scope.signal.aborted && helperSettled.signal.aborted) {
-                      return undefined;
-                    }
-                    throw error;
-                  });
+                const result = await runCommandWithTimeout(argv, {
+                  cwd,
+                  input: request.prompt,
+                  signal: AbortSignal.any([scope.signal, helperSettled.signal]),
+                  timeoutMs: timeoutSeconds === null ? undefined : timeoutSeconds * 1000,
+                  env: { OPENCLAW_NO_RESPAWN: "1" },
+                  outputCapture: "head",
+                  maxOutputBytes: { stdout: MAX_RESULT_BYTES, stderr: 64_000 },
+                  terminateOnOutputLimit: true,
+                  killProcessTree: true,
+                  // Native startup must finish its abort cleanup before forced termination.
+                  killGraceMs: 5_000,
+                  beforeInput: () => {
+                    scope.assertCurrent();
+                    helperSettled.signal.throwIfAborted();
+                  },
+                }).catch((error: unknown) => {
+                  if (!scope.signal.aborted && helperSettled.signal.aborted) {
+                    return undefined;
+                  }
+                  throw error;
+                });
                 scope.assertCurrent();
                 if (!result || helperSettled.signal.aborted) {
                   break;

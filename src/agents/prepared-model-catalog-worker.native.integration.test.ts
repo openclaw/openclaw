@@ -9,7 +9,6 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createCatalogFixture,
   catalogEntry,
@@ -26,21 +25,16 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 
 const { makeTempDir, retireAfterTest, readCatalogWorkers } = usePreparedCatalogWorkerFixtures();
 
-it("retains configured dynamic models alongside native harness models after full refresh", async () => {
-  await expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest });
-});
+it("retains configured dynamic models alongside native harness models after full refresh", () =>
+  expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest }));
 
 it.each([
   { catalogReturnsRows: true, aliasOnly: false },
   { catalogReturnsRows: false, aliasOnly: false },
   { catalogReturnsRows: true, aliasOnly: true },
-])("refreshes legacy catalogs (rows=$catalogReturnsRows, alias=$aliasOnly)", async (options) => {
-  await expectLegacyWorkerCatalogRetention({
-    makeTempDir,
-    retireAfterTest,
-    ...options,
-  });
-});
+])("refreshes legacy catalogs (rows=$catalogReturnsRows, alias=$aliasOnly)", (options) =>
+  expectLegacyWorkerCatalogRetention({ makeTempDir, retireAfterTest, ...options }),
+);
 
 async function createGatewayNativeAdmissionFixture(gateCount: number, signal: AbortSignal) {
   const fixture = await createCatalogFixture(makeTempDir, 0);
@@ -189,17 +183,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     { agentCount: 1, publication: "individual" },
   );
   const snapshot = fleet.snapshots[0]!;
-  const failures: Error[] = [];
-  let waiting: ReturnType<typeof createDeferred<ModelCatalogSnapshot>> | undefined;
+  const failures: string[] = [];
   unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "catalog-failed") {
-      failures.push(event.error);
-      waiting?.reject(event.error);
-    } else if (event.phase === "catalog-published" && snapshot.isCurrent()) {
-      const catalog = snapshot.readFullModelCatalog!();
-      if (catalog?.entries.some((entry) => entry.id === "native-admitted")) {
-        waiting?.resolve(catalog);
-      }
+      failures.push(event.phase);
     }
   });
   const started = performance.now();
@@ -222,6 +209,13 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     settled<T>(work: PromiseLike<T>) {
       return withinTest(work, signal);
     },
+    /** Host sleep: the clock jumps, then each overdue timer fires once at the resumed time. */
+    async freeze(ms: number) {
+      const resumedAt = performance.now() + ms;
+      clock.mockImplementation(() => resumedAt);
+      await vi.advanceTimersByTimeAsync(ms);
+      clock.mockImplementation(() => started + fakeNow());
+    },
     holdProvider() {
       fs.writeFileSync(providerHold, "");
       return providerEntered.promise;
@@ -240,11 +234,9 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         .split("\n")
         .map((line) => JSON.parse(line)),
     refresh() {
-      const completion = createDeferred<ModelCatalogSnapshot>();
-      waiting = completion;
       const foreground = snapshot.loadFullModelCatalog!({ refresh: true });
-      void foreground.catch(completion.reject);
-      const completed = completion.promise;
+      void foreground.catch(() => {});
+      const completed = snapshot.loadFullModelCatalog!({ refresh: true, wait: true });
       void completed.catch(() => {});
       return { foreground, completed };
     },
@@ -269,7 +261,7 @@ it("reuses progressing native admission across Gateway refreshes", async ({ sign
   }
   const catalog = await fixture.settled(first.completed);
   expect(catalog.entries).toContainEqual(catalogEntry("native-admitted"));
-  // Publication precedes acquisition settlement; the next turn starts a separate refresh.
+  // The completed acquisition leaves the next turn free to start a separate refresh.
   await checkpoint();
   const refreshed = await fixture.settled(fixture.refresh().completed);
   expect(refreshed.entries).toEqual(catalog.entries);
@@ -314,10 +306,10 @@ it("keeps stalled native admission terminal after parent auth failure", async ({
   await fixture.wait(auth.entered, auth.completed, "Parent auth probe did not enter");
   await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS - 1_000);
   expect(fixture.failures).toHaveLength(1);
-  const failure = fixture.failures[0]!;
+  const failure = await first.completed.catch((error: unknown) => error);
   expect(failure).toMatchObject({ name: "PreparedModelCatalogAdmissionStalledError" });
-  expect(failure.message).toContain(PROVIDER_ID);
-  expect(failure.message).toContain("native reference verification");
+  await expect(first.completed).rejects.toThrow(PROVIDER_ID);
+  await expect(first.completed).rejects.toThrow("native reference verification");
   await expect(first.completed).rejects.toBe(failure);
   const retained = await fixture.settled(first.foreground);
   expect([retained.refreshFailed, retained.pendingProviders]).toEqual([true, undefined]);
@@ -336,4 +328,24 @@ it("keeps stalled native admission terminal after parent auth failure", async ({
   expect(records.filter(({ event }) => event === "started")).toHaveLength(1);
   expect(records.some(({ event }) => event === "admitted" || event === "catalog")).toBe(false);
   expect([retained.refreshFailed, retained.pendingProviders]).toEqual([true, undefined]);
+});
+
+it("does not count host sleep toward the native admission stall", async ({ signal }) => {
+  await using fixture = await createGatewayNativeAdmissionFixture(1, signal);
+  const first = fixture.refresh();
+  const gate = await fixture.wait(
+    fixture.entered[0]!.promise,
+    first.completed,
+    "Native capture did not enter",
+  );
+  await checkpoint();
+  // Two sleeps longer than the stall budget, one second apart.
+  await fixture.freeze(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS + 4_000);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await fixture.freeze(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS + 4_000);
+  expect(fixture.failures).toEqual([]);
+  fixture.release(gate);
+  const catalog = await fixture.settled(first.completed);
+  expect(catalog.entries).toContainEqual(catalogEntry("native-admitted"));
+  expect(fixture.failures).toEqual([]);
 });

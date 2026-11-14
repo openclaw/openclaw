@@ -51,7 +51,6 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
       ],
     },
     async start(ctx) {
-      stop();
       const controller = new AbortController();
       lifetime = controller;
       const configured = readWorkspaces(ctx.config.plugins?.entries?.["file-transfer"]?.config).map(
@@ -134,9 +133,7 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
           );
         }
       } catch (error) {
-        if (lifetime === controller) {
-          stop();
-        }
+        stop();
         throw error;
       }
     },

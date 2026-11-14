@@ -1,9 +1,22 @@
 // Discord tests cover message handler.process plugin behavior.
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ReplyPayload,
+  DispatchReplyWithBufferedBlockDispatcher,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
+
+type SessionRecord = Parameters<
+  typeof import("openclaw/plugin-sdk/conversation-runtime").recordInboundSession
+>[0];
+type DispatchResult = Pick<
+  Awaited<ReturnType<DispatchReplyWithBufferedBlockDispatcher>>,
+  "queuedFinal" | "counts" | "failedCounts" | "settledReceipt"
+>;
 
 const runtimeEnvMocks = vi.hoisted(() => ({
   logVerbose: vi.fn(),
@@ -27,8 +40,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 });
 
 export const getGlobalHookRunnerForTest = getGlobalHookRunner;
-
-export const logVerboseForTest = runtimeEnvMocks.logVerbose;
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -143,7 +154,7 @@ vi.mock("./reply-delivery.js", async (importOriginal) => ({
 }));
 
 export type DispatchInboundParams = {
-  ctx?: Record<string, unknown>;
+  ctx?: MsgContext;
   dispatcher: {
     sendBlockReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
@@ -152,33 +163,14 @@ export type DispatchInboundParams = {
   replyOptions?: import("openclaw/plugin-sdk/reply-runtime").GetReplyOptions;
 };
 const dispatchInboundMessage = vi.hoisted(() =>
-  vi.fn<
-    (params?: DispatchInboundParams) => Promise<{
-      queuedFinal: boolean;
-      counts: { final: number; tool: number; block: number };
-      failedCounts?: { final?: number; tool?: number; block?: number };
-      settledReceipt?: {
-        counts: Record<
-          "tool" | "block" | "final",
-          {
-            delivered: number;
-            deliveredNotVisible: number;
-            cancelled: number;
-            failedBeforeSend: number;
-            failedAfterSend: number;
-          }
-        >;
-        anyVisibleDelivered: boolean;
-      };
-    }>
-  >(async (_params?: DispatchInboundParams) => ({
+  vi.fn<(params?: DispatchInboundParams) => Promise<DispatchResult>>(async () => ({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
   })),
 );
 const readAgentRunTerminalOutcome = vi.hoisted(() => vi.fn());
 const recordInboundSession = vi.hoisted(() =>
-  vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
+  vi.fn<(params: SessionRecord) => Promise<void>>(async () => {}),
 );
 const configSessionsMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn<(params?: unknown) => unknown>(() => undefined),
@@ -210,14 +202,11 @@ const createDiscordRestClientSpy = vi.hoisted(() =>
 );
 export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
-export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
 export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
-export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
@@ -347,28 +336,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
-  recordInboundSession: (...args: unknown[]) => recordInboundSession(...args),
-  resolvePinnedMainDmOwnerFromAllowlist: (params: {
-    dmScope?: string | null;
-    allowFrom?: Array<string | number> | null;
-    normalizeEntry: (entry: string) => string | undefined;
-  }) => {
-    if ((params.dmScope ?? "main") !== "main") {
-      return null;
-    }
-    const allowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
-    if (allowFrom.some((entry) => String(entry).trim() === "*")) {
-      return null;
-    }
-    const owners = Array.from(
-      new Set(
-        allowFrom
-          .map((entry) => params.normalizeEntry(String(entry)))
-          .filter((entry): entry is string => Boolean(entry)),
-      ),
-    );
-    return owners.length === 1 ? owners[0] : null;
-  },
+  recordInboundSession: (params: SessionRecord) => recordInboundSession(params),
   registerSessionBindingAdapterV2: vi.fn(),
   unregisterSessionBindingAdapter: vi.fn(),
   resolveThreadBindingConversationIdFromBindingId: (bindingId: string) =>
@@ -413,18 +381,16 @@ export async function createBaseContext(
 
 export async function createAutomaticSourceDeliveryContext(
   overrides: Parameters<typeof createBaseDiscordMessageContext>[0] = {},
+  options: { disableStatusReactions?: boolean } = {},
 ): Promise<Awaited<ReturnType<typeof createBaseDiscordMessageContext>>> {
-  const cfg = (overrides.cfg ?? {}) as {
-    messages?: {
-      groupChat?: Record<string, unknown>;
-    } & Record<string, unknown>;
-  } & Record<string, unknown>;
+  const cfg = (overrides.cfg ?? {}) as OpenClawConfig;
   return await createBaseContext({
     ...overrides,
     cfg: {
       ...cfg,
       messages: {
         ...cfg.messages,
+        ...(options.disableStatusReactions ? { statusReactions: { enabled: false } } : {}),
         ackReaction: cfg.messages?.ackReaction ?? "👀",
         groupChat: {
           ...cfg.messages?.groupChat,
@@ -450,7 +416,6 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage } = await import("./message-handler.process.js"));
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
@@ -490,97 +455,18 @@ export function registerDiscordProcessTestLifecycle() {
   });
 }
 
-export function getLastRouteUpdate():
-  | {
-      sessionKey?: string;
-      channel?: string;
-      to?: string;
-      accountId?: string;
-      mainDmOwnerPin?: { ownerRecipient?: string; senderRecipient?: string };
-    }
-  | undefined {
-  const callArgs = recordInboundSession.mock.calls[recordInboundSession.mock.calls.length - 1] as
-    | unknown[]
-    | undefined;
-  const params = callArgs?.[0] as
-    | {
-        updateLastRoute?: {
-          sessionKey?: string;
-          channel?: string;
-          to?: string;
-          accountId?: string;
-          mainDmOwnerPin?: { ownerRecipient?: string; senderRecipient?: string };
-        };
-      }
-    | undefined;
-  return params?.updateLastRoute;
+export function getLastRouteUpdate() {
+  return recordInboundSession.mock.calls.at(-1)?.[0]?.updateLastRoute;
 }
 
-export function getLastDispatchCtx():
-  | {
-      Body?: string;
-      BodyForAgent?: string;
-      ChatType?: string;
-      CommandBody?: string;
-      From?: string;
-      GroupRequireMention?: boolean;
-      media?: Array<{ transcribed?: boolean }>;
-      MessageSid?: string;
-      MessageSidFull?: string;
-      MessageThreadId?: string | number;
-      ModelParentSessionKey?: string;
-      OriginatingTo?: string;
-      ParentSessionKey?: string;
-      SessionKey?: string;
-      ThreadStarterBody?: string;
-      To?: string;
-      Transcript?: string;
-    }
-  | undefined {
-  const callArgs = dispatchInboundMessage.mock.calls[
-    dispatchInboundMessage.mock.calls.length - 1
-  ] as unknown[] | undefined;
-  const params = callArgs?.[0] as
-    | {
-        ctx?: {
-          Body?: string;
-          BodyForAgent?: string;
-          ChatType?: string;
-          CommandBody?: string;
-          From?: string;
-          GroupRequireMention?: boolean;
-          media?: Array<{ transcribed?: boolean }>;
-          MessageSid?: string;
-          MessageSidFull?: string;
-          MessageThreadId?: string | number;
-          ModelParentSessionKey?: string;
-          OriginatingTo?: string;
-          ParentSessionKey?: string;
-          SessionKey?: string;
-          ThreadStarterBody?: string;
-          To?: string;
-          Transcript?: string;
-        };
-      }
-    | undefined;
-  return params?.ctx;
+export function getLastDispatchCtx() {
+  return dispatchInboundMessage.mock.calls.at(-1)?.[0]?.ctx;
 }
 
-export function getLastDispatchReplyOptions(): DispatchInboundParams["replyOptions"] | undefined {
-  const callArgs = dispatchInboundMessage.mock.calls[
-    dispatchInboundMessage.mock.calls.length - 1
-  ] as unknown[] | undefined;
-  const params = callArgs?.[0] as DispatchInboundParams | undefined;
-  return params?.replyOptions;
+export function getLastDispatchReplyOptions() {
+  return dispatchInboundMessage.mock.calls.at(-1)?.[0]?.replyOptions;
 }
 
 export async function runProcessDiscordMessage(ctx: DiscordMessagePreflightContext): Promise<void> {
   await processDiscordMessage(ctx);
-}
-
-export async function runInPartialStreamMode(): Promise<void> {
-  const ctx = await createBaseContext({
-    discordConfig: { streaming: { mode: "partial" } },
-  });
-  await runProcessDiscordMessage(ctx);
 }

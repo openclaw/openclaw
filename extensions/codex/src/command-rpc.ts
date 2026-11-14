@@ -75,6 +75,7 @@ export type CodexControlRequestOptions = {
   timeoutMs?: number;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  assertDispatchCurrentAsync?: () => Promise<void>;
   /** Owner authority applies before dispatch; accepted responses still settle. */
   assertOwnerCurrent?: () => void;
   catalogPreview?: true;
@@ -317,6 +318,7 @@ export async function codexControlRequest(
       timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
       assertCurrent: options.assertCurrent,
       assertCurrentAsync: options.assertCurrentAsync,
+      assertDispatchCurrentAsync: options.assertDispatchCurrentAsync,
       startOptions,
       config: options.config,
       agentId: options.agentId,

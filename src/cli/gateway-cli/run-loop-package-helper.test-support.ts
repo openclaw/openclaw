@@ -19,7 +19,6 @@ import {
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
-const removeFixturePath = fs.rm;
 const sourceUrl = (key: keyof typeof updateExecutorEntrypoints) =>
   JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints[key]).href);
 
@@ -164,29 +163,12 @@ export async function gateFixtureHandoffPublication(root: string, handoffId: str
 export async function observeFixtureHelper(
   root: string,
   handoffId: string,
-  control: string,
   spawnProcess: UpdateRespawnFixtures["spawnProcess"],
 ) {
   const { spawn } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const runtimeFs = (await import("node:fs/promises")).default;
   let helper: ChildProcess | undefined;
-  let helperDirectory: string | undefined;
   let closed: Promise<void> | undefined;
-  let stderr = "";
-  const capture = async () => {
-    if (helperDirectory) {
-      const log = await fs
-        .readFile(path.join(helperDirectory, "handoff.log"), "utf8")
-        .catch(() => undefined);
-      if (log !== undefined) {
-        await fs.writeFile(path.join(control, "handoff.log"), log, { mode: 0o600 });
-      }
-    }
-    if (stderr) {
-      await fs.writeFile(path.join(control, "handoff.stderr.log"), stderr, { mode: 0o600 });
-    }
-  };
   spawnProcess.mockImplementation((command, args, options) => {
     const script = Array.isArray(args) ? args[0] : undefined;
     if (typeof script !== "string" || path.basename(script) !== "handoff.cjs") {
@@ -198,22 +180,11 @@ export async function observeFixtureHelper(
     if (params.updateLeaseKey !== root || params.handoffId !== handoffId) {
       return spawn(command, args, options);
     }
-    helperDirectory = path.dirname(script);
-    // Only stderr visibility changes; argv, environment, IPC and ownership stay real.
-    helper = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
-    helper.stderr?.on("data", (bytes) => {
-      stderr = (stderr + String(bytes)).slice(-32768);
-    });
+    helper = spawn(command, args, options);
     closed = new Promise((resolve) => {
       helper!.once("close", () => resolve());
     });
     return helper;
-  });
-  const removeSpy = vi.spyOn(runtimeFs, "rm").mockImplementation(async (target, options) => {
-    if (helperDirectory && target === helperDirectory) {
-      await capture().catch(() => undefined);
-    }
-    return removeFixturePath(target, options);
   });
   const cleanup = createManagedServiceBoundaryCleanup(() => [helper]);
   return {
@@ -225,7 +196,6 @@ export async function observeFixtureHelper(
     },
     async close() {
       const outcomes = await Promise.allSettled([cleanup(), ...(closed ? [closed] : [])]);
-      outcomes.push(...(await Promise.allSettled([capture()])));
       const failures = outcomes.flatMap((outcome) =>
         outcome.status === "rejected" ? [outcome.reason] : [],
       );
@@ -235,7 +205,6 @@ export async function observeFixtureHelper(
     },
     restore() {
       spawnProcess.mockImplementation(spawn);
-      removeSpy.mockRestore();
     },
   };
 }

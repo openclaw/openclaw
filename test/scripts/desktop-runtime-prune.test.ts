@@ -45,7 +45,7 @@ it("removes audited development files while preserving runtime data and every Ma
   }
   writeFileSync(
     path.join(root, "@mistralai/mistralai/package.json"),
-    JSON.stringify({ name: "@mistralai/mistralai", version: "2.7.0" }),
+    JSON.stringify({ name: "@mistralai/mistralai", version: "3.2.0" }),
   );
   writeFileSync(
     path.join(root, "openai/package.json"),

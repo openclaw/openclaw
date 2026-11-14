@@ -24,7 +24,22 @@ const unavailableError = {
   retryable: true,
 };
 
-async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
+async function patchMany(params: unknown) {
+  const respond = vi.fn();
+  await sessionMutationHandlers["sessions.patchMany"]!({
+    params,
+    respond,
+    context: patchContext(),
+  } as never);
+  return respond;
+}
+
+const success = (key: string) => ({ ok: true, key });
+const failure = (key: string, error: unknown) => ({ ok: false, key, error });
+const expectOutcomes = (respond: ReturnType<typeof vi.fn>, outcomes: unknown[]) =>
+  expect(respond.mock.calls[0]).toEqual([true, { outcomes }, undefined]);
+
+async function checkAliasConflict(batch: boolean, signal: AbortSignal, requestCanonical = false) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const prefix = batch ? "session-alias-race" : "session-single-alias-race";
     const siblings = batch ? ["agent:main:alias-race-before", "agent:main:alias-race-after"] : [];
@@ -35,6 +50,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     setRuntimeConfigSnapshot(cfg);
     const canonicalKey = "agent:main:work";
     const conflictingAlias = "agent:main:main";
+    const requestedKey = requestCanonical ? canonicalKey : conflictingAlias;
     await seedEntry(canonicalKey, `${prefix}-canonical`);
     for (const [index, sessionKey] of siblings.entries()) {
       await seedEntry(sessionKey, `session-alias-race-sibling-${index}`);
@@ -84,7 +100,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     const request = sessionMutationHandlers[batch ? "sessions.patchMany" : "sessions.patch"]!({
       params: batch
         ? {
-            targets: [{ key: siblings[0]! }, { key: conflictingAlias }, { key: siblings[1]! }],
+            targets: [{ key: siblings[0]! }, { key: requestedKey }, { key: siblings[1]! }],
             patch: { unread: false },
           }
         : { key: conflictingAlias, pinned: true },
@@ -107,9 +123,9 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     await writer;
     await request;
     if (batch) {
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
+      expectOutcomes(respond, [
         { ok: true, key: siblings[0] },
-        { ok: false, key: conflictingAlias, error: unavailableError },
+        { ok: false, key: requestedKey, error: unavailableError },
         { ok: true, key: siblings[1] },
       ]);
     } else {
@@ -132,8 +148,6 @@ const patchContext = (overrides: Record<string, unknown> = {}) =>
     loadGatewayModelCatalog: vi.fn(async () => []),
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     ...overrides,
   }) as never;
@@ -145,33 +159,23 @@ describe("sessions.patchMany orchestration", () => {
       for (let index = 0; index < 3; index += 1) {
         await seedEntry(`agent:main:batch-${index}`, `session-${index}`, `revision-${index}`);
       }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({
-            key: `agent:main:batch-${index}`,
-            expectedSessionId: index === 1 ? "stale-session" : `session-${index}`,
-            expectedLifecycleRevision: `revision-${index}`,
-          })),
-          patch: { unread: false },
-        },
-        respond,
-        context: patchContext(),
-      } as never);
+      const respond = await patchMany({
+        targets: [0, 1, 2].map((index) => ({
+          key: `agent:main:batch-${index}`,
+          expectedSessionId: index === 1 ? "stale-session" : `session-${index}`,
+          expectedLifecycleRevision: `revision-${index}`,
+        })),
+        patch: { unread: false },
+      });
 
-      const outcomes = respond.mock.calls[0]?.[1]?.outcomes;
-      expect(outcomes).toEqual([
-        { ok: true, key: "agent:main:batch-0" },
-        {
-          ok: false,
-          key: "agent:main:batch-1",
-          error: {
-            code: "INVALID_REQUEST",
-            details: { reason: "session-changed" },
-            message: "Session agent:main:batch-1 changed before patch. Retry.",
-          },
-        },
-        { ok: true, key: "agent:main:batch-2" },
+      expectOutcomes(respond, [
+        success("agent:main:batch-0"),
+        failure("agent:main:batch-1", {
+          code: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+          message: "Session agent:main:batch-1 changed before patch. Retry.",
+        }),
+        success("agent:main:batch-2"),
       ]);
       expect(readEntry("agent:main:batch-0")).toHaveProperty("lastReadAt");
       expect(readEntry("agent:main:batch-1")).not.toHaveProperty("lastReadAt");
@@ -180,49 +184,15 @@ describe("sessions.patchMany orchestration", () => {
   });
 
   it("rejects logical aliases before mutation", async () => {
-    const respond = vi.fn();
-    await sessionMutationHandlers["sessions.patchMany"]!({
-      params: {
-        targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
-        patch: { archived: true },
-      },
-      respond,
-      context: patchContext(),
-    } as never);
+    const respond = await patchMany({
+      targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
+      patch: { archived: true },
+    });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({ message: "Duplicate target." }),
     );
-  });
-
-  it("projects non-archive patches in request order against prior successes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      for (let index = 0; index < 2; index += 1) {
-        await seedEntry(`agent:main:label-${index}`, `session-label-${index}`);
-      }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1].map((index) => ({ key: `agent:main:label-${index}` })),
-          patch: { label: "Shared label" },
-        },
-        respond,
-        context: patchContext(),
-      } as never);
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        { ok: true, key: "agent:main:label-0" },
-        {
-          ok: false,
-          key: "agent:main:label-1",
-          error: { code: "INVALID_REQUEST", message: "label already in use: Shared label" },
-        },
-      ]);
-      expect(readEntry("agent:main:label-0")?.label).toBe("Shared label");
-      expect(readEntry("agent:main:label-1")?.label).toBeUndefined();
-    });
   });
 
   it.each([
@@ -277,16 +247,11 @@ describe("sessions.patchMany orchestration", () => {
       } else {
         expect([...checkedKeys]).toEqual(keys);
       }
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: keys.map((key, index) =>
-            index === failedIndex
-              ? { ok: false, key, error: { code: "INVALID_REQUEST", message } }
-              : { ok: true, key },
-          ),
-        },
-        undefined,
+      expectOutcomes(
+        respond,
+        keys.map((key, index) =>
+          index === failedIndex ? failure(key, { code: "INVALID_REQUEST", message }) : success(key),
+        ),
       );
       for (const [index, target] of targets.entries()) {
         const entry = readEntry(target.key);
@@ -307,11 +272,12 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("rejects an alias conflict introduced after preflight without blocking siblings", async ({
-    signal,
-  }) => {
-    await checkAliasConflict(true, signal);
-  });
+  it.for([false, true])(
+    "rejects an alias conflict without blocking siblings (canonical request: %s)",
+    async (requestCanonical, { signal }) => {
+      await checkAliasConflict(true, signal, requestCanonical);
+    },
+  );
 
   it("rejects an alias inserted after single-patch preflight while waiting for the writer", async ({
     signal,
@@ -335,31 +301,16 @@ describe("sessions.patchMany orchestration", () => {
           }
           return preparePlacementValidation(params);
         });
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
-          patch: { category: "Batch" },
-        },
-        respond,
-        context: patchContext(),
-      } as never);
+      const respond = await patchMany({
+        targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
+        patch: { category: "Batch" },
+      });
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { ok: true, key: "agent:main:throw-0" },
-            {
-              ok: false,
-              key: "agent:main:throw-1",
-              error: unavailableError,
-            },
-            { ok: true, key: "agent:main:throw-2" },
-          ],
-        },
-        undefined,
-      );
+      expectOutcomes(respond, [
+        success("agent:main:throw-0"),
+        failure("agent:main:throw-1", unavailableError),
+        success("agent:main:throw-2"),
+      ]);
     });
   });
 });

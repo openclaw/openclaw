@@ -1,8 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { requireRepositoryWorkspaceDiskAuthority } from "./session-repository-workspaces.authority.js";
 import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 import { createStateDomainPublication } from "./state-domain-publication.js";
 
 export function isRepositoryWorkspace(value: unknown): value is SessionRepositoryWorkspaceRecord {
+  if (isRecord(value) && value.diskAuthority !== undefined) {
+    try {
+      requireRepositoryWorkspaceDiskAuthority(value.diskAuthority);
+    } catch {
+      return false;
+    }
+  }
   return (
     isRecord(value) &&
     ["workspaceId", "agentId", "sessionKey", "url", "branch"].every(

@@ -1,6 +1,9 @@
 // Appearance-only controls operate on the canonical outbox; startup does not load them.
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
+import { registerPreferencesEnglish } from "../i18n/locales/en-preferences.ts";
+import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { requestServerUiPrefIntent } from "./server-prefs-intent.ts";
 import {
@@ -31,6 +34,8 @@ import type { ThemeName } from "./theme.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 /** Transport failures stay attached to the exact pending intent, never a newer edit. */
+registerEnglishCatalog(registerPreferencesEnglish);
+
 export function resolveServerUiPrefWriteStatus(
   key: SyncedPrefKey,
   scope: string,
@@ -54,7 +59,7 @@ export function resolveServerUiPrefWriteStatus(
     return { status: "pending" };
   }
   if (readRetainedLocalKeys(effectiveScope).has(key)) {
-    return { status: "error", error: "This preference is saved only on this device." };
+    return { status: "error", error: t("quickSettings.personal.deviceOnly") };
   }
   return { status: "saved" };
 }

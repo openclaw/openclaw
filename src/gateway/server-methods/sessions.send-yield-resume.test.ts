@@ -6,7 +6,7 @@ import {
 } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -31,13 +31,9 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { withRequesterTestAuthority } from "./sessions-initial-transfer.test-support.js";
-import { sessionMessagingHandlers } from "./sessions-messaging.js";
-import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-support.js";
-import type { GatewayRequestHandler, RespondFn } from "./types.js";
-
-const chatSend = vi.hoisted(() => vi.fn<GatewayRequestHandler>());
-vi.mock("./chat-send-external-entry.js", () => ({ handleDirectExternalChatSend: chatSend }));
+import { sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 
 const fixture = useSubagentControlFixture();
 afterEach(() => {
@@ -45,6 +41,28 @@ afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   vi.useRealTimers();
 });
+
+function interceptRegistryWrites(afterWrite: () => Promise<void>) {
+  return vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: async (...args) => {
+              const result = await scope.execute(...args);
+              if (args[0].type === "subagents.persistChanges") {
+                await afterWrite();
+              }
+              return result;
+            },
+          }),
+        options,
+      ),
+    );
+}
 
 async function createInitialYieldFixture(label: string) {
   const requesterSessionKey = "agent:main:main";
@@ -78,14 +96,13 @@ async function createInitialYieldFixture(label: string) {
     requesterSessionKey,
     requesterTurnRunId,
     runId,
-    childSessionKey,
     entry: expectDefined(subagentRuns.get(runId), "initial child"),
     onYield,
     tool,
   };
 }
 
-it("resumes a yielded child through sessions.send and wakes its original parent after the same batch settles", async () => {
+it("continues a yielded child and wakes its original parent after the same batch settles", async () => {
   vi.useFakeTimers();
   const { runSubagentAnnounceFlow } = await vi.importActual<
     typeof import("../../agents/subagents/announce/subagent-announce.js")
@@ -122,11 +139,9 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
   context.resolveGatewayContext = () => context;
   const delivery = { dispatch: dispatchGatewayMethodInProcess };
-  const dispatch = vi.spyOn(delivery, "dispatch").mockImplementation(async () => {
-    return {
-      status: "ok",
-      result: { payloads: [{ text: "Both results received; parent continues." }], meta: {} },
-    };
+  const dispatch = vi.spyOn(delivery, "dispatch").mockResolvedValue({
+    status: "ok",
+    result: { payloads: [{ text: "Both results received; parent continues." }], meta: {} },
   });
   setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: delivery.dispatch });
 
@@ -173,48 +188,30 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   });
   const acknowledgedIntent = createDeferred();
   const releaseIntent = createDeferred();
-  const runWorker = runSubagentStateWorkerOperation;
   let registryWrites = 0;
-  const worker = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((stateContext, operation, options) =>
-      runWorker(
-        stateContext,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: async (...args) => {
-              const result = await scope.execute(...args);
-              if (args[0].type === "subagents.persistChanges" && ++registryWrites === 1) {
-                acknowledgedIntent.resolve();
-                await releaseIntent.promise;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const worker = interceptRegistryWrites(async () => {
+    if (++registryWrites === 1) {
+      acknowledgedIntent.resolve();
+      await releaseIntent.promise;
+    }
+  });
   const hostSql = observeParentSqlite();
   try {
     await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
       const yielding = yieldTool.execute("yield-parent", {});
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         acknowledgedIntent.promise,
-        yielding.then(() => {
-          throw new Error("Yield completed before the native acknowledgement handoff");
-        }),
-      ]);
+        yielding,
+        "Yield completed before the native acknowledgement handoff",
+      );
       expect(onYield).not.toHaveBeenCalled();
       expect(children.map((child) => subagentRuns.get(child.runId)?.requesterTurnYielded)).toEqual([
         undefined,
         undefined,
       ]);
       releaseIntent.resolve();
-      await expect(yielding).resolves.toMatchObject({
-        details: { status: "yielded" },
-      });
-      const settlement = withLocalSessionPlacementTurnSettlement(
+      await expect(yielding).resolves.toMatchObject({ details: { status: "yielded" } });
+      const result = await withLocalSessionPlacementTurnSettlement(
         {
           sessionId: `${requesterSessionKey}-session`,
           sessionKey: requesterSessionKey,
@@ -231,7 +228,6 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
         }),
         {},
       );
-      const result = await settlement;
       expect(result.requesterContinuationSettled).toBe(true);
       expect(registryWrites).toBe(2);
     });
@@ -279,46 +275,25 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   expect(dispatch).not.toHaveBeenCalled();
 
   const followup = "Read the completed tool outputs and finish the existing task.";
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: nextRunId, status: "started" });
-  });
-  const sendResponse = vi.fn<RespondFn>();
-  const send = () =>
-    expectDefined(
-      sessionMessagingHandlers["sessions.send"],
-      "sessions.send",
-    )({
-      req: { type: "req", id: "resume-request", method: "sessions.send" },
-      params: { key: childSessionKey, message: followup, idempotencyKey: nextRunId },
-      respond: sendResponse,
-      context,
-      client: soloClient(),
-      isWebchatConnect: () => false,
-    });
-  await send();
-  expect(sendResponse).toHaveBeenCalledWith(
-    true,
-    { runId: nextRunId, status: "started" },
-    undefined,
-    undefined,
-  );
+  expect(
+    await reactivateCompletedSubagentSession({
+      sessionKey: childSessionKey,
+      runId: nextRunId,
+      task: followup,
+      gatewayContextResolver: context.resolveGatewayContext,
+      session: {
+        cfg: getRuntimeConfig(),
+        activeSessionAgentId: "main",
+        sessionEntry:
+          loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }) ?? undefined,
+      },
+    }),
+  ).toBe(true);
   expect(subagentRuns.has(previousRunId)).toBe(false);
   const resumed = expectDefined(subagentRuns.get(nextRunId), "resumed child");
   expect(resumed).toMatchObject({ task: followup, taskRunId: previousRunId, requesterSessionKey });
   expect(resumed.pauseReason).toBeUndefined();
-  for (const runId of [nextRunId, siblingRunId]) {
-    expect(subagentRuns.get(runId)?.requesterSettleWake).toMatchObject({
-      batchRunIds: [nextRunId, siblingRunId].toSorted(),
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-    });
-  }
-
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: nextRunId, status: "started" }, undefined, { cached: true });
-  });
-  await send();
-  expect(subagentRuns.get(nextRunId)).toBe(resumed);
+  expectSharedRequesterCohort([nextRunId, siblingRunId], [nextRunId, siblingRunId]);
 
   await complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
   expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");
@@ -353,36 +328,19 @@ it.each(["runtime owner", "state source"] as const)(
     let committed = false;
     let writes = 0;
     let closing: Promise<void> | undefined;
-    const runWorker = runSubagentStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((stateContext, operation, options) =>
-        runWorker(
-          stateContext,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: async (...args) => {
-                const result = await scope.execute(...args);
-                if (args[0].type === "subagents.persistChanges") {
-                  writes += 1;
-                }
-                if (!committed && args[0].type === "subagents.persistChanges") {
-                  committed = true;
-                  if (retirement === "runtime owner") {
-                    retireRequester();
-                  } else {
-                    closing = closeOpenClawStateDatabaseAsync();
-                  }
-                  acknowledged.resolve();
-                  await releaseAcknowledgement.promise;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = interceptRegistryWrites(async () => {
+      writes += 1;
+      if (!committed) {
+        committed = true;
+        if (retirement === "runtime owner") {
+          retireRequester();
+        } else {
+          closing = closeOpenClawStateDatabaseAsync();
+        }
+        acknowledged.resolve();
+        await releaseAcknowledgement.promise;
+      }
+    });
     const first = withRequesterTestAuthority(
       requesterTurnRunId,
       requesterSessionKey,
@@ -395,19 +353,18 @@ it.each(["runtime owner", "state source"] as const)(
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         acknowledged.promise,
-        first.then(() => {
-          throw new Error("Initial write did not reach its held native acknowledgement");
-        }),
-      ]);
+        first,
+        "Initial write did not reach its held native acknowledgement",
+      );
       releaseAcknowledgement.resolve();
       const outcome = await first;
       expect(outcome).toMatchObject({
-        error:
-          retirement === "runtime owner"
-            ? { outcome: "committed", publication: "published" }
-            : { outcome: "committed", publication: "superseded" },
+        error: {
+          outcome: "committed",
+          publication: retirement === "runtime owner" ? "published" : "superseded",
+        },
       });
       expect(committed).toBe(true);
       await closing;

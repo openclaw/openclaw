@@ -49,47 +49,47 @@ export function observeLegacyMcpOAuthImport(
   const created = vi
     .spyOn(workerCpu, "createCpuTrackedWorker")
     .mockImplementation((filename, options) => {
-      const worker = create(
-        filename,
-        mode === "observe"
-          ? options
-          : {
-              ...options,
-              execArgv: [
-                ...(options?.execArgv ?? []),
-                "--import",
-                `data:text/javascript,${encodeURIComponent(preload)}`,
-              ],
-              workerData: {
-                ...options?.workerData,
-                mcpMigrationSourceKey: sourceKey,
-                mcpMigrationFaultMode: mode,
-                mcpMigrationExit: exit.buffer,
-              },
-            },
-      );
+      let workerOptions = options;
+      if (mode !== "observe") {
+        workerOptions = {
+          ...options,
+          execArgv: [
+            ...(options?.execArgv ?? []),
+            "--import",
+            `data:text/javascript,${encodeURIComponent(preload)}`,
+          ],
+          workerData: {
+            ...options?.workerData,
+            mcpMigrationSourceKey: sourceKey,
+            mcpMigrationFaultMode: mode,
+            mcpMigrationExit: exit.buffer,
+          },
+        };
+      }
+      const worker = create(filename, workerOptions);
       const post = worker.postMessage.bind(worker);
       const posted = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
         const message: unknown = args[0];
         if (
-          isRecord(message) &&
-          message.type === "execute" &&
-          message.input instanceof Uint8Array
+          !isRecord(message) ||
+          message.type !== "execute" ||
+          !(message.input instanceof Uint8Array)
         ) {
-          const command: unknown = deserialize(message.input);
-          if (
-            isRecord(command) &&
-            command.type === "legacyMcpOAuth.import" &&
-            isRecord(command.input) &&
-            command.input.sourceKey === sourceKey
-          ) {
-            if (typeof message.id !== "number") {
-              throw new Error("Import request has no transport id");
-            }
-            writerThreadId = worker.threadId;
-            importInputBytes = message.input.byteLength;
-            importCount++;
+          return post(...args);
+        }
+        const command: unknown = deserialize(message.input);
+        if (
+          isRecord(command) &&
+          command.type === "legacyMcpOAuth.import" &&
+          isRecord(command.input) &&
+          command.input.sourceKey === sourceKey
+        ) {
+          if (typeof message.id !== "number") {
+            throw new Error("Import request has no transport id");
           }
+          writerThreadId = worker.threadId;
+          importInputBytes = message.input.byteLength;
+          importCount++;
         }
         return post(...args);
       });
@@ -104,11 +104,7 @@ export function observeLegacyMcpOAuthImport(
     importInputBytes: () => importInputBytes,
     writerThreadId: () => writerThreadId,
     exitThreadId: () => Atomics.load(exit, 1),
-    restore() {
-      for (const undo of restore.toReversed()) {
-        undo();
-      }
-    },
+    restore: () => restore.toReversed().forEach((undo) => undo()),
   };
 }
 

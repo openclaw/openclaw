@@ -27,9 +27,6 @@ export async function readGeneratedHtmlProvenance(
     { context, current: true },
   );
   context.admission.assertCurrent();
-  if (!reply) {
-    return undefined;
-  }
   return reply;
 }
 

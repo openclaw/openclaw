@@ -1,33 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
 
+type ProcessOptions = { env?: NodeJS.ProcessEnv; beforeRun?: () => void };
 const fixture = vi.hoisted(() => ({
   common: "",
   beforeProcess: async (_view: string) => {},
   views: [] as string[],
-  run: vi.fn(
-    async (
-      _cwd: string,
-      args: string[],
-      options: { env?: NodeJS.ProcessEnv; beforeRun?: () => void } = {},
-    ) => {
-      options.beforeRun?.();
-      if (args[0] === "config") {
-        return { code: 1, stdout: "", stderr: "" };
-      }
-      const view = options.env?.GIT_COMMON_DIR;
-      if (!view) {
-        throw new Error("Content operation lost its isolated configuration");
-      }
-      fixture.views.push(view);
-      await fixture.beforeProcess(view);
-      return { code: 0, stdout: "", stderr: "" };
-    },
-  ),
+  run: vi.fn(async (_cwd: string, args: string[], options: ProcessOptions = {}) => {
+    options.beforeRun?.();
+    if (args[0] === "config") {
+      return { code: 1, stdout: "", stderr: "" };
+    }
+    const view = options.env?.GIT_COMMON_DIR;
+    if (!view) {
+      throw new Error("Content operation lost its isolated configuration");
+    }
+    fixture.views.push(view);
+    await fixture.beforeProcess(view);
+    return { code: 0, stdout: "", stderr: "" };
+  }),
 }));
 // mock-isolation: simulate Git processes while real filesystem operations exercise Windows metadata lifetime.
 vi.mock("./git.js", () => ({
@@ -38,13 +34,6 @@ vi.mock("./git.js", () => ({
   runGitBuffered: fixture.run,
   commandError: () => new Error("Git failed"),
 }));
-// Real filesystem operations exercise the Windows junction/copy strategy on this
-// host. Native Windows path conversion and process spawning have separate owners.
-vi.mock("../../infra/git-exec.js", () => ({
-  normalizeGitPathForFilesystem: (value: string) => value,
-  gitNullConfigPath: () => "NUL",
-  requireGitCommandOutput: () => "",
-}));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("isolates copied metadata per Windows process and keeps views until in-flight work settles", async () => {
@@ -54,8 +43,6 @@ it("isolates copied metadata per Windows process and keeps views until in-flight
     await fs.mkdir(path.join(fixture.common, name), { recursive: true });
   }
   await fs.writeFile(path.join(fixture.common, "packed-refs"), "first");
-  fixture.views = [];
-  fixture.beforeProcess = async () => {};
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   const links = vi.spyOn(fs, "symlink");
   const entered = createDeferredCore();
@@ -82,9 +69,7 @@ it("isolates copied metadata per Windows process and keeps views until in-flight
       finished = true;
     });
     await entered.promise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
     expect(finished).toBe(false);
     expect((await fs.stat(fixture.views.at(-1)!)).isDirectory()).toBe(true);
     expect(links.mock.calls.every((call) => call[2] === "junction")).toBe(true);

@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult, SessionsPatchResult } from "../api/types.ts";
+import type { SessionPatchOutcome } from "../lib/sessions/patch.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -94,7 +95,7 @@ it.each([
     patchReads = 0;
   let hold = false;
   let refresh: Promise<void> | undefined;
-  let readOperation: Promise<SessionsPatchResult | null> | undefined;
+  let readOperation: Promise<SessionPatchOutcome | null> | undefined;
   const { sidebar, provider, sessions, harness } = await mount(async (method, raw) => {
     const params = asOptionalRecord(raw);
     if (method === "sessions.patch") {

@@ -18,7 +18,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: Mock<
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
 > = vi.fn((ctx) => ctx);
-export const buildChannelInboundEventContextMock: Mock<
+const buildChannelInboundEventContextMock: Mock<
   (params: {
     channel: string;
     accountId?: string;
@@ -131,12 +131,15 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   };
 });
 
-vi.mock("./client.js", () => ({
-  SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT: 2_000,
-  sendMessage: vi.fn().mockResolvedValue(true),
-  sendHostedFileUrl: vi.fn().mockResolvedValue({ status: "accepted" }),
-  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    sendMessage: vi.fn().mockResolvedValue({ messageIds: [] }),
+    sendHostedFileUrl: vi.fn().mockResolvedValue({ status: "accepted" }),
+    resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("./outbound-media.js", async () => {
   const actual = await vi.importActual<typeof import("./outbound-media.js")>("./outbound-media.js");

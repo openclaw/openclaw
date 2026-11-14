@@ -17,22 +17,11 @@ import {
 } from "../../scripts/mantis/telegram-run-admission.ts";
 import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { makeIngress, plan } from "./mantis-telegram.test-support.js";
+import { identity, makeIngress, plan } from "./mantis-telegram.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const canonicalPlan =
   '{"actions":[{"atMs":0,"text":"hello","type":"send"}],"claim":"A selected reply is observed","expectations":["The bot answers reply"],"maxDurationMs":1000,"modelReplies":["reply"],"settings":{"nativeCommands":false,"streaming":"off"}}';
 const planDigest = createHash("sha256").update(canonicalPlan).digest("hex");
-const identity = telegramProofIdentitySchema.parse({
-  request_id: "a".repeat(64),
-  plan_sha256: planDigest,
-  repository: { id: "1", full_name: "openclaw/openclaw" },
-  pull_request: 1,
-  candidate_sha: "b".repeat(40),
-  scenario: "telegram-bot-e2e-proof",
-  workflow: { path: ".github/workflows/mantis-telegram-bot-e2e-proof.yml", sha: "c".repeat(40) },
-  harness: { sha: "c".repeat(40) },
-  run: { id: "2", attempt: 1 },
-});
 describe("Bounded model-selected plan", () => {
   it("hashes recursively sorted keys while retaining action order", () => {
     expect(parseTelegramProofPlan(JSON.stringify(plan), planDigest)).toEqual(plan);
@@ -150,6 +139,24 @@ async function ingressFixture() {
   const revoked = createDeferred<Error>();
   const forwarded: string[] = [];
   let healthy = true;
+  const privateNames = { first_name: "Private tester", last_name: "Private surname" };
+  const message = {
+    message_id: 99,
+    chat: { id: 43, type: "private", first_name: "Private tester" },
+    from: { id: 43, ...privateNames, username: "private_tester" },
+    text: "Unchanged scenario text",
+  };
+  const replies: Record<string, unknown> = {
+    sendMessage: { message_id: 100, chat: { id: 43, type: "private" } },
+    getUpdates: [{ update_id: 1, message }],
+    getMe: {
+      id: 42,
+      ...privateNames,
+      first_name: "Private bot",
+      is_bot: true,
+      username: "selected_bot",
+    },
+  };
   const fixture = await makeIngress(root, {
     lease: {
       assertHealthy() {
@@ -163,38 +170,7 @@ async function ingressFixture() {
       const url = new URL(input instanceof Request ? input.url : input);
       forwarded.push(url.pathname);
       const method = url.pathname.split("/").at(-1);
-      return Response.json({
-        ok: true,
-        result:
-          method === "sendMessage"
-            ? { message_id: 100, chat: { id: 43, type: "private" } }
-            : method === "getUpdates"
-              ? [
-                  {
-                    update_id: 1,
-                    message: {
-                      message_id: 99,
-                      chat: { id: 43, type: "private", first_name: "Private tester" },
-                      from: {
-                        id: 43,
-                        first_name: "Private tester",
-                        last_name: "Private surname",
-                        username: "private_tester",
-                      },
-                      text: "Unchanged scenario text",
-                    },
-                  },
-                ]
-              : method === "getMe"
-                ? {
-                    id: 42,
-                    is_bot: true,
-                    first_name: "Private bot",
-                    last_name: "Private surname",
-                    username: "selected_bot",
-                  }
-                : true,
-      });
+      return Response.json({ ok: true, result: replies[method ?? ""] ?? true });
     },
   });
   return {
@@ -270,10 +246,13 @@ it("prepares closed pairing state without the observer private key", async () =>
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     expect(Object.values(database.prepare("PRAGMA integrity_check").get() ?? {})).toEqual(["ok"]);
-    const counts = ["device_pairing_paired", "device_pairing_pending", "device_identities"].map(
+    const counts = ["device_pairing_paired", "device_pairing_pending"].map(
       (table) => database.prepare(`SELECT count(*) AS count FROM ${table}`).get()?.count,
     );
-    expect(counts).toEqual([1, 0, 0]);
+    expect(counts).toEqual([1, 0]);
+    expect(
+      database.prepare("SELECT name FROM sqlite_schema WHERE name = 'device_identities'").get(),
+    ).toBeUndefined();
   } finally {
     database.close();
   }

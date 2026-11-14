@@ -39,7 +39,8 @@ export function summarizeSessionContext(messages: AgentMessage[]): {
   return {
     roleCounts:
       [...roleCounts.entries()]
-        .toSorted((a, b) => a[0].localeCompare(b[0]))
+        // oxlint-disable-next-line unicorn/no-array-sort -- The materialized entries array is private.
+        .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([role, count]) => `${role}:${count}`)
         .join(",") || "none",
     totalTextChars,

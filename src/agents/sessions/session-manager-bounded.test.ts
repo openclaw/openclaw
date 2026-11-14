@@ -31,6 +31,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
@@ -57,14 +59,16 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 async function createSessionScope(sessionId: string, filename = "sessions.json") {
   const dir = tempDirs.make("openclaw-session-manager-");
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, filename),
-  };
+  const scope = sessionScope(path.join(dir, filename), sessionId);
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
+}
+
+function reconcile(scope: ReturnType<typeof sessionScope>) {
+  return waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
 }
 
 function buildAssistantMessage(text: string) {
@@ -74,14 +78,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
@@ -177,14 +174,7 @@ it("retries a stale bounded append without parsing transcript rows outside the b
 });
 
 it("accepts a prepared assistant whose parent is the admitted user", async () => {
-  const dir = tempDirs.make("openclaw-session-manager-admitted-assistant-");
-  const scope = {
-    agentId: "main",
-    sessionId: "admitted-assistant",
-    sessionKey: "agent:main:admitted-assistant",
-    storePath: path.join(dir, "sessions.json"),
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const { dir, scope } = await createSessionScope("admitted-assistant");
   const manager = SessionManager.open(scope, dir);
   const admitted = manager.appendMessageWithTranscriptAnchor({
     role: "user",
@@ -260,7 +250,10 @@ it.each(["sync", "async"] as const)(
         expect(
           appendTranscriptMessageSync(scope, {
             eventId: "concurrent-assistant",
-            message: buildAssistantMessage("concurrent"),
+            message: {
+              ...buildAssistantMessage("concurrent"),
+              details: JSON.parse(`${"[".repeat(1100)}1${"]".repeat(1100)}`),
+            },
             now: 2,
           }).ok,
         ).toBe(true);
@@ -451,10 +444,7 @@ it.each(["sync", "async"])(
       buildAssistantMessage("reply"),
     );
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(scope),
-    });
+    await reconcile(scope);
     const reopened = await SessionManager.openBoundedAsync(scope, {
       maxBytes: 4096,
       maxEvents: 10,
@@ -474,62 +464,48 @@ it.each(["sync", "async"])(
   },
 );
 
-it("rejects a fenced assistant when a later hidden user has advanced the turn", async () => {
-  const { dir, scope } = await createSessionScope("fenced-assistant");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "admitted",
-    timestamp: 2,
-  });
-  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
-  if (!admission.anchor) {
-    throw new Error("missing current-turn anchor");
-  }
+it.each(["assistant", "toolResult"] as const)(
+  "rejects a fenced %s when a later hidden user has advanced the turn",
+  async (role) => {
+    const { dir, scope } = await createSessionScope(`fenced-${role}`);
+    const manager = SessionManager.open(scope, dir);
+    manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
+    const admission = manager.appendMessageWithTranscriptAnchor({
+      role: "user",
+      content: "admitted",
+      timestamp: 2,
+    });
+    manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
+    if (!admission.anchor) {
+      throw new Error("missing current-turn anchor");
+    }
 
-  runWithSessionTranscriptReadFence(
-    { ...admission.anchor, logicalTurnId: "fenced-assistant", role: "user" },
-    () => {
-      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
-      expect(() => fenced.appendMessage(buildAssistantMessage("stale reply"))).toThrow(
-        "SQLite transcript changed while preparing rewrite",
-      );
-    },
-  );
-});
-
-it("rejects a fenced tool result when a later hidden user has advanced the turn", async () => {
-  const { dir, scope } = await createSessionScope("fenced-tool-result");
-  const manager = SessionManager.open(scope, dir);
-  manager.appendMessage({ role: "user", content: "previous", timestamp: 1 });
-  const admission = manager.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "admitted",
-    timestamp: 2,
-  });
-  manager.appendMessage({ role: "user", content: "newer", timestamp: 3 });
-  if (!admission.anchor) {
-    throw new Error("missing current-turn anchor");
-  }
-
-  runWithSessionTranscriptReadFence(
-    { ...admission.anchor, logicalTurnId: "fenced-tool-result", role: "user" },
-    () => {
-      const fenced = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 8 });
-      expect(() =>
-        fenced.appendMessage({
-          role: "toolResult",
-          toolCallId: "stale-tool-call",
-          toolName: "test_tool",
-          content: [{ type: "text", text: "stale result" }],
-          isError: false,
-          timestamp: 4,
-        }),
-      ).toThrow("SQLite transcript changed while preparing rewrite");
-    },
-  );
-});
+    runWithSessionTranscriptReadFence(
+      { ...admission.anchor, logicalTurnId: `fenced-${role}`, role: "user" },
+      () => {
+        const fenced = SessionManager.openBounded(scope, {
+          cwd: dir,
+          maxBytes: 4096,
+          maxEvents: 8,
+        });
+        const reply =
+          role === "assistant"
+            ? buildAssistantMessage("stale reply")
+            : {
+                role,
+                toolCallId: "stale-tool-call",
+                toolName: "test_tool",
+                content: [{ type: "text" as const, text: "stale result" }],
+                isError: false,
+                timestamp: 4,
+              };
+        expect(() => fenced.appendMessage(reply)).toThrow(
+          "SQLite transcript changed while preparing rewrite",
+        );
+      },
+    );
+  },
+);
 
 it("rejects suffix cleanup when the admission fence hides later transcript rows", async () => {
   const { dir, scope } = await createSessionScope("fenced-cleanup");
@@ -601,10 +577,7 @@ it("preserves the durable leaf when bounded cleanup removes the whole selected w
   const seed = SessionManager.open(scope, dir);
   const durableId = seed.appendMessage({ role: "user", content: "durable", timestamp: 1 });
   const removableId = seed.appendMessage(buildAssistantMessage("temporary"));
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
 
   const bounded = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
   expect(bounded.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
@@ -619,15 +592,7 @@ it("preserves the durable leaf when bounded cleanup removes the whole selected w
 });
 
 it("bounds runtime hydration while preserving older durable transcript rows on rewrites", async () => {
-  const dir = tempDirs.make("openclaw-session-manager-bounded-");
-  const storePath = path.join(dir, "sessions.json");
-  const scope = {
-    agentId: "main",
-    sessionId: "bounded-runtime-session",
-    sessionKey: "agent:main:bounded-runtime-session",
-    storePath,
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const { dir, scope } = await createSessionScope("bounded-runtime-session");
   for (const content of ["oldest", "middle", "latest"]) {
     await appendTranscriptMessage(scope, { cwd: dir, message: { role: "user", content } });
   }
@@ -670,10 +635,7 @@ it("rejects bounded cleanup across opaque hydration-boundary rows", async () => 
   });
   seed.reloadPersistedTranscript();
   seed.appendMessage({ role: "user", content: "remove", timestamp: 3 });
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: resolveSessionTranscriptDatabasePath(scope),
-  });
+  await reconcile(scope);
   const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 1 });
   openOpenClawAgentDatabase({
     agentId: scope.agentId,
@@ -708,10 +670,7 @@ it("ignores inactive matching rows before the bounded active cleanup window", as
   const branchManager = SessionManager.open(scope, dir);
   branchManager.branch(root.messageId);
   const activeId = branchManager.appendMessage(buildAssistantMessage("remove"));
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: resolveSessionTranscriptDatabasePath(scope),
-  });
+  await reconcile(scope);
 
   const manager = SessionManager.openBounded(scope, {
     cwd: dir,
@@ -784,23 +743,13 @@ it.each([
   { corruptSeq: 1, name: "older raw prefix" },
   { corruptSeq: 2, name: "newly exposed bounded row" },
 ])("removes a bounded tail without parsing a $name", async ({ corruptSeq }) => {
-  const dir = tempDirs.make("openclaw-session-manager-unparsed-prefix-");
-  const scope = {
-    agentId: "main",
-    sessionId: `unparsed-prefix-session-${corruptSeq}`,
-    sessionKey: `agent:main:unparsed-prefix-session-${corruptSeq}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const { dir, scope } = await createSessionScope(`unparsed-prefix-session-${corruptSeq}`);
   const seed = SessionManager.open(scope, dir);
   seed.appendMessage({ role: "user", content: "older", timestamp: 1 });
   seed.appendMessage({ role: "user", content: "middle", timestamp: 2 });
   seed.appendMessage({ role: "user", content: "retained", timestamp: 3 });
   const removableId = seed.appendMessage(buildAssistantMessage("temporary"));
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
   const manager = SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 2 });
 
   const database = openOpenClawAgentDatabase({
@@ -825,10 +774,7 @@ it("invalidates raw and visible cursors while keeping the projection available",
   const manager = SessionManager.open(scope, dir);
   manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
   const removableId = manager.appendMessage(buildAssistantMessage("temporary"));
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
   const raw = readTranscriptRawDelta(scope);
   const visible = readSessionTranscriptVisibleMessageDeltaCore(scope);
   if (raw.kind !== "page" || visible.kind !== "page") {
@@ -869,10 +815,7 @@ it("keeps a long transcript projection available when removing a trailing entry"
     })),
   ];
   expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
   const generationBefore = readSessionTranscriptWatermark(scope)?.generation;
 
   const manager = SessionManager.openBounded(scope, {
@@ -910,16 +853,10 @@ it.each([
     content: temporaryContent,
     timestamp: 2,
   });
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
 
   expect(manager.removeTrailingEntries((entry) => entry.id === removableId)).toBe(1);
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
   expect(() =>
     SessionManager.openBounded(scope, { cwd: dir, maxBytes: 4096, maxEvents: 4 }),
   ).not.toThrow();
@@ -949,10 +886,7 @@ it("preserves inactive siblings when the bounded active branch fits its limits",
       maxEvents: 3,
     });
   expect(openBounded).toThrow(SessionTranscriptProjectionUnavailableError);
-  await waitForSessionTranscriptIndexReconcile({
-    agentId: scope.agentId,
-    path: path.join(dir, "openclaw-agent.sqlite"),
-  });
+  await reconcile(scope);
   const manager = openBounded();
   const generationBefore = readSessionTranscriptWatermark(scope).generation;
 

@@ -253,6 +253,7 @@ export const UpdateRunRecordSchema = closedObject({
     pluginErrors: Type.Optional(Type.Array(text, { maxItems: 32 })),
     channelsReady: Type.Optional(Type.Boolean()),
     readyz: Type.Optional(Type.Boolean()),
+    coreReady: Type.Optional(Type.Boolean()),
     settled: Type.Optional(Type.Boolean()),
     noticeDelivered: Type.Optional(Type.Boolean()),
     doctorHint: Type.Optional(text),
@@ -272,6 +273,14 @@ export const UpdateRunRecordSchema = closedObject({
   finishedAtMs: Type.Union([timestamp, Type.Null()]),
   downtimeMs: Type.Union([timestamp, Type.Null()]),
 });
+
+export const UpdateRecoveryCleanupParamsSchema = Type.Union([
+  closedObject({ runId, expectedOwnerId: Type.String({ minLength: 1 }) }),
+  closedObject({
+    dryRun: Type.Optional(Type.Boolean()),
+    expectedOwnerId: Type.String({ minLength: 1 }),
+  }),
+]);
 
 export const UpdateRunsGetParamsSchema = closedObject({ runId });
 export const UpdateRunsGetResultSchema = closedObject({

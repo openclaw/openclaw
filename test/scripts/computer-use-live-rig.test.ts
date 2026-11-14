@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { getFreePort } from "../../src/test-utils/ports.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const rigScriptSource = path.resolve("scripts/dev/computer-use-macos-live-rig.sh");
@@ -62,20 +62,6 @@ console.log(JSON.stringify({
   return { root, script, fakeBin, app, fixture, proof };
 }
 
-async function reservePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
 function runRig(params: { root: string; script: string; fakeBin: string; args: string[] }) {
   return spawnSync("bash", [params.script, ...params.args], {
     cwd: params.root,
@@ -105,7 +91,7 @@ async function prepareRig(platform: "macos" | "linux", dirty = false) {
   }
   const scratch = path.join(fixture.root, "scratch");
   const profile = "proof-test";
-  const port = String(await reservePort());
+  const port = String(await getFreePort());
   const args =
     platform === "macos"
       ? ["prepare", profile, port, fixture.app, scratch, ...(dirty ? ["cua"] : [])]

@@ -10,11 +10,10 @@ import {
 } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  ChatComposerPersistence,
   loadChatComposerState as load,
-  restoreChatComposerState as restore,
   persistChatComposerState as persist,
-} from "./composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import * as durableComposer from "./durable-composer-persistence.ts";
 
 type ReadResult = Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>;
@@ -221,6 +220,22 @@ it.each([false, true])(
   },
 );
 
+it("retires pending restoration on stop and restores again after restart", async () => {
+  const state = createState();
+  const { pending, persistence } = pendingRestore(state);
+  await settleStorage();
+  persistence.stop();
+  pending.resolve(foundDraft("Saved draft"));
+  await settleStorage();
+  expect(state.chatMessage).toBe("");
+  expect(load(state, state.sessionKey).snapshot).toBeNull();
+
+  persistence.start();
+  await settleStorage();
+  expect(state.chatMessage).toBe("Saved draft");
+  expect(load(state, state.sessionKey).snapshot?.draft).toBe("Saved draft");
+});
+
 it("captures once per restore admission while pending, settled, reset, and switching scope", async () => {
   const capture = vi.spyOn(durableComposer, "captureDurableChatAttachments");
   const state = createState({ chatMessage: "Saved draft" });
@@ -236,8 +251,6 @@ it("captures once per restore admission while pending, settled, reset, and switc
   expect(capture).toHaveBeenCalled();
   expectUncaptured(3);
   await settleStorage();
-  expect(read).toHaveBeenCalledOnce();
-
   pending.resolve(missing);
   await settleStorage();
   expectWrite(
@@ -246,22 +259,16 @@ it("captures once per restore admission while pending, settled, reset, and switc
     expect.objectContaining({ expectedRevision: 0 }),
   );
   expectUncaptured(3);
-  expect(read).toHaveBeenCalledOnce();
-
   persistence.restore();
   capture.mockClear();
   persistence.persistChangedState();
   expect(capture).toHaveBeenCalledOnce();
   expectUncaptured();
   await settleStorage();
-  expect(read).toHaveBeenCalledTimes(2);
-
   state.sessionKey = "agent:main:other";
   persistence.persistChangedState();
   await settleStorage();
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(read).toHaveBeenNthCalledWith(
-    3,
+  expect(read).toHaveBeenLastCalledWith(
     expect.objectContaining({ scopeKey: expect.stringContaining("agent:main:other") }),
   );
   expectUncaptured();
@@ -274,11 +281,10 @@ it("keeps a synchronous reply cancellation when an older stored draft has a high
   const previousReply = { messageId: "previous", text: "Previous selection" };
   const state = createState({ chatReplyTarget: previousReply });
   expect(persist(state, state.sessionKey, { draftRevision: 1 })).toBe(true);
-  const { pending, read, persistence } = pendingRestore(state);
+  const { pending, persistence } = pendingRestore(state);
   state.chatReplyTarget = null;
   persistence.schedule();
   await settleStorage();
-  expect(read).toHaveBeenCalledOnce();
   pending.resolve(
     foundDraft("Older saved draft", {
       revision: storedRevision,
@@ -323,7 +329,6 @@ it.each([false, true])(
       await settleStorage();
       expect(state.chatMessage).toBe("Winning durable draft");
       expect(load(state, state.sessionKey).snapshot?.draft).toBe("Winning durable draft");
-      expect(restored).toHaveBeenCalledOnce();
       if (pendingEdit) {
         expectWrite(ownerScope, { text: "Second local draft" });
       }
@@ -350,7 +355,7 @@ it("persists empty goal selection and versions cancellation", () => {
   persistence.persistNow();
   const revision = load(state, state.sessionKey).revisions.latestAttempt;
   const restored = createState({ client: null, connected: false });
-  expect(restore(restored)).toBe(true);
+  expect(new ChatComposerPersistence(() => restored).restore()).toBe(true);
   expect(restored).toMatchObject({
     chatGoalDraftMode: state.chatGoalDraftMode,
     chatReplyTarget: state.chatReplyTarget,

@@ -7,8 +7,8 @@ import crypto from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
 import { loadMcpToolGrants, type McpToolGrant } from "../infra/exec-approvals-mcp.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
@@ -169,7 +169,7 @@ export function loadCodexBundleMcpApprovalConfig(
   params: Pick<LoadCodexBundleMcpThreadConfigParams, "workspaceDir" | "cfg" | "toolOverrides">,
 ): CodexMcpServersConfig {
   const { config } = loadEnabledBundleMcpConfig(params);
-  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const configuredMcp = params.cfg?.mcp?.servers ?? {};
   const selected = selectCodexBundleMcpConfig(
     { mcpServers: { ...config.mcpServers, ...configuredMcp } },
     configuredMcp,
@@ -190,7 +190,7 @@ export function loadCodexBundleMcpApprovalConfig(
 
 function selectCodexBundleMcpConfig(
   config: BundleMcpConfig,
-  configuredMcp: ReturnType<typeof normalizeConfiguredMcpServers>,
+  configuredMcp: Record<string, McpServerConfig>,
   toolOverrides: LoadCodexBundleMcpThreadConfigParams["toolOverrides"],
 ): BundleMcpConfig {
   const serverOverrides = toolOverrides?.mcpServers;
@@ -257,7 +257,7 @@ export async function loadCodexBundleMcpThreadConfigCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
   });
-  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const configuredMcp = params.cfg?.mcp?.servers ?? {};
   const serverOverrides = params.toolOverrides?.mcpServers;
   const effectiveConfig = selectCodexBundleMcpConfig(
     bundleMcp.config,
@@ -290,7 +290,7 @@ export async function loadCodexBundleMcpThreadConfigCore(
       "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
     );
   }
-  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+  const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
     config: effectiveConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });

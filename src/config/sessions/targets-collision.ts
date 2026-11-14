@@ -99,7 +99,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     group.push({
       target,
       shared: resolved.shared === true,
-      ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
+      ...(resolved.agentId ? { databaseOwnerAgentId: resolved.agentId } : {}),
     });
     grouped.set(sqlitePath, group);
     // Exact shared locators do not allocate legacy per-agent suffixes.

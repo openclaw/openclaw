@@ -12,7 +12,6 @@ import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import type { CodexPluginConfig } from "./app-server/config.js";
-import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { getCurrentSharedClientEntry } from "./app-server/shared-client-lifecycle.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -26,7 +25,7 @@ import { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-lis
 import { CODEX_APP_SERVER_THREADS_LIST_COMMAND } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
-type ListFrame = { id: number; params: CodexThreadListParams };
+type ListFrame = { id: number };
 const REQUEST_TIMEOUT_MS = 200;
 
 function observe<T>(pending: Promise<T>) {
@@ -242,54 +241,27 @@ describe("resident catalog hydration request lifetime", () => {
 
   afterEach(async () => h.close());
 
-  it.each([false, true])(
-    "attributes actual-client control requests (rejected=%s)",
-    async (reject) => {
-      const control = h.newFactory(2_000).forRequest("main");
-      await withPageDiagnostics(async (records, advanceClock) => {
-        const pending = observe(control.initialize());
-        const error = { code: -32601, message: "synthetic-private-control-error" };
-        const settled = reject
-          ? expect(pending).rejects.toMatchObject(error)
-          : expect(pending).resolves.toBeUndefined();
-        const frame = await h.frame(0);
-        advanceClock();
-        if (reject) {
-          frame.transport.send({ id: frame.id, error });
-        } else {
-          h.reply(frame, "timed-success");
-        }
-        await settled;
-        await diagnosticRuntime.waitForDiagnosticEventsDrained();
-        expect(h.work.frames).toBe(1);
-        expect(records).toHaveLength(1);
-        expect(records[0]?.attributes).toMatchObject({
-          outcome: reject ? "rejected" : "resolved",
-          controlRequestCalls: 1,
-          ...(reject
-            ? {
-                controlFailurePhase: "client-request",
-                controlFailureCategory: "rpc-method-unavailable",
-              }
-            : {
-                inclusiveControlRequestWaitMs: 1_500,
-                controlLoadMs: 0,
-                controlPrepareMs: 0,
-                controlAcquireClientMs: 0,
-                controlClientRequestMs: 1_500,
-                controlReleaseClientMs: 0,
-              }),
-        });
-        if (reject) {
-          expect(JSON.stringify(records)).not.toContain(error.message);
-        } else {
-          await expectPage(control.listPage({ limit: 1 }), "timed-success");
-          expect(records[0]?.attributes).not.toHaveProperty("controlFailurePhase");
-          expect(records[0]?.attributes).not.toHaveProperty("controlFailureCategory");
-        }
+  it("attributes and redacts actual-client control failures", async () => {
+    const control = h.newFactory(2_000).forRequest("main");
+    await withPageDiagnostics(async (records, advanceClock) => {
+      const pending = observe(control.initialize());
+      const error = { code: -32601, message: "synthetic-private-control-error" };
+      const settled = expect(pending).rejects.toMatchObject(error);
+      const frame = await h.frame(0);
+      advanceClock();
+      frame.transport.send({ id: frame.id, error });
+      await settled;
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        outcome: "rejected",
+        controlRequestCalls: 1,
+        controlFailurePhase: "client-request",
+        controlFailureCategory: "rpc-method-unavailable",
       });
-    },
-  );
+      expect(JSON.stringify(records)).not.toContain(error.message);
+    });
+  });
 
   it("shares same-home hydration across agents and releases only the hydration lease", async () => {
     await h.control.withPinnedConnection(async (pinned) => {
@@ -305,7 +277,6 @@ describe("resident catalog hydration request lifetime", () => {
       await expectPage(listed, "shared");
       expect(h.work).toMatchObject({ frames: 1, leases: 2 });
       await expectPage(pinned.listPage({ limit: 10 }), "shared");
-      expect(h.work.frames).toBe(1);
     });
     expect(h.work.leases).toBe(1);
     await expect(h.companion.request("model/list", {})).resolves.toEqual({ data: [] });

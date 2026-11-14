@@ -16,6 +16,7 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import { recordLatestSubagentRun } from "./subagent-run-generation.js";
 
 // Prompt data is sanitized then JSON-quoted so active subagent state cannot add
 // executable prompt instructions through labels or task text.
@@ -61,7 +62,7 @@ function formatPendingResult(entry: SubagentRunRecord): string {
     `session_json=${quotePromptData(entry.childSessionKey)};`,
     `outcome=${entry.execution.outcome?.status ?? "unknown"};`,
     `delivery=${entry.delivery?.status ?? "pending"};`,
-    `requester_continuation=${entry.requesterSettleWake?.status ?? "none"};`,
+    `requester_continuation=${entry.requesterSettleWake ? "pending" : "none"};`,
     `task_json=${quotePromptData(truncateUtf16Safe(entry.task, 96))};`,
     `result_json=${sanitizeForPromptLiteral(JSON.stringify(truncateUtf16Safe(result, PENDING_RESULT_MAX_CHARS)))};`,
     `result_truncated=${result.length > PENDING_RESULT_MAX_CHARS}`,
@@ -74,7 +75,6 @@ export async function buildActiveSubagentRuntimeContext(params: {
   controllerSessionKey?: string;
   controllerAgentId?: string;
   runId?: string;
-  recentMinutes?: number;
   includeSpawnContext?: boolean;
 }): Promise<string | undefined> {
   const rawControllerSessionKey = params.controllerSessionKey?.trim();
@@ -100,21 +100,24 @@ export async function buildActiveSubagentRuntimeContext(params: {
   return withSubagentRunReadSnapshot(
     subagentRuns,
     (snapshot) => {
-      const index = buildSubagentRunReadIndexFromRuns({
-        runs: snapshot,
-        inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
-      });
-      const yielded = [...index.latestRunsByChildSessionKey.values()].filter(
+      const latest = new Map<string, SubagentRunReadRecord>();
+      for (const entry of snapshot.values()) {
+        const key = entry.childSessionKey.trim();
+        if (key) {
+          recordLatestSubagentRun(latest, key, entry);
+        }
+      }
+      const yielded = [...latest.values()].filter(
         (entry) => isVisible(entry) && entry.pauseReason === "sessions_yield",
       );
       return {
-        index,
+        snapshot,
+        latest,
         runIds: [],
         sessionKeys: [controllerSessionKey, ...yielded.map((entry) => entry.childSessionKey)],
       };
     },
-    ({ index }, snapshot) => {
-      const latest = index.latestRunsByChildSessionKey;
+    ({ snapshot: readSnapshot, latest }, snapshot) => {
       const visible = [...snapshot.values()].filter(isVisible);
       const runs = visible.filter(
         (entry) => latest.get(entry.childSessionKey.trim())?.runId === entry.runId,
@@ -147,29 +150,37 @@ export async function buildActiveSubagentRuntimeContext(params: {
       if (runs.length === 0 && pending.length === 0) {
         return undefined;
       }
-      const recentMinutes = params.recentMinutes ?? 30;
-      const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
-      const list = buildSubagentList({
-        context,
-        // Prompt fields are registry-owned; model and usage enrichment belongs to visible lists.
-        sessionEntries: new Map(),
-        taskMaxChars: 96,
-      });
+      const recentMinutes = 30;
+      const list =
+        params.includeSpawnContext === false
+          ? undefined
+          : buildSubagentList({
+              context: captureSubagentListReadContext(
+                runs,
+                buildSubagentRunReadIndexFromRuns({
+                  runs: readSnapshot,
+                  inMemoryRuns: [...readSnapshot.keys()].flatMap(
+                    (id) => subagentRuns.get(id) ?? [],
+                  ),
+                }),
+                snapshot,
+                recentMinutes,
+              ),
+              // Prompt fields are registry-owned; enrichment belongs to visible lists.
+              sessionEntries: new Map(),
+              taskMaxChars: 96,
+            });
       // buildSubagentList returns recent runs in registry order, so sort before
       // capping to keep the prompt block deterministic across turns.
       const pendingIds = new Set(pending.map((entry) => entry.runId));
-      const recentForPrompt = list.recent
+      const recentForPrompt = (list?.recent ?? [])
         .filter((entry) => !pendingIds.has(entry.runId))
         .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
         .slice(0, RECENT_PROMPT_MAX_ENTRIES);
-      if (
-        pending.length === 0 &&
-        (params.includeSpawnContext === false ||
-          (list.active.length === 0 && recentForPrompt.length === 0))
-      ) {
+      if (pending.length === 0 && !list?.active.length && recentForPrompt.length === 0) {
         return undefined;
       }
-      const formatEntry = (entry: (typeof list.active)[number]) =>
+      const formatEntry = (entry: ReturnType<typeof buildSubagentList>["active"][number]) =>
         [
           "-",
           entry.taskName
@@ -190,7 +201,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
           .filter(Boolean)
           .join(" ");
       const sections: string[][] = [];
-      if (params.includeSpawnContext !== false && list.active.length > 0) {
+      if (list && list.active.length > 0) {
         sections.push([
           "## Active Subagents",
           ...list.active
@@ -200,7 +211,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
           ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
         ]);
       }
-      if (params.includeSpawnContext !== false && recentForPrompt.length > 0) {
+      if (recentForPrompt.length > 0) {
         sections.push([
           "## Recently Completed Subagents",
           `Children that ended in the last ${recentMinutes}m, newest first:`,

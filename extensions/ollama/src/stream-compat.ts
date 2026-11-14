@@ -11,7 +11,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createMoonshotThinkingWrapper,
-  DEFAULT_CONTEXT_TOKENS,
   normalizeProviderId,
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -205,12 +204,7 @@ export function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): numb
 function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   return (
     resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(
-      1,
-      Math.floor(
-        model.contextTokens ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-      ),
-    )
+    Math.max(1, Math.floor(model.contextTokens ?? model.contextWindow ?? model.maxTokens))
   );
 }
 

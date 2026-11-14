@@ -3,6 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { readClaimingHookAdmission } from "../../../plugins/hook-claim-admission.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -20,6 +22,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
   resolveSessionPinnedHarnessId,
 } from "../../../sessions/agent-harness-session-key.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../../agent-runtime-id.js";
 import {
   evaluateContextWindowGuard,
@@ -30,15 +33,71 @@ import {
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
+import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { resolveModelContextWindowProfile } from "../../model-context-window.js";
 import { readModelServingContextWindow } from "../../model-serving-context.js";
 import { log } from "../logger.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 
 type HookRunnerLike = Pick<
   NonNullable<ReturnType<typeof getGlobalHookRunner>>,
   "hasHooks" | "runBeforeModelResolve"
 >;
 type HookContext = Parameters<HookRunnerLike["runBeforeModelResolve"]>[1];
+
+type ModelRoutingAuthority = {
+  hookContext: HookContext;
+  assertCurrent?: () => void;
+  runAuthority?: Pick<
+    RunEmbeddedAgentInternalParams,
+    "abortSignal" | "preparedRunAdmission" | "admittedRunContext" | "lifecycleGeneration"
+  >;
+};
+
+function captureModelRoutingAssertion(params: ModelRoutingAuthority) {
+  const source = params.runAuthority;
+  source?.abortSignal?.throwIfAborted();
+  const instance = source?.preparedRunAdmission?.operationalRunInstance;
+  const previousOwner = instance
+    ? getAgentRunContext(instance.runId)?.delegatedAuthority
+    : undefined;
+  const assertHookCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+  const assertAdmitted = source?.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(source.admittedRunContext, source.abortSignal)
+    : undefined;
+  return () => {
+    source?.abortSignal?.throwIfAborted();
+    params.assertCurrent?.();
+    assertHookCurrent?.();
+    if (source?.lifecycleGeneration) {
+      assertAgentRunLifecycleGenerationCurrent(source.lifecycleGeneration);
+    }
+    try {
+      source?.preparedRunAdmission?.assertSourceCurrent();
+      source?.preparedRunAdmission?.assertCurrent();
+      if (source?.admittedRunContext) {
+        if (!assertAdmitted) {
+          throw new Error("admitted run authority is no longer active");
+        }
+        assertAdmitted();
+      }
+      if (instance) {
+        const owner = getAgentRunContext(instance.runId)?.delegatedAuthority;
+        // An unrelated previous owner may finish while this source is still preparing admission.
+        if (
+          owner &&
+          owner !== previousOwner &&
+          owner.operationalRunInstance.instanceId !== instance.instanceId
+        ) {
+          throw new Error("model routing run authority changed");
+        }
+      }
+    } catch (cause) {
+      // Changing providers cannot restore a canceled or superseded source.
+      throw new AgentHarnessPreflightError("Model routing source is no longer active.", { cause });
+    }
+  };
+}
 
 /** Durable harness sessions run only with their exact persisted identity and runtime lock. */
 export function resolveAgentHarnessRunAdmissionError(params: {
@@ -81,16 +140,18 @@ export function resolveAgentHarnessRunAdmissionError(params: {
 /**
  * Runs model-selection hooks before resolving the runtime model.
  */
-export async function resolveHookModelSelection(params: {
-  prompt: string;
-  attachments?: PluginHookBeforeModelResolveAttachment[];
-  provider: string;
-  modelId: string;
-  modelSelectionLocked?: boolean;
-  awaitSessionDiffBaseline?: () => Promise<void>;
-  hookRunner?: HookRunnerLike | null;
-  hookContext: HookContext;
-}) {
+export async function resolveHookModelSelection(
+  params: ModelRoutingAuthority & {
+    prompt: string;
+    onDispatch?: () => void;
+    attachments?: PluginHookBeforeModelResolveAttachment[];
+    provider: string;
+    modelId: string;
+    modelSelectionLocked?: boolean;
+    awaitSessionDiffBaseline?: () => Promise<void>;
+    hookRunner?: HookRunnerLike | null;
+  },
+) {
   const selection: { provider: string; modelId: string } & Pick<
     PluginHookBeforeModelResolveResult,
     "fallbacksOverride"
@@ -107,21 +168,26 @@ export async function resolveHookModelSelection(params: {
   // Run before_model_resolve hooks early so plugins can override the
   // provider/model before resolveModel().
   if (hookRunner?.hasHooks("before_model_resolve")) {
-    const assertCurrent = readClaimingHookAdmission(params.hookContext)?.assertCurrent;
+    const assertCurrent = captureModelRoutingAssertion(params);
+    assertCurrent();
     await params.awaitSessionDiffBaseline?.();
-    assertCurrent?.();
+    assertCurrent();
     try {
       const event: PluginHookBeforeModelResolveEvent = params.attachments
         ? { prompt: params.prompt, attachments: params.attachments }
         : { prompt: params.prompt };
-      const run = () => hookRunner.runBeforeModelResolve(event, params.hookContext);
-      modelResolveOverride = assertCurrent
-        ? await withGuardedFetchRequestAuthority(assertCurrent, run)
-        : await run();
+      const run = () => {
+        // A registered hook can commit work before native target preparation starts.
+        if (hookRunner.hasHooks("before_model_resolve")) {
+          params.onDispatch?.();
+        }
+        return hookRunner.runBeforeModelResolve(event, params.hookContext);
+      };
+      modelResolveOverride = await withGuardedFetchRequestAuthority(assertCurrent, run);
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
-    assertCurrent?.();
+    assertCurrent();
   }
 
   if (modelResolveOverride?.providerOverride) {

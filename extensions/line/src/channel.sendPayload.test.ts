@@ -4,6 +4,7 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -18,7 +19,6 @@ import {
   stubLineApiFetch,
 } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineConfig } from "./types.js";
 
 const ssrfMocks = vi.hoisted(() => ({ resolvePinnedHostnameWithPolicy: vi.fn() }));
@@ -31,7 +31,7 @@ function lineConfig(line: LineConfig): OpenClawConfig {
 }
 const cfg = lineConfig({});
 const to = "line:user:U123";
-const sendOptions = { verbose: false, accountId: "default", cfg };
+const sendOptions = { accountId: "default", cfg };
 const videoUrl = "https://example.com/video.mp4";
 const imageUrl = "https://example.com/photo.png";
 const previewImageUrl = "https://example.com/preview.jpg";
@@ -243,12 +243,16 @@ it("preserves batch receipts and bounds Flex alternative text", async () => {
   mocks.pushMessagesLine.mockResolvedValueOnce({
     messageId: providerMessageIds[0],
     chatId: "C123",
-    receipt: createLineSendReceipt({
-      messageId: providerMessageIds[0],
-      messageIds: providerMessageIds,
-      chatId: "C123",
+    receipt: createMessageReceiptFromOutboundResults({
+      results: providerMessageIds.map((messageId) => ({
+        channel: "line",
+        messageId,
+        chatId: "C123",
+        conversationId: "C123",
+        meta: { messageCount: 2 },
+      })),
+      threadId: "C123",
       kind: "card",
-      messageCount: 2,
     }),
   });
   const onDeliveryResult = vi.fn();
@@ -417,7 +421,7 @@ it.each([false, true])("keeps nested partial evidence (accepted=%s)", async (acc
   const rejection = refusal(400);
   const partial = createChannelPartialDeliveryError(rejection, {
     messageIds: ["accepted-child"],
-    receipt: createLineSendReceipt({ messageId: "accepted-child", chatId: "c1", kind: "text" }),
+    receipt: lineResult("accepted-child").receipt,
     visibleReplySent: true,
   });
   if (accepted) {

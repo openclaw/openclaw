@@ -25,9 +25,18 @@ function install(statement) {
   if (!prepared) {
     return () => {};
   }
-  const selected = faults.filter(
-    (fault, index) => Atomics.load(enabled, index) && fault.match.test(prepared.sql),
-  );
+  const selected = faults.filter((fault, index) => {
+    if (!Atomics.load(enabled, index) || !fault.match.test(prepared.sql)) {
+      return false;
+    }
+    if ("exitOnMatch" in fault) {
+      if (Atomics.sub(enabled, index, 1) === 1) {
+        process.exit(1);
+      }
+      return false;
+    }
+    return true;
+  });
   // TEMP triggers affect the actual write without invalidating the admitted main schema.
   for (const fault of selected) {
     prepared.database.exec(fault.sql);

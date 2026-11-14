@@ -11,6 +11,11 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 
+const native = { playback: "native" } as const;
+const first: AttachmentItem = {
+  type: "attachment",
+  attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
+};
 let pause: ReturnType<typeof vi.spyOn>;
 let container: HTMLDivElement | undefined;
 let view: ReturnType<typeof mountSolid> | undefined;
@@ -88,10 +93,6 @@ it("renews a selected video's ticket without interrupting playback and releases 
       url: source + "?mediaTicket=B",
       expiresAt: new Date(Date.now() + 300_000).toISOString(),
     });
-  const first: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
-  };
   const next: AttachmentItem = {
     type: "attachment",
     attachment: {
@@ -100,6 +101,7 @@ it("renews a selected video's ticket without interrupting playback and releases 
       artifactId: "synthetic-video",
       label: "Clip",
       mimeType: "video/mp4",
+      ...native,
     },
   };
   const opened = await open(first, resolve, [first, next]);
@@ -109,7 +111,6 @@ it("renews a selected video's ticket without interrupting playback and releases 
   const play = vi.spyOn(media, "play").mockImplementation(async () => {
     paused = false;
   });
-  const timersBeforeConnection = vi.getTimerCount();
   disconnect = item!.connectVideo!(media, vi.fn());
   await vi.advanceTimersByTimeAsync(0);
   expect(media.src).toContain("mediaTicket=A");
@@ -129,13 +130,14 @@ it("renews a selected video's ticket without interrupting playback and releases 
   expect(media.currentTime).toBe(8);
   expect(play).toHaveBeenCalledOnce();
   expect(paused).toBe(false);
+  const timersBeforeClose = vi.getTimerCount();
   disconnect();
   disconnect = undefined;
   expect(media.hasAttribute("src")).toBe(false);
   expect(pause).toHaveBeenCalled();
-  // This neighbor has no inline subscriber. The transcript owner remains alive;
-  // only the selected connection can release its pending refresh timer here.
-  expect(vi.getTimerCount()).toBe(timersBeforeConnection);
+  // The transcript remains alive. Measure the selected connection's synchronous
+  // release without counting timers started by other UI work during playback.
+  expect(vi.getTimerCount()).toBe(timersBeforeClose - 1);
   await vi.advanceTimersByTimeAsync(300_000);
   expect(resolve).toHaveBeenCalledTimes(2);
 });
@@ -183,14 +185,10 @@ it("aborts selected rendition preparation and never assigns a late source after 
 });
 
 it("explicit retry clears a cached recoverable neighbor failure through its source owner", async () => {
-  const first: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
-  };
   const url = "/api/chat/media/outgoing/agent%3Amain%3Amain/" + crypto.randomUUID() + "/full";
   const next: AttachmentItem = {
     type: "attachment",
-    attachment: { kind: "video", url, artifactId: "synthetic-retry", label: "Next" },
+    attachment: { kind: "video", url, artifactId: "synthetic-retry", label: "Next", ...native },
   };
   const resolve = vi
     .fn()

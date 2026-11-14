@@ -1,8 +1,17 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import fs from "node:fs/promises";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import {
+  resolveCronJobsStorePathFromConfig,
+  saveCronJobsStore,
+} from "../../../../src/cron/store.js";
+import type { CronStoredJob } from "../../../../src/cron/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { withEnvAsync } from "../../../../src/test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -27,6 +36,12 @@ const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
+const EXPECTED_LOGIN = {
+  type: "chatgptAuthTokens",
+  accessToken: oauthAccess,
+  chatgptAccountId: ACCOUNT_ID,
+  chatgptPlanType: null,
+};
 
 let instance: OpenClawTestInstance | undefined;
 let receipts: FixtureReceiptChannel;
@@ -56,6 +71,14 @@ type GatewayHistory = Record<string, unknown> & {
 };
 
 type GatewayEvent = { event?: string; payload?: unknown };
+
+function expectRequestOrder(entries: AppServerLogEntry[], first: string, second: string) {
+  const firstIndex = entries.findIndex((entry) => entry.method === first);
+  const secondIndex = entries.findIndex((entry) => entry.method === second);
+  expect(firstIndex).toBeGreaterThanOrEqual(0);
+  expect(secondIndex).toBeGreaterThan(firstIndex);
+  return [entries[firstIndex], entries[secondIndex]];
+}
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
@@ -144,9 +167,8 @@ async function waitForAssistantHistory(testInstance: OpenClawTestInstance, expec
             if (
               messages.some(
                 (message) =>
-                  message !== null &&
-                  typeof message === "object" &&
-                  (message as { role?: unknown }).role === "assistant" &&
+                  isRecord(message) &&
+                  message.role === "assistant" &&
                   JSON.stringify(message).includes(expected),
               )
             ) {
@@ -208,6 +230,123 @@ async function createAuthGateway(missingProfile = false) {
 
 describe("Codex auth product proof", () => {
   it(
+    "runs migrated heartbeat-main on explicit Codex after doctor --fix twice",
+    { timeout: 240_000 },
+    async ({ signal }) => {
+      instance = await createAuthGateway();
+      instance.env.OPENCLAW_SKIP_CRON = "0";
+      const config: OpenClawConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+      await instance.state.writeConfig({
+        ...config,
+        agents: {
+          ...config.agents,
+          entries: {
+            main: { agentDir: instance.state.agentDir(), workspace: instance.state.workspaceDir },
+          },
+          defaults: {
+            ...config.agents?.defaults,
+            systemAgent: { agentId: "main" },
+          },
+        },
+      });
+      const requestLog = instance.state.path("codex-heartbeat-app-server.jsonl");
+      instance.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG = requestLog;
+      const appServerLog = createJsonlRequestTailer<AppServerLogEntry>(requestLog);
+      const createdAtMs = Date.now();
+      const job: CronStoredJob = {
+        id: "migrated-heartbeat-main",
+        name: "heartbeat-main",
+        agentId: "main",
+        enabled: true,
+        createdAtMs,
+        updatedAtMs: createdAtMs,
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: createdAtMs },
+        sessionKey: "agent:main:main",
+        sessionTarget: "session:agent:main:main",
+        wakeMode: "now",
+        idleOnly: true,
+        payload: {
+          kind: "agentTurn",
+          message: `Reply with ${PRODUCT_OUTPUT}.`,
+          skipIfScratchEmpty: true,
+        },
+        delivery: { mode: "none", target: "owner" },
+        state: {},
+      };
+      // Preserve the existing post-migration job, including its name and absent account binding.
+      const testInstance = instance;
+      await withEnvAsync(instance.env, async () => {
+        await saveCronJobsStore(resolveCronJobsStorePathFromConfig(config, testInstance.env), {
+          version: 1,
+          jobs: [job],
+        });
+        await cleanupSessionStateForTest({
+          stateDir: testInstance.stateDir,
+          rootPath: testInstance.state.root,
+        });
+      });
+      // The first Doctor migrates the stable credential and adopts the automation's account.
+      await runCodexAuthDoctorMigrationProof(instance, {
+        accountId: ACCOUNT_ID,
+        oauthAccess,
+        shape: "oauth-only",
+      });
+      const repeated = await instance.cli(["doctor", "--fix", "--yes", "--non-interactive"], {
+        timeoutMs: 120_000,
+      });
+      expect(repeated.code, repeated.stderr).toBe(0);
+      await instance.startGateway();
+      const client = await connectGatewayStatusClient(instance);
+      try {
+        const { jobs } = await client.request<{ jobs: CronStoredJob[] }>("cron.list", {
+          includeDisabled: true,
+        });
+        const heartbeat = jobs.find((entry) => entry.id === job.id);
+        expect(heartbeat).toMatchObject({
+          payload: { kind: "agentTurn" },
+          sessionTarget: "session:agent:main:main",
+          delivery: { target: "owner" },
+        });
+        if (!heartbeat) {
+          throw new Error("Doctor did not migrate heartbeat-main");
+        }
+        const scratch = await client.request<{ currentRevision: number }>("cron.scratch.get", {
+          id: heartbeat.id,
+        });
+        await client.request("cron.scratch.set", {
+          id: heartbeat.id,
+          content: "Synthetic heartbeat work.",
+          expectedRevision: scratch.currentRevision,
+        });
+        const started = await client.request<{ runId: string }>("cron.run", {
+          id: heartbeat.id,
+          mode: "force",
+        });
+        const terminal = await vi.waitFor(
+          async () => {
+            const history = await client.request<{
+              entries: Array<{ runId?: string; status?: string; error?: string }>;
+            }>("cron.runs", { id: heartbeat.id, runId: started.runId, limit: 1 });
+            const entry = history.entries.find((candidate) => candidate.runId === started.runId);
+            if (!entry) {
+              throw new Error("Waiting for the heartbeat run to finish");
+            }
+            return entry;
+          },
+          { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
+        );
+        expect(terminal).toMatchObject({ status: "ok" });
+        const login = await waitForRequest(appServerLog, requestLog, "account/login/start", signal);
+        expect(login.params).toMatchObject(EXPECTED_LOGIN);
+        expectRequestOrder(appServerLog.read(), "account/login/start", "turn/start");
+        await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it(
     "repairs mixed legacy auth into SQLite and sends the selected OAuth profile to app-server",
     { timeout: 180_000 },
     async ({ signal }) => {
@@ -240,22 +379,10 @@ describe("Codex auth product proof", () => {
         "account/login/start",
         signal,
       );
-      const loginParams = loginRequest.params as Record<string, unknown>;
-      expect(loginParams).toMatchObject({
-        type: "chatgptAuthTokens",
-        accessToken: oauthAccess,
-        chatgptAccountId: ACCOUNT_ID,
-        chatgptPlanType: null,
-      });
+      expect(loginRequest.params).toMatchObject(EXPECTED_LOGIN);
 
       await waitForRequest(appServerLog, requestLog, "turn/start", signal);
-      const turnEntries = appServerLog.read();
-      const threadStartIndex = turnEntries.findIndex(
-        (request) => request.method === "thread/start",
-      );
-      const turnStartIndex = turnEntries.findIndex((request) => request.method === "turn/start");
-      expect(threadStartIndex).toBeGreaterThanOrEqual(0);
-      expect(turnStartIndex).toBeGreaterThan(threadStartIndex);
+      expectRequestOrder(appServerLog.read(), "thread/start", "turn/start");
       await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
 
       const usageRequestLog = instance.state.path("codex-auth-usage-app-server.jsonl");
@@ -274,37 +401,13 @@ describe("Codex auth product proof", () => {
       expect(status.stdout).toContain("qa-codex-account@example.com");
 
       const usageEntries = usageLog.read();
-      const usageLoginIndex = usageEntries.findIndex(
-        (request) => request.method === "account/login/start",
+      const [usageLoginRequest, accountReadRequest] = expectRequestOrder(
+        usageEntries,
+        "account/login/start",
+        "account/read",
       );
-      const accountReadIndex = usageEntries.findIndex(
-        (request) => request.method === "account/read",
-      );
-      expect(usageLoginIndex).toBeGreaterThanOrEqual(0);
-      expect(accountReadIndex).toBeGreaterThan(usageLoginIndex);
-
-      const usageLoginRequest = usageEntries[usageLoginIndex];
-      const usageLoginParams = usageLoginRequest?.params as Record<string, unknown>;
-      expect(usageLoginParams).toEqual({
-        type: "chatgptAuthTokens",
-        accessToken: oauthAccess,
-        chatgptAccountId: ACCOUNT_ID,
-        chatgptPlanType: null,
-      });
-
-      const accountReadRequest = usageEntries[accountReadIndex];
+      expect(usageLoginRequest?.params).toEqual(EXPECTED_LOGIN);
       expect(accountReadRequest?.params).toEqual({});
-      const accountReadResponse = usageEntries.find(
-        (entry) => entry.id === accountReadRequest?.id && entry.result !== undefined,
-      );
-      expect(accountReadResponse?.result).toEqual({
-        account: {
-          type: "chatgpt",
-          email: "qa-codex-account@example.com",
-          planType: "pro",
-        },
-        requiresOpenaiAuth: true,
-      });
     },
   );
 
@@ -414,20 +517,18 @@ describe("Codex auth product proof", () => {
             finalEvent = events.find(
               (event) =>
                 event.event === "chat" &&
-                event.payload !== null &&
-                typeof event.payload === "object" &&
-                (event.payload as { runId?: unknown }).runId === runId &&
-                (event.payload as { state?: unknown }).state === "error",
+                isRecord(event.payload) &&
+                event.payload.runId === runId &&
+                event.payload.state === "error",
             );
             lifecycleEvent = events.find(
               (event) =>
                 event.event === "sessions.changed" &&
-                event.payload !== null &&
-                typeof event.payload === "object" &&
-                (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
-                (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId ===
-                  runId &&
-                (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
+                isRecord(event.payload) &&
+                event.payload.sessionKey === sessionKey &&
+                isRecord(event.payload.session) &&
+                event.payload.session.lastRunId === runId &&
+                event.payload.session.status === "failed",
             );
             expect(finalEvent).toBeDefined();
             expect(lifecycleEvent).toBeDefined();

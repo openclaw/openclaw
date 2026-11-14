@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -22,14 +23,11 @@ it.each(["doctor", "startup", "rejected-startup"] as const)(
         const marker = path.join(home, "loaded-captures");
         await fs.mkdir(pluginDir);
         await fs.writeFile(path.join(pluginDir, "index.cjs"), "exports.register = () => {};\n");
-        await fs.writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: pluginId,
-            doctorContract: { configRepair: true },
-            configSchema: { type: "object", additionalProperties: false },
-          }),
-        );
+        await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+          id: pluginId,
+          doctorContract: { configRepair: true },
+          configSchema: { type: "object", additionalProperties: false },
+        });
         await fs.writeFile(
           path.join(pluginDir, "doctor-contract-api.cjs"),
           `require("node:fs").appendFileSync(${JSON.stringify(marker)}, __dirname + "\\n");
@@ -52,7 +50,7 @@ exports.legacyConfigRules = [{
           },
           meta: { migrations: { webhookListeners: true as const } },
         };
-        await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(config));
+        await writeFixtureJson(path.join(home, ".openclaw", "openclaw.json"), config);
         await seedInstalledPluginIndex({}, { config });
 
         const captures = async () => (await fs.readFile(marker, "utf8")).trim().split("\n");

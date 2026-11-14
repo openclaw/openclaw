@@ -34,6 +34,7 @@ export function buildBaseOptions(
     apiKey: apiKey || options?.apiKey,
     transport: options?.transport,
     cacheRetention: options?.cacheRetention,
+    promptCacheTtl: options?.promptCacheTtl,
     sessionId: options?.sessionId,
     promptCacheKey: options?.promptCacheKey,
     headers: options?.headers,

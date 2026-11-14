@@ -71,6 +71,7 @@ const spawnModelAutoSelectionSchema = z.object({
 export const sessionSpawnContextSchema = z
   .object({
     requesterProfileId: normalizedRequiredStringSchema.optional(),
+    gitContributorProfileId: normalizedRequiredStringSchema.optional(),
     requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
@@ -98,6 +99,9 @@ export const sessionSpawnContextSchema = z
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
     ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
+    ...(context.gitContributorProfileId
+      ? { gitContributorProfileId: context.gitContributorProfileId }
+      : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),

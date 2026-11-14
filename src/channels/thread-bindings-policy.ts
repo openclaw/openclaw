@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
   resolveThreadBindingLifecycle as resolveSharedThreadBindingLifecycle,
@@ -96,10 +97,13 @@ function resolveChannelThreadBindings(params: {
   account?: SessionThreadBindingsConfigShape;
 } {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = channels?.[normalizeLowercaseStringOrEmpty(params.channel)] as
-    | ChannelThreadBindingsContainerShape
-    | undefined;
-  const accountConfig = channelConfig?.accounts?.[normalizeAccountId(params.accountId)];
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
+  const channelConfig = channels?.[channel] as ChannelThreadBindingsContainerShape | undefined;
+  const accountConfig = resolveChannelAccountEntry(
+    channelConfig?.accounts,
+    normalizeAccountId(params.accountId),
+    channel,
+  );
   return {
     root: channelConfig?.threadBindings,
     account: accountConfig?.threadBindings,

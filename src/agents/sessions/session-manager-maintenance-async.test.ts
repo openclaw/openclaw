@@ -73,10 +73,7 @@ function afterWorkerCommand(type: string, after: () => void | Promise<void>) {
           execute: async (command, commandOptions) => {
             const result = await worker.execute(command, commandOptions);
             if (command.type === type) {
-              const pending = after();
-              if (pending) {
-                await pending;
-              }
+              await after();
             }
             return result;
           },
@@ -86,16 +83,22 @@ function afterWorkerCommand(type: string, after: () => void | Promise<void>) {
   return vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(intercept);
 }
 
-it("shares admitted immutable payloads when preparing and publishing a rewrite", async () => {
-  const manager = SessionManager.inMemory("/synthetic");
+it("shares admitted immutable payloads and opaque aliases when preparing and publishing a rewrite", async () => {
+  const manager = SessionManager.fromEntries([
+    { type: "session", version: 4, id: "aliases", cwd: "/synthetic" },
+    { type: "opaque", id: "opaque", parentId: null },
+  ]);
   const id = await manager.appendCustomEntryAsync("large-tool-output", {
     chunks: Array.from({ length: 1024 }, () => ({ text: "x".repeat(1024) })),
+    child: { text: "original" },
   });
   const data = customData(manager, id);
+  opaqueEntry(manager).alias = data.child;
   const original = manager.getEntry(id);
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   expect(rewrite.sessionManager.getEntry(id)).not.toBe(original);
   expect(customData(rewrite.sessionManager, id)).toBe(data);
+  expect(opaqueEntry(rewrite.sessionManager).alias).toBe(data.child);
   expect(Object.isFrozen(data)).toBe(true);
   expect(Reflect.set(data, "chunks", [])).toBe(false);
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
@@ -141,20 +144,6 @@ it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", asy
   expect(committed).not.toBe(entry);
   data.text = "later";
   expect(committed).toMatchObject({ data: { text: "prepared" } });
-});
-
-it("preserves opaque SDK aliases into an admitted payload during a rewrite", async () => {
-  const manager = SessionManager.fromEntries([
-    { type: "session", version: 4, id: "aliases", cwd: "/synthetic" },
-    { type: "opaque", id: "opaque", parentId: null },
-  ]);
-  const id = await manager.appendCustomEntryAsync("owned", { child: { text: "original" } });
-  const owned = customData(manager, id);
-  opaqueEntry(manager).alias = owned.child;
-  const rewrite = await manager.prepareTranscriptRewriteAsync();
-  const prepared = customData(rewrite.sessionManager, id);
-  expect(opaqueEntry(rewrite.sessionManager).alias).toBe(prepared.child);
-  expect(prepared).toBe(owned);
 });
 
 it("settles queued suffix removals in order and rebuilds the pending branch projection", async () => {

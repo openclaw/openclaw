@@ -5,6 +5,12 @@ import type { ComponentData } from "./internal/components.base.js";
 
 type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 
+export const DISCORD_APPROVAL_DECISIONS = {
+  "allow-once": { label: "Allowed (once)", color: "#57F287" },
+  "allow-always": { label: "Allowed (always)", color: "#5865F2" },
+  deny: { label: "Denied", color: "#ED4245" },
+};
+
 const DISCORD_APPROVAL_CUSTOM_ID_MAX_CHARS = 100;
 
 function encodeDiscordApprovalCustomId(action: DiscordApprovalAction): string {

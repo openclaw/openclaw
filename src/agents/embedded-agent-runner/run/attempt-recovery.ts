@@ -181,6 +181,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !isCompactionReplayCheckpoint(recoveryAssistant.providerReplay) &&
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
+    !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
     !hasComposedVisibleAnswerAfterSettledTools(attempt);
   const emptyLengthNeedsContinuation =
@@ -421,6 +422,39 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "timeout_recovery");
     return retry();
   }
+  const emitTransientRetryStatus = async ({
+    attempt: retryAttempt,
+    maxRetries,
+    delayMs,
+    reason,
+  }: {
+    attempt: number;
+    maxRetries: number;
+    delayMs: number;
+    reason: FailoverReason | "output_limit";
+  }) => {
+    const event = {
+      stream: "run_status",
+      data: {
+        phase: "retrying",
+        message:
+          reason === "rate_limit"
+            ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
+            : reason === "output_limit"
+              ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+              : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+        retryAttempt,
+        maxRetries,
+        delayMs,
+        retryAt: Date.now() + delayMs,
+        attempt: retryAttempt + 1,
+        maxAttempts: maxRetries + 1,
+        reason,
+      },
+    };
+    emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
+    await params.onAgentEvent?.(event);
+  };
   const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
   const retryCode = promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code;
   const retryMessage = promptError ? formatErrorMessage(promptError) : assistantSignal?.message;
@@ -452,32 +486,10 @@ export async function recoverEmbeddedRunAttempt(input: {
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
       maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
-      // Fallback and rotation both require a replay-safe attempt; without one the
-      // only recovery left is to wait out the floor and continue the transcript.
+      // Fallback and rotation both require a replay-safe attempt; unsafe attempts
+      // may only continue the transcript when the retry controller admits the wait.
       failoverEligible: currentAttemptReplaySafe,
-      onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
-        const event = {
-          stream: "run_status",
-          data: {
-            phase: "retrying",
-            message:
-              reason === "rate_limit"
-                ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
-                : reason === "output_limit"
-                  ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
-                  : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
-            retryAttempt,
-            maxRetries,
-            delayMs,
-            retryAt: Date.now() + delayMs,
-            attempt: retryAttempt + 1,
-            maxAttempts: maxRetries + 1,
-            reason,
-          },
-        };
-        emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
-        await params.onAgentEvent?.(event);
-      },
+      onRetry: emitTransientRetryStatus,
     }))
   ) {
     runInput.laneController.throwIfAborted();
@@ -506,10 +518,25 @@ export async function recoverEmbeddedRunAttempt(input: {
       );
       runInput.laneController.throwIfAborted();
     }
+    // A provider rejection that streamed nothing changed no transcript state after
+    // settled tools, so the same user turn can be resent instead of continued.
+    // Native harness threads take every prompt as a new turn and keep continuing.
+    const rejectedWithoutOutput =
+      !runtime.pluginHarnessOwnsTransport &&
+      !promptError &&
+      !outputLimitFailure &&
+      attemptAssistant?.stopReason === "error" &&
+      attemptAssistant.content.length === 0 &&
+      (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
+      attempt.itemLifecycle.activeCount === 0 &&
+      toolsAllowContinuation;
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
-      messages: attempt.messagesSnapshot,
+      // Native snapshots contain only this attempt; embedded retries reload their full transcript.
+      // Accumulating embedded snapshots retains another history on every provider rejection.
+      messages: runtime.pluginHarnessOwnsTransport ? attempt.messagesSnapshot : undefined,
+      ...(rejectedWithoutOutput ? { replayCurrentUserTurn: true } : {}),
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({
@@ -540,6 +567,15 @@ export async function recoverEmbeddedRunAttempt(input: {
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
+    // A provider outage during recovery compaction gets the same bounded backoff as a
+    // failed model request; the retried attempt rechecks the budget and compacts again.
+    retryTransientCompactionFailure: (failure) =>
+      failoverRetryController.maybeRetryTransient({
+        ...failure,
+        maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
+        failoverEligible: currentAttemptReplaySafe,
+        onRetry: emitTransientRetryStatus,
+      }),
   });
   if (overflowRecovery.action === "retry") {
     recordRecoveryDecision("accepted", "overflow_recovery");

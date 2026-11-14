@@ -23,23 +23,18 @@ describe("createSafeStreamWriter", () => {
       }
       return true;
     });
-    try {
-      expect(writer[method](process.stdout, "hello")).toBe(false);
-      expect(onBrokenPipe).toHaveBeenCalledTimes(1);
-      expect(onBrokenPipe.mock.calls[0]?.[0]).toBe(failure);
-      expect(onBrokenPipe.mock.calls[0]?.[1]).toBe(
-        beforeWriteFails ? process.stderr : process.stdout,
-      );
-
-      beforeWrite.mockReturnValue(undefined);
-      write.mockReturnValue(true);
-      expect(writer[method](process.stdout, "again")).toBe(false);
-      expect(beforeWrite).toHaveBeenCalledTimes(1);
-      expect(write).toHaveBeenCalledTimes(beforeWriteFails ? 0 : 1);
-      expect(onBrokenPipe).toHaveBeenCalledTimes(1);
-    } finally {
-      write.mockRestore();
-    }
+    expect(writer[method](process.stdout, "hello")).toBe(false);
+    expect(onBrokenPipe).toHaveBeenCalledTimes(1);
+    expect(onBrokenPipe.mock.calls[0]?.[0]).toBe(failure);
+    expect(onBrokenPipe.mock.calls[0]?.[1]).toBe(
+      beforeWriteFails ? process.stderr : process.stdout,
+    );
+    beforeWrite.mockReturnValue(undefined);
+    write.mockReturnValue(true);
+    expect(writer[method](process.stdout, "again")).toBe(false);
+    expect(beforeWrite).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(beforeWriteFails ? 0 : 1);
+    expect(onBrokenPipe).toHaveBeenCalledTimes(1);
   });
 
   it("notifies once when a reentrant write closes before the outer write", () => {
@@ -61,17 +56,13 @@ describe("createSafeStreamWriter", () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
       throw failure;
     });
-    try {
-      expect(writer.write(process.stdout, "outer")).toBe(false);
-      expect(nestedResult).toBe(false);
-      expect(callbackResult).toBe(false);
-      write.mockReturnValue(true);
-      expect(writer.write(process.stdout, "ignored")).toBe(false);
-      expect(notifications).toBe(1);
-      expect(write.mock.calls.map(([text]) => text)).toEqual(["nested", "outer"]);
-    } finally {
-      write.mockRestore();
-    }
+    expect(writer.write(process.stdout, "outer")).toBe(false);
+    expect(nestedResult).toBe(false);
+    expect(callbackResult).toBe(false);
+    write.mockReturnValue(true);
+    expect(writer.write(process.stdout, "ignored")).toBe(false);
+    expect(notifications).toBe(1);
+    expect(write.mock.calls.map(([text]) => text)).toEqual(["nested", "outer"]);
   });
 
   it("keeps the output closed when the notification callback throws", () => {
@@ -83,18 +74,14 @@ describe("createSafeStreamWriter", () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
       throw failure;
     });
+    let thrown: unknown;
     try {
-      let thrown: unknown;
-      try {
-        writer.write(process.stdout, "first");
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown).toBe(callbackError);
-      expect(writer.write(process.stdout, "ignored")).toBe(false);
-      expect(write).toHaveBeenCalledTimes(1);
-    } finally {
-      write.mockRestore();
+      writer.write(process.stdout, "first");
+    } catch (error) {
+      thrown = error;
     }
+    expect(thrown).toBe(callbackError);
+    expect(writer.write(process.stdout, "ignored")).toBe(false);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });

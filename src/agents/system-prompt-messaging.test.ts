@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("system prompt messaging routing", () => {
+  it("routes local HTML publication through the available current-conversation message tool", () => {
+    const prompt = (channel: string, toolNames: string[]) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        sourceReplyDeliveryMode: "automatic",
+        runtimeInfo: { channel },
+      });
+    expect(prompt("webchat", ["message"])).toContain(
+      "Local HTML reports: publish the final file with `message(action=send, media=<path>)`",
+    );
+    expect(prompt("webchat", ["read"])).not.toContain("Local HTML reports:");
+    expect(prompt("telegram", ["message"])).not.toContain("Local HTML reports:");
+  });
+
   it.each(["full", "minimal"] as const)(
     "keeps messaging routing and terminal reactions in %s prompts",
     (promptMode) => {

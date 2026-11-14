@@ -1,6 +1,5 @@
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import type { AssistantAttachmentItem, AttachmentItem } from "./chat-message-media.ts";
-import "./chat-pasted-text.tsx";
 
 export function isPastedTextAttachment(
   attachment: Pick<ChatAttachment, "mimeType" | "fileName" | "origin">,

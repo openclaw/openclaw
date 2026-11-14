@@ -1,32 +1,26 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
 import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
-import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+import type {
+  MemoryCliSearchParams,
+  MemorySearchManager,
+} from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type {
   LegacyMemoryReadResult,
-  MemoryCliSearchParams,
   MemoryCliSearchResult,
   MemoryOriginClass,
   MemoryReadResult,
-  MemorySearchManager,
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
-  EmbeddingBatchChunk,
-  EmbeddingBatchOptions,
-} from "./embedding-provider-runtime-types.js";
-import type {
-  EmbeddingProvider,
   EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
   EmbeddingProviderCreateResult,
-  EmbeddingProviderIndexIdentity,
-  EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type { MemoryEmbeddingProviderRuntime } from "./memory-embedding-providers.js";
 import type {
   MemoryProviderOpenParams,
   MemoryProviderOpenResult,
@@ -69,24 +63,6 @@ export type RegisteredCompactionProvider = {
   provider: CompactionProvider;
   ownerPluginId?: string;
 };
-
-export type MemoryEmbeddingBatchChunk = EmbeddingBatchChunk & {
-  embeddingInput?: EmbeddingInput;
-};
-
-export type MemoryEmbeddingBatchOptions = Omit<EmbeddingBatchOptions, "chunks"> & {
-  chunks: MemoryEmbeddingBatchChunk[];
-};
-
-export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
-
-export type MemoryEmbeddingProviderRuntime = Omit<EmbeddingProviderRuntime, "batchEmbed"> & {
-  batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
-};
-
-export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
-
-export type MemoryEmbeddingProvider = EmbeddingProvider;
 
 export type MemoryEmbeddingProviderCreateOptions = Omit<EmbeddingProviderCreateOptions, "local"> & {
   fallback?: string;
@@ -203,15 +179,11 @@ export type MemoryPromptPreparationRegistration = {
   prepare: MemoryPromptSectionPreparer;
 };
 
-/**
- * A file-persistence flush plan with its resolved timing. Its shape is unchanged from earlier
- * releases, so existing producers and readers keep compiling and behaving the same.
- */
+/** A file-persistence flush plan with its resolved timing. */
 export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
-  model?: string;
   prompt: string;
   systemPrompt: string;
   relativePath: string;
@@ -225,17 +197,16 @@ type MemoryFlushPlanTiming = Pick<
 
 /**
  * A file plan as a resolver may return it: omitted timing fields are filled by the host, and
- * defined ones deliberately override it. A file plan without a model keeps the session's model.
+ * defined ones deliberately override it.
  */
 export type MemoryFlushFilePlanDraft = Omit<MemoryFlushPlan, keyof MemoryFlushPlanTiming> &
   Partial<MemoryFlushPlanTiming> & { persistenceToolNames?: never; lookupToolNames?: never };
 
 /**
- * Tool persistence for the selected memory slot owner. The host fills omitted timing and the
- * configured flush model; defined values deliberately override them.
+ * Tool persistence for the selected memory slot owner. The host fills omitted timing;
+ * defined values deliberately override it.
  */
 export type MemoryFlushToolsPlan = Partial<MemoryFlushPlanTiming> & {
-  model?: string;
   prompt: string;
   systemPrompt: string;
   /** Absent on every tools plan; a tools plan never names a workspace file. */
@@ -251,7 +222,7 @@ type MemoryFlushPlanResolverParams = {
   contextWindowTokens?: number;
 };
 
-/** Resolves a complete file flush plan; its contract is unchanged from earlier releases. */
+/** Resolves a complete file flush plan. */
 export type MemoryFlushPlanResolver = (
   params: MemoryFlushPlanResolverParams,
 ) => MemoryFlushPlan | null;
@@ -366,6 +337,79 @@ export type MemoryPluginCapability = {
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */
   supportsPrivateTranscriptRecall?: boolean;
+};
+
+/**
+ * What a /learn contribution writes. The host owns routing between media, so a medium is
+ * host vocabulary: "memory" is reserved for the selected memory slot owner.
+ */
+export type LearnMedium = "skills" | "memory";
+
+type LearnGuidance = {
+  /** Lines for the /learn prompt body. */
+  lines: readonly string[];
+  /** Reference blocks the host appends after the closing instruction, each after a blank line. */
+  appendix?: readonly string[];
+};
+
+type LearnSubcommandContext = {
+  /** Text after the subcommand name. */
+  args: string;
+  config: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  /** Revalidates admitted owner authority; call it after awaited work, before effects. */
+  assertOwnerCurrent?: () => void;
+};
+
+/** A reply without a model turn, or the prompt that replaces this turn's user message. */
+type LearnSubcommandResult = { text: string } | { prompt: string };
+
+export type LearnSubcommand = {
+  /** The word after /learn, matched case-insensitively. */
+  name: string;
+  /**
+   * Whether the raw text after the name, separator included, selects the subcommand;
+   * other text stays a learning request. The handler gets the arguments without the separator.
+   */
+  matchArgs?: (args: string) => boolean;
+  /**
+   * Changes state without a model turn: only owners may run it, gateway clients need
+   * operator.admin, and it runs even when the contribution's tools are unavailable.
+   * Other subcommands run only when the contribution can learn on this turn.
+   */
+  direct?: boolean;
+  handle: (
+    context: LearnSubcommandContext,
+  ) => LearnSubcommandResult | Promise<LearnSubcommandResult>;
+};
+
+export type LearnContribution = {
+  medium: LearnMedium;
+  /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
+  toolNames: readonly string[];
+  /** Tools that must all be allowed for this contribution to learn; default: any of toolNames. */
+  requiredToolNames?: readonly string[];
+  /**
+   * Builds this contribution's /learn guidance from the allowed tools and the media that
+   * learn on this turn, including this one. It must be deterministic: it is prompt text.
+   */
+  buildGuidance: (params: {
+    availableTools: Set<string>;
+    media: ReadonlySet<LearnMedium>;
+  }) => LearnGuidance;
+  /** Words after /learn that this contribution handles instead of a learning request. */
+  subcommands?: readonly LearnSubcommand[];
+  /**
+   * Reply when /learn cannot learn here and this contribution's medium is the only one
+   * registered (or its subcommand was asked for). Default: a generic remedy.
+   */
+  unavailableText?: string;
+};
+
+export type LearnContributionRegistration = {
+  pluginId: string;
+  contribution: LearnContribution;
 };
 
 export type MemoryPluginCapabilityRegistration = {

@@ -2,14 +2,10 @@ export type {
   CreateSandboxBackendParams,
   CreateReservedSandboxBackendParamsV1,
   ReservedSandboxBackendFactoryV1,
-  RemoteShellSandboxHandle,
-  RunSshSandboxCommandParams,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
   SandboxBackendFactory,
-  SandboxFsBridge,
-  SandboxFsStat,
   SandboxBackendHandle,
   SandboxBackendId,
   SandboxBackendManager,
@@ -19,12 +15,19 @@ export type {
   SandboxBackendWorkdirValidation,
   SandboxBackendWorkdirResolver,
   SandboxBackendWorkdirValidator,
-  SandboxContext,
-  SandboxResolvedPath,
-  SandboxSshConfig,
+} from "../agents/sandbox/backend.js";
+export type { RemoteShellSandboxHandle } from "../agents/sandbox/remote-fs-bridge.js";
+export type {
+  RunSshSandboxCommandParams,
   SshSandboxSession,
   SshSandboxSettings,
-} from "../agents/sandbox.js";
+} from "../agents/sandbox/ssh.js";
+export type {
+  SandboxFsBridge,
+  SandboxFsStat,
+  SandboxResolvedPath,
+} from "../agents/sandbox/fs-bridge.js";
+export type { SandboxContext, SandboxSshConfig } from "../agents/sandbox/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type {
   OpenClawPluginToolSandbox,
@@ -40,23 +43,27 @@ export {
   buildRemoteWorkdirValidationCommand,
   buildRemoteCommand,
   buildValidatedExecRemoteCommand,
-  createRemoteShellSandboxFsBridge,
-  createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
+  runSshSandboxCommand,
+  shellEscape,
+} from "../agents/sandbox/ssh.js";
+export { createRemoteShellSandboxFsBridge } from "../agents/sandbox/remote-fs-bridge.js";
+export { createWritableRenameTargetResolver } from "../agents/sandbox/fs-bridge-rename-targets.js";
+export {
   getSandboxBackendFactory,
   getSandboxBackendManager,
   getSandboxBackendWorkdirResolver,
-  isToolAllowed,
-  prepareSshSandboxExec,
   registerSandboxBackend,
   requireSandboxBackendFactory,
+} from "../agents/sandbox/backend.js";
+export { isToolAllowed } from "../agents/sandbox/tool-policy.js";
+export {
   resolveSandboxRuntimeStatusAsync,
   resolvePreparedSandboxRuntimeStatus,
-  runSshSandboxCommand,
-  sanitizeEnvVars,
-  shellEscape,
-} from "../agents/sandbox.js";
+} from "../agents/sandbox/runtime-status.js";
+export { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
 
 export {
   runPluginCommandWithTimeout,

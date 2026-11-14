@@ -1,12 +1,9 @@
-import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import type { PluginPayloadSmokeFailure } from "../../plugins/payload-verification.js";
-import type { PluginUpdateOutcome } from "../../plugins/update.js";
 import { formatCliCommand } from "../command-format.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
@@ -36,6 +33,7 @@ export function collectPostCorePluginAdvisories(
         (warning) =>
           warning.reason === "plugin-target-unavailable" ||
           warning.reason === "plugin-operator-managed" ||
+          warning.reason === "plugin-config-conflict" ||
           warning.reason === "doctor-advisory",
       )
       .map((warning) => warning.message),
@@ -80,56 +78,6 @@ export function collectPostCorePluginFailureFacts(
     });
   }
   return normalizeUpdateFailureFacts(failures, env);
-}
-
-// Producer evidence only. This does not assert activation, final config validity,
-// or authority to execute a repair. Unknown installation requirements stay unsafe.
-// Legacy status/reason remain independent until callers qualify their policy cutover.
-export type PluginUpdateAssessment =
-  | { kind: "no-payload-repair" }
-  | { kind: "core-critical"; reason: ReturnType<typeof createUpdateConfigFailure>["reason"] }
-  | {
-      kind: "unsafe";
-      reason:
-        | "capability-consent-required"
-        | "integrity-drift"
-        | "unowned-plugin-payload"
-        | "plugin-requirement-unknown"
-        | "convergence-failed";
-    };
-
-export type ProducedPluginUpdateResult = PostCorePluginUpdateResult & {
-  assessment: PluginUpdateAssessment;
-};
-
-export function assessPluginUpdate(params: {
-  smokeFailures: PluginPayloadSmokeFailure[];
-  hasDisabledPlugin: boolean;
-  errored: boolean;
-  outcomes: PluginUpdateOutcome[];
-  integrityDrift: boolean;
-}): PluginUpdateAssessment {
-  if (
-    params.outcomes.some(
-      (outcome) =>
-        outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-    )
-  ) {
-    return { kind: "unsafe", reason: "capability-consent-required" };
-  }
-  if (params.integrityDrift) {
-    return { kind: "unsafe", reason: "integrity-drift" };
-  }
-  const failures = params.smokeFailures;
-  if (failures.some((failure) => !failure.installPath)) {
-    return { kind: "unsafe", reason: "unowned-plugin-payload" };
-  }
-  if (failures.length > 0 || params.hasDisabledPlugin) {
-    return { kind: "unsafe", reason: "plugin-requirement-unknown" };
-  }
-  return params.errored
-    ? { kind: "unsafe", reason: "convergence-failed" }
-    : { kind: "no-payload-repair" };
 }
 
 export type PluginUpdateWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];

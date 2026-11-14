@@ -10,6 +10,7 @@ import {
   shouldRetryFailoverSignal,
 } from "../../agents/failover/retry-evidence.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../agents/sessions/transcript-turn-error.js";
+import { isLocalStorageOutcomeError } from "../../infra/sqlite-error-diagnostics.js";
 import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
@@ -32,11 +33,17 @@ const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
 export function isTerminalAssistantError(
   message:
     | (Pick<AssistantMessage, "diagnostics" | "errorCode"> &
-        Partial<Pick<AssistantMessage, "stopReason" | "errorBody" | "errorMessage" | "content">>)
+        Partial<
+          Pick<
+            AssistantMessage,
+            "stopReason" | "errorBody" | "errorMessage" | "errorType" | "content"
+          >
+        >)
     | null
     | undefined,
 ): boolean {
   return (
+    isLocalStorageOutcomeError(message) ||
     Boolean(message?.errorCode && TERMINAL_ASSISTANT_ERROR_CODES.has(message.errorCode)) ||
     (message?.stopReason === "error" &&
       isSessionTranscriptTurnMismatchErrorMessage(message.errorMessage)) ||

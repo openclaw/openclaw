@@ -9,7 +9,6 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { resolveEnvApiKey } from "../model-auth-env.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
-import { createBundledStaticCatalogModelResolver } from "./model.static-catalog.js";
 
 const loaded = loadPluginManifest(
   fileURLToPath(new URL("../../../extensions/qwen", import.meta.url)),
@@ -20,27 +19,18 @@ if (!loaded.ok) {
 const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [loaded.manifest] });
 
 function configuredQwen(modelId: string, baseUrl: string): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        qwen: {
-          baseUrl,
-          api: "openai-completions",
-          models: [
-            {
-              id: modelId,
-              name: modelId,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 262_144,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
+  const models = [
+    {
+      id: modelId,
+      name: modelId,
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262_144,
+      maxTokens: 4096,
     },
-  };
+  ];
+  return { models: { providers: { qwen: { baseUrl, api: "openai-completions", models } } } };
 }
 
 function resolveQwen(modelId: string, cfg: OpenClawConfig = {}) {
@@ -56,46 +46,20 @@ function resolveQwen(modelId: string, cfg: OpenClawConfig = {}) {
 }
 
 describe("Qwen static fallback routing", () => {
-  it("inherits the provider endpoint when the model row has none", () => {
-    const resolve = createBundledStaticCatalogModelResolver({
-      metadataSnapshot,
-      cfg: {},
-      includeRuntimeDiscovery: true,
-    });
-    expect(resolve({ provider: "qwen", modelId: "qwen3.5-plus" })).toMatchObject({
-      api: "openai-completions",
-      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-    });
-  });
-
   it.each([
-    {
-      name: "key only",
-      baseUrl: undefined,
-      endpoint: "https://coding-intl.dashscope.aliyuncs.com/v1",
-    },
-    {
-      name: "China Coding Plan",
-      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-      endpoint: "https://coding.dashscope.aliyuncs.com/v1",
-    },
-    {
-      name: "Global Standard",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      endpoint: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    },
-    {
-      name: "China Standard",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    },
-  ])("sends $name requests to the selected endpoint", async ({ baseUrl, endpoint }) => {
+    ["key only", undefined],
+    ["China Coding Plan", "https://coding.dashscope.aliyuncs.com/v1"],
+    ["Global Standard", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    ["China Standard", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
+  ])("sends %s requests to the selected endpoint", async (_name, baseUrl) => {
+    const endpoint = baseUrl ?? "https://coding-intl.dashscope.aliyuncs.com/v1";
     const cfg = baseUrl ? configuredQwen("qwen3.5-plus", baseUrl) : {};
     const resolved = await resolveQwen("qwen3.5-plus", cfg);
     expect(resolved.error).toBeUndefined();
     if (!resolved.model) {
       throw new Error(resolved.error);
     }
+    expect(resolved.model).toMatchObject({ api: "openai-completions", baseUrl: endpoint });
     const requests: Request[] = [];
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(new Request(input, init));
@@ -118,8 +82,7 @@ describe("Qwen static fallback routing", () => {
         { apiKey: auth?.apiKey },
       )
       .result();
-    expect(result.errorMessage).toBeUndefined();
-    expect(result.stopReason).toBe("stop");
+    expect([result.errorMessage, result.stopReason]).toEqual([undefined, "stop"]);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(`${endpoint}/chat/completions`);
     expect(requests[0]?.headers.get("authorization")).toBe("Bearer synthetic-qwen-key");

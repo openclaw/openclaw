@@ -1,4 +1,5 @@
 import type { ConfigValidationIssue, LegacyConfigIssue } from "../config/types.js";
+import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 export function createDoctorConfigSnapshot(
   params: {
@@ -11,18 +12,11 @@ export function createDoctorConfigSnapshot(
 ) {
   const config = params.config ?? {};
   return {
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(config),
     includedPaths: [],
-    exists: true,
-    raw: "{}",
     parsed: params.parsed ?? {},
-    sourceConfig: config,
-    resolved: config,
     valid: params.valid ?? true,
-    runtimeConfig: config,
-    config,
     issues: params.issues ?? [],
-    warnings: [],
     legacyIssues: params.legacyIssues ?? [],
   };
 }

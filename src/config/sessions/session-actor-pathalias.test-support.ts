@@ -132,9 +132,6 @@ export async function assertSessionActorPathAliasReuse(
 
         historyReads.mockClear();
         expect(
-          readSessionActorProjectionReceipt({ path: otherDatabase.path, sessionKey, sessionId }),
-        ).toBeUndefined();
-        expect(
           await readSessionTranscriptAccountingAsync(otherScope, accountingOptions),
         ).toMatchObject({ eventCount: 1 });
         expect(

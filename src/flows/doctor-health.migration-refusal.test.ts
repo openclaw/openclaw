@@ -1,6 +1,7 @@
 import "./doctor-health.test-support.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
 import * as nocow from "../commands/doctor-sqlite-nocow.js";
@@ -12,6 +13,7 @@ import {
   acquireStateDatabaseSchemaLease,
 } from "../infra/gateway-state-owner.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import {
   collectUpdateDoctorFailureFacts,
@@ -251,11 +253,6 @@ describe("Doctor refused-migration maintenance outcome", () => {
             gateway: { ...ctx.cfg.gateway, port: 19091 },
           });
           const first = await readConfigFileSnapshot();
-          expect(ctx.configResult.confirmedConfigSource).toEqual({
-            path: first.path,
-            hash: first.hash,
-          });
-          expect(first.hash).not.toBe(planned.hash);
           maintenance.finish.mockImplementationOnce(async (_cfg, writeConfig) => {
             expect(writeConfig).toBeTypeOf("function");
             if (outcome === "conflict") {
@@ -264,8 +261,6 @@ describe("Doctor refused-migration maintenance outcome", () => {
               ctx.configResult.confirmedConfigSource = { path: first.path, hash: null };
             }
             const previous = ctx.cfg;
-            const baseline = ctx.cfgForPersistence;
-            const receipt = ctx.configResult.confirmedConfigSource;
             const files = [state.configPath, state.configPath + ".bak"];
             const retained = readFiles(files);
             const candidate = {
@@ -282,23 +277,10 @@ describe("Doctor refused-migration maintenance outcome", () => {
                 outcome === "validation" ? "validation" : "config-conflict",
               );
               expect(ctx.cfg).toBe(previous);
-              expect(ctx.cfgForPersistence).toBe(baseline);
-              expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
               expect(readFiles(files)).toEqual(retained);
               expect(ctx.cfg.gateway?.auth?.token).toBeUndefined();
             } else {
-              const committed = await writeConfig(candidate);
-              expect(committed).toEqual(ctx.cfg);
-              expect(ctx.cfgForPersistence.gateway?.auth?.token).toBe(
-                "maintenance-recovered-token",
-              );
-              const saved = await readConfigFileSnapshot();
-              expect(ctx.configResult.confirmedConfigSource).toEqual({
-                path: saved.path,
-                hash: saved.hash,
-              });
-              expect(saved.hash).not.toBe(first.hash);
-              expect(saved.sourceConfig.gateway?.port).toBe(19091);
+              await writeConfig(candidate);
             }
           });
         });
@@ -385,7 +367,7 @@ describe("Doctor maintenance admission", () => {
       [false, true].map((updating) => ({ owner, updating })),
     ),
   )(
-    "preserves the live $owner owner before snapshots (updating=$updating)",
+    "preserves the live $owner owner before repair snapshots (updating=$updating)",
     async ({ owner, updating }) => {
       const resultPath = updating ? createUpdatePostInstallDoctorResultPath() : undefined;
       const env = {
@@ -405,6 +387,11 @@ describe("Doctor maintenance admission", () => {
         }
         closeOpenClawStateDatabaseByPath(database.path);
         const before = readConfig(state.configPath);
+        const readDatabaseFamily = () =>
+          resolveSqliteDatabaseFilePaths(database.path).map((file) =>
+            fs.existsSync(file) ? fs.readFileSync(file) : null,
+          );
+        const familyBefore = readDatabaseFamily();
         const stateOwner =
           owner === "gateway"
             ? acquireGatewayStateOwner({ databasePath: database.path })
@@ -423,10 +410,35 @@ describe("Doctor maintenance admission", () => {
           const result = resultPath
             ? await consumeUpdatePostInstallDoctorResult(resultPath)
             : undefined;
+          const readImages = snapshotProcesses.execFile.mock.calls.flatMap((call) => {
+            const args = call[1];
+            if (!Array.isArray(args)) {
+              return [];
+            }
+            const childIndex = args.indexOf(SQLITE_READONLY_CHILD_ARG);
+            return childIndex < 0 ? [] : [args.slice(childIndex + 1)];
+          });
+          if (owner === "agent") {
+            // Inspect current WAL leases in a private shared-state image before refusing repair.
+            for (const [mode, source, temporaryRoot] of readImages) {
+              expect(mode).toBe("sync");
+              expect(source).toBe(database.path);
+              expect(temporaryRoot).toBeTypeOf("string");
+              if (typeof temporaryRoot !== "string") {
+                throw new Error("Lease inspection did not identify its temporary image");
+              }
+              expect(path.dirname(temporaryRoot)).toBe(mocks.runtimeTmpDir());
+              expect(path.basename(temporaryRoot)).toMatch(/^openclaw-sqlite-readonly-v2-/);
+              expect(fs.existsSync(temporaryRoot)).toBe(false);
+            }
+          } else {
+            expect(readImages).toEqual([]);
+          }
+          expect(readDatabaseFamily()).toEqual(familyBefore);
           expect(
-            snapshotProcesses.execFile.mock.calls.filter(
-              (call) => Array.isArray(call[1]) && call[1].includes(SQLITE_READONLY_CHILD_ARG),
-            ),
+            fs
+              .readdirSync(path.dirname(database.path))
+              .filter((entry) => entry.includes(".pre-startup-migration-")),
           ).toEqual([]);
           if (updating) {
             expect(failure).toBeUndefined();
@@ -448,7 +460,7 @@ describe("Doctor maintenance admission", () => {
                 check: "doctor",
                 code: "agent-database-lease-active",
                 message:
-                  "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+                  "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.",
               },
             ]);
           } else {

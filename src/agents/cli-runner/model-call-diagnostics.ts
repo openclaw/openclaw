@@ -20,6 +20,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
+import { isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { isFailoverError } from "../failover-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -142,12 +143,7 @@ function parseAssistantContentBlock(block: unknown): DiagnosticAssistantBlock | 
   if (block.type === "thinking" && typeof block.thinking === "string") {
     return { type: "thinking", thinking: block.thinking };
   }
-  if (
-    (block.type === "tool_use" ||
-      block.type === "server_tool_use" ||
-      block.type === "mcp_tool_use") &&
-    typeof block.name === "string"
-  ) {
+  if (isClaudeToolUseBlockType(block.type) && typeof block.name === "string") {
     return {
       type: "tool_call",
       name: block.name,

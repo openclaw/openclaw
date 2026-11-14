@@ -39,7 +39,10 @@ import type {
 } from "./session-accessor.types.js";
 import { createSessionActorEntryWithTranscriptInScope } from "./session-actor-entry-adapter.js";
 import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { resolveSessionEntryCandidates } from "./store-entry.js";
 
 type CreationScope = ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
 type CreationSource = {
@@ -74,14 +77,38 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
     let source: CreationSource;
     if (retained) {
       const reader = retained.owner;
-      const read = () =>
-        reader.readExactEntries({
-          projection: "creation",
-          creationLabel: options.label,
-          sessionKeys: [scope.sessionKey],
-          env: { ...scope.env },
-        });
-      let snapshot = (await read()).creation;
+      const read = async () => {
+        const facts =
+          options.label === undefined
+            ? readRetainedSessionEntryFacts(databaseOptions, { sessionKeys: [scope.sessionKey] })
+            : undefined;
+        if (facts) {
+          const resolved = resolveSessionEntryCandidates({
+            entries: facts.entries,
+            sessionKey: scope.sessionKey,
+            canonicalKeys: true,
+          });
+          const targetEntry = facts.entries[0]?.entry;
+          return {
+            normalizedKey: resolved.normalizedKey,
+            legacyKeys: resolved.legacyKeys,
+            existingEntry: resolved.existing ? { ...resolved.existing.entry } : undefined,
+            targetEntry: targetEntry ? { ...targetEntry } : undefined,
+            labelInUse: false,
+            databaseIdentity: facts.source.databaseIdentity,
+            databasePath: facts.source.path,
+          };
+        }
+        return (
+          await reader.readExactEntries({
+            projection: "creation",
+            creationLabel: options.label,
+            sessionKeys: [scope.sessionKey],
+            env: { ...scope.env },
+          })
+        ).creation;
+      };
+      let snapshot = await read();
       if (!snapshot) {
         await prepareSessionEntryReplacementDatabase(
           databaseOptions,
@@ -92,7 +119,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
           undefined,
           options.followRegistration,
         );
-        snapshot = (await read()).creation;
+        snapshot = await read();
       }
       if (!snapshot) {
         throw new Error("Session creation lost its initialized database");
@@ -252,10 +279,23 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             skipMaintenance: true,
             withCommit,
             beforeCommitInTransaction: () => {
-              assertCurrent();
-              assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
+              try {
+                assertCurrent();
+                assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
+              } catch (error) {
+                throw options.certifyNotCommitted
+                  ? new SessionEntryCreationNotCommittedError(error)
+                  : error;
+              }
             },
             creation: {
+              receipt: options.creationOperation
+                ? {
+                    operation: options.creationOperation,
+                    sessionKey: normalizedKey,
+                    entry: created.entry,
+                  }
+                : undefined,
               preparedTranscript,
               ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             },
@@ -267,6 +307,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         try {
           assertCurrent();
           await applySessionEntryCreationReplacement({
+            certifyNotCommitted: options.certifyNotCommitted,
             scope,
             agentId: scope.agentId,
             storePath: scope.path,
@@ -285,6 +326,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               options.label === undefined
                 ? undefined
                 : { sessionKey: normalizedKey, label: options.label },
+            creationOperation: options.creationOperation,
             preparedTranscript,
             initializeTranscript: separateHeader || preparedTranscript ? undefined : initialization,
             onWriterAdmitted: separateHeader ? undefined : () => options.onPhase?.("commit"),

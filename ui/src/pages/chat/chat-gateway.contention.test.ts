@@ -1,34 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
-import type { ChatState } from "./chat-state-contract.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
-
-function createState(overrides: Partial<ChatState> = {}): ChatState {
-  return {
-    chatAttachments: [],
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessage: "",
-    chatMessages: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatRunStartup: null,
-    chatThinkingLevel: null,
-    chatVerboseLevel: null,
-    client: null,
-    connected: true,
-    connectionEpoch: 0,
-    hello: null,
-    lastError: null,
-    sessionKey: "main",
-    ...overrides,
-  };
-}
 
 describe("chat gateway state contention", () => {
   it.each(["state_contention", "unknown", undefined] as const)(

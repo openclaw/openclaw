@@ -74,6 +74,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Rich Messages",
     help: "Opt into Bot API 10.3 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
+  widgets: {
+    label: "Telegram Message Widgets",
+    help: "Opt into Bot API 10.4 message widgets: show_widget sends interactive widgets in private chats, and taps update them in place. Default: false because older Telegram clients cannot render widgets.",
+  },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
     help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",

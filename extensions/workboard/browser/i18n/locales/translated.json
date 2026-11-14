@@ -28,7 +28,9 @@
         "statusCounts": "按状态分类的卡片",
         "cardCount": "{count} 张卡片",
         "noActiveCards": "没有就绪或运行中的卡片。",
-        "disconnected": "连接到 Gateway 以加载工作看板。"
+        "disconnected": "连接到 Gateway 以加载工作看板。",
+        "cardNotLoaded": "此卡片尚未加载。请加载更多卡片以查找它。",
+        "partialCards": "已加载 {count} 张卡片。计数和结果仅包含已加载的卡片。"
       },
       "status": {
         "triage": "Triage",
@@ -349,7 +351,9 @@
           "orange": "橙色",
           "pink": "粉色",
           "cyan": "青色"
-        }
+        },
+        "partial": "已加载 {count} 个会话，共 {total} 个。智能体筛选仅适用于已加载的会话。",
+        "loadMore": "加载更多会话"
       },
       "boardName": "名称",
       "boardAppearance": "看板外观",
@@ -457,7 +461,12 @@
       "lifecycleFailedDetail": "打开会话以查看失败原因",
       "lifecycleStopped": "已停止",
       "lifecycleTimedOut": "已超时",
-      "lifecycleStoppedDetail": "运行已停止"
+      "lifecycleStoppedDetail": "运行已停止",
+      "partialCards": "已加载 {count} 张卡片。搜索和筛选仅适用于已加载的卡片。加载所有卡片后才能重新排序。",
+      "loadMoreCards": "加载更多卡片",
+      "automationEvent": "事件：{source}",
+      "automationWaitingForEvent": "等待事件",
+      "dependencyStatusNotLoaded": "未加载"
     }
   },
   "zh-TW": {
@@ -489,7 +498,9 @@
         "statusCounts": "依狀態顯示卡片",
         "cardCount": "{count} 張卡片",
         "noActiveCards": "沒有就緒或執行中的卡片。",
-        "disconnected": "請連線至 Gateway 以載入 Workboard。"
+        "disconnected": "請連線至 Gateway 以載入 Workboard。",
+        "cardNotLoaded": "尚未載入此卡片。請載入更多卡片以尋找此卡片。",
+        "partialCards": "已載入 {count} 張卡片。計數與結果僅包含已載入的卡片。"
       },
       "status": {
         "triage": "Triage",
@@ -810,7 +821,9 @@
           "orange": "橙色",
           "pink": "粉紅色",
           "cyan": "青色"
-        }
+        },
+        "partial": "已載入 {count} 個工作階段，共 {total} 個。代理程式篩選僅適用於已載入的工作階段。",
+        "loadMore": "載入更多工作階段"
       },
       "boardName": "名稱",
       "boardAppearance": "看板外觀",
@@ -918,7 +931,12 @@
       "lifecycleFailedDetail": "開啟工作階段以查看失敗原因",
       "lifecycleStopped": "已停止",
       "lifecycleTimedOut": "已逾時",
-      "lifecycleStoppedDetail": "執行已停止"
+      "lifecycleStoppedDetail": "執行已停止",
+      "partialCards": "已載入 {count} 張卡片。搜尋與篩選僅適用於已載入的卡片。請載入所有卡片以重新排序。",
+      "loadMoreCards": "載入更多卡片",
+      "automationEvent": "事件：{source}",
+      "automationWaitingForEvent": "等待事件",
+      "dependencyStatusNotLoaded": "未載入"
     }
   },
   "pt-BR": {
@@ -950,7 +968,9 @@
         "statusCounts": "Cartões por status",
         "cardCount": "{count} cards",
         "noActiveCards": "Nenhum cartão pronto ou em execução.",
-        "disconnected": "Conecte-se ao Gateway para carregar o Workboard."
+        "disconnected": "Conecte-se ao Gateway para carregar o Workboard.",
+        "cardNotLoaded": "Este cartão ainda não foi carregado. Carregue mais cartões para encontrá-lo.",
+        "partialCards": "{count} cartões carregados. As contagens e os resultados incluem apenas os cartões carregados."
       },
       "status": {
         "triage": "Triage",
@@ -1271,7 +1291,9 @@
           "orange": "Laranja",
           "pink": "Rosa",
           "cyan": "Ciano"
-        }
+        },
+        "partial": "{count} de {total} sessões carregadas. O filtro de agente se aplica às sessões carregadas.",
+        "loadMore": "Carregar mais sessões"
       },
       "boardName": "Nome",
       "boardAppearance": "Aparência do quadro",
@@ -1379,7 +1401,12 @@
       "lifecycleFailedDetail": "Abra a sessão para analisar a falha",
       "lifecycleStopped": "Interrompida",
       "lifecycleTimedOut": "Tempo limite excedido",
-      "lifecycleStoppedDetail": "A execução foi interrompida"
+      "lifecycleStoppedDetail": "A execução foi interrompida",
+      "partialCards": "{count} cartões carregados. A busca e os filtros se aplicam aos cartões carregados. Carregue todos os cartões para reordená-los.",
+      "loadMoreCards": "Carregar mais cartões",
+      "automationEvent": "Evento: {source}",
+      "automationWaitingForEvent": "Aguardando evento",
+      "dependencyStatusNotLoaded": "Não carregado"
     }
   },
   "de": {
@@ -1411,7 +1438,9 @@
         "statusCounts": "Karten nach Status",
         "cardCount": "{count} Karten",
         "noActiveCards": "Keine bereiten oder laufenden Karten.",
-        "disconnected": "Stellen Sie eine Verbindung zum Gateway her, um Workboard zu laden."
+        "disconnected": "Stellen Sie eine Verbindung zum Gateway her, um Workboard zu laden.",
+        "cardNotLoaded": "Diese Karte ist noch nicht geladen. Laden Sie weitere Karten, um sie zu finden.",
+        "partialCards": "{count} Karten geladen. Anzahlen und Ergebnisse berücksichtigen nur geladene Karten."
       },
       "status": {
         "triage": "Triage",
@@ -1732,7 +1761,9 @@
           "orange": "Orange",
           "pink": "Pink",
           "cyan": "Cyan"
-        }
+        },
+        "partial": "{count} von {total} Sitzungen geladen. Der Agentenfilter gilt für geladene Sitzungen.",
+        "loadMore": "Weitere Sitzungen laden"
       },
       "boardName": "Name",
       "boardAppearance": "Board-Darstellung",
@@ -1840,7 +1871,12 @@
       "lifecycleFailedDetail": "Öffnen Sie die Sitzung, um den Fehler zu überprüfen",
       "lifecycleStopped": "Gestoppt",
       "lifecycleTimedOut": "Zeitüberschreitung",
-      "lifecycleStoppedDetail": "Der Durchlauf wurde gestoppt"
+      "lifecycleStoppedDetail": "Der Durchlauf wurde gestoppt",
+      "partialCards": "{count} Karten geladen. Suche und Filter gelten für geladene Karten. Laden Sie alle Karten, um sie neu anzuordnen.",
+      "loadMoreCards": "Weitere Karten laden",
+      "automationEvent": "Ereignis: {source}",
+      "automationWaitingForEvent": "Warten auf Ereignis",
+      "dependencyStatusNotLoaded": "Nicht geladen"
     }
   },
   "es": {
@@ -1872,7 +1908,9 @@
         "statusCounts": "Tarjetas por estado",
         "cardCount": "{count} tarjetas",
         "noActiveCards": "No hay tarjetas listas o en ejecución.",
-        "disconnected": "Conéctate al Gateway para cargar Workboard."
+        "disconnected": "Conéctate al Gateway para cargar Workboard.",
+        "cardNotLoaded": "Esta tarjeta aún no se ha cargado. Carga más tarjetas para encontrarla.",
+        "partialCards": "{count} tarjetas cargadas. Los recuentos y los resultados solo incluyen las tarjetas cargadas."
       },
       "status": {
         "triage": "Triage",
@@ -2193,7 +2231,9 @@
           "orange": "Naranja",
           "pink": "Rosa",
           "cyan": "Cian"
-        }
+        },
+        "partial": "{count} de {total} sesiones cargadas. El filtro de agentes se aplica a las sesiones cargadas.",
+        "loadMore": "Cargar más sesiones"
       },
       "boardName": "Nombre",
       "boardAppearance": "Apariencia del tablero",
@@ -2301,7 +2341,12 @@
       "lifecycleFailedDetail": "Abre la sesión para revisar el error",
       "lifecycleStopped": "Detenida",
       "lifecycleTimedOut": "Tiempo de espera agotado",
-      "lifecycleStoppedDetail": "La ejecución se detuvo"
+      "lifecycleStoppedDetail": "La ejecución se detuvo",
+      "partialCards": "{count} tarjetas cargadas. La búsqueda y los filtros se aplican a las tarjetas cargadas. Carga todas las tarjetas para reordenarlas.",
+      "loadMoreCards": "Cargar más tarjetas",
+      "automationEvent": "Evento: {source}",
+      "automationWaitingForEvent": "Esperando un evento",
+      "dependencyStatusNotLoaded": "Sin cargar"
     }
   },
   "ja-JP": {
@@ -2333,7 +2378,9 @@
         "statusCounts": "ステータス別のカード",
         "cardCount": "{count} 件のカード",
         "noActiveCards": "準備完了または実行中のカードはありません。",
-        "disconnected": "Workboardを読み込むには、Gatewayに接続してください。"
+        "disconnected": "Workboardを読み込むには、Gatewayに接続してください。",
+        "cardNotLoaded": "このカードはまだ読み込まれていません。カードをさらに読み込んで探してください。",
+        "partialCards": "{count}件のカードを読み込み済みです。件数と結果には読み込み済みのカードのみが含まれます。"
       },
       "status": {
         "triage": "Triage",
@@ -2654,7 +2701,9 @@
           "orange": "オレンジ",
           "pink": "ピンク",
           "cyan": "シアン"
-        }
+        },
+        "partial": "{total}件中{count}件のセッションを読み込み済みです。エージェントフィルターは読み込み済みのセッションに適用されます。",
+        "loadMore": "セッションをさらに読み込む"
       },
       "boardName": "名前",
       "boardAppearance": "ボードの外観",
@@ -2762,7 +2811,12 @@
       "lifecycleFailedDetail": "セッションを開いて失敗の詳細を確認してください",
       "lifecycleStopped": "停止済み",
       "lifecycleTimedOut": "タイムアウト",
-      "lifecycleStoppedDetail": "実行が停止されました"
+      "lifecycleStoppedDetail": "実行が停止されました",
+      "partialCards": "{count}件のカードを読み込み済みです。検索とフィルターは読み込み済みのカードに適用されます。並べ替えるには、すべてのカードを読み込んでください。",
+      "loadMoreCards": "カードをさらに読み込む",
+      "automationEvent": "イベント：{source}",
+      "automationWaitingForEvent": "イベント待機中",
+      "dependencyStatusNotLoaded": "未読み込み"
     }
   },
   "ko": {
@@ -2794,7 +2848,9 @@
         "statusCounts": "상태별 카드",
         "cardCount": "카드 {count}개",
         "noActiveCards": "준비 또는 실행 중인 카드가 없습니다.",
-        "disconnected": "Workboard를 불러오려면 Gateway에 연결하세요."
+        "disconnected": "Workboard를 불러오려면 Gateway에 연결하세요.",
+        "cardNotLoaded": "아직 불러오지 않은 카드입니다. 카드를 더 불러와서 찾아보세요.",
+        "partialCards": "카드 {count}개를 불러왔습니다. 개수와 결과에는 불러온 카드만 포함됩니다."
       },
       "status": {
         "triage": "Triage",
@@ -3115,7 +3171,9 @@
           "orange": "주황색",
           "pink": "분홍색",
           "cyan": "청록색"
-        }
+        },
+        "partial": "세션 {total}개 중 {count}개를 불러왔습니다. 에이전트 필터는 불러온 세션에 적용됩니다.",
+        "loadMore": "세션 더 불러오기"
       },
       "boardName": "이름",
       "boardAppearance": "보드 모양",
@@ -3223,7 +3281,12 @@
       "lifecycleFailedDetail": "세션을 열어 실패 원인을 확인하세요",
       "lifecycleStopped": "중지됨",
       "lifecycleTimedOut": "시간 초과",
-      "lifecycleStoppedDetail": "실행이 중지되었습니다"
+      "lifecycleStoppedDetail": "실행이 중지되었습니다",
+      "partialCards": "카드 {count}개를 불러왔습니다. 검색과 필터는 불러온 카드에 적용됩니다. 순서를 변경하려면 모든 카드를 불러오세요.",
+      "loadMoreCards": "카드 더 불러오기",
+      "automationEvent": "이벤트: {source}",
+      "automationWaitingForEvent": "이벤트 대기 중",
+      "dependencyStatusNotLoaded": "불러오지 않음"
     }
   },
   "fr": {
@@ -3255,7 +3318,9 @@
         "statusCounts": "Cartes par statut",
         "cardCount": "{count} cartes",
         "noActiveCards": "Aucune carte prête ou en cours.",
-        "disconnected": "Connectez-vous au Gateway pour charger Workboard."
+        "disconnected": "Connectez-vous au Gateway pour charger Workboard.",
+        "cardNotLoaded": "Cette carte n’est pas encore chargée. Chargez plus de cartes pour la trouver.",
+        "partialCards": "{count} cartes chargées. Les totaux et les résultats incluent uniquement les cartes chargées."
       },
       "status": {
         "triage": "Triage",
@@ -3576,7 +3641,9 @@
           "orange": "Orange",
           "pink": "Rose",
           "cyan": "Cyan"
-        }
+        },
+        "partial": "{count} sessions chargées sur {total}. Le filtre par agent s’applique aux sessions chargées.",
+        "loadMore": "Charger plus de sessions"
       },
       "boardName": "Nom",
       "boardAppearance": "Apparence du tableau",
@@ -3684,7 +3751,12 @@
       "lifecycleFailedDetail": "Ouvrez la session pour examiner l’échec",
       "lifecycleStopped": "Arrêté",
       "lifecycleTimedOut": "Délai dépassé",
-      "lifecycleStoppedDetail": "L’exécution a été arrêtée"
+      "lifecycleStoppedDetail": "L’exécution a été arrêtée",
+      "partialCards": "{count} cartes chargées. La recherche et les filtres s’appliquent aux cartes chargées. Chargez toutes les cartes pour les réorganiser.",
+      "loadMoreCards": "Charger plus de cartes",
+      "automationEvent": "Événement : {source}",
+      "automationWaitingForEvent": "En attente d’un événement",
+      "dependencyStatusNotLoaded": "Non chargé"
     }
   },
   "hi": {
@@ -3716,7 +3788,9 @@
         "statusCounts": "स्थिति के अनुसार कार्ड",
         "cardCount": "{count} कार्ड",
         "noActiveCards": "कोई तैयार या चल रहे कार्ड नहीं हैं।",
-        "disconnected": "Workboard लोड करने के लिए Gateway से कनेक्ट करें।"
+        "disconnected": "Workboard लोड करने के लिए Gateway से कनेक्ट करें।",
+        "cardNotLoaded": "यह कार्ड अभी लोड नहीं हुआ है। इसे ढूँढने के लिए और कार्ड लोड करें।",
+        "partialCards": "{count} कार्ड लोड हो गए हैं। गिनती और नतीजों में केवल लोड किए गए कार्ड शामिल हैं।"
       },
       "status": {
         "triage": "ट्रायज",
@@ -4037,7 +4111,9 @@
           "orange": "नारंगी",
           "pink": "गुलाबी",
           "cyan": "सियान"
-        }
+        },
+        "partial": "{total} में से {count} सत्र लोड हो गए हैं। एजेंट फ़िल्टर लोड किए गए सत्रों पर लागू होता है।",
+        "loadMore": "और सत्र लोड करें"
       },
       "boardName": "नाम",
       "boardAppearance": "बोर्ड का स्वरूप",
@@ -4145,7 +4221,12 @@
       "lifecycleFailedDetail": "विफलता की समीक्षा करने के लिए सत्र खोलें",
       "lifecycleStopped": "रोक दिया गया",
       "lifecycleTimedOut": "समय सीमा समाप्त हो गई",
-      "lifecycleStoppedDetail": "रन रोक दिया गया था"
+      "lifecycleStoppedDetail": "रन रोक दिया गया था",
+      "partialCards": "{count} कार्ड लोड हो गए हैं। खोज और फ़िल्टर लोड किए गए कार्ड पर लागू होते हैं। उनका क्रम बदलने के लिए सभी कार्ड लोड करें।",
+      "loadMoreCards": "और कार्ड लोड करें",
+      "automationEvent": "घटना: {source}",
+      "automationWaitingForEvent": "घटना की प्रतीक्षा है",
+      "dependencyStatusNotLoaded": "लोड नहीं हुआ"
     }
   },
   "ar": {
@@ -4177,7 +4258,9 @@
         "statusCounts": "البطاقات حسب الحالة",
         "cardCount": "{count} بطاقة",
         "noActiveCards": "لا توجد بطاقات جاهزة أو قيد التشغيل.",
-        "disconnected": "اتصل بـ Gateway لتحميل Workboard."
+        "disconnected": "اتصل بـ Gateway لتحميل Workboard.",
+        "cardNotLoaded": "لم تُحمّل هذه البطاقة بعد. حمّل المزيد من البطاقات للعثور عليها.",
+        "partialCards": "تم تحميل {count} بطاقة. تشمل الأعداد والنتائج البطاقات المحمّلة فقط."
       },
       "status": {
         "triage": "Triage",
@@ -4498,7 +4581,9 @@
           "orange": "برتقالي",
           "pink": "وردي",
           "cyan": "سماوي"
-        }
+        },
+        "partial": "تم تحميل {count} من أصل {total} جلسة. ينطبق عامل تصفية الوكيل على الجلسات المحمّلة.",
+        "loadMore": "تحميل المزيد من الجلسات"
       },
       "boardName": "الاسم",
       "boardAppearance": "مظهر اللوحة",
@@ -4606,7 +4691,12 @@
       "lifecycleFailedDetail": "افتح الجلسة لمراجعة سبب الفشل",
       "lifecycleStopped": "متوقف",
       "lifecycleTimedOut": "انتهت المهلة",
-      "lifecycleStoppedDetail": "تم إيقاف التشغيل"
+      "lifecycleStoppedDetail": "تم إيقاف التشغيل",
+      "partialCards": "تم تحميل {count} بطاقة. ينطبق البحث والتصفية على البطاقات المحمّلة. حمّل جميع البطاقات لإعادة ترتيبها.",
+      "loadMoreCards": "تحميل المزيد من البطاقات",
+      "automationEvent": "الحدث: {source}",
+      "automationWaitingForEvent": "في انتظار حدث",
+      "dependencyStatusNotLoaded": "غير محمّل"
     }
   },
   "it": {
@@ -4638,7 +4728,9 @@
         "statusCounts": "Schede per stato",
         "cardCount": "{count} schede",
         "noActiveCards": "Nessuna scheda pronta o in esecuzione.",
-        "disconnected": "Connettiti al Gateway per caricare Workboard."
+        "disconnected": "Connettiti al Gateway per caricare Workboard.",
+        "cardNotLoaded": "Questa scheda non è ancora stata caricata. Carica altre schede per trovarla.",
+        "partialCards": "{count} schede caricate. I conteggi e i risultati includono solo le schede caricate."
       },
       "status": {
         "triage": "Triage",
@@ -4959,7 +5051,9 @@
           "orange": "Arancione",
           "pink": "Rosa",
           "cyan": "Ciano"
-        }
+        },
+        "partial": "{count} sessioni caricate su {total}. Il filtro per agente si applica alle sessioni caricate.",
+        "loadMore": "Carica altre sessioni"
       },
       "boardName": "Nome",
       "boardAppearance": "Aspetto della bacheca",
@@ -5067,7 +5161,12 @@
       "lifecycleFailedDetail": "Apri la sessione per esaminare l'errore",
       "lifecycleStopped": "Interrotta",
       "lifecycleTimedOut": "Tempo scaduto",
-      "lifecycleStoppedDetail": "L'esecuzione è stata interrotta"
+      "lifecycleStoppedDetail": "L'esecuzione è stata interrotta",
+      "partialCards": "{count} schede caricate. La ricerca e i filtri si applicano alle schede caricate. Carica tutte le schede per riordinarle.",
+      "loadMoreCards": "Carica altre schede",
+      "automationEvent": "Evento: {source}",
+      "automationWaitingForEvent": "In attesa di un evento",
+      "dependencyStatusNotLoaded": "Non caricato"
     }
   },
   "tr": {
@@ -5099,7 +5198,9 @@
         "statusCounts": "Duruma göre kartlar",
         "cardCount": "{count} kart",
         "noActiveCards": "Hazır veya çalışan kart yok.",
-        "disconnected": "Workboard'u yüklemek için Gateway'e bağlanın."
+        "disconnected": "Workboard'u yüklemek için Gateway'e bağlanın.",
+        "cardNotLoaded": "Bu kart henüz yüklenmedi. Bulmak için daha fazla kart yükleyin.",
+        "partialCards": "{count} kart yüklendi. Sayılar ve sonuçlar yalnızca yüklenen kartları içerir."
       },
       "status": {
         "triage": "Triage",
@@ -5420,7 +5521,9 @@
           "orange": "Turuncu",
           "pink": "Pembe",
           "cyan": "Camgöbeği"
-        }
+        },
+        "partial": "{total} oturumdan {count} tanesi yüklendi. Aracı filtresi, yüklenen oturumlara uygulanır.",
+        "loadMore": "Daha fazla oturum yükle"
       },
       "boardName": "Ad",
       "boardAppearance": "Pano görünümü",
@@ -5528,7 +5631,12 @@
       "lifecycleFailedDetail": "Hatayı incelemek için oturumu açın",
       "lifecycleStopped": "Durduruldu",
       "lifecycleTimedOut": "Zaman aşımına uğradı",
-      "lifecycleStoppedDetail": "Çalıştırma durduruldu"
+      "lifecycleStoppedDetail": "Çalıştırma durduruldu",
+      "partialCards": "{count} kart yüklendi. Arama ve filtreler, yüklenen kartlara uygulanır. Kartları yeniden sıralamak için tüm kartları yükleyin.",
+      "loadMoreCards": "Daha fazla kart yükle",
+      "automationEvent": "Olay: {source}",
+      "automationWaitingForEvent": "Olay bekleniyor",
+      "dependencyStatusNotLoaded": "Yüklenmedi"
     }
   },
   "uk": {
@@ -5560,7 +5668,9 @@
         "statusCounts": "Картки за статусом",
         "cardCount": "{count} карток",
         "noActiveCards": "Немає готових або запущених карток.",
-        "disconnected": "Підключіться до Gateway, щоб завантажити Workboard."
+        "disconnected": "Підключіться до Gateway, щоб завантажити Workboard.",
+        "cardNotLoaded": "Цю картку ще не завантажено. Завантажте більше карток, щоб знайти її.",
+        "partialCards": "Завантажено карток: {count}. Кількість і результати враховують лише завантажені картки."
       },
       "status": {
         "triage": "Triage",
@@ -5881,7 +5991,9 @@
           "orange": "Помаранчевий",
           "pink": "Рожевий",
           "cyan": "Блакитний"
-        }
+        },
+        "partial": "Завантажено сеансів: {count} із {total}. Фільтр за агентом застосовується до завантажених сеансів.",
+        "loadMore": "Завантажити більше сеансів"
       },
       "boardName": "Назва",
       "boardAppearance": "Вигляд дошки",
@@ -5989,7 +6101,12 @@
       "lifecycleFailedDetail": "Відкрийте сеанс, щоб переглянути відомості про помилку",
       "lifecycleStopped": "Зупинено",
       "lifecycleTimedOut": "Час очікування вичерпано",
-      "lifecycleStoppedDetail": "Виконання зупинено"
+      "lifecycleStoppedDetail": "Виконання зупинено",
+      "partialCards": "Завантажено карток: {count}. Пошук і фільтри застосовуються до завантажених карток. Завантажте всі картки, щоб змінити їхній порядок.",
+      "loadMoreCards": "Завантажити більше карток",
+      "automationEvent": "Подія: {source}",
+      "automationWaitingForEvent": "Очікування події",
+      "dependencyStatusNotLoaded": "Не завантажено"
     }
   },
   "id": {
@@ -6021,7 +6138,9 @@
         "statusCounts": "Kartu berdasarkan status",
         "cardCount": "{count} kartu",
         "noActiveCards": "Tidak ada kartu yang siap atau sedang berjalan.",
-        "disconnected": "Hubungkan ke Gateway untuk memuat Workboard."
+        "disconnected": "Hubungkan ke Gateway untuk memuat Workboard.",
+        "cardNotLoaded": "Kartu ini belum dimuat. Muat lebih banyak kartu untuk menemukannya.",
+        "partialCards": "{count} kartu dimuat. Jumlah dan hasil hanya mencakup kartu yang dimuat."
       },
       "status": {
         "triage": "Triage",
@@ -6342,7 +6461,9 @@
           "orange": "Oranye",
           "pink": "Merah muda",
           "cyan": "Sian"
-        }
+        },
+        "partial": "{count} dari {total} sesi dimuat. Filter agen berlaku untuk sesi yang dimuat.",
+        "loadMore": "Muat lebih banyak sesi"
       },
       "boardName": "Nama",
       "boardAppearance": "Tampilan papan",
@@ -6450,7 +6571,12 @@
       "lifecycleFailedDetail": "Buka sesi untuk meninjau kegagalan",
       "lifecycleStopped": "Dihentikan",
       "lifecycleTimedOut": "Waktu habis",
-      "lifecycleStoppedDetail": "Proses dihentikan"
+      "lifecycleStoppedDetail": "Proses dihentikan",
+      "partialCards": "{count} kartu dimuat. Pencarian dan filter berlaku untuk kartu yang dimuat. Muat semua kartu untuk mengubah urutannya.",
+      "loadMoreCards": "Muat lebih banyak kartu",
+      "automationEvent": "Peristiwa: {source}",
+      "automationWaitingForEvent": "Menunggu peristiwa",
+      "dependencyStatusNotLoaded": "Belum dimuat"
     }
   },
   "pl": {
@@ -6482,7 +6608,9 @@
         "statusCounts": "Karty według statusu",
         "cardCount": "{count} kart",
         "noActiveCards": "Brak gotowych lub uruchomionych kart.",
-        "disconnected": "Połącz się z Gateway, aby załadować Workboard."
+        "disconnected": "Połącz się z Gateway, aby załadować Workboard.",
+        "cardNotLoaded": "Ta karta nie została jeszcze wczytana. Wczytaj więcej kart, aby ją znaleźć.",
+        "partialCards": "Liczba wczytanych kart: {count}. Liczniki i wyniki uwzględniają tylko wczytane karty."
       },
       "status": {
         "triage": "Triage",
@@ -6803,7 +6931,9 @@
           "orange": "Pomarańczowy",
           "pink": "Różowy",
           "cyan": "Cyjan"
-        }
+        },
+        "partial": "Liczba wczytanych sesji: {count} z {total}. Filtr agentów dotyczy wczytanych sesji.",
+        "loadMore": "Wczytaj więcej sesji"
       },
       "boardName": "Nazwa",
       "boardAppearance": "Wygląd tablicy",
@@ -6911,7 +7041,12 @@
       "lifecycleFailedDetail": "Otwórz sesję, aby sprawdzić przyczynę niepowodzenia",
       "lifecycleStopped": "Zatrzymano",
       "lifecycleTimedOut": "Przekroczono limit czasu",
-      "lifecycleStoppedDetail": "Wykonanie zostało zatrzymane"
+      "lifecycleStoppedDetail": "Wykonanie zostało zatrzymane",
+      "partialCards": "Liczba wczytanych kart: {count}. Wyszukiwanie i filtry dotyczą wczytanych kart. Wczytaj wszystkie karty, aby zmienić ich kolejność.",
+      "loadMoreCards": "Wczytaj więcej kart",
+      "automationEvent": "Zdarzenie: {source}",
+      "automationWaitingForEvent": "Oczekiwanie na zdarzenie",
+      "dependencyStatusNotLoaded": "Nie wczytano"
     }
   },
   "th": {
@@ -6943,7 +7078,9 @@
         "statusCounts": "การ์ดตามสถานะ",
         "cardCount": "{count} การ์ด",
         "noActiveCards": "ไม่มีการ์ดที่พร้อมหรือกำลังทำงาน",
-        "disconnected": "เชื่อมต่อกับ Gateway เพื่อโหลด Workboard"
+        "disconnected": "เชื่อมต่อกับ Gateway เพื่อโหลด Workboard",
+        "cardNotLoaded": "ยังไม่ได้โหลดการ์ดนี้ โหลดการ์ดเพิ่มเติมเพื่อค้นหาการ์ดนี้",
+        "partialCards": "โหลดการ์ดแล้ว {count} ใบ จำนวนและผลลัพธ์จะรวมเฉพาะการ์ดที่โหลดแล้วเท่านั้น"
       },
       "status": {
         "triage": "Triage",
@@ -7264,7 +7401,9 @@
           "orange": "สีส้ม",
           "pink": "สีชมพู",
           "cyan": "สีฟ้าอมเขียว"
-        }
+        },
+        "partial": "โหลดเซสชันแล้ว {count} จาก {total} เซสชัน ตัวกรองเอเจนต์จะใช้กับเซสชันที่โหลดแล้วเท่านั้น",
+        "loadMore": "โหลดเซสชันเพิ่มเติม"
       },
       "boardName": "ชื่อ",
       "boardAppearance": "รูปลักษณ์ของบอร์ด",
@@ -7372,7 +7511,12 @@
       "lifecycleFailedDetail": "เปิดเซสชันเพื่อตรวจสอบสาเหตุที่ล้มเหลว",
       "lifecycleStopped": "หยุดแล้ว",
       "lifecycleTimedOut": "หมดเวลา",
-      "lifecycleStoppedDetail": "การทำงานถูกหยุดแล้ว"
+      "lifecycleStoppedDetail": "การทำงานถูกหยุดแล้ว",
+      "partialCards": "โหลดการ์ดแล้ว {count} ใบ การค้นหาและตัวกรองจะใช้กับการ์ดที่โหลดแล้วเท่านั้น โหลดการ์ดทั้งหมดเพื่อจัดลำดับใหม่",
+      "loadMoreCards": "โหลดการ์ดเพิ่มเติม",
+      "automationEvent": "เหตุการณ์: {source}",
+      "automationWaitingForEvent": "กำลังรอเหตุการณ์",
+      "dependencyStatusNotLoaded": "ยังไม่ได้โหลด"
     }
   },
   "vi": {
@@ -7404,7 +7548,9 @@
         "statusCounts": "Thẻ theo trạng thái",
         "cardCount": "{count} thẻ",
         "noActiveCards": "Không có thẻ nào sẵn sàng hoặc đang chạy.",
-        "disconnected": "Kết nối với Gateway để tải Workboard."
+        "disconnected": "Kết nối với Gateway để tải Workboard.",
+        "cardNotLoaded": "Thẻ này chưa được tải. Tải thêm thẻ để tìm thẻ này.",
+        "partialCards": "Đã tải {count} thẻ. Số lượng và kết quả chỉ bao gồm các thẻ đã tải."
       },
       "status": {
         "triage": "Triage",
@@ -7725,7 +7871,9 @@
           "orange": "Cam",
           "pink": "Hồng",
           "cyan": "Xanh lơ"
-        }
+        },
+        "partial": "Đã tải {count} trên tổng số {total} phiên. Bộ lọc tác nhân áp dụng cho các phiên đã tải.",
+        "loadMore": "Tải thêm phiên"
       },
       "boardName": "Tên",
       "boardAppearance": "Giao diện bảng",
@@ -7833,7 +7981,12 @@
       "lifecycleFailedDetail": "Mở phiên để xem lại lỗi",
       "lifecycleStopped": "Đã dừng",
       "lifecycleTimedOut": "Đã hết thời gian chờ",
-      "lifecycleStoppedDetail": "Lượt chạy đã bị dừng"
+      "lifecycleStoppedDetail": "Lượt chạy đã bị dừng",
+      "partialCards": "Đã tải {count} thẻ. Tìm kiếm và bộ lọc áp dụng cho các thẻ đã tải. Tải tất cả thẻ để sắp xếp lại.",
+      "loadMoreCards": "Tải thêm thẻ",
+      "automationEvent": "Sự kiện: {source}",
+      "automationWaitingForEvent": "Đang chờ sự kiện",
+      "dependencyStatusNotLoaded": "Chưa tải"
     }
   },
   "nl": {
@@ -7865,7 +8018,9 @@
         "statusCounts": "Kaarten per status",
         "cardCount": "{count} kaarten",
         "noActiveCards": "Geen gereedstaande of actieve kaarten.",
-        "disconnected": "Maak verbinding met de Gateway om Workboard te laden."
+        "disconnected": "Maak verbinding met de Gateway om Workboard te laden.",
+        "cardNotLoaded": "Deze kaart is nog niet geladen. Laad meer kaarten om deze te vinden.",
+        "partialCards": "{count} kaarten geladen. Aantallen en resultaten omvatten alleen geladen kaarten."
       },
       "status": {
         "triage": "Triage",
@@ -8186,7 +8341,9 @@
           "orange": "Oranje",
           "pink": "Roze",
           "cyan": "Cyaan"
-        }
+        },
+        "partial": "{count} van {total} sessies geladen. Het agentfilter is van toepassing op geladen sessies.",
+        "loadMore": "Meer sessies laden"
       },
       "boardName": "Naam",
       "boardAppearance": "Bordweergave",
@@ -8294,7 +8451,12 @@
       "lifecycleFailedDetail": "Open de sessie om de fout te bekijken",
       "lifecycleStopped": "Gestopt",
       "lifecycleTimedOut": "Time-out",
-      "lifecycleStoppedDetail": "De uitvoering is gestopt"
+      "lifecycleStoppedDetail": "De uitvoering is gestopt",
+      "partialCards": "{count} kaarten geladen. Zoeken en filters zijn van toepassing op geladen kaarten. Laad alle kaarten om de volgorde te wijzigen.",
+      "loadMoreCards": "Meer kaarten laden",
+      "automationEvent": "Gebeurtenis: {source}",
+      "automationWaitingForEvent": "Wachten op gebeurtenis",
+      "dependencyStatusNotLoaded": "Niet geladen"
     }
   },
   "fa": {
@@ -8326,7 +8488,9 @@
         "statusCounts": "کارت‌ها بر اساس وضعیت",
         "cardCount": "{count} کارت",
         "noActiveCards": "هیچ کارت آماده یا در حال اجرا نیست.",
-        "disconnected": "برای بارگذاری Workboard به Gateway متصل شوید."
+        "disconnected": "برای بارگذاری Workboard به Gateway متصل شوید.",
+        "cardNotLoaded": "این کارت هنوز بارگذاری نشده است. برای یافتن آن، کارت‌های بیشتری بارگذاری کنید.",
+        "partialCards": "{count} کارت بارگذاری شده است. شمارش‌ها و نتایج فقط شامل کارت‌های بارگذاری‌شده هستند."
       },
       "status": {
         "triage": "Triage",
@@ -8647,7 +8811,9 @@
           "orange": "نارنجی",
           "pink": "صورتی",
           "cyan": "فیروزه‌ای"
-        }
+        },
+        "partial": "{count} جلسه از {total} جلسه بارگذاری شده است. فیلتر عامل روی جلسه‌های بارگذاری‌شده اعمال می‌شود.",
+        "loadMore": "بارگذاری جلسه‌های بیشتر"
       },
       "boardName": "نام",
       "boardAppearance": "ظاهر تابلو",
@@ -8755,7 +8921,12 @@
       "lifecycleFailedDetail": "برای بررسی علت شکست، نشست را باز کنید",
       "lifecycleStopped": "متوقف شده",
       "lifecycleTimedOut": "مهلت به پایان رسید",
-      "lifecycleStoppedDetail": "اجرا متوقف شد"
+      "lifecycleStoppedDetail": "اجرا متوقف شد",
+      "partialCards": "{count} کارت بارگذاری شده است. جستجو و فیلترها روی کارت‌های بارگذاری‌شده اعمال می‌شوند. برای تغییر ترتیب کارت‌ها، همهٔ آن‌ها را بارگذاری کنید.",
+      "loadMoreCards": "بارگذاری کارت‌های بیشتر",
+      "automationEvent": "رویداد: {source}",
+      "automationWaitingForEvent": "در انتظار رویداد",
+      "dependencyStatusNotLoaded": "بارگذاری نشده"
     }
   },
   "ru": {
@@ -8787,7 +8958,9 @@
         "statusCounts": "Карточки по статусу",
         "cardCount": "{count} карточек",
         "noActiveCards": "Нет готовых или выполняющихся карточек.",
-        "disconnected": "Подключитесь к Gateway, чтобы загрузить Workboard."
+        "disconnected": "Подключитесь к Gateway, чтобы загрузить Workboard.",
+        "cardNotLoaded": "Эта карточка ещё не загружена. Загрузите ещё карточки, чтобы найти её.",
+        "partialCards": "Загружено карточек: {count}. В подсчётах и результатах учитываются только загруженные карточки."
       },
       "status": {
         "triage": "Разбор",
@@ -9108,7 +9281,9 @@
           "orange": "Оранжевый",
           "pink": "Розовый",
           "cyan": "Голубой"
-        }
+        },
+        "partial": "Загружено сеансов: {count} из {total}. Фильтр по агенту применяется к загруженным сеансам.",
+        "loadMore": "Загрузить ещё сеансы"
       },
       "boardName": "Название",
       "boardAppearance": "Оформление доски",
@@ -9216,7 +9391,830 @@
       "lifecycleFailedDetail": "Откройте сеанс, чтобы просмотреть сведения об ошибке",
       "lifecycleStopped": "Остановлено",
       "lifecycleTimedOut": "Время ожидания истекло",
-      "lifecycleStoppedDetail": "Выполнение было остановлено"
+      "lifecycleStoppedDetail": "Выполнение было остановлено",
+      "partialCards": "Загружено карточек: {count}. Поиск и фильтры применяются к загруженным карточкам. Загрузите все карточки, чтобы изменить их порядок.",
+      "loadMoreCards": "Загрузить ещё карточки",
+      "automationEvent": "Событие: {source}",
+      "automationWaitingForEvent": "Ожидание события",
+      "dependencyStatusNotLoaded": "Не загружено"
+    }
+  },
+  "sv": {
+    "common": {
+      "refreshing": "Uppdaterar…",
+      "refresh": "Uppdatera",
+      "retry": "Försök igen",
+      "cancel": "Avbryt",
+      "close": "Stäng",
+      "create": "Skapa",
+      "na": "ej tillämpligt",
+      "save": "Spara"
+    },
+    "sessionsView": {
+      "statusQueued": "I kö"
+    },
+    "workboard": {
+      "partialCards": "{count} kort har lästs in. Sökning och filter gäller för inlästa kort. Läs in alla kort för att ändra deras ordning.",
+      "loadMoreCards": "Läs in fler kort",
+      "pageLoadFailed": "Arbetstavlan kunde inte läsas in. Kontrollera anslutningen och ladda om sidan.",
+      "pinBoard": "Fäst i sidofältet",
+      "unpinBoard": "Lossa från sidofältet",
+      "deleteBoard": "Ta bort tavla…",
+      "deleteBoardTitle": "Ta bort ”{name}”?",
+      "deleteBoardConfirm": "Ta bort tavla",
+      "deleteBoardHelp": "Detta tar permanent bort tavlan och dess sparade sessionsplaceringar. Sessionerna behålls. Tavlor med kort måste tömmas först.",
+      "deleteBoardUnavailable": "Anslut med skrivbehörighet för att ta bort den här tavlan.",
+      "discardCardTitle": "Kasta det här kortet?",
+      "discardChangesTitle": "Ignorera ändringarna?",
+      "discardDraftHelp": "Dina osparade ändringar går förlorade.",
+      "keepEditing": "Fortsätt redigera",
+      "discardDraft": "Ignorera",
+      "viewBoard": "Kolumner",
+      "boardColor": "Färg",
+      "clearFilters": "Rensa filter",
+      "activeFilters": "Aktiva filter",
+      "removeFilter": "Ta bort filter: {filter}",
+      "filterChipValue": "{field}: {value}",
+      "filterChipExcludes": "{field} ≠ {value}",
+      "filterChipSearch": "Sök: ”{query}”",
+      "filterChipArchived": "Inkludera arkiverade",
+      "filterAttention": "Kräver uppmärksamhet",
+      "filterStale": "Ingen aktivitet nyligen",
+      "filterStaleHint": "Kort markerade som inaktuella eller kopplade till en inaktuell session",
+      "filterMissingProof": "Slutförda utan belägg",
+      "filterMissingProofHint": "Slutförda kort utan belägg, artefakter eller bilagor",
+      "filterDonePeriod": "Slutförda kort",
+      "filterAllTime": "Hela perioden",
+      "filterLastWeek": "Senaste 7 dagarna",
+      "filterLayout": "Layout",
+      "filterDensity": "Täthet",
+      "densityCompact": "Kompakt",
+      "densityComfortable": "Luftig",
+      "viewList": "Lista",
+      "columnActions": "Åtgärder för kolumnen {column}",
+      "selectAllInColumn": "Markera alla i {column}",
+      "selectCard": "Markera {title}",
+      "deselectCard": "Avmarkera {title}",
+      "selectedCountOne": "1 markerat",
+      "selectedCount": "{count} markerade",
+      "selectionLabel": "Markerade kort",
+      "clearSelection": "Rensa markering",
+      "bulkAssign": "Tilldela agent…",
+      "bulkEdit": "Redigera egenskaper",
+      "bulkArchive": "Arkivera",
+      "bulkDelete": "Ta bort",
+      "bulkEditTitle": "Redigera {count} kort",
+      "bulkDeleteTitle": "Ta bort {count} kort?",
+      "bulkDeleteHelp": "Dessa kort raderas permanent. Pågående sessioner fortsätter.",
+      "bulkEditHelp": "Ändringarna gäller alla valda kort.",
+      "bulkKeep": "Behåll oförändrat",
+      "bulkLabels_keep": "Behåll oförändrat",
+      "bulkLabels_add": "Lägg till etiketter",
+      "bulkLabels_replace": "Ersätt etiketter",
+      "bulkLabels_remove": "Ta bort etiketter",
+      "bulkLabelsPlaceholder": "Etiketter, separerade med kommatecken",
+      "bulkApplying": "Tillämpar…",
+      "bulkApply": "Tillämpa ändringar",
+      "bulkResult": "Ändringarna har tillämpats på {completed} av {total} kort.",
+      "bulkUnavailable": "Åtgärden avbröts. Återstående kort är fortfarande valda. Uppdatera och försök igen.",
+      "bulkMoveLabel": "Flytta till…",
+      "widget": {
+        "boardLabel": "Workboard-tavla",
+        "loading": "Läser in Workboard…",
+        "disconnected": "Anslut till Gateway för att läsa in Workboard.",
+        "cardIdRequired": "Den här widgeten behöver en cardId-prop.",
+        "cardMissing": "Det här Workboard-kortet är inte längre tillgängligt.",
+        "cardNotLoaded": "Det här kortet har inte lästs in ännu. Läs in fler kort för att hitta det.",
+        "partialCards": "{count} kort har lästs in. Antal och resultat omfattar endast inlästa kort.",
+        "unassigned": "Ej tilldelat",
+        "openBoard": "Öppna tavla",
+        "statusCounts": "Kort per status",
+        "cardCount": "{count} kort",
+        "noActiveCards": "Inga redo eller pågående kort."
+      },
+      "status": {
+        "triage": "Bedömning",
+        "backlog": "Väntelista",
+        "todo": "Att göra",
+        "scheduled": "Schemalagt",
+        "ready": "Redo",
+        "running": "Pågår",
+        "review": "Granskning",
+        "blocked": "Blockerat",
+        "done": "Klart"
+      },
+      "noLinkedSession": "Ingen länkad session",
+      "stopSession": "Stoppa session",
+      "editCard": "Redigera kort",
+      "editBoard": "Redigera tavla",
+      "newBoard": "Ny tavla",
+      "boardKind": "Typ av tavla",
+      "cardsBoard": "Kort",
+      "sessionsBoard": {
+        "kind": "Sessioner",
+        "peopleFilter": "Personfilter",
+        "everyone": "Alla",
+        "involvingMe": "Där jag deltar",
+        "agent": "Tavlans agent",
+        "agentLabel": "Sessionstavla · {name}",
+        "agentUnavailable": "Agenten för tavlans konversation är inte tillgänglig. Välj en konfigurerad agent eller uppdatera tavlans konversation.",
+        "agentCreateFailed": "Det gick inte att skapa tavlans konversation. Försök igen.",
+        "writeUnavailable": "Tavlans utseende har sparats. Återanslut med skrivbehörighet för att spara sessionskolumnerna.",
+        "loading": "Läser in sessioner…",
+        "partial": "{count} av {total} sessioner har lästs in. Agentfiltret gäller för inlästa sessioner.",
+        "loadMore": "Läs in fler sessioner",
+        "empty": "Inga sessioner i den här kolumnen",
+        "columns": "Kolumner",
+        "columnLabel": "Kolumnetikett",
+        "description": "Beskrivning",
+        "fallback": "Reservkolumn",
+        "defaultColor": "Standard",
+        "addColumn": "Lägg till kolumn",
+        "removeColumn": "Ta bort kolumn",
+        "newColumn": "Ny kolumn",
+        "moveUp": "Flytta upp",
+        "moveDown": "Flytta ned",
+        "rulesHelp": "Tavlans agent kan redigera kolumnregler och sessionernas omfattning.",
+        "source": {
+          "state": "enligt regel",
+          "operator": "fäst"
+        },
+        "run": {
+          "active": "Arbetar",
+          "idle": "Inaktiv",
+          "failed": "Misslyckades"
+        },
+        "pullRequest": {
+          "open": "Öppen",
+          "draft": "Utkast",
+          "merged": "Sammanslagen",
+          "closed": "Stängd"
+        },
+        "color": {
+          "red": "Röd",
+          "blue": "Blå",
+          "green": "Grön",
+          "yellow": "Gul",
+          "purple": "Lila",
+          "orange": "Orange",
+          "pink": "Rosa",
+          "cyan": "Cyan"
+        }
+      },
+      "boardName": "Namn",
+      "boardAppearance": "Tavlans utseende",
+      "boardAutomation": "Tavlans automatisering",
+      "openBoardAutomation": "Öppna",
+      "automationLoading": "Läser in kopplad automatisering…",
+      "automationUnavailable": "Automatiseringen är inte tillgänglig",
+      "automationPaused": "Pausad",
+      "automationEnabled": "Aktiverad",
+      "automationState": "Status",
+      "automationFrequency": "Frekvens",
+      "automationNextRunLabel": "Nästa körning",
+      "automationNotScheduled": "Inte schemalagd",
+      "automationUpdatedAgo": "Uppdaterades för {time} sedan",
+      "automationUpdatedNow": "Uppdaterades nyss",
+      "automationRefreshHint": "Uppdatera tavlan för att försöka igen.",
+      "openNamedAutomation": "Öppna {name}",
+      "automationNextRun": "Nästa körning {time}",
+      "automationNextRunDue": "Nästa körning ska ske nu",
+      "automationEvery": "Var {duration}",
+      "automationAt": "Kl. {time}",
+      "automationOnExit": "Vid avslut: {command}",
+      "automationStream": "Ström: {command}",
+      "automationEvent": "Händelse: {source}",
+      "automationWaitingForEvent": "Väntar på händelse",
+      "viewPresetCountOne": "1 kort",
+      "editCardHelp": "Uppdatera kömetadata och sessionsöverlämning.",
+      "newCard": "Nytt kort",
+      "newCardShort": "Nytt",
+      "newCardInColumn": "Nytt kort i {column}",
+      "newCardHelp": "Lägg arbete i kö för en agentsession.",
+      "archiveCard": "Arkivera kort",
+      "unarchiveCard": "Återställ från arkivet",
+      "archived": "Arkiverat",
+      "deleteCard": "Ta bort kort",
+      "cardActions": "Kortåtgärder",
+      "viewDetails": "Visa detaljer",
+      "detailTitle": "Kortdetaljer",
+      "detailProperties": "Egenskaper",
+      "detailTabOverview": "Översikt",
+      "detailTabActivity": "Aktivitet",
+      "detailTabSession": "Session",
+      "detailTabDetails": "Detaljer",
+      "detailTemplate": "Mall",
+      "detailFailures": "Misslyckade försök",
+      "detailClaim": "Ansvarig",
+      "detailHeartbeat": "Senaste livstecken",
+      "detailNotifications": "Aviseringar",
+      "inlineAddLabels": "Lägg till etiketter",
+      "inlineAddDescription": "Lägg till beskrivning",
+      "detailOccurrences": "{count} förekomster",
+      "detailFirstSeen": "Först observerad {time}",
+      "detailLastSeen": "Senast observerad {time}",
+      "detailExecutionOptions": "Andra sätt att starta",
+      "detailRunAutomatically": "Kör automatiskt",
+      "detailOpenManually": "Öppna en session manuellt",
+      "detailNoSessionYet": "Ingen session ännu",
+      "defaultAgentBadge": "Standard",
+      "detailStartSessionHelp": "Starta {agent} för att arbeta med det här kortet.",
+      "detailTechnical": "Tekniska detaljer",
+      "detailRun": "Körning",
+      "detailUpdated": "Uppdaterad",
+      "detailProof": "Bevis",
+      "detailAttemptTitle": "Försök {number}",
+      "proofPassed": "Godkänd",
+      "proofSkipped": "Överhoppad",
+      "proofUnknown": "Okänd",
+      "detailDiagnostics": "Diagnostik",
+      "detailWorkerLogs": "Arbetarloggar",
+      "detailWorkerProtocol": "Arbetarprotokoll",
+      "detailCardAutomation": "Kortautomatisering",
+      "detailBoard": "Tavla",
+      "detailScheduled": "Schemalagd",
+      "detailSkills": "Skills",
+      "detailWorkspace": "Arbetsyta",
+      "detailDispatchCount": "Utskick",
+      "detailLastDispatch": "Senaste utskick",
+      "detailRuntimeLimit": "Körtidsgräns",
+      "detailRetryLimit": "Gräns för återförsök",
+      "detailTenant": "Klientorganisation",
+      "detailUpdatedValue": "Uppdaterad: {time}",
+      "detailOperatorNotes": "Operatörsanteckningar",
+      "detailNoNotes": "Inga operatörsanteckningar ännu.",
+      "detailNotePlaceholder": "Lägg till ett beslut, ett hinder eller en anteckning om belägg...",
+      "detailAddNote": "Lägg till anteckning",
+      "openSession": "Öppna session",
+      "defaultAgent": "Standardagent",
+      "allAgents": "Alla agenter",
+      "agentFilter": "Filtrera efter agent",
+      "allBoards": "Alla tavlor",
+      "boardFilter": "Filtrera efter tavla",
+      "defaultBoard": "Standardtavla",
+      "boardFilterSummary": "{active} aktiva · {total} totalt",
+      "boardFilterArchivedSummary": "Arkiverad · {active} aktiva · {total} totalt",
+      "agentFilterUnassigned": "Ej tilldelade (använder {agent})",
+      "agentFilterUnassignedHelp": "Kort utan en uttryckligen tilldelad agent.",
+      "agentFilterConfiguredDefault": "{agent} (standard)",
+      "agentFilterConfiguredDefaultHelp": "Kort som uttryckligen tilldelats den konfigurerade standardagenten.",
+      "agentCurrentUnconfigured": "{agent} (inte konfigurerad)",
+      "viewPresetCount": "{count} kort",
+      "engineOpenAI": "OpenAI",
+      "engineClaude": "Claude",
+      "engineDisabledRuntime": "{agent} använder ACP-körmiljön {runtime}. Använd standardstart för den sessionen.",
+      "runEngine": "Kör {engine}",
+      "openEngine": "Öppna {engine}",
+      "runDefaultAgent": "Kör standardagent",
+      "start": "Starta",
+      "dependencies": "Beroenden",
+      "dependenciesBlocked": "{count} blockerade",
+      "dependencyStatusMissing": "Saknas",
+      "dependencyStatusNotLoaded": "Inte inläst",
+      "unknownStatus": "Okänd",
+      "showArchived": "Visa arkiverade",
+      "dispatch": "Starta agenter",
+      "dispatchHelp": "Be agenter att utföra uppgifterna på den här tavlans kort med status Redo, upp till 3 åt gången.",
+      "dispatchHelpAll": "Be agenter att utföra uppgifterna på kort med status Redo på alla tavlor, upp till 3 åt gången.",
+      "moveTo": "Flytta till",
+      "dispatchSummary": "Startade {started}. Förberedde {promoted}, blockerade {blocked}, frigjorde {reclaimed}, organiserade {orchestrated}. Kunde inte starta: {failures}.",
+      "dispatchSummaryEmpty": "Inga kort startades.",
+      "lastRefreshed": "Uppdaterad {time}",
+      "refreshError": "Uppdateringen misslyckades",
+      "fieldTitle": "Titel",
+      "fieldNotes": "Anteckningar",
+      "fieldStatus": "Status",
+      "fieldPriority": "Prioritet",
+      "fieldAgent": "Agent",
+      "fieldSession": "Session",
+      "fieldLabels": "Etiketter",
+      "templatesLabel": "Kortmallar",
+      "suggestionsLabel": "Förslag",
+      "template": {
+        "bugfix": "Buggfix",
+        "docs": "Dokumentation",
+        "release": "Utgåva",
+        "pr_review": "PR-granskning",
+        "plugin": "Insticksmodul"
+      },
+      "templateDraft": {
+        "bugfixTitle": "Åtgärda: ",
+        "bugfixNotes": "Symtom:\nOrsak:\nAcceptanskriterier:\nBelägg:",
+        "docsTitle": "Dokumentation: ",
+        "docsNotes": "Sida:\nÄndring:\nKällbelägg:",
+        "releaseTitle": "Lansering: ",
+        "releaseNotes": "Omfattning:\nVerifiering:\nAvslut:",
+        "prReviewTitle": "Granska PR ",
+        "prReviewNotes": "Berörda delar:\nRisker:\nBelägg:",
+        "pluginTitle": "Insticksmodul: ",
+        "pluginNotes": "Avgränsning:\nKonfiguration/dokumentation:\nTester:"
+      },
+      "cardStaleAge": "Inaktiv · {age}",
+      "cardStaleTitle": "Ingen aktivitet på {age}",
+      "cardUpdatedNow": "just nu",
+      "cardUpdatedAgo": "för {time} sedan",
+      "cardMoreLabels": "{count} ytterligare etiketter: {labels}",
+      "cardFiles": "{count} filer",
+      "cardWarnings": "{count} varningar",
+      "sessionStatus": {
+        "queued": "I kö",
+        "running": "Pågår",
+        "done": "Klar",
+        "failed": "Misslyckades",
+        "stale": "Inaktiv",
+        "unknown": "Okänd",
+        "unavailable": "Otillgänglig",
+        "ambiguous": "Tvetydig",
+        "stopped": "Stoppad",
+        "timedOut": "Tidsgränsen överskreds",
+        "cancelled": "Avbruten"
+      },
+      "badgeAttempts": "{count} försök",
+      "badgeFailures": "{count} misslyckade",
+      "badgeComments": "{count} kommentarer",
+      "badgeLinks": "{count} länkar",
+      "badgeProof": "{count} bevis",
+      "badgeArtifacts": "{count} artefakter",
+      "badgeAttachments": "{count} bilagor",
+      "badgeStale": "inaktuell",
+      "titlePlaceholder": "Kortets titel",
+      "notesPlaceholder": "Anteckningar, acceptanskriterier, länkar",
+      "labelsPlaceholder": "t.ex. gränssnitt, dokumentation",
+      "searchPlaceholder": "Sök kort",
+      "closeSearch": "Rensa och stäng sökningen",
+      "allStatuses": "Alla",
+      "allWork": "Allt arbete",
+      "filters": "Filter",
+      "filtersActive": "Filter, {count} aktiva",
+      "emptyColumns": "Tomma kolumner",
+      "emptyColumnsShow": "Visa",
+      "emptyColumnsCollapse": "Fäll ihop",
+      "emptyColumnsHide": "Dölj",
+      "showEmptyColumns": "Visa alla",
+      "collapseEmptyColumns": "Fäll ihop tomma",
+      "hideEmptyColumns": "Dölj tomma",
+      "collapseColumn": "Fäll ihop kolumnen {column}",
+      "expandColumn": "Fäll ut kolumnen {column}",
+      "emptyColumn": "Släpp uppgifter här",
+      "emptyColumnTitle": "Inga kort ännu",
+      "emptyFilteredTitle": "Inga kort matchar den här vyn",
+      "emptyFilteredHint": "Prova färre filter eller en annan sökning.",
+      "lifecycleUnlinked": "Ingen session",
+      "lifecycleUnlinkedDetail": "Starta eller länka en session",
+      "lifecycleUnknown": "Okänd sessionsstatus",
+      "lifecycleUnknownDetail": "Öppna kortet eller uppdatera för att läsa in sessionsinformation",
+      "lifecycleUnavailable": "Sessionen är inte tillgänglig",
+      "lifecycleUnavailableDetail": "Öppna sessionen eller länka om det här kortet",
+      "lifecycleAmbiguous": "Tvetydig sessionskoppling",
+      "lifecycleAmbiguousDetail": "Redigera kortet för att välja en specifik session",
+      "lifecycleLinked": "Kopplad",
+      "lifecycleIdleDetail": "Ingen aktiv körning",
+      "lifecycleRunning": "Körs",
+      "lifecycleRunningDetail": "Aktiv körning pågår",
+      "lifecycleStale": "Inaktuell",
+      "lifecycleStaleDetail": "Ingen sessionsaktivitet på senaste tiden",
+      "lifecycleDone": "Slutförd",
+      "lifecycleDoneDetail": "Körningen slutförd",
+      "lifecycleFailed": "Misslyckades",
+      "lifecycleFailedDetail": "Öppna sessionen för att granska felet",
+      "lifecycleStopped": "Stoppad",
+      "lifecycleTimedOut": "Tidsgränsen överskreds",
+      "lifecycleStoppedDetail": "Körningen stoppades",
+      "eventsLabel": "Korthändelser",
+      "eventCreated": "Skapad",
+      "eventEdited": "Redigerad",
+      "eventMoved": "Flyttad",
+      "eventMovedTo": "Flyttad till {status}",
+      "eventLinked": "Session länkad",
+      "eventSpecified": "Specificerad",
+      "eventDecomposed": "Uppdelad",
+      "eventClaimed": "Åtagen",
+      "eventHeartbeat": "Livstecken",
+      "eventExecutionUpdated": "Agent uppdaterad",
+      "eventAttemptStarted": "Försök startat",
+      "eventAttemptUpdated": "Försök uppdaterat",
+      "eventCommentAdded": "Kommentar tillagd",
+      "eventLinkAdded": "Länk tillagd",
+      "eventProofAdded": "Bevis tillagt",
+      "eventArtifactAdded": "Artefakt tillagd",
+      "eventAttachmentAdded": "Bilaga tillagd",
+      "eventDiagnostic": "Diagnostik",
+      "eventNotification": "Avisering",
+      "eventDispatch": "Utskick",
+      "eventOrchestration": "Orkestrering",
+      "eventProtocolViolation": "Protokollöverträdelse",
+      "eventArchived": "Arkiverad",
+      "eventUnarchived": "Återställd från arkivet",
+      "eventStale": "Inaktuell session"
+    }
+  },
+  "ca": {
+    "common": {
+      "refreshing": "S'està actualitzant…",
+      "refresh": "Actualitza",
+      "retry": "Torna-ho a provar",
+      "cancel": "Cancel·la",
+      "close": "Tanca",
+      "create": "Crea",
+      "na": "n/d",
+      "save": "Desa"
+    },
+    "sessionsView": {
+      "statusQueued": "En cua"
+    },
+    "workboard": {
+      "partialCards": "S'han carregat {count} targetes. La cerca i els filtres s'apliquen a les targetes carregades. Carregueu totes les targetes per reordenar-les.",
+      "loadMoreCards": "Carrega més targetes",
+      "pageLoadFailed": "No s'ha pogut carregar el tauler de treball. Comproveu la connexió i torneu a carregar aquesta pàgina.",
+      "pinBoard": "Fixa a la barra lateral",
+      "unpinBoard": "Desfixa de la barra lateral",
+      "deleteBoard": "Suprimeix el tauler…",
+      "deleteBoardTitle": "Voleu suprimir «{name}»?",
+      "deleteBoardConfirm": "Suprimeix el tauler",
+      "deleteBoardHelp": "Aquesta acció suprimeix permanentment el tauler i les ubicacions desades de les sessions. Les sessions es conserven. Els taulers amb targetes s'han de buidar abans.",
+      "deleteBoardUnavailable": "Connecteu-vos amb permisos d'escriptura per suprimir aquest tauler.",
+      "discardCardTitle": "Voleu descartar aquesta targeta?",
+      "discardChangesTitle": "Vols descartar els canvis?",
+      "discardDraftHelp": "Es perdran els canvis que no hagis desat.",
+      "keepEditing": "Continua editant",
+      "discardDraft": "Descarta",
+      "viewBoard": "Columnes",
+      "boardColor": "Color",
+      "clearFilters": "Esborra els filtres",
+      "activeFilters": "Filtres actius",
+      "removeFilter": "Elimina el filtre: {filter}",
+      "filterChipValue": "{field}: {value}",
+      "filterChipExcludes": "{field} ≠ {value}",
+      "filterChipSearch": "Cerca: «{query}»",
+      "filterChipArchived": "Inclou les arxivades",
+      "filterAttention": "Requereix atenció",
+      "filterStale": "Sense activitat recent",
+      "filterStaleHint": "Targetes marcades com a inactives o vinculades a una sessió inactiva",
+      "filterMissingProof": "Completades sense evidències",
+      "filterMissingProofHint": "Targetes completades sense proves, artefactes ni fitxers adjunts",
+      "filterDonePeriod": "Targetes completades",
+      "filterAllTime": "Tot el període",
+      "filterLastWeek": "Últims 7 dies",
+      "filterLayout": "Disposició",
+      "filterDensity": "Densitat",
+      "densityCompact": "Compacta",
+      "densityComfortable": "Còmoda",
+      "viewList": "Llista",
+      "columnActions": "Accions de la columna {column}",
+      "selectAllInColumn": "Selecciona-ho tot a {column}",
+      "selectCard": "Selecciona {title}",
+      "deselectCard": "Desselecciona {title}",
+      "selectedCountOne": "1 seleccionada",
+      "selectedCount": "{count} seleccionades",
+      "selectionLabel": "Targetes seleccionades",
+      "clearSelection": "Esborra la selecció",
+      "bulkAssign": "Assigna un agent…",
+      "bulkEdit": "Edita les propietats",
+      "bulkArchive": "Arxiva",
+      "bulkDelete": "Suprimeix",
+      "bulkEditTitle": "Edita {count} targetes",
+      "bulkDeleteTitle": "Vols suprimir {count} targetes?",
+      "bulkDeleteHelp": "Aquestes targetes se suprimiran permanentment. Les sessions en execució continuaran.",
+      "bulkEditHelp": "Els canvis s'apliquen a totes les targetes seleccionades.",
+      "bulkKeep": "Mantén sense canvis",
+      "bulkLabels_keep": "Mantén sense canvis",
+      "bulkLabels_add": "Afegeix etiquetes",
+      "bulkLabels_replace": "Substitueix les etiquetes",
+      "bulkLabels_remove": "Elimina les etiquetes",
+      "bulkLabelsPlaceholder": "Etiquetes separades per comes",
+      "bulkApplying": "S'estan aplicant…",
+      "bulkApply": "Aplica els canvis",
+      "bulkResult": "S'han aplicat a {completed} de {total} targetes.",
+      "bulkUnavailable": "L'operació s'ha aturat. Les targetes restants continuen seleccionades; actualitza i torna-ho a provar.",
+      "bulkMoveLabel": "Mou a…",
+      "widget": {
+        "boardLabel": "Tauler de Workboard",
+        "loading": "S'està carregant Workboard…",
+        "disconnected": "Connecta't a la Passarel·la per carregar Workboard.",
+        "cardIdRequired": "Aquest giny necessita una propietat cardId.",
+        "cardMissing": "Aquesta targeta de Workboard ja no està disponible.",
+        "cardNotLoaded": "Aquesta targeta encara no s'ha carregat. Carrega més targetes per trobar-la.",
+        "partialCards": "{count} targetes carregades. Els recomptes i els resultats només inclouen les targetes carregades.",
+        "unassigned": "Sense assignar",
+        "openBoard": "Obre el tauler",
+        "statusCounts": "Targetes per estat",
+        "cardCount": "{count} targetes",
+        "noActiveCards": "No hi ha targetes preparades ni en execució."
+      },
+      "status": {
+        "triage": "Triatge",
+        "backlog": "Pendents",
+        "todo": "Per fer",
+        "scheduled": "Programada",
+        "ready": "Preparada",
+        "running": "En execució",
+        "review": "En revisió",
+        "blocked": "Bloquejada",
+        "done": "Feta"
+      },
+      "noLinkedSession": "Cap sessió vinculada",
+      "stopSession": "Atura la sessió",
+      "editCard": "Edita la targeta",
+      "editBoard": "Edita el tauler",
+      "newBoard": "Tauler nou",
+      "boardKind": "Tipus de tauler",
+      "cardsBoard": "Targetes",
+      "sessionsBoard": {
+        "kind": "Sessions",
+        "peopleFilter": "Filtre de persones",
+        "everyone": "Tothom",
+        "involvingMe": "On participo",
+        "agent": "Agent del tauler",
+        "agentLabel": "Tauler de sessions · {name}",
+        "agentUnavailable": "L'agent de la conversa del tauler no està disponible. Trieu un agent configurat o actualitzeu la conversa del tauler.",
+        "agentCreateFailed": "No s'ha pogut crear la conversa del tauler. Torneu-ho a provar.",
+        "writeUnavailable": "S'ha desat l'aparença del tauler. Torneu a connectar-vos amb permisos d'escriptura per desar les columnes de sessions.",
+        "loading": "S'estan carregant les sessions…",
+        "partial": "S'han carregat {count} de {total} sessions. El filtre d'agents s'aplica a les sessions carregades.",
+        "loadMore": "Carrega més sessions",
+        "empty": "No hi ha sessions en aquesta columna",
+        "columns": "Columnes",
+        "columnLabel": "Etiqueta de la columna",
+        "description": "Descripció",
+        "fallback": "Columna alternativa",
+        "defaultColor": "Predeterminat",
+        "addColumn": "Afegeix una columna",
+        "removeColumn": "Elimina la columna",
+        "newColumn": "Columna nova",
+        "moveUp": "Mou amunt",
+        "moveDown": "Mou avall",
+        "rulesHelp": "L'agent del tauler pot editar les regles de les columnes i l'àmbit de les sessions.",
+        "source": {
+          "state": "per regla",
+          "operator": "fixat"
+        },
+        "run": {
+          "active": "Treballant",
+          "idle": "Inactiu",
+          "failed": "Ha fallat"
+        },
+        "pullRequest": {
+          "open": "Oberta",
+          "draft": "Esborrany",
+          "merged": "Fusionada",
+          "closed": "Tancada"
+        },
+        "color": {
+          "red": "Vermell",
+          "blue": "Blau",
+          "green": "Verd",
+          "yellow": "Groc",
+          "purple": "Porpra",
+          "orange": "Taronja",
+          "pink": "Rosa",
+          "cyan": "Cian"
+        }
+      },
+      "boardName": "Nom",
+      "boardAppearance": "Aparença del tauler",
+      "boardAutomation": "Automatització del tauler",
+      "openBoardAutomation": "Obre",
+      "automationLoading": "S'està carregant l'automatització vinculada…",
+      "automationUnavailable": "Automatització no disponible",
+      "automationPaused": "En pausa",
+      "automationEnabled": "Activada",
+      "automationState": "Estat",
+      "automationFrequency": "Freqüència",
+      "automationNextRunLabel": "Propera execució",
+      "automationNotScheduled": "No programada",
+      "automationUpdatedAgo": "Actualitzada fa {time}",
+      "automationUpdatedNow": "Actualitzada ara mateix",
+      "automationRefreshHint": "Actualitza el tauler per tornar-ho a provar.",
+      "openNamedAutomation": "Obre {name}",
+      "automationNextRun": "Propera execució: {time}",
+      "automationNextRunDue": "La propera execució toca ara",
+      "automationEvery": "Cada {duration}",
+      "automationAt": "A les {time}",
+      "automationOnExit": "En sortir: {command}",
+      "automationStream": "Flux: {command}",
+      "automationEvent": "Esdeveniment: {source}",
+      "automationWaitingForEvent": "Esperant un esdeveniment",
+      "viewPresetCountOne": "1 targeta",
+      "editCardHelp": "Actualitza les metadades de la cua i el traspàs de sessió.",
+      "newCard": "Targeta nova",
+      "newCardShort": "Nova",
+      "newCardInColumn": "Targeta nova a {column}",
+      "newCardHelp": "Afegeix feina a la cua per a una sessió d'agent.",
+      "archiveCard": "Arxiva la targeta",
+      "unarchiveCard": "Restaura des de l'arxiu",
+      "archived": "Arxivada",
+      "deleteCard": "Suprimeix la targeta",
+      "cardActions": "Accions de la targeta",
+      "viewDetails": "Mostra els detalls",
+      "detailTitle": "Detalls de la targeta",
+      "detailProperties": "Propietats",
+      "detailTabOverview": "Visió general",
+      "detailTabActivity": "Activitat",
+      "detailTabSession": "Sessió",
+      "detailTabDetails": "Detalls",
+      "detailTemplate": "Plantilla",
+      "detailFailures": "Intents fallits",
+      "detailClaim": "Responsable de la reclamació",
+      "detailHeartbeat": "Últim polset",
+      "detailNotifications": "Notificacions",
+      "inlineAddLabels": "Afegeix etiquetes",
+      "inlineAddDescription": "Afegeix una descripció",
+      "detailOccurrences": "{count} ocurrències",
+      "detailFirstSeen": "Primera detecció: {time}",
+      "detailLastSeen": "Última detecció: {time}",
+      "detailExecutionOptions": "Altres maneres de començar",
+      "detailRunAutomatically": "Executa automàticament",
+      "detailOpenManually": "Obre una sessió manualment",
+      "detailNoSessionYet": "Encara no hi ha cap sessió",
+      "defaultAgentBadge": "Per defecte",
+      "detailStartSessionHelp": "Inicia {agent} per treballar en aquesta targeta.",
+      "detailTechnical": "Detalls tècnics",
+      "detailRun": "Execució",
+      "detailUpdated": "Actualitzat",
+      "detailProof": "Verificació",
+      "detailAttemptTitle": "Intent {number}",
+      "proofPassed": "Superada",
+      "proofSkipped": "Omesa",
+      "proofUnknown": "Desconeguda",
+      "detailDiagnostics": "Diagnòstic",
+      "detailWorkerLogs": "Registres del procés de treball",
+      "detailWorkerProtocol": "Protocol del procés de treball",
+      "detailCardAutomation": "Automatització de la targeta",
+      "detailBoard": "Tauler",
+      "detailScheduled": "Programat",
+      "detailSkills": "Habilitats",
+      "detailWorkspace": "Espai de treball",
+      "detailDispatchCount": "Assignacions",
+      "detailLastDispatch": "Última assignació",
+      "detailRuntimeLimit": "Límit de temps d'execució",
+      "detailRetryLimit": "Límit de reintents",
+      "detailTenant": "Organització",
+      "detailUpdatedValue": "Actualitzat: {time}",
+      "detailOperatorNotes": "Notes de l'operador",
+      "detailNoNotes": "Encara no hi ha notes de l'operador.",
+      "detailNotePlaceholder": "Afegeix una nota sobre una decisió, un impediment o una prova...",
+      "detailAddNote": "Afegeix una nota",
+      "openSession": "Obre la sessió",
+      "defaultAgent": "Agent per defecte",
+      "allAgents": "Tots els agents",
+      "agentFilter": "Filtra per agent",
+      "allBoards": "Tots els taulers",
+      "boardFilter": "Filtra per tauler",
+      "defaultBoard": "Tauler per defecte",
+      "boardFilterSummary": "{active} actives · {total} en total",
+      "boardFilterArchivedSummary": "Arxivat · {active} actives · {total} en total",
+      "agentFilterUnassigned": "Sense assignar (utilitza {agent})",
+      "agentFilterUnassignedHelp": "Targetes sense un agent explícit.",
+      "agentFilterConfiguredDefault": "{agent} (per defecte)",
+      "agentFilterConfiguredDefaultHelp": "Targetes assignades explícitament a l'agent configurat per defecte.",
+      "agentCurrentUnconfigured": "{agent} (no configurat)",
+      "viewPresetCount": "{count} targetes",
+      "engineOpenAI": "OpenAI",
+      "engineClaude": "Claude",
+      "engineDisabledRuntime": "{agent} utilitza l'entorn d'execució ACP {runtime}. Fes servir l'inici per defecte per a aquesta sessió.",
+      "runEngine": "Executa {engine}",
+      "openEngine": "Obre {engine}",
+      "runDefaultAgent": "Executa l'agent per defecte",
+      "start": "Inicia",
+      "dependencies": "Dependències",
+      "dependenciesBlocked": "{count} bloquejades",
+      "dependencyStatusMissing": "Falta",
+      "dependencyStatusNotLoaded": "No carregada",
+      "unknownStatus": "Desconegut",
+      "showArchived": "Mostra les arxivades",
+      "dispatch": "Inicia els agents",
+      "dispatchHelp": "Demana als agents que executin les targetes amb l'estat A punt d'aquest tauler, fins a 3 alhora.",
+      "dispatchHelpAll": "Demana als agents que executin les targetes amb l'estat A punt de tots els taulers, fins a 3 alhora.",
+      "moveTo": "Mou a",
+      "dispatchSummary": "Iniciades: {started}. Preparades: {promoted}, bloquejades: {blocked}, alliberades: {reclaimed}, organitzades: {orchestrated}. No s'han pogut iniciar: {failures}.",
+      "dispatchSummaryEmpty": "No s'ha iniciat cap targeta.",
+      "lastRefreshed": "Actualitzat {time}",
+      "refreshError": "No s'ha pogut actualitzar",
+      "fieldTitle": "Títol",
+      "fieldNotes": "Notes",
+      "fieldStatus": "Estat",
+      "fieldPriority": "Prioritat",
+      "fieldAgent": "Agent",
+      "fieldSession": "Sessió",
+      "fieldLabels": "Etiquetes",
+      "templatesLabel": "Plantilles de targetes",
+      "suggestionsLabel": "Suggeriments",
+      "template": {
+        "bugfix": "Correcció d'errors",
+        "docs": "Documentació",
+        "release": "Llançament",
+        "pr_review": "Revisió de PR",
+        "plugin": "Connector"
+      },
+      "templateDraft": {
+        "bugfixTitle": "Correcció: ",
+        "bugfixNotes": "Símptoma:\nCausa:\nAcceptació:\nEvidència:",
+        "docsTitle": "Documentació: ",
+        "docsNotes": "Pàgina:\nCanvi:\nEvidència de la font:",
+        "releaseTitle": "Llançament: ",
+        "releaseNotes": "Abast:\nVerificació:\nTancament:",
+        "prReviewTitle": "Revisa la PR ",
+        "prReviewNotes": "Àrea afectada:\nRiscos:\nEvidències:",
+        "pluginTitle": "Connector: ",
+        "pluginNotes": "Límits:\nConfiguració/documentació:\nProves:"
+      },
+      "cardStaleAge": "Sense activitat · {age}",
+      "cardStaleTitle": "Sense activitat des de fa {age}",
+      "cardUpdatedNow": "ara mateix",
+      "cardUpdatedAgo": "fa {time}",
+      "cardMoreLabels": "{count} etiquetes més: {labels}",
+      "cardFiles": "{count} fitxers",
+      "cardWarnings": "{count} advertiments",
+      "sessionStatus": {
+        "queued": "En cua",
+        "running": "En execució",
+        "done": "Completada",
+        "failed": "Fallida",
+        "stale": "Sense activitat",
+        "unknown": "Desconeguda",
+        "unavailable": "No disponible",
+        "ambiguous": "Ambigu",
+        "stopped": "Aturat",
+        "timedOut": "Temps d'espera esgotat",
+        "cancelled": "Cancel·lat"
+      },
+      "badgeAttempts": "{count} intents",
+      "badgeFailures": "{count} fallits",
+      "badgeComments": "{count} comentaris",
+      "badgeLinks": "{count} enllaços",
+      "badgeProof": "{count} proves",
+      "badgeArtifacts": "{count} artefactes",
+      "badgeAttachments": "{count} fitxers adjunts",
+      "badgeStale": "obsolet",
+      "titlePlaceholder": "Títol de la targeta",
+      "notesPlaceholder": "Notes, criteris d'acceptació, enllaços",
+      "labelsPlaceholder": "p. ex. interfície, documentació",
+      "searchPlaceholder": "Cerca targetes",
+      "closeSearch": "Esborra i tanca la cerca",
+      "allStatuses": "Tots",
+      "allWork": "Tota la feina",
+      "filters": "Filtres",
+      "filtersActive": "Filtres, {count} actius",
+      "emptyColumns": "Columnes buides",
+      "emptyColumnsShow": "Mostra",
+      "emptyColumnsCollapse": "Replega",
+      "emptyColumnsHide": "Amaga",
+      "showEmptyColumns": "Mostra-les totes",
+      "collapseEmptyColumns": "Replega les buides",
+      "hideEmptyColumns": "Amaga les buides",
+      "collapseColumn": "Replega la columna {column}",
+      "expandColumn": "Desplega la columna {column}",
+      "emptyColumn": "Deixa anar el treball aquí",
+      "emptyColumnTitle": "Encara no hi ha targetes",
+      "emptyFilteredTitle": "Cap targeta coincideix amb aquesta vista",
+      "emptyFilteredHint": "Prova amb menys filtres o amb una altra cerca.",
+      "lifecycleUnlinked": "Sense sessió",
+      "lifecycleUnlinkedDetail": "Inicia o vincula una sessió",
+      "lifecycleUnknown": "Estat de la sessió desconegut",
+      "lifecycleUnknownDetail": "Obre la targeta o actualitza la vista per carregar els detalls de la sessió",
+      "lifecycleUnavailable": "Sessió no disponible",
+      "lifecycleUnavailableDetail": "Obre la sessió o torna a vincular aquesta targeta",
+      "lifecycleAmbiguous": "Vinculació amb la sessió ambigua",
+      "lifecycleAmbiguousDetail": "Editeu la targeta per seleccionar una sessió concreta",
+      "lifecycleLinked": "Vinculada",
+      "lifecycleIdleDetail": "Cap execució activa",
+      "lifecycleRunning": "En execució",
+      "lifecycleRunningDetail": "Execució activa en curs",
+      "lifecycleStale": "Inactiva",
+      "lifecycleStaleDetail": "Sense activitat recent a la sessió",
+      "lifecycleDone": "Completada",
+      "lifecycleDoneDetail": "Execució completada",
+      "lifecycleFailed": "Fallida",
+      "lifecycleFailedDetail": "Obriu la sessió per revisar l'error",
+      "lifecycleStopped": "Aturada",
+      "lifecycleTimedOut": "Temps d'espera esgotat",
+      "lifecycleStoppedDetail": "L'execució s'ha aturat",
+      "eventsLabel": "Esdeveniments de la targeta",
+      "eventCreated": "Creada",
+      "eventEdited": "Editada",
+      "eventMoved": "Moguda",
+      "eventMovedTo": "Moguda a {status}",
+      "eventLinked": "Sessió vinculada",
+      "eventSpecified": "Especificat",
+      "eventDecomposed": "Desglossat",
+      "eventClaimed": "Reclamat",
+      "eventHeartbeat": "Polset",
+      "eventExecutionUpdated": "Agent actualitzat",
+      "eventAttemptStarted": "Intent iniciat",
+      "eventAttemptUpdated": "Intent actualitzat",
+      "eventCommentAdded": "Comentari afegit",
+      "eventLinkAdded": "Enllaç afegit",
+      "eventProofAdded": "Prova afegida",
+      "eventArtifactAdded": "Artefacte afegit",
+      "eventAttachmentAdded": "Fitxer adjunt afegit",
+      "eventDiagnostic": "Diagnòstic",
+      "eventNotification": "Notificació",
+      "eventDispatch": "Enviament",
+      "eventOrchestration": "Orquestració",
+      "eventProtocolViolation": "Infracció del protocol",
+      "eventArchived": "Arxivat",
+      "eventUnarchived": "Desarxivat",
+      "eventStale": "Sessió obsoleta"
     }
   }
 }

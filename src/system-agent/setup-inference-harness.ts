@@ -9,7 +9,7 @@ import { hasRememberedNativeRuntimeConsent } from "../config/native-runtime-cons
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCache } from "../plugins/plugin-cache.js";
 import { withPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -112,7 +112,7 @@ export async function prepareSetupVerificationGeneration(
         ),
       }
     : staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
-      ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
+      ? await withPluginLifecycleLeaseAsync({ signal: params.signal }, async () =>
           loadSetupInferencePluginGeneration({
             cache,
             config: candidate,

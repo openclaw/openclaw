@@ -10,7 +10,7 @@ export function assertClawHubExternalInstallContract(installPath, label) {
   if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
     throw new Error(`${label} openclaw peer is not a symlink: ${openclawPeerPath}`);
   }
-  const hostRoot = fs.realpathSync(process.cwd());
+  const hostRoot = fs.realpathSync(process.env.OPENCLAW_E2E_HOST_ROOT || process.cwd());
   const linkedHostRoot = fs.realpathSync(openclawPeerPath);
   if (linkedHostRoot !== hostRoot) {
     throw new Error(`expected ${label} openclaw peer ${linkedHostRoot} to target ${hostRoot}`);

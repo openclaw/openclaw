@@ -204,6 +204,40 @@ it.each([false, true])(
   },
 );
 
+it("refuses a pending mention write after the recipient loses access", () =>
+  withInbox(
+    async (f) => {
+      await f.items();
+      const prepared = createDeferred();
+      const release = createDeferred();
+      const commit = mentionWorker.commitMentionChanges;
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(async (...args) => {
+        prepared.resolve();
+        await release.promise;
+        return commit(...args);
+      });
+      const pending = f.post("revoked-before-commit");
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          pending,
+          "Mention did not prepare its write",
+        );
+        setUserProfileRole(f.bob.id, "denied");
+        invalidateOperatorRolePolicy(f.bob.id);
+        release.resolve();
+        await pending;
+        expect(storedSnapshot()?.sources ?? []).toEqual([]);
+        expect(f.push).not.toHaveBeenCalled();
+        expectMentionError(await listInbox(f.inbox, f.bobClient), "FORBIDDEN");
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    },
+    mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } }),
+  ));
+
 it("drains accepted committed input during disposal while refusing new input", () =>
   withInbox(async (f) => {
     const accepted = f.post("accepted-before-dispose");
@@ -573,6 +607,16 @@ it("keeps view revisions private and retracts a now-hidden session", () =>
     expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
     await f.post();
     const visible = await read(f.inbox, f.bobClient);
+    const response = await read(f.inbox, f.bobClient);
+    response.items[0]!.senderLabel = "Caller-owned label";
+    response.items.length = 0;
+    response.revision++;
+    expect(await read(f.inbox, f.bobClient)).toEqual(visible);
+    f.broadcast.mockClear();
+    setDisplayName(f.carol.id, "Carol Updated");
+    await Promise.resolve();
+    expect(await read(f.inbox, f.bobClient)).toEqual(visible);
+    expect(f.broadcast).not.toHaveBeenCalled();
     await f.setSession({ displayName: "Updated design review" });
     expect((await f.items())[0]?.sessionTitle).toBe("Updated design review");
     await f.setSession({ visibility: "draft" });

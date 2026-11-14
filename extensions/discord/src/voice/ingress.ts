@@ -54,7 +54,6 @@ export async function resolveDiscordVoiceIngressContext(params: {
     entry.guildName = guild?.name.trim() ? guild.name : undefined;
   }
   const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
-  const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);
   const access = await authorizeDiscordVoiceIngress({
     readPolicy: params.readPolicy,
     cfg: params.cfg,
@@ -65,12 +64,12 @@ export async function resolveDiscordVoiceIngressContext(params: {
     channelName: entry.channelName,
     channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
     channelLabel: formatMention({ channelId: entry.channelId }),
-    memberRoleIds: speakerIdentity.memberRoleIds,
+    memberRoleIds: speaker.memberRoleIds,
     admissionAllowFrom: params.admissionAllowFrom,
     sender: {
-      id: speakerIdentity.id,
-      name: speakerIdentity.name,
-      tag: speakerIdentity.tag,
+      id: speaker.id,
+      name: speaker.name,
+      tag: speaker.tag,
     },
   });
   if (!access.ok) {

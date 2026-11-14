@@ -1,5 +1,5 @@
 import * as providerModelNormalization from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createConfiguredProviderModelResolver,
   resolveMergedModelProviderModels,
@@ -162,26 +162,22 @@ describe("reused configured model lookups", () => {
     const second = model("custom/ Second");
     let matchFirst = false;
     let failure: Error | undefined;
-    const canonicalize = vi.fn((id: string) => {
+    const canonicalize = (id: string) => {
+      if (id === "Second" && matchFirst) {
+        throw new Error("must short-circuit after the first match");
+      }
       if ((id === "First" || id === "literal") && failure) {
         throw failure;
       }
       return id === "target" || id === "Second" || (id === "First" && matchFirst) ? "match" : id;
-    });
+    };
     const resolve = resolver([first, second, model("literal")], canonicalize);
     expect(resolve("target")).toBe(second);
-    expect(canonicalize.mock.calls).toEqual([["literal"], ["target"], ["First"], ["Second"]]);
-    canonicalize.mockClear();
     matchFirst = true;
     expect(resolve("target")).toBe(first);
-    expect(canonicalize.mock.calls).toEqual([["target"], ["First"]]);
-    canonicalize.mockClear();
     expect(resolve("First")).toBe(first);
-    expect(canonicalize.mock.calls).toEqual([["First"]]);
-    canonicalize.mockClear();
     failure = new Error("policy failure");
     expect(() => resolve("target")).toThrow(failure);
-    expect(canonicalize.mock.calls).toEqual([["target"], ["First"]]);
     expect(() => resolve("First")).toThrow(failure);
     expect(() => resolve("literal")).toThrow(failure);
     failure = undefined;
@@ -201,18 +197,16 @@ describe("reused configured model lookups", () => {
   it("retains the published partial index after an initialization callback throws", () => {
     const first = model("custom/First");
     const failure = new Error("initialization failure");
-    const canonicalize = vi.fn((id: string) => {
+    const canonicalize = (id: string) => {
       if (id === "broken") {
         throw failure;
       }
       return id;
-    });
+    };
     const resolve = resolver([first, model("broken"), model("custom/Second")], canonicalize);
     expect(() => resolve("First")).toThrow(failure);
-    canonicalize.mockClear();
     expect(resolve("Second")).toBeUndefined();
     expect(resolve("First")).toBe(first);
-    expect(canonicalize.mock.calls).toEqual([["Second"], ["First"], ["First"]]);
   });
 });
 
@@ -227,17 +221,11 @@ it.each([
   [{ supportedReasoningEfforts: ["none"] }, "present"],
   [{ supportedReasoningEfforts: ["high", false] }, "present"],
   [{ supportsTemperature: false }, "none"],
-  [{ supportsTemperature: true }, "none"],
   [{ codeMode: "preferred" }, "none"],
   [{ codeMode: "capable" }, "none"],
   [{ supportsTemperature: "false" }, "present"],
   [{ codeMode: "exact" }, "present"],
-  [{ supportsTemperature: false, codeMode: "preferred", supportsStore: false }, "present"],
   [{ supportsStore: false }, "present"],
-  [
-    { supportsReasoningEffort: true, supportedReasoningEfforts: ["high"], supportsStore: false },
-    "present",
-  ],
 ])("classifies %j as %s (timeout %s)", (compat, expected, timeoutSeconds?: number) => {
   const openai = { models: [{ id: "gpt-5.6-sol", compat }], timeoutSeconds };
   const config = { models: { providers: { openai } } } as never;

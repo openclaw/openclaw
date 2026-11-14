@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -26,9 +27,11 @@ import {
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
+  readGatewayIngressTransport,
 } from "./ingress-attribution.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
 type CookieRequestAuth = NonNullable<ReturnType<typeof authorizeControlUiPluginCookieRequest>>;
 
@@ -47,6 +50,11 @@ function readControlUiPluginCookieRequest(
 ) {
   const ingress = getRemoteControlUiIngressContext(req);
   assertRemoteControlUiIngressCurrent(ingress);
+  // Tunnel requests already have a device principal. Cookie handoffs must not
+  // replace its current membership/role with a previously signed browser grant.
+  if (readGatewayIngressTransport(req)?.kind === "openclaw-id-tunnel") {
+    return null;
+  }
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
   // Explicit owner/staff credentials retain their own authority even when an
@@ -58,6 +66,9 @@ function readControlUiPluginCookieRequest(
   // boundary. Cross-site sandbox descendants need an ambient cookie, so this
   // handoff is read-only; mutations stay on explicit Gateway auth surfaces.
   const cfg = getRuntimeConfig();
+  if (hasGatewayDelegationClaim(req, cfg.gateway?.auth?.trustedProxy?.userHeader)) {
+    return null;
+  }
   const grants = resolveControlUiPluginAuthCookieGrants(req, {
     requestPath: params.requestPath,
     generation: resolveControlUiPluginAuthCookieGeneration(params.authGeneration, cfg),
@@ -110,7 +121,11 @@ export function authorizeControlUiPluginCookieRequest(
       }
     : checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
-    if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
+    const unavailable = profileAuth.authResult.reason === "operator_access_unavailable";
+    if (unavailable && !params.res) {
+      throw new GatewayOperatorAccessUnavailableError();
+    }
+    if (params.res && (unavailable || profileAuth.authResult.reason === "operator_access_denied")) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
     }
     return null;

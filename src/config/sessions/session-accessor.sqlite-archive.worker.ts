@@ -7,6 +7,7 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { MessagePort, parentPort, threadId, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   installDatabaseEngineSelection,
@@ -19,19 +20,23 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
 } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "../../infra/worker-memory.js";
+import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   hashSessionArchiveBytes,
+  trackSqliteArchiveTemporaryFile,
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
@@ -62,11 +67,8 @@ import {
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import type {
-  SessionColdPreparationWorkerData,
-  SessionColdWorkerData,
-} from "./session-cold-storage-worker.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import type { SqliteArchiveMutationRequest } from "./session-cold-storage-worker.js";
+import { transcriptEventJsonSql } from "./transcript-payload-read.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -119,7 +121,6 @@ function stageTranscriptArchiveContent(
       rowCount += 1;
     }
     flush();
-    fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
@@ -172,6 +173,7 @@ async function encodeStagedTranscriptArchive(params: {
     nowMs: createdAt,
   })}${compressed ? ".zst" : ""}`;
   const encodedPath = `${archivePath}.${randomUUID()}.stage`;
+  trackSqliteArchiveTemporaryFile(encodedPath, true);
   try {
     await pipeline([
       fs.createReadStream(params.stagedPath),
@@ -189,6 +191,7 @@ async function encodeStagedTranscriptArchive(params: {
     };
   } finally {
     fs.rmSync(encodedPath, { force: true });
+    trackSqliteArchiveTemporaryFile(encodedPath, false);
   }
 }
 
@@ -210,10 +213,11 @@ export async function materializeTranscriptArchiveInWorker(
     reason: input.reason,
     sessionId: input.sessionId,
   })}.${randomUUID()}.jsonl-stage`;
+  trackSqliteArchiveTemporaryFile(stagedPath, true);
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => {
             assertSource();
@@ -284,6 +288,7 @@ export async function materializeTranscriptArchiveInWorker(
     return { archive, sessionId: input.sessionId, ...(history ? { preparedPlan } : {}) };
   } finally {
     fs.rmSync(stagedPath, { force: true });
+    trackSqliteArchiveTemporaryFile(stagedPath, false);
   }
 }
 
@@ -354,58 +359,89 @@ export function publishTranscriptArchiveInWorker(
   }
 }
 
+async function runArchiveSessionRequest(
+  port: NonNullable<typeof parentPort>,
+  env: NodeJS.ProcessEnv,
+  message: unknown,
+): Promise<boolean> {
+  // SAFETY: only the paired scoped archive owner sends this private port's requests.
+  const request = message as
+    | SqliteArchiveSessionRequest
+    | SqliteArchiveMutationRequest
+    | { type: "close" };
+  if (request.type === "close") {
+    return false;
+  }
+  if (request.type === "cold-mutation") {
+    const { runColdMutationWorkerPort } =
+      await import("./session-accessor.sqlite-mutation-worker.runtime.js");
+    await runColdMutationWorkerPort(request.port, request.data, request.operationId);
+    return true;
+  }
+  let response: SqliteArchiveSessionResponse;
+  if (request.operation === "cold-prepare") {
+    const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-prepare.js");
+    const scope = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      response = {
+        type: "cold-prepared",
+        results: [
+          await scope.run(request.input.databaseOptions, () =>
+            prepareSessionColdBatchInWorker(request.input),
+          ),
+        ],
+      };
+    } finally {
+      // The reusable carrier must not retain the preparation's database lease.
+      scope.close();
+    }
+  } else if (request.operation === "materialize") {
+    const results: TranscriptArchiveWorkerResult[] = [];
+    for await (const result of materializeTranscriptArchiveBatch(request.plans, env)) {
+      results.push(result);
+    }
+    response = { type: "done", results };
+  } else if (request.operation === "publish") {
+    response = {
+      type: "published",
+      results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
+    };
+  } else if (request.operation === "read-page") {
+    const { readTranscriptArchivePageInWorker } =
+      await import("./session-accessor.sqlite-archive-read.js");
+    const results: Array<TranscriptArchivePageResult | undefined> = [];
+    for (const plan of request.plans) {
+      results.push(await readTranscriptArchivePageInWorker(plan, env));
+    }
+    response = { type: "page-read", results };
+  } else {
+    const { readTranscriptArchiveFinalInWorker } =
+      await import("./session-accessor.sqlite-archive-read.js");
+    const results: TranscriptArchiveReadResult[] = [];
+    for (const plan of request.plans) {
+      results.push(await readTranscriptArchiveFinalInWorker(plan, env));
+    }
+    response = { type: "final-read", results };
+  }
+  // Each callee has closed its fresh database, streams, file descriptors and staging files.
+  // Failed publication still requires native exit in case its error came from native close.
+  port.postMessage(response);
+  return !(
+    response.type === "published" && response.results.some((result) => result.error !== undefined)
+  );
+}
+
 async function runArchiveSession(
   port: NonNullable<typeof parentPort>,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  for await (const [message] of on(port, "message")) {
+  for await (const messages of on(port, "message")) {
     cancelWorkerIdleGc();
-    // SAFETY: only the paired scoped archive owner sends this private port's requests.
-    const request = message as SqliteArchiveSessionRequest | { type: "close" };
-    if (request.type === "close") {
+    // Consume the event before waiting again; request payloads live only in the handler.
+    if (!(await runArchiveSessionRequest(port, env, messages.pop()))) {
       break;
     }
-    let response: SqliteArchiveSessionResponse;
-    if (request.operation === "materialize") {
-      const results: TranscriptArchiveWorkerResult[] = [];
-      for await (const result of materializeTranscriptArchiveBatch(request.plans, env)) {
-        results.push(result);
-      }
-      response = { type: "done", results };
-    } else if (request.operation === "publish") {
-      response = {
-        type: "published",
-        results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
-      };
-    } else if (request.operation === "read-page") {
-      const { readTranscriptArchivePageInWorker } =
-        await import("./session-accessor.sqlite-archive-read.js");
-      const results: Array<TranscriptArchivePageResult | undefined> = [];
-      for (const plan of request.plans) {
-        results.push(await readTranscriptArchivePageInWorker(plan, env));
-      }
-      response = { type: "page-read", results };
-    } else {
-      const { readTranscriptArchiveFinalInWorker } =
-        await import("./session-accessor.sqlite-archive-read.js");
-      const results: TranscriptArchiveReadResult[] = [];
-      for (const plan of request.plans) {
-        results.push(await readTranscriptArchiveFinalInWorker(plan, env));
-      }
-      response = { type: "final-read", results };
-    }
-    // Each callee has closed its fresh database, streams, file descriptors and staging files.
-    // Failed publication still requires native exit in case its error came from native close.
-    port.postMessage(response);
-    const failed =
-      response.type === "published" &&
-      response.results.some((result) => result.error !== undefined);
-    response.results.length = 0;
-    request.plans = [];
     scheduleWorkerIdleGc();
-    if (failed) {
-      break;
-    }
   }
   port.close();
 }
@@ -447,13 +483,17 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
             } satisfies SqliteCanonicalValidationTaskMessage,
             [],
           );
-          await runReclamationWorkerPort(task.port, task.databaseOptions, taskSequence);
+          const cleanup = await runReclamationWorkerPort(
+            task.port,
+            task.databaseOptions,
+            taskSequence,
+          );
           channel.consumeInput();
-          return { status: "closed" };
+          return { status: "closed", cleanup };
         } catch (error) {
           return {
             status: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: encodeNativeWorkerFailure(toStringifiedError(error)),
           };
         } finally {
           task?.port?.close();
@@ -485,12 +525,24 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
         [],
       );
       port.close();
-    } else if (operation === "cold-prepare") {
-      const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
-      // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.
-      const data = workerData as SessionColdPreparationWorkerData;
-      const result = await prepareSessionColdBatchInWorker(data.input);
-      port.postMessage({ type: "done", results: [result] }, []);
+    } else if (operation === "cold-embed-snapshot") {
+      const { openNodeSqliteDatabase, resolveExistingSqliteFileUri } =
+        await import("../../infra/node-sqlite.js");
+      const { embedSessionColdArchivesInSnapshotInWorker } =
+        await import("./session-cold-storage-backup.worker.js");
+      // SAFETY: the snapshot owner retains this private file until the worker joins.
+      const data = workerData as Extract<
+        SqliteArchiveOneShotWorkerData,
+        { operation: "cold-embed-snapshot" }
+      >;
+      {
+        using database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(data.snapshotPath));
+        await embedSessionColdArchivesInSnapshotInWorker({
+          database,
+          sourceStorePath: data.sourceStorePath,
+        });
+      }
+      port.postMessage({ type: "done", results: [] }, []);
       port.close();
     } else if (operation === "maintenance-size") {
       const { readSessionTranscriptJsonlBytesInDatabase } =
@@ -508,38 +560,42 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
       }
       port.postMessage({ type: "sized", results: [opened.value] }, []);
       port.close();
-    } else if (operation === "cold-mutate" || operation === "reclaim") {
-      const { runColdMutationWorkerPort, runReclamationWorkerPort } =
+    } else if (operation === "reclaim") {
+      const { runReclamationWorkerPort } =
         await import("./session-accessor.sqlite-mutation-worker.runtime.js");
-      if (operation === "cold-mutate") {
-        // SAFETY: the paired parent constructs this internal payload; commit revalidates its rows.
-        await runColdMutationWorkerPort(port, workerData as SessionColdWorkerData);
-      } else {
-        await runReclamationWorkerPort(
-          port,
-          // SAFETY: the parent creates these cloneable boot options from its typed plan.
-          (workerData as { databaseOptions: SqliteSessionReclamationPlan["databaseOptions"] })
-            .databaseOptions,
-        );
-      }
+      await runReclamationWorkerPort(
+        port,
+        // SAFETY: the parent creates these cloneable boot options from its typed plan.
+        (workerData as { databaseOptions: SqliteSessionReclamationPlan["databaseOptions"] })
+          .databaseOptions,
+      );
     } else {
       throw new Error("SQLite transcript archive worker requires a supported operation");
     }
   };
   const admissionPort = workerData.databaseAdmissionPort;
-  if (admissionPort instanceof MessagePort) {
-    bindSqliteDatabaseAdmissionUpstream(admissionPort);
-    try {
-      await withSqliteDatabaseAdmissionExchange(
-        (admissions, location, create) =>
-          exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
-        () => run(workerPort),
-      );
-    } finally {
-      admissionPort.close();
+  // Pooled validation serves its own diagnostics; dedicated carriers own them until exit.
+  const memorySamples =
+    workerData.operation === "canonical-validation-pool"
+      ? undefined
+      : serveWorkerMemorySamples(workerPort);
+  try {
+    if (admissionPort instanceof MessagePort) {
+      bindSqliteDatabaseAdmissionUpstream(admissionPort);
+      try {
+        await withSqliteDatabaseAdmissionExchange(
+          (admissions, location, create) =>
+            exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
+          () => run(workerPort),
+        );
+      } finally {
+        admissionPort.close();
+      }
+    } else {
+      // Task-pool dispatch installs its own existing admission exchange per task.
+      await run(workerPort);
     }
-  } else {
-    // Task-pool dispatch installs its own existing admission exchange per task.
-    await run(workerPort);
+  } finally {
+    memorySamples?.close();
   }
 }

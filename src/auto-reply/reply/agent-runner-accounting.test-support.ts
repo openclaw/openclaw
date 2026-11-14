@@ -3,10 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import {
+  bindSessionControllerTarget,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { createAgentAccountingPersistenceFixture } from "./agent-runner-result-accounting.persistence.test-support.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 export function useAccountingFixture(prefix: string) {
   const database = { root: "", storePath: "" };
@@ -34,7 +38,18 @@ export function useAccountingFixture(prefix: string) {
       createAgentAccountingPersistenceFixture({
         ...database,
         fixtureId: ++sequence,
-        registerOperation: (operation) => operations.push(operation),
+        registerOperation: (operation) => {
+          bindSessionControllerTarget(
+            operation,
+            captureSessionTarget({
+              storeScope: database.storePath,
+              sessionKey: operation.key,
+              agentId: "main",
+              incarnation: operation.sessionId,
+            }),
+          );
+          operations.push(operation);
+        },
       }),
   };
 }

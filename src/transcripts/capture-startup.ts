@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { ActiveTranscriptsSession } from "./capture-types.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
@@ -111,12 +112,7 @@ export function prepareTranscriptCaptureDisable(stateDir: string) {
       const results = await Promise.allSettled(
         entries.map(async (entry) => entry.directCapture?.drain()),
       );
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Transcript capture policy drainage failed");
-      }
+      throwSettledAggregate(results, "Transcript capture policy drainage failed");
     },
     resume: () => {
       if (capturePolicyTransitions.get(stateDir) === transition) {

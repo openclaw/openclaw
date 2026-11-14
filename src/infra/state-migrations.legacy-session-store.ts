@@ -7,7 +7,6 @@ import {
   migrateLegacySessionEntryState,
   normalizePersistedSessionEntryShape,
 } from "../commands/doctor/shared/session-entry-shape.js";
-import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
 import { hasLegacySessionProviderState } from "../config/sessions/session-entry-state-format.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
@@ -18,13 +17,8 @@ import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-en
 import { applyFileBackedSessionStoreMaintenance } from "../config/sessions/store-maintenance-operations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
-import {
-  normalizeSessionRuntimeModelFields,
-  type SessionEntry,
-  type SessionOrigin,
-} from "../config/sessions/types.js";
+import { normalizeSessionRuntimeModelFields, type SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../plugins/session-entry-slot-keys.js";
 import {
@@ -37,16 +31,15 @@ import { migrateLegacySessionCreator } from "../state/creator-namespace-migratio
 import {
   deliveryContextFromChannelRoute,
   isCanonicalSessionDeliveryState,
+  isInternalRouteContext,
   mergeDeliveryContext,
+  mergeExternalDeliveryContextOverInternalRoute,
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
+  type SessionDeliveryProjection,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isInternalNonDeliveryChannel,
-} from "../utils/message-channel-constants.js";
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
@@ -58,58 +51,6 @@ const log = createSubsystemLogger("sessions/legacy-importer");
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../gateway/session-archive.runtime.js"),
 );
-
-function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized = normalizeDeliveryContext({
-    channel: typeof value.channel === "string" ? value.channel : undefined,
-    to: typeof value.to === "string" ? value.to : undefined,
-    accountId: typeof value.accountId === "string" ? value.accountId : undefined,
-    threadId:
-      typeof value.threadId === "string" || typeof value.threadId === "number"
-        ? value.threadId
-        : undefined,
-  });
-  return normalized?.channel && normalized.to ? normalized : undefined;
-}
-
-function sameDeliveryContext(
-  left: DeliveryContext | undefined,
-  right: DeliveryContext | undefined,
-): boolean {
-  return (
-    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
-    (left?.to ?? undefined) === (right?.to ?? undefined) &&
-    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
-    (left?.threadId ?? undefined) === (right?.threadId ?? undefined)
-  );
-}
-
-function normalizeRestartRecoveryFields(entry: SessionEntry): SessionEntry {
-  let next = entry;
-  const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
-    if (entry[key] === value) {
-      return;
-    }
-    if (next === entry) {
-      next = { ...entry };
-    }
-    if (value === undefined) {
-      delete next[key];
-    } else {
-      next[key] = value;
-    }
-  };
-
-  const restartContext = normalizeOptionalDeliveryContext(entry.restartRecoveryDeliveryContext);
-  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartContext)) {
-    assign("restartRecoveryDeliveryContext", restartContext);
-  }
-  normalizeRestartRecoveryEntryFields(entry, assign);
-  return next;
-}
 
 function normalizeLegacyPluginState(
   entry: SessionEntry,
@@ -179,10 +120,8 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     if (modelSelectionLocked && runtimeFields !== shaped) {
       throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
-    let normalized = normalizeRestartRecoveryFields(
-      normalizeLegacySessionEntryDelivery(
-        migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
-      ),
+    let normalized = normalizeLegacySessionEntryDelivery(
+      migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
     );
     normalized = normalizeLegacyPluginState(normalized, "pluginExtensions", (value) =>
       isPluginJsonValue(value) ? value : undefined,
@@ -240,8 +179,6 @@ async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
-  reason: "deleted";
-  restrictToStoreDir: true;
 }): Promise<Set<string>> {
   const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
@@ -253,8 +190,8 @@ async function archiveRemovedSessionTranscripts(params: {
       sessionId,
       storePath: params.storePath,
       sessionFile,
-      reason: params.reason,
-      restrictToStoreDir: params.restrictToStoreDir,
+      reason: "deleted",
+      restrictToStoreDir: true,
     });
     for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));
@@ -343,16 +280,7 @@ export async function updateLegacySessionStore<T>(
   });
 }
 
-type LegacySessionDeliveryEntry = SessionEntry & {
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  origin?: SessionOrigin;
-  channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
+type LegacySessionDeliveryEntry = SessionEntry & SessionDeliveryProjection;
 
 const LEGACY_SESSION_DELIVERY_KEYS = [
   "route",
@@ -365,27 +293,8 @@ const LEGACY_SESSION_DELIVERY_KEYS = [
   "lastThreadId",
 ] as const;
 
-function isInternalContext(context?: DeliveryContext): boolean {
-  return Boolean(
-    context?.channel &&
-    (context.channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(context.channel)),
-  );
-}
-
 function hasExternalTarget(context?: DeliveryContext): boolean {
-  return Boolean(context?.channel && !isInternalContext(context) && context.to);
-}
-
-function mergeExternalOverInternal(
-  external?: DeliveryContext,
-  internal?: DeliveryContext,
-): DeliveryContext | undefined {
-  return normalizeDeliveryContext({
-    channel: external?.channel,
-    to: external?.to,
-    accountId: external?.accountId ?? internal?.accountId,
-    threadId: external?.threadId ?? internal?.threadId,
-  });
+  return Boolean(context?.channel && !isInternalRouteContext(context) && context.to);
 }
 
 /** Canonicalizes file-era delivery fields before doctor imports a row into SQLite. */
@@ -397,7 +306,7 @@ export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record
   assertSupportedSessionStoreEntry(value);
   const entry =
     isRecord(value) && hasLegacySessionProviderState(value)
-      ? migrateLegacySessionEntryState(value)
+      ? migrateLegacySessionEntryState(value).entry
       : value;
   const legacy = entry as LegacySessionDeliveryEntry;
   const hasLegacyFields = LEGACY_SESSION_DELIVERY_KEYS.some((key) => key in legacy);
@@ -409,8 +318,13 @@ export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record
   const routeContext = deliveryContextFromChannelRoute(route);
   const explicitContext = normalizeDeliveryContext(legacy.deliveryContext);
   const lastChannel = normalizeDeliveryContext({ channel: legacy.lastChannel })?.channel;
-  const storedChannel = normalizeDeliveryContext({ channel: legacy.channel })?.channel;
-  const originChannel = normalizeDeliveryContext({ channel: legacy.origin?.provider })?.channel;
+  const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
+  const originContext = normalizeDeliveryContext({
+    channel: legacy.origin?.provider,
+    to: legacy.origin?.to,
+    accountId: legacy.origin?.accountId,
+    threadId: legacy.origin?.threadId,
+  });
   const normalizedLastFields = normalizeDeliveryContext({
     to: legacy.lastTo,
     accountId: legacy.lastAccountId,
@@ -423,40 +337,34 @@ export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record
   );
   const lastCandidate = normalizeDeliveryContext({
     channel:
-      lastChannel ?? (hasNormalizedLastFields ? (storedChannel ?? originChannel) : undefined),
+      lastChannel ??
+      (hasNormalizedLastFields ? (channelContext?.channel ?? originContext?.channel) : undefined),
     to: normalizedLastFields?.to,
     accountId: normalizedLastFields?.accountId,
     threadId: normalizedLastFields?.threadId,
   });
   const lastContext =
-    isInternalContext(lastCandidate) ||
+    isInternalRouteContext(lastCandidate) ||
     hasExternalTarget(lastCandidate) ||
     (lastChannel != null && lastCandidate?.channel != null) ||
     (lastCandidate?.channel && lastCandidate.channel === explicitContext?.channel)
       ? lastCandidate
       : undefined;
-  const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
-  const originContext = normalizeDeliveryContext({
-    channel: legacy.origin?.provider,
-    to: legacy.origin?.to,
-    accountId: legacy.origin?.accountId,
-    threadId: legacy.origin?.threadId,
-  });
   const fallbackContext = mergeDeliveryContext(
     lastContext,
     mergeDeliveryContext(explicitContext, mergeDeliveryContext(channelContext, originContext)),
   );
-  const internalFallbackContext = isInternalContext(routeContext)
+  const internalFallbackContext = isInternalRouteContext(routeContext)
     ? mergeDeliveryContext(routeContext, lastContext)
-    : isInternalContext(lastContext)
+    : isInternalRouteContext(lastContext)
       ? lastContext
-      : isInternalContext(channelContext)
+      : isInternalRouteContext(channelContext)
         ? mergeDeliveryContext(channelContext, lastContext)
         : undefined;
   const hasInternalFallback =
     internalFallbackContext !== undefined && hasExternalTarget(explicitContext);
   const context = hasInternalFallback
-    ? mergeExternalOverInternal(explicitContext, internalFallbackContext)
+    ? mergeExternalDeliveryContextOverInternalRoute(explicitContext, internalFallbackContext)
     : mergeDeliveryContext(routeContext, fallbackContext);
   const migratedDelivery = normalizeSessionDeliveryState({
     route: hasInternalFallback ? undefined : route,

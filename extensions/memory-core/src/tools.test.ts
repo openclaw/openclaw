@@ -147,25 +147,52 @@ describe("memory_search unavailable payloads", () => {
     expectUnavailableMemorySearchDetails(result.details, expected);
   });
 
-  it("treats a provider error worded like the deadline as a provider failure", async () => {
-    const searchImpl = mockSearch(async () => {
-      throw new Error("memory_search timed out after 30s");
-    });
+  it.each(["memory_search timed out after 30s", "SQLite read-only worker scope closed"])(
+    "does not classify provider errors by wording: %s",
+    async (error) => {
+      const searchImpl = mockSearch(async () => {
+        throw new Error(error);
+      });
 
-    const tool = createMemorySearchToolOrThrow();
-    const result = await executeSearch(tool);
-    expect(result.details).not.toHaveProperty("timedOut");
-    expectUnavailableMemorySearchDetails(result.details, {
-      error: "memory_search timed out after 30s",
-      warning: "Memory search is unavailable due to an embedding/provider error.",
-      action: "Check embedding provider configuration and retry memory_search.",
-    });
-    const cooldownResult = await executeSearch(tool, { query: "hello again" });
-    expect(cooldownResult.details).toEqual(result.details);
-    expect(searchImpl).toHaveBeenCalledTimes(1);
-  });
+      const tool = createMemorySearchToolOrThrow();
+      const result = await executeSearch(tool);
+      expect(result.details).not.toHaveProperty("timedOut");
+      expectUnavailableMemorySearchDetails(result.details, {
+        error,
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      vi.setSystemTime(Date.now() + 120_000);
+      expect((await executeSearch(tool, { query: "hello again" })).details).toEqual(result.details);
+      expect(searchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it("returns unavailable metadata when memory search does not settle", async () => {
+  it.each(["initialization", "search"] as const)(
+    "classifies a closed storage scope by code during %s",
+    async (phase) => {
+      const error = "SQLite read-only worker scope closed";
+      const storage = {
+        error,
+        code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+      };
+      if (phase === "initialization") {
+        setMemorySearchManagerImpl(async () => storage);
+      } else {
+        mockSearch(async () => {
+          throw Object.assign(new Error(error), { code: storage.code });
+        });
+      }
+      expectUnavailableMemorySearchDetails((await executeSearch()).details, {
+        error,
+        warning: "Memory search is unavailable because its storage scope closed.",
+        action:
+          "Run openclaw plugins reload memory-core, or restart the Gateway, then retry memory_search.",
+      });
+    },
+  );
+
+  it("allows an immediate retry after aborting a search at its deadline", async () => {
     vi.useFakeTimers();
     let searchSignal: AbortSignal | undefined;
     const searchImpl = mockSearch(async (opts) => {
@@ -191,20 +218,14 @@ describe("memory_search unavailable payloads", () => {
       timeoutMs: 30_000,
       warning: "Memory search did not finish within its time limit.",
       action:
-        "Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent main, and rebuild with openclaw memory index --force --agent main only if it reports the index dirty or incomplete",
+        "Retry memory_search. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent main, and rebuild with openclaw memory index --force --agent main only if it reports the index dirty or incomplete",
     });
     expect(searchSignal?.aborted).toBe(true);
-    const cooldownResult = await executeSearch(tool, { query: "hello again" });
-    expect(cooldownResult.details).toEqual(result.details);
-    expect(searchImpl).toHaveBeenCalledTimes(1);
-    searchImpl.mockResolvedValue([]);
-    await vi.advanceTimersByTimeAsync(59_999);
-    const pausedResult = await executeSearch(tool, { query: "hello again" });
-    expect(pausedResult.details).toEqual(cooldownResult.details);
-    expect(searchImpl).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    searchImpl.mockResolvedValue([hit("MEMORY.md", "memory", "retry succeeded")]);
     const retryResult = await executeSearch(tool, { query: "hello again" });
-    expect(retryResult.details).toMatchObject({ results: [] });
+    expect(retryResult.details).toMatchObject({
+      results: [{ path: "MEMORY.md" }],
+    });
     expect(retryResult.details).not.toHaveProperty("unavailable");
     expect(searchImpl).toHaveBeenCalledTimes(2);
   });

@@ -237,8 +237,17 @@ export class SessionLineageOwner {
     } else {
       this.clearPresentation();
     }
-    if (binding.target.key !== "global" && !this.request?.publishingSelected) {
-      this.retireChangedLineage(previous, row);
+    if (
+      binding.target.key !== "global" &&
+      !this.request?.publishingSelected &&
+      previous &&
+      row &&
+      ((previous.sessionId && row.sessionId && previous.sessionId !== row.sessionId) ||
+        normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(previous)) !==
+          normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(row)))
+    ) {
+      // Pending ancestry belongs to the previous row as much as a completed walk does.
+      this.retireWalk();
     }
   }
 
@@ -292,22 +301,6 @@ export class SessionLineageOwner {
         areUiSessionKeysEquivalent(row.key, this.routeKey),
       )
     );
-  }
-
-  private retireChangedLineage(
-    previous: GatewaySessionRow | undefined,
-    current: GatewaySessionRow | null,
-  ): void {
-    if (
-      previous &&
-      current &&
-      ((previous.sessionId && current.sessionId && previous.sessionId !== current.sessionId) ||
-        normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(previous)) !==
-          normalizeDefaultMainSessionAliasForUi(resolveUiSessionNavigationParentKey(current)))
-    ) {
-      // Pending ancestry belongs to the previous row as much as a completed walk does.
-      this.retireWalk();
-    }
   }
 
   captureChildRead(sourceListScope?: SessionListScope): SidebarChildSessionRead {
@@ -449,7 +442,49 @@ export class SessionLineageOwner {
         ),
         isCurrent,
         ...(descriptorBinding
-          ? { readSelected: () => this.readDescriptor(descriptorBinding, isCurrent) }
+          ? {
+              readSelected: async () => {
+                const observation = descriptorBinding.observation;
+                if (!observation || !isCurrent()) {
+                  return undefined;
+                }
+                if (observation.row && !descriptorBinding.refreshRequested) {
+                  return observation.row;
+                }
+                descriptorBinding.refreshRequested = false;
+                const reconcile = observation.captureReconcile();
+                const described = await descriptorBinding.sessions
+                  .describe(
+                    {
+                      key: descriptorBinding.key,
+                      ...(isUiGlobalSessionKey(descriptorBinding.key)
+                        ? { agentId: descriptorBinding.target.agentId }
+                        : {}),
+                    },
+                    { client: descriptorBinding.client },
+                  )
+                  .catch((error: unknown) => {
+                    descriptorBinding.refreshRequested = true;
+                    throw error;
+                  });
+                if (!isCurrent()) {
+                  return undefined;
+                }
+                const outcome = reconcile(
+                  described?.session
+                    ? {
+                        ...described.session,
+                        runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+                      }
+                    : undefined,
+                );
+                if (outcome.status !== "current") {
+                  return observation.row ?? undefined;
+                }
+                this.publish(descriptorBinding, outcome.row);
+                return outcome.row ?? undefined;
+              },
+            }
           : {
               publishSelected: (row, reconcile) => {
                 // This walk follows the admitted parent after synchronous observation delivery.
@@ -502,48 +537,5 @@ export class SessionLineageOwner {
       this.owner.requestSessionDataUpdate();
     });
     return request.promise;
-  }
-
-  private async readDescriptor(
-    binding: DescriptorBinding,
-    isCurrent: () => boolean,
-  ): Promise<GatewaySessionRow | undefined> {
-    const observation = binding.observation;
-    if (!observation || !isCurrent()) {
-      return undefined;
-    }
-    if (observation.row && !binding.refreshRequested) {
-      return observation.row;
-    }
-    binding.refreshRequested = false;
-    const reconcile = observation.captureReconcile();
-    const described = await binding.sessions
-      .describe(
-        {
-          key: binding.key,
-          ...(isUiGlobalSessionKey(binding.key) ? { agentId: binding.target.agentId } : {}),
-        },
-        { client: binding.client },
-      )
-      .catch((error: unknown) => {
-        binding.refreshRequested = true;
-        throw error;
-      });
-    if (!isCurrent()) {
-      return undefined;
-    }
-    const outcome = reconcile(
-      described?.session
-        ? {
-            ...described.session,
-            runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
-          }
-        : undefined,
-    );
-    if (outcome.status !== "current") {
-      return observation.row ?? undefined;
-    }
-    this.publish(binding, outcome.row);
-    return outcome.row ?? undefined;
   }
 }

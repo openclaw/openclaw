@@ -6,7 +6,6 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import {
-  createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
@@ -311,55 +310,44 @@ describe("provider-owned audio transcription", () => {
 });
 
 describe("transcribeOpenAiAudio", () => {
-  it("respects lowercase authorization header overrides", async () => {
-    const { fetchFn, getAuthHeader } = createAuthCaptureJsonFetch({ text: "ok" });
-    const result = await transcribe({
-      fileName: "note.mp3",
-      headers: { authorization: "Bearer override" },
-      fetchFn,
-    });
-    expect(getAuthHeader()).toBe("Bearer override");
-    expect(result.text).toBe("ok");
-  });
+  it.each([undefined, "Bearer override"])(
+    "builds the request with authorization override %s",
+    async (authorization) => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+      const result = await transcribe({
+        baseUrl: "https://api.example.com/v1/",
+        model: " ",
+        language: " en ",
+        prompt: " hello ",
+        mime: "audio/wav",
+        headers: { "X-Custom": "1", ...(authorization ? { authorization } : {}) },
+        fetchFn,
+      });
+      const { url: seenUrl, init: seenInit } = getRequest();
+      expect(result).toEqual({ model: "gpt-4o-transcribe", text: "hello" });
+      expect(seenUrl).toBe("https://api.example.com/v1/audio/transcriptions");
+      expect(seenInit?.method).toBe("POST");
+      expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
+      const headers = new Headers(seenInit?.headers);
+      expect(headers.get("authorization")).toBe(authorization ?? "Bearer test-key");
+      expect(headers.get("x-custom")).toBe("1");
+      const form = seenInit?.body as FormData;
+      expect(form).toBeInstanceOf(FormData);
+      expectForm(seenInit, { model: "gpt-4o-transcribe", language: "en", prompt: "hello" });
+      expect(form.get("file")).toMatchObject({ type: "audio/wav", name: "voice.wav" });
+    },
+  );
 
-  it("builds the expected request payload", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
-    const result = await transcribe({
-      buffer: Buffer.from("audio-bytes"),
-      timeoutMs: 1234,
-      baseUrl: "https://api.example.com/v1/",
-      model: " ",
-      language: " en ",
-      prompt: " hello ",
-      mime: "audio/wav",
-      headers: { "X-Custom": "1" },
-      fetchFn,
-    });
-    const { url: seenUrl, init: seenInit } = getRequest();
-    expect(result).toEqual({ model: "gpt-4o-transcribe", text: "hello" });
-    expect(seenUrl).toBe("https://api.example.com/v1/audio/transcriptions");
-    expect(seenInit?.method).toBe("POST");
-    expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
-    const headers = new Headers(seenInit?.headers);
-    expect(headers.get("authorization")).toBe("Bearer test-key");
-    expect(headers.get("x-custom")).toBe("1");
-    const form = seenInit?.body as FormData;
-    expect(form).toBeInstanceOf(FormData);
-    expectForm(seenInit, { model: "gpt-4o-transcribe", language: "en", prompt: "hello" });
-    expect(form.get("file")).toMatchObject({ type: "audio/wav", name: "voice.wav" });
-  });
-
-  it("throws when the provider response omits text", async () => {
-    const { fetchFn } = createRequestCaptureJsonFetch({});
-    await expect(
-      transcribe({ buffer: Buffer.from("audio-bytes"), timeoutMs: 1234, fetchFn }),
-    ).rejects.toThrow("Audio transcription response missing text");
-  });
-
-  it("returns an empty transcript for audio without detected speech", async () => {
-    const { fetchFn } = createRequestCaptureJsonFetch({ text: " " });
-    await expect(
-      transcribe({ buffer: Buffer.from("audio-bytes"), timeoutMs: 1234, fetchFn }),
-    ).resolves.toEqual({ text: "", model: "gpt-4o-transcribe" });
-  });
+  it.each([{}, { text: " " }])(
+    "handles missing versus silent transcripts: %j",
+    async (response) => {
+      const { fetchFn } = createRequestCaptureJsonFetch(response);
+      const result = transcribe({ fetchFn });
+      if ("text" in response) {
+        await expect(result).resolves.toEqual({ text: "", model: "gpt-4o-transcribe" });
+      } else {
+        await expect(result).rejects.toThrow("Audio transcription response missing text");
+      }
+    },
+  );
 });

@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
@@ -67,10 +66,7 @@ export function createSessionRowProjectionArchive(params: {
           params.context(),
           params.referenced,
         );
-        if (
-          isDeepStrictEqual(current.parents, lineage.parents) &&
-          isDeepStrictEqual(current.entry, lineage.entry)
-        ) {
+        if (current.parents === lineage.parents && current.entry === lineage.entry) {
           continue;
         }
         // Cold children retain metadata/indices; both parents must drop stale child links.
@@ -135,7 +131,12 @@ export function createSessionRowProjectionArchive(params: {
           if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
           }
-          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+          // Catalog policy can expire native ownership while retaining ACP and Board facts.
+          if (
+            current.preparedAcpMeta === undefined ||
+            current.preparedRuntimeOwnership === undefined ||
+            current.hasBoard === undefined
+          ) {
             params.dirty.add(records.identity(current));
           }
           continue;
@@ -163,10 +164,15 @@ export function createSessionRowProjectionArchive(params: {
           readPins.delete(pins);
           pins = new Set(ids);
           readPins.add(pins);
+          limit = Math.max(limit, pins.size);
           trim();
         },
         release() {
           readPins.delete(pins);
+          limit = Math.max(
+            DEFAULT_ARCHIVED_MATERIALIZED_ROWS,
+            ...Array.from(readPins, (heldPins) => heldPins.size),
+          );
           trim();
         },
       };

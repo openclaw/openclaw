@@ -142,14 +142,14 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
   return readAttachmentName(value, "Attachment reference");
 }
 
-const buttonStyles = new Map<string, ButtonStyle>([
+const buttonStyles = new Map<string, Exclude<ButtonStyle, ButtonStyle.Premium>>([
   ["secondary", ButtonStyle.Secondary],
   ["success", ButtonStyle.Success],
   ["danger", ButtonStyle.Danger],
   ["link", ButtonStyle.Link],
 ]);
 
-export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
+export function mapButtonStyle(style?: DiscordComponentButtonStyle) {
   return (
     buttonStyles.get(normalizeLowercaseStringOrEmpty(style ?? "primary")) ?? ButtonStyle.Primary
   );

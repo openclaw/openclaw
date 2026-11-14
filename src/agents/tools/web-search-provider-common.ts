@@ -2,9 +2,11 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { readProviderEnvValue } from "../../secrets/provider-credential-values.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createProviderErrorTextRedactor, ProviderHttpError } from "../provider-http-errors.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -35,6 +37,15 @@ export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
+export function externalContentStamp(provider: string): {
+  untrusted: true;
+  source: "web_search";
+  wrapped: true;
+  provider: string;
+} {
+  return { untrusted: true, source: "web_search", wrapped: true, provider };
+}
+
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
 }
@@ -49,6 +60,28 @@ export function resolveSearchCount(value: unknown, fallback: number): number {
 
 export function readConfiguredSecretString(value: unknown, path: string): string | undefined {
   return normalizeSecretInput(normalizeResolvedSecretInputString({ value, path })) || undefined;
+}
+
+export function readWebSearchApiKey(
+  value: unknown,
+  path: string,
+  envVars: string[],
+): string | undefined {
+  return readConfiguredSecretString(value, path) ?? readProviderEnvValue(envVars);
+}
+
+export function readWebSearchQueryAndCount(
+  args: Record<string, unknown>,
+  searchConfig?: SearchConfigRecord,
+): { query: string; count: number | undefined } {
+  return {
+    query: readToolStringParam(args, "query", { required: true }),
+    count:
+      readPositiveIntegerParam(args, "count", {
+        max: MAX_SEARCH_COUNT,
+        message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+      }) ?? searchConfig?.maxResults,
+  };
 }
 
 export async function withTrustedWebSearchEndpoint<T>(

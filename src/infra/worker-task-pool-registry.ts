@@ -1,6 +1,7 @@
 import { joinOwnedWorkerTasks, type ResourceOwningPool } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assertOpenClawAgentWriterReleased } from "../state/openclaw-agent-write-admission-state.js";
+import { throwIfSettledRejected } from "./error-graph-internal.js";
 
 const livePools = resolveGlobalSingleton(
   Symbol.for("openclaw.workerTaskPools"),
@@ -48,13 +49,7 @@ async function closeResources(key: string): Promise<void> {
   const results = await Promise.allSettled(
     [...reachablePools()].map(({ pool }) => pool.startCloseResources(key).result),
   );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Worker resource cleanup failed");
-  }
+  throwIfSettledRejected(results, "Worker resource cleanup failed");
 }
 
 /** Ask every live pool's workers to close the retained resources this key names. */

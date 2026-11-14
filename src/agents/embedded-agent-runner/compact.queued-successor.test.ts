@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -106,12 +106,11 @@ function expectPostCompactionCalls(count = 0) {
 }
 
 async function waitForCheckpoint(checkpoint: Promise<unknown>, pending: Promise<unknown>) {
-  await Promise.race([
+  await awaitGateBeforeSettlement(
     checkpoint,
-    pending.then(() => {
-      throw new Error("Queued compaction settled before the checkpoint");
-    }),
-  ]);
+    pending,
+    "Queued compaction settled before the checkpoint",
+  );
 }
 const compactParams = (abortSignal?: AbortSignal) => ({
   ...target(),
@@ -154,15 +153,11 @@ type BackendAppendOutcome = ReturnType<ReturnType<typeof createBackendAppend>>;
 type TranscriptRewrite = NonNullable<ContextEngineRuntimeContext["rewriteTranscriptEntries"]>;
 
 async function transcriptFixture() {
-  const { SessionManager } = await import("../sessions/index.js");
-  const openAsync = vi.spyOn(SessionManager, "openAsync");
-  const originalOpenAsync = expectDefined(
-    openAsync.getMockImplementation(),
-    "session-manager bridge",
-  );
+  const originalOpenAsync = PersistentSessionManager.openAsync.bind(PersistentSessionManager);
+  const openAsync = vi.spyOn(PersistentSessionManager, "openAsync");
   const hooks: { beforeBranchRead?: () => void } = {};
   openAsync.mockImplementation(async (...args) => {
-    const manager = await PersistentSessionManager.openAsync(...args);
+    const manager = await originalOpenAsync(...args);
     const getBranch = manager.getBranch.bind(manager);
     vi.spyOn(manager, "getBranch").mockImplementation((...branchArgs) => {
       hooks.beforeBranchRead?.();
@@ -170,7 +165,7 @@ async function transcriptFixture() {
     });
     return manager;
   });
-  restoreTranscriptBridge = () => openAsync.mockImplementation(originalOpenAsync);
+  restoreTranscriptBridge = () => openAsync.mockRestore();
   const manager = PersistentSessionManager.open(target(), workspaceDir);
   const entryId = manager.appendMessage({
     role: "user",

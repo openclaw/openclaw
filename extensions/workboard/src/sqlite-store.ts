@@ -24,24 +24,28 @@ type WorkboardSqliteStores = WorkboardPersistence & {
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
   workerModuleUrl: URL;
+  /** Schema discovery must not allocate a durable store before a tool executes. */
+  lazy?: boolean;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
   const selectedDatabase = getDatabaseEngineInput("workboard");
-  const worker = openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
-    {
-      moduleUrl: options.workerModuleUrl,
-      databasePath,
-      input: selectedDatabase,
-    },
-    selectedDatabase,
-  );
+  const openWorker = () =>
+    openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
+      {
+        moduleUrl: options.workerModuleUrl,
+        databasePath,
+        input: selectedDatabase,
+      },
+      selectedDatabase,
+    );
+  let worker = options.lazy ? undefined : openWorker();
   let sealed = false;
   let closing: Promise<void> | undefined;
   const operations = new Set<Promise<unknown>>();
   const writeAuthority = new AsyncLocalStorage<{ active: boolean; assertCurrent?: () => void }>();
-  const ready = worker.then(() => undefined);
+  const ready = worker ? worker.then(() => undefined) : Promise.resolve();
   void ready.catch(() => {});
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
@@ -49,7 +53,7 @@ export function createWorkboardSqliteStores(options: {
     writes = false,
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
-    const store = await worker;
+    const store = await (worker ??= openWorker());
     const result = unwrapWorkboardSqliteResult(
       await runEngineStoreOperation(
         store,
@@ -149,7 +153,7 @@ export function createWorkboardSqliteStores(options: {
           while (operations.size) {
             await Promise.allSettled(operations);
           }
-          const store = await worker.catch(() => undefined);
+          const store = await worker?.catch(() => undefined);
           await store?.close();
         })
         .catch((error: unknown) => {

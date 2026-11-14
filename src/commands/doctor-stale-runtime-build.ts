@@ -3,7 +3,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { gitCommitPrefixesMatch, resolveCommitHash } from "../infra/git-commit.js";
 import { readInstallOwner } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { readBuiltRuntimeCommit } from "../infra/update-git-runtime.js";
+import { readBuiltRuntimeCommit, readBuiltRuntimeIsolation } from "../infra/update-git-runtime.js";
 
 const STALE_RUNTIME_BUILD_CHECK_ID = "core/doctor/stale-runtime-build";
 
@@ -21,12 +21,28 @@ export async function collectStaleRuntimeBuildFindings(
   if (!root || (await readInstallOwner(root))) {
     return [];
   }
-  const builtCommit = await readBuiltRuntimeCommit(root);
+  const [builtCommit, isolation] = await Promise.all([
+    readBuiltRuntimeCommit(root),
+    readBuiltRuntimeIsolation(root),
+  ]);
+  const findings: HealthFinding[] = isolation
+    ? [
+        {
+          checkId: STALE_RUNTIME_BUILD_CHECK_ID,
+          severity: "warning",
+          message: `This immutable release was built by the operator${isolation.account ? ` ${isolation.account} (uid ${isolation.uid}, gid ${isolation.gid})` : ""} without an isolated build account.`,
+          path: root,
+          details: isolation,
+          fixHint:
+            "See https://docs.openclaw.ai/cli/update for build-account provisioning. The sealed release remains usable.",
+        },
+      ]
+    : [];
   // Source runs carry no build provenance, so only a real build can be stale.
   // Packaged installs ship provenance whose commit the checkout read falls back
   // to, which keeps them matching instead of reporting a phantom drift.
   if (!builtCommit) {
-    return [];
+    return findings;
   }
   // resolveCommitHash prefers GIT_COMMIT/GIT_SHA, which declare the *built*
   // identity for packaged installs. Honouring them here would compare the build
@@ -35,12 +51,15 @@ export async function collectStaleRuntimeBuildFindings(
   const { GIT_COMMIT: _gitCommit, GIT_SHA: _gitSha, ...checkoutEnv } = env;
   const checkoutCommit = resolveCommitHash({ cwd: root, env: checkoutEnv });
   if (!checkoutCommit || gitCommitPrefixesMatch(builtCommit, checkoutCommit)) {
-    return [];
+    return findings;
   }
   return [
+    ...findings,
     {
       checkId: STALE_RUNTIME_BUILD_CHECK_ID,
       severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/install/updating",
       message: `Running build came from commit ${builtCommit.slice(0, 7)}, but the checkout is at ${checkoutCommit.slice(0, 7)}; the loaded runtime is older than its source.`,
       path: root,
       fixHint:

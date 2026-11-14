@@ -81,4 +81,38 @@ describe("runAbortableTimeout", () => {
     }
     expect(warnings).not.toContain("TimeoutNegativeWarning");
   });
+
+  it.each([
+    { direction: "backward", jumpMs: -300_000 },
+    { direction: "forward", jumpMs: 8 },
+  ])(
+    "keeps the max-total ceiling on the monotonic clock across a $direction wall-clock jump",
+    async ({ jumpMs }) => {
+      vi.useFakeTimers();
+      let signal: AbortSignal | undefined;
+      let rearm!: () => void;
+      const pending = runAbortableTimeout(
+        (timeoutSignal, resetTimeout) => {
+          signal = timeoutSignal;
+          rearm = resetTimeout;
+          return new Promise<never>(() => {});
+        },
+        30,
+        "Compaction",
+        20,
+      );
+      const settled = pending.catch(() => {});
+      await vi.advanceTimersByTimeAsync(10);
+      vi.setSystemTime(Date.now() + jumpMs);
+      rearm();
+      // The 20ms ceiling fires on schedule. A wall-clock remaining would inflate the
+      // backward window to 30ms, and shrink the forward one to 2ms.
+      await vi.advanceTimersByTimeAsync(9);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      await settled;
+      vi.clearAllTimers();
+    },
+  );
 });

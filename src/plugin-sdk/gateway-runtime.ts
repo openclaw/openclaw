@@ -41,6 +41,8 @@ export { createOperatorApprovalsGatewayClient } from "../gateway/operator-approv
 
 export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
 
+export { isSessionAccessRefreshingError } from "../gateway/session-mutation-authorization-error.js";
+
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export {
   captureLocalStateMutationGuard,

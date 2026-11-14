@@ -10,15 +10,15 @@ export function isScheduledTaskSqliteSharingError(error: unknown): boolean {
   );
 }
 
-export async function retryScheduledTaskLeaseRead<T>(read: () => T): Promise<T> {
-  for (const deadline = Date.now() + 15_000; ;) {
+export async function retryScheduledTaskLeaseRead<T>(read: () => T | Promise<T>): Promise<T> {
+  for (const deadline = performance.now() + 15_000; ;) {
     try {
-      return read();
+      return await read();
     } catch (error) {
-      if (!isScheduledTaskSqliteSharingError(error) || Date.now() >= deadline) {
+      if (!isScheduledTaskSqliteSharingError(error) || performance.now() >= deadline) {
         throw error;
       }
-      await sleep(Math.min(100, deadline - Date.now()));
+      await sleep(Math.min(100, deadline - performance.now()));
     }
   }
 }

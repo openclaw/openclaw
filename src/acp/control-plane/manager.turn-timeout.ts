@@ -56,7 +56,7 @@ export async function cleanupTimedOutTurn(params: {
   mode: AcpRuntimeSessionMode;
   clearCachedRuntimeStateIfHandleMatches: (activeTurn: ActiveTurnState) => void;
 }): Promise<void> {
-  params.activeTurn.abortController.abort();
+  params.activeTurn.abortController.abort(ACP_TURN_TIMEOUT_REASON);
   if (!params.activeTurn.cancelPromise) {
     params.activeTurn.cancelPromise = params.activeTurn.runtime.cancel({
       handle: params.activeTurn.handle,

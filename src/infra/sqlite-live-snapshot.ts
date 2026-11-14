@@ -8,7 +8,6 @@ import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 type LiveSnapshotOwner = {
   assertCurrent: () => void;
   database: DatabaseSync;
-  owner: string;
 };
 
 const liveOwners = resolveGlobalSingleton(
@@ -20,13 +19,11 @@ export function registerLiveSqliteSnapshotOwner(options: {
   assertCurrent: () => void;
   database: DatabaseSync;
   databasePath: string;
-  owner: string;
 }): () => void {
   const identity = readDatabasePathIdentitySync(options.databasePath);
   const registration: LiveSnapshotOwner = {
     assertCurrent: options.assertCurrent,
     database: options.database,
-    owner: options.owner,
   };
   liveOwners.set(identity.key, registration);
   return () => {
@@ -49,7 +46,7 @@ export function prepareSqliteSnapshotFromLiveOwner(
   owner.assertCurrent();
   return prepareSingleFlightSqliteSnapshot(
     identity.canonicalPath,
-    `live-owner:${owner.owner}`,
+    "live-owner:openclaw-state",
     (flightSignal) =>
       prepareSqliteReadOnlyLocationFromOwnedDatabase(
         owner.database,

@@ -71,15 +71,12 @@ childProcess.spawn = function(executable, args, ...rest) {
   return Reflect.apply(spawn, this, [executable, args, ...rest]);
 };
 syncBuiltinESMExports();
-assert.equal(compilerStarts, 0, "native compiler started before the checker");
 await import(${JSON.stringify(checkerUrl.href)});
-assert.equal(compilerStarts, 0, "native compiler started by the checker import");
 const { listCoreRuntimePostBuildOutputs } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runtimePostbuild).href)});
 listCoreRuntimePostBuildOutputs({ rootDir: ${JSON.stringify(rootDir)} });
-assert.equal(compilerStarts, 0, "native compiler started by runtime postbuild inventory checks");
 await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode).href)});
-assert.equal(compilerStarts, 0, "native compiler started by the development runner import");
-const { API } = await import("typescript/unstable/sync");
+assert.equal(compilerStarts, 0, "native compiler started by imports or runtime inventory checks");
+const { API } = await import("typescript/sync");
 const api = new API();
 try {
   api.parseConfigFile("tsconfig.json");

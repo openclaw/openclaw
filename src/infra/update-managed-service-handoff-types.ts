@@ -44,9 +44,16 @@ export type ManagedServiceUpdateHandoffResult = {
   logPath: string;
 } & (
   | { status: "started"; handoffId: string; installRoot: string }
-  | { status: "joined"; handoffId?: string }
+  | { status: "joined"; handoffId?: string; message: string }
 );
 
+/**
+ * Independent custody facts, not an ordered phase enum. Claiming is local;
+ * transfer is provisional until the helper acknowledges it. Parking admits a
+ * service effect. Helper exit alone proves neither settlement nor lease release;
+ * `settled` joins the cleanup receipt with normal process close. Update success
+ * still belongs to the durable run report.
+ */
 export type ActiveManagedServiceUpdateHandoff = {
   handoffId: string;
   operatorRestartWarning?: string;

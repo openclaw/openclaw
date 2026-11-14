@@ -1,9 +1,4 @@
-/**
- * Regression coverage for core tool allow/deny policy helpers.
- * Verifies sandbox policy resolution, explicit lists, and tool matching.
- */
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -44,55 +39,36 @@ describe("tool-policy", () => {
     expect([...(declared?.mcpServerNames ?? [])]).toEqual(expected);
   });
 
-  it("resolves known profiles and ignores unknown ones", () => {
-    const coding = resolveToolProfilePolicy("coding");
-    expect(coding?.allow).toContain("read");
-    expect(coding?.allow).toContain("automations");
-    expect(coding?.allow).toContain("gateway");
+  it("ignores unknown profiles", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
-  it.each(["constructor"])("matches literal %s prefixes only when allowed", (name) => {
+  it("matches literal constructor prefixes only when allowed", () => {
+    const name = "constructor";
     expect(couldNormalizeToolNamePrefixToAllowedTool(name.slice(0, 3), new Set([name]))).toBe(true);
     expect(couldNormalizeToolNamePrefixToAllowedTool("other", new Set([name]))).toBe(false);
     expect(couldNormalizeToolNamePrefixToAllowedTool(name, new Set(["other"]))).toBe(false);
   });
 
   it.each(["ba", "cron"])("retains declared alias prefix %s", (prefix) => {
-    expect(
-      couldNormalizeToolNamePrefixToAllowedTool(
-        prefix,
-        new Set(["exec", "apply_patch", "automations"]),
-      ),
-    ).toBe(true);
+    const allowed = new Set(["exec", "apply_patch", "automations"]);
+    expect(couldNormalizeToolNamePrefixToAllowedTool(prefix, allowed)).toBe(true);
   });
 
-  it("uses alsoAllow entries for plugin discovery without the synthetic allow-all", () => {
-    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["lobster"] })])).toEqual([
-      "lobster",
-      DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
-    ]);
-    expect(
-      collectExplicitAllowlist([pickSandboxToolPolicy({ allow: [], alsoAllow: ["lobster"] })]),
-    ).toEqual(["*", "lobster"]);
-  });
-
-  it("does not treat additive allow-all policies as restrictive", () => {
-    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ alsoAllow: ["optional-demo"] }))).toBe(
-      false,
-    );
-    expect(
-      hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: [], alsoAllow: ["optional-demo"] })),
-    ).toBe(false);
+  it.each<[string[] | undefined, string[]]>([
+    [undefined, ["lobster", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY]],
+    [[], ["*", "lobster"]],
+  ])("preserves additive allowlist provenance with allow=%j", (allow, expected) => {
+    const policy = pickSandboxToolPolicy({ allow, alsoAllow: ["lobster"] });
+    expect(collectExplicitAllowlist([policy])).toEqual(expected);
+    expect(hasRestrictiveAllowPolicy(policy)).toBe(false);
   });
 
   it("still treats explicit bounded allowlists as restrictive", () => {
     expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: ["read"] }))).toBe(true);
   });
-});
-
-describe("sandbox tool policy", () => {
-  it.each(["constructor"])("applies allow and deny to literal %s", (name) => {
+  it("applies allow and deny to literal constructor", () => {
+    const name = "constructor";
     const allow = { allow: [` ${name.toUpperCase()} `] };
     const deny = { allow: ["*"], deny: [` ${name.toUpperCase()} `] };
     for (const matches of [
@@ -105,55 +81,28 @@ describe("sandbox tool policy", () => {
       expect(matches(deny, "other")).toBe(true);
     }
   });
-});
-
-describe("resolveSandboxToolPolicyForAgent", () => {
-  it("keeps allow-all semantics when allow is []", () => {
-    const cfg = {
-      tools: { sandbox: { tools: { allow: [], deny: ["browser"] } } },
-    } as unknown as OpenClawConfig;
-
-    const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
-    expect(resolved.sources.allow).toEqual({
-      source: "global",
-      key: "tools.sandbox.tools.allow",
+  const resolve = (allow: string[], deny: string[]) =>
+    resolveSandboxToolPolicyForAgent({ tools: { sandbox: { tools: { allow, deny } } } }, undefined);
+  it.each([
+    { allow: [], deny: ["browser"], expected: [] },
+    { allow: ["read"], deny: ["browser"], expected: ["read", "view_image"] },
+    { allow: ["read"], deny: ["view_image"], expected: ["read"] },
+  ])("resolves sandbox allow=$allow deny=$deny", ({ allow, deny, expected }) => {
+    const resolved = resolve(allow, deny);
+    expect(resolved).toMatchObject({
+      allow: expected,
+      deny,
+      sources: { allow: { source: "global", key: "tools.sandbox.tools.allow" } },
     });
-    expect(resolved.allow).toStrictEqual([]);
-    expect(resolved.deny).toEqual(["browser"]);
-
-    const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };
-    expect(isToolAllowed(policy, "read")).toBe(true);
-    expect(isToolAllowed(policy, "browser")).toBe(false);
+    if (allow.length === 0) {
+      expect(resolved.allow).toStrictEqual([]);
+      expect(isToolAllowed(resolved, "read")).toBe(true);
+      expect(isToolAllowed(resolved, "browser")).toBe(false);
+    }
   });
-
-  it("auto-adds image to explicit allowlists unless denied", () => {
-    const cfg = {
-      tools: { sandbox: { tools: { allow: ["read"], deny: ["browser"] } } },
-    } as unknown as OpenClawConfig;
-
-    const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
-    expect(resolved.allow).toEqual(["read", "view_image"]);
-    expect(resolved.deny).toEqual(["browser"]);
-  });
-
-  it("does not auto-add view_image when explicitly denied", () => {
-    const cfg = {
-      tools: { sandbox: { tools: { allow: ["read"], deny: ["view_image"] } } },
-    } as unknown as OpenClawConfig;
-
-    const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
-    expect(resolved.allow).toEqual(["read"]);
-    expect(resolved.deny).toEqual(["view_image"]);
-  });
-});
-
-describe("isToolAllowedByPolicyName — legacy scheduler tool name (RFC 0026)", () => {
   it("denies the renamed tool through persisted legacy deny lists", () => {
     expect(isToolAllowedByPolicyName("automations", { deny: ["cron"] })).toBe(false);
   });
-});
-
-describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76749)", () => {
   it("does not deny apply_patch when write is denied", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
   });

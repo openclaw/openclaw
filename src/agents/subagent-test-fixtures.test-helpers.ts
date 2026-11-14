@@ -2,17 +2,14 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import {
-  ensureDeliveryState,
-  loadPendingFinalDeliveryPayload,
-  projectSubagentRunForSessionList,
-} from "./subagents/registry/subagent-delivery-state.js";
+import { projectSubagentRunForSessionList } from "./subagents/registry/subagent-delivery-state.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -37,26 +34,37 @@ export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
   responses: Record<string, GatewayResponse<TRequest, TResult>>,
   fallback = {} as TResult,
 ): void {
-  mock.mockImplementation(
-    vi.fn(async (request: TRequest) => {
-      const response =
-        request.method === undefined ? fallback : (responses[request.method] ?? fallback);
-      if (response instanceof Error) {
-        throw response;
-      }
-      if (typeof response === "function") {
-        const handler = response as (request: TRequest) => TResult | Promise<TResult>;
-        return await handler(request);
-      }
-      return response;
-    }),
-  );
+  mock.mockImplementation(async (request) => {
+    const response =
+      request.method === undefined ? fallback : (responses[request.method] ?? fallback);
+    if (response instanceof Error) {
+      throw response;
+    }
+    if (typeof response === "function") {
+      const handler = response as (request: TRequest) => TResult | Promise<TResult>;
+      return await handler(request);
+    }
+    return response;
+  });
 }
 
 export type MockSubagentRegistryRows = (
   rows: Map<string, SubagentRunRecord>,
   runIds: readonly string[],
 ) => void | Promise<void>;
+
+/** Policy fixtures supply commit facts; native delivery is covered by real-worker tests. */
+export function acknowledgeMockSubagentRegistryWrite(
+  createAdmission: SqliteWorkerAdmissionFactory | undefined,
+  writeId: string,
+): void {
+  if (!createAdmission) {
+    throw new Error("Registry policy fixture requires a native receipt consumer");
+  }
+  const { admission } = createAdmission({ settled: Promise.resolve({ kind: "completed" }) });
+  Object.defineProperty(admission, "committed", { value: { facts: { writeId, notices: [] } } });
+  admission.finish();
+}
 
 /** Policy fixtures retain the real row owner and stub only the worker transport ACK. */
 export async function configureMockSubagentRegistryPersistence(methods: {
@@ -77,21 +85,18 @@ export async function configureMockSubagentRegistryPersistence(methods: {
             return original(context, (scope) => scope.execute(command), options);
           }
           const write = command.input;
-          const values = write.values.map((row) => {
-            if (typeof row.payload_json !== "string") {
-              throw new Error("Registry fixture write is missing its payload");
-            }
-            return {
-              ...row,
-              payload_json: row.payload_json,
-              controller_session_key: row.controller_session_key ?? null,
-              controller_store_path: row.controller_store_path ?? null,
-              requester_store_path: row.requester_store_path ?? null,
-            };
-          });
           const rows = new Map(
-            values.map((row) => {
-              const entry = rowToSubagentRunRecord(row);
+            write.values.map((row) => {
+              if (typeof row.payload_json !== "string") {
+                throw new Error("Registry fixture write is missing its payload");
+              }
+              const entry = rowToSubagentRunRecord({
+                ...row,
+                payload_json: row.payload_json,
+                controller_session_key: row.controller_session_key ?? null,
+                controller_store_path: row.controller_store_path ?? null,
+                requester_store_path: row.requester_store_path ?? null,
+              });
               if (!entry) {
                 throw new Error("Registry fixture write has an invalid payload");
               }
@@ -100,7 +105,7 @@ export async function configureMockSubagentRegistryPersistence(methods: {
           );
           await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
           options?.assertCurrent?.();
-          return { writeId: write.writeId, notices: [] };
+          acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
         }),
       });
     });
@@ -147,13 +152,6 @@ export type SessionEntryFixture = Partial<InternalSessionEntry> & {
   lastAccountId?: string;
   lastThreadId?: string | number;
 };
-
-export function createSessionStore(
-  overrides: SessionEntryFixture = {},
-  sessionKey = "agent:main:subagent:child",
-): Record<string, InternalSessionEntry> {
-  return { [sessionKey]: createSessionEntry(overrides) };
-}
 
 export function createSessionEntry(overrides: SessionEntryFixture = {}): InternalSessionEntry {
   return normalizeLegacySessionEntryDelivery({
@@ -312,16 +310,4 @@ export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSuba
   registerSubagentRun(
     params: SubagentRunParamsOverrides,
   ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
-};
-
-export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
-  const now = Date.now();
-  const payload = loadPendingFinalDeliveryPayload(args.entry);
-  const delivery = ensureDeliveryState(args.entry);
-  delivery.status = "pending";
-  delivery.createdAt ??= now;
-  delivery.lastAttemptAt = now;
-  delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
-  delivery.lastError = args.error ?? null;
-  delivery.payload = payload;
 };

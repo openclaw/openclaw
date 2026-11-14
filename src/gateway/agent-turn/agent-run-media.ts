@@ -1,3 +1,4 @@
+import { isRpcSourceRegistered } from "../../sessions/session-controller.rpc-sources.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { WebchatReplyMediaRequesterContext } from "../server-methods/chat-reply-media.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
@@ -82,10 +83,10 @@ export function dispatchAgentRunWithMedia(
         try {
           dispatch.assertCurrent?.();
           return (
-            Boolean(admittedRunEntry) &&
-            dispatch.context.chatAbortControllers.get(dispatch.runId) === admittedRunEntry &&
-            admittedRunEntry?.controller === abortController &&
-            !admittedRunEntry.registrationCleanupRequested &&
+            admittedRunEntry !== undefined &&
+            isRpcSourceRegistered(admittedRunEntry) &&
+            admittedRunEntry.input.abortSignal === abortController.signal &&
+            !admittedRunEntry.input.retirementRequested &&
             !abortController.signal.aborted
           );
         } catch {

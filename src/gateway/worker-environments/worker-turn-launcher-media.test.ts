@@ -7,18 +7,19 @@ import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
 } from "../../../test/helpers/image-fixtures.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as rootLogger from "../../logger.js";
 import * as localMediaAccess from "../../media/local-media-access.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import * as mediaReferences from "../../media/media-reference.js";
-import { cleanOldMedia, saveMediaBuffer } from "../../media/store.js";
+import { cleanOldMedia, getMediaDir, saveMediaBuffer } from "../../media/store.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
@@ -118,7 +119,9 @@ async function harness(assistantText = "image received", workspace?: string) {
     }),
     stageAttachments: vi.fn(async (request) => {
       expect(request.isAuthorized()).toBe(true);
-      for (const file of await fs.readdir(request.localPath, { recursive: true })) {
+      for (const file of (await listDirectoryTreeStrict(request.localPath)).map(
+        (walkEntry) => walkEntry.relativePath,
+      )) {
         const source = path.join(request.localPath, file);
         if ((await fs.stat(source)).isFile() && !remoteFiles.has(file)) {
           remoteFiles.set(file, await fs.readFile(source));
@@ -186,13 +189,20 @@ async function harness(assistantText = "image received", workspace?: string) {
 }
 
 describe("cloud turn media boundary", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
+  beforeEach(async () => {
+    await setupWorkerTurnLauncherTest();
+    const bin = path.join(root, "bin");
+    await fs.mkdir(bin);
+    await fs.writeFile(path.join(bin, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+  });
   afterEach(async () => {
     vi.restoreAllMocks();
     await cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+    vi.unstubAllEnvs();
   });
 
-  it("stages relative worker reply bytes before reconciliation without using the Gateway copy", async () => {
+  it("stages relative worker reply bytes before post-turn reconciliation without using the Gateway copy", async () => {
     const remoteRoot = path.join(root, "remote-output");
     const remotePath = path.join(remoteRoot, "reply.txt");
     const bytes = Buffer.from("worker-only output\n".repeat(5_000));
@@ -222,15 +232,21 @@ describe("cloud turn media boundary", () => {
         code: commandProcess.exitCode,
       });
     });
-    vi.mocked(rig.tunnel.reconcileWorkspace).mockImplementationOnce(async (request) => {
-      await fs.rm(remotePath);
-      return await reconcileUnchangedLocalWorkspace(request);
-    });
+    vi.mocked(rig.tunnel.reconcileWorkspace)
+      // Input refresh precedes the reply; only completed-turn cleanup removes its source.
+      .mockImplementationOnce(reconcileUnchangedLocalWorkspace)
+      .mockImplementationOnce(async (request) => {
+        await fs.rm(remotePath);
+        return await reconcileUnchangedLocalWorkspace(request);
+      });
 
     const result = await rig.execute(turn("outbound-relative"));
+    await waitForSessionRunEnd(SESSION_ID, null);
     const mediaUrl = result.payloads?.[0]?.mediaUrl;
     expect(mediaUrl).toBeTypeOf("string");
+    expect(path.dirname(mediaUrl!)).toBe(path.join(getMediaDir(), "outbound"));
     await expect(fs.readFile(mediaUrl!)).resolves.toEqual(bytes);
+    await expect(fs.stat(remotePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await openSessionManager()).getLeafEntry()).toMatchObject({
       type: "message",
       message: { role: "assistant", content: [{ type: "text", text }] },
@@ -259,7 +275,11 @@ describe("cloud turn media boundary", () => {
     } = await parseMessageWithAttachments("compare in order", [
       { content: small.toString("base64"), mimeType: "image/png", fileName: "inline.png" },
     ]);
-    expect(inline?.sourceIndex).toBe(0);
+    expect(inline).toEqual({
+      type: "image",
+      data: small.toString("base64"),
+      mimeType: "image/png",
+    });
     if (!inline) {
       throw new Error("missing parsed inline image");
     }
@@ -562,7 +582,7 @@ describe("cloud turn media boundary", () => {
       if (closure === "unrelated") {
         await operation;
         expect(rig.launches).toHaveLength(1);
-        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+        await waitForSessionRunEnd(SESSION_ID, null);
         expect(transferSignal?.aborted).toBe(true);
         input.preparedRunAdmission.close();
       } else {

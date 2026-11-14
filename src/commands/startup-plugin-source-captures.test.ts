@@ -58,12 +58,6 @@ vi.mock("../infra/state-migrations.messages.js", () => ({
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
-let authorityLive = false;
-const assertCurrent = () => {
-  if (!authorityLive) {
-    throw new Error("maintenance authority expired");
-  }
-};
 
 beforeEach(async () => {
   vi.resetAllMocks();
@@ -80,11 +74,11 @@ beforeEach(async () => {
   mocks.verify.mockResolvedValue({ quarantinedPlugins: [] });
   mocks.prune.mockResolvedValue({ removed: [], warnings: [] });
   mocks.maintenance.mockImplementation(async ({ run }) => {
-    authorityLive = true;
+    const authority = new AbortController();
     try {
-      return await run({ assertCurrent });
+      return await run({ assertCurrent: () => authority.signal.throwIfAborted() });
     } finally {
-      authorityLive = false;
+      authority.abort(new Error("maintenance authority expired"));
     }
   });
   vi.spyOn(process, "emitWarning").mockImplementation(mocks.warning);
@@ -95,15 +89,22 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("leaves capture reclamation to the Gateway post-ready owner", async () => {
-  await expect(runStartupConfigPreflight({ gateway: true })).resolves.toHaveProperty(
-    "snapshot.valid",
-    true,
-  );
-  expect(mocks.verify).toHaveBeenCalledOnce();
-  expect(mocks.maintenance).not.toHaveBeenCalled();
-  expect(mocks.prune).not.toHaveBeenCalled();
-});
+it.each(["gateway", "observe", "artifact-preserving"])(
+  "leaves captures untouched for %s",
+  async (kind) => {
+    mocks.preserving = kind === "artifact-preserving";
+    const result = await runStartupConfigPreflight({
+      gateway: kind === "gateway",
+      observe: kind === "observe" ? false : undefined,
+    });
+    if (kind === "gateway") {
+      expect(result.snapshot.valid).toBe(true);
+      expect(mocks.verify).toHaveBeenCalledOnce();
+    }
+    expect(mocks.maintenance).not.toHaveBeenCalled();
+    expect(mocks.prune).not.toHaveBeenCalled();
+  },
+);
 
 it("cleans up for CLI startup only after its state-preparation guard accepts", async () => {
   const guard = vi.fn(async () => false);
@@ -116,43 +117,28 @@ it("cleans up for CLI startup only after its state-preparation guard accepts", a
   expect(mocks.prune).toHaveBeenCalledOnce();
 });
 
-it.each(["observe", "artifact-preserving"])(
-  "leaves captures untouched during %s reads",
-  async (kind) => {
-    mocks.preserving = kind === "artifact-preserving";
-    await runStartupConfigPreflight({
-      gateway: false,
-      ...(kind === "observe" ? { observe: false } : {}),
-    });
-    expect(mocks.maintenance).not.toHaveBeenCalled();
-  },
-);
-
 it.each(["maintenance", "permission", "cleanup", "contention"])(
   "continues CLI startup after %s refusal, warning unless another process owns state",
   async (kind) => {
     const reason = "fixture capture cleanup unavailable";
-    if (kind === "contention") {
+    if (kind === "cleanup") {
+      mocks.prune.mockResolvedValueOnce({ removed: [], warnings: [reason] });
+    } else if (kind === "maintenance") {
+      mocks.maintenance.mockRejectedValueOnce(new Error(reason));
+    } else {
       mocks.maintenance.mockRejectedValueOnce(
         new DoctorSqliteMaintenanceLockUnavailableError(
           "plugin source cleanup",
           new GatewayLockError(
-            "failed to acquire gateway state ownership",
-            new GatewayStateOwnerContentionError(path.join(stateDir, "state", "openclaw.sqlite")),
+            kind === "contention" ? "failed to acquire gateway state ownership" : reason,
+            kind === "contention"
+              ? new GatewayStateOwnerContentionError(
+                  path.join(stateDir, "state", "openclaw.sqlite"),
+                )
+              : Object.assign(new Error(reason), { code: "EACCES" }),
           ),
         ),
       );
-    } else if (kind === "maintenance") {
-      mocks.maintenance.mockRejectedValueOnce(new Error(reason));
-    } else if (kind === "permission") {
-      mocks.maintenance.mockRejectedValueOnce(
-        new DoctorSqliteMaintenanceLockUnavailableError(
-          "plugin source cleanup",
-          new GatewayLockError(reason, Object.assign(new Error(reason), { code: "EACCES" })),
-        ),
-      );
-    } else {
-      mocks.prune.mockResolvedValueOnce({ removed: [], warnings: [reason] });
     }
     await expect(runStartupConfigPreflight({ gateway: false })).resolves.toHaveProperty(
       "snapshot.valid",

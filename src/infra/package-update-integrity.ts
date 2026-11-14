@@ -3,6 +3,7 @@ import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { repairPackagePermissions } from "./package-update-activation-paths.js";
@@ -64,7 +65,7 @@ export function repairPackageIntegrityPermissions(
   for (const { file, stat } of entries) {
     assertCurrent();
     try {
-      repairPackagePermissions(file, stat, Number(stat.mode & 0o7700n));
+      repairPackagePermissions(file, stat, Number(stat.mode & 0o7755n));
       repaired++;
     } catch (error) {
       if (!["EACCES", "EPERM", "EROFS"].some((code) => hasErrnoCode(error, code))) {
@@ -80,7 +81,7 @@ export function repairPackageIntegrityPermissions(
       .map(({ file }) => JSON.stringify(file))
       .join(", ");
     onWarning(
-      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other permissions and POSIX ACL access masks were cleared.${
+      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other write permissions and POSIX ACL write masks were cleared; read/execute access was preserved.${
         failures.length
           ? ` Could not tighten ${failures.length} objects (${failures
               .slice(0, 3)
@@ -163,12 +164,12 @@ export function packageLauncherDifferences(
   options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  // A copied launcher must restore the same bytes or link target; npm may
-  // recreate its metadata. Exact-object mutation authority is checked separately.
+  // Symlink modes vary with umask. Exact-object mutation authority is checked separately.
   return (["type", "mode", "contents"] as const)
     .filter(
       (field) =>
-        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+        (field !== "mode" || (!symlink && options?.checkMode === true)) &&
+        expected[field] !== actual[field],
     )
     .map((field) =>
       field === "contents" && symlink
@@ -297,12 +298,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return children.toSorted();
   }
 
-  async function hashFile(
-    file: string,
-    stat: BigIntStats,
-    remainingBytes: number,
-    readBuffer?: Buffer,
-  ) {
+  async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
     if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
     }
@@ -318,7 +314,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
-      const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
+      const buffer = Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
@@ -453,7 +449,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         rootIdentity = identity(stat);
       }
       observed.push({ file, stat });
-      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
+      // Package contents retain npm's public read/execute modes, unlike private
+      // activation controls. Group bits also bound named POSIX ACL write grants.
+      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o022n) !== 0n) {
         permissive.set(identity(stat), { file, stat });
       }
       // npm's disposable hidden lockfile is a cache, not package content:
@@ -580,14 +578,18 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (const entry of observed) {
-        if (
-          !packageStatUnchanged(
-            entry.stat,
-            await read(() => fs.lstat(entry.file, { bigint: true })),
-          )
-        ) {
-          throw new Error("Package rollback tree changed during verification");
+      for (let start = 0; start < observed.length; start += 32) {
+        const results = await Promise.allSettled(
+          observed.slice(start, start + 32).map(async ({ file, stat }) => {
+            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
+              throw new Error("Package rollback tree changed during verification");
+            }
+          }),
+        );
+        // Preserve traversal-order refusals, even when a later read times out first.
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
         }
       }
       if (legacy) {
@@ -702,10 +704,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 

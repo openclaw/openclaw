@@ -5,11 +5,11 @@ import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type StartGatewayMaintenanceTimers =
@@ -19,6 +19,7 @@ type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   scheduler: GatewayScheduler;
+  getCronStorePath: () => string;
   minimalTestGateway: boolean;
   isClosing: () => boolean;
   updateCanary?: boolean;
@@ -38,18 +39,17 @@ export async function startGatewayEarlyRuntime(params: {
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
   swapDiscovery: (next: GatewayDiscovery | null) => GatewayDiscovery | null;
   pluginRegistry?: PluginRegistry;
-  pluginRuntimeClaim: GatewayPluginRuntimeClaim;
+  getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
   broadcast: GatewayMaintenanceParams["broadcast"];
   maintenance: Omit<
     GatewayMaintenanceParams,
+    | "resolveGatewayContext"
     | "scheduler"
     | "broadcast"
     | "getRuntimeConfig"
     | "activeWorkInspectors"
     | "isNixMode"
-    | "runWorktreeGc"
     | "runDeliveryQueueMediaGc"
-    | "runManagedOutgoingMediaGc"
   >;
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
@@ -80,7 +80,6 @@ export async function startGatewayEarlyRuntime(params: {
             discovery: params.cfgAtStart.discovery,
             tailscaleMode: params.tailscaleMode,
             gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
-            pluginRuntimeClaim: params.pluginRuntimeClaim,
             logDiscovery: params.logDiscovery,
           });
         },
@@ -95,7 +94,7 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     if (!params.isClosing()) {
-      startCronMaintenance(params.scheduler);
+      startCronMaintenance(params.scheduler, params.getCronStorePath);
     }
   }
 
@@ -165,7 +164,10 @@ export async function startGatewayEarlyRuntime(params: {
         return null;
       }
       try {
-        await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
+        await refreshSkillsDiscovery({
+          config: params.getRuntimeConfig(),
+          pluginMetadataSnapshot: params.getPluginMetadataSnapshot(),
+        });
       } catch (error) {
         params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
       }
@@ -177,6 +179,7 @@ export async function startGatewayEarlyRuntime(params: {
         () =>
           startGatewayMaintenanceTimers({
             ...params.maintenance,
+            resolveGatewayContext,
             scheduler: params.scheduler,
             broadcast: params.broadcast,
             activeWorkInspectors,

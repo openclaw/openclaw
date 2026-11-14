@@ -8,7 +8,6 @@ import {
   type ProviderStreamFunction,
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import {
   createCapturedPluginRegistration,
   registerProviderPlugin,
@@ -17,8 +16,14 @@ import {
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { hasTrustedFfmpegForLiveVoiceNote } from "../test-support/generation-live-test-helpers.js";
+import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
+import { RED_H264_VIDEO_BASE64 as GOOGLE_LIVE_RED_VIDEO_BASE64 } from "../test-support/native-video-fixture.test-support.js";
 import plugin from "./index.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -31,25 +36,6 @@ const GOOGLE_API_KEY =
   "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
-
-// Two 64x64 solid-red H.264 frames keep native-video proof bounded and reproducible.
-const GOOGLE_LIVE_RED_VIDEO_BASE64 = [
-  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
-  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
-  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
-  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
-  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
-  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
-  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
-  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
-  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
-  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
-  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
-  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
-  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
-  "cm8AAAAAAAAAQw==",
-].join("");
 
 async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
   const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -81,20 +67,6 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   }
   const message = error.message.toLowerCase();
   return message.includes("timeout") || message.includes("aborted");
-}
-
-function hasTrustedFfmpegForLiveVoiceNote(): boolean {
-  try {
-    resolveFfmpegBin();
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("ffmpeg not found in trusted system directories")) {
-      console.warn("[google:live] skip voice-note transcode: ffmpeg unavailable");
-      return false;
-    }
-    throw error;
-  }
 }
 
 async function waitForGoogleLive(
@@ -160,13 +132,7 @@ describeLive("google plugin live", () => {
           api: "google-generative-ai",
         } as Model<"google-generative-ai">,
         {
-          messages: [
-            {
-              role: "user",
-              content: "Reply with exactly: OpenClaw live catalog OK",
-              timestamp: Date.now(),
-            },
-          ],
+          messages: [makeUserMessage("Reply with exactly: OpenClaw live catalog OK", Date.now())],
         },
         { apiKey: GOOGLE_API_KEY, maxTokens: 64 },
       );
@@ -207,16 +173,11 @@ describeLive("google plugin live", () => {
     if (!streamFn) {
       throw new Error("registered Google provider did not create its chat transport");
     }
-    const tool = {
-      name: "live_echo",
-      description: "Return the supplied value.",
-      parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-    };
-    const userPrompt = {
-      role: "user" as const,
-      content: "Call live_echo with value argon. Do not answer directly.",
-      timestamp: Date.now(),
-    };
+    const tool = createLiveValueTool("live_echo");
+    const userPrompt = makeUserMessage(
+      "Call live_echo with value argon. Do not answer directly.",
+      Date.now(),
+    );
     const first = await streamFn(
       model,
       { messages: [userPrompt], tools: [tool] },
@@ -244,14 +205,7 @@ describeLive("google plugin live", () => {
         messages: [
           userPrompt,
           { ...first, content: [unsignedCall] },
-          {
-            role: "toolResult",
-            toolCallId: call.id,
-            toolName: call.name,
-            content: [{ type: "text", text: "argon" }],
-            isError: false,
-            timestamp: Date.now(),
-          },
+          makeTextToolResult(call.id, call.name, "argon", false, Date.now()),
           { role: "user", content: "Reply with exactly: argon", timestamp: Date.now() },
         ],
         tools: [tool],
@@ -353,7 +307,7 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
-    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+    if (!hasTrustedFfmpegForLiveVoiceNote("google")) {
       return;
     }
 

@@ -8,10 +8,14 @@ import { events, makeReleaseFixture, runOwner } from "./worker-config-owner-fixt
 const linuxRoot = { skip: process.platform !== "linux" || process.getuid() !== 0 ? "requires disposable Linux root" : false };
 const digest = path => createHash("sha256").update(readFileSync(path)).digest("hex");
 const identity = path => { const s = lstatSync(path); return [s.dev, s.ino]; };
+const pointers = f => ["current", "previous"].map(name => {
+  const path = join(f.serving, name);
+  return existsSync(path) ? [name, identity(path), readlinkSync(path)] : [name, null];
+});
 
-function fixture(t, scenario = "success", version) {
+function fixture(t, scenario = "success", version = undefined) {
   const f = makeReleaseFixture(t, scenario);
-  if (!existsSync(f.lockFile)) writeFileSync(f.lockFile, "", { mode: 0o600 });
+  if (!existsSync(f.lockFile)) { writeFileSync(f.lockFile, "", { mode: 0o600 }); }
   mkdirSync(join(f.root, "bin"));
   if (version) {
     // Rejection and mutation cases use a disposable runtime probe instead of modifying installed Bun.
@@ -21,10 +25,7 @@ function fixture(t, scenario = "success", version) {
     f.bun = realpathSync(process.env.OPENCLAW_TEST_BUN ?? "/usr/local/bin/bun");
   }
   f.target = ["--switch-runtime", "bun", f.bun, digest(f.bun)];
-  f.pointers = ["current", "previous"].map(name => {
-    const path = join(f.serving, name);
-    return existsSync(path) ? [name, identity(path), readlinkSync(path)] : [name, null];
-  });
+  f.pointers = pointers(f);
   f.databaseIdentity = identity(f.databasePath);
   return f;
 }
@@ -39,10 +40,7 @@ function accepted(f, result) {
   assert.equal(existsSync(f.journal), false, "accepted transaction must retire its journal");
   assert.deepEqual(readFileSync(f.configPath), f.originalConfigBytes);
   assert.deepEqual(identity(f.databasePath), f.databaseIdentity);
-  assert.deepEqual(["current", "previous"].map(name => {
-    const path = join(f.serving, name);
-    return existsSync(path) ? [name, identity(path), readlinkSync(path)] : [name, null];
-  }), f.pointers, "runtime switching must preserve application pointers");
+  assert.deepEqual(pointers(f), f.pointers, "runtime switching must preserve application pointers");
 }
 
 test("Node to Bun to Node changes only the selected runtime and is idempotent", linuxRoot, t => {
@@ -60,15 +58,15 @@ test("Node to Bun to Node changes only the selected runtime and is idempotent", 
   assert.equal(readFileSync(join(f.state, "runtime-executable"), "utf8"), process.execPath);
 });
 
-test("wrong pins, writable binaries, and unsupported runtimes fail before activation", linuxRoot, async t => {
+test("wrong pins, writable binaries, and unsupported runtimes fail before activation", linuxRoot, async suite => {
   for (const reason of ["hash", "writable", "1.3.0", "1.4.0", "1.4.1", "1.4.2"]) {
-    await t.test(reason, t => {
+    await suite.test(reason, t => {
       const f = fixture(t, "success", reason === "hash" ? undefined : reason === "writable" ? "1.4.3" : reason);
-      if (reason === "hash") f.target[3] = "0".repeat(64);
-      if (reason === "writable") chmodSync(f.bun, 0o777);
+      if (reason === "hash") { f.target[3] = "0".repeat(64); }
+      if (reason === "writable") { chmodSync(f.bun, 0o777); }
       const result = run(f);
       assert.notEqual(result.status, 0);
-      if (reason.startsWith("1.")) assert.match(result.stderr, /Gateway runtime capability probe failed/);
+      if (reason.startsWith("1.")) { assert.match(result.stderr, /Gateway runtime capability probe failed/); }
       assert.equal(existsSync(f.runtimeDrop), false);
       assert.equal(existsSync(f.journal), false);
       assert.doesNotMatch(events(f), /service\.system\.(restart|start|stop)/);
@@ -83,9 +81,9 @@ test("an unchanged Node selection does not restart the legacy service", linuxRoo
   assert.doesNotMatch(events(f), /service\.system\.(restart|start|stop)/);
 });
 
-test("a replaced default Node binary cannot pass runtime-switch admission", linuxRoot, async t => {
+test("a replaced default Node binary cannot pass runtime-switch admission", linuxRoot, async suite => {
   for (const kind of ["node", "bun"]) {
-    await t.test(kind, t => {
+    await suite.test(kind, t => {
       const f = fixture(t);
       const oldNode = join(f.root, "bin/old-node");
       copyFileSync(process.execPath, oldNode);
@@ -102,8 +100,8 @@ test("a replaced default Node binary cannot pass runtime-switch admission", linu
   }
 });
 
-test("runtime switching reports lock contention and preserves a busy Gateway", linuxRoot, async t => {
-  await t.test("lock", t => {
+test("runtime switching reports lock contention and preserves a busy Gateway", linuxRoot, async suite => {
+  await suite.test("lock", t => {
     const f = fixture(t);
     writeFileSync(f.commandPaths.flock, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const result = run(f);
@@ -111,7 +109,7 @@ test("runtime switching reports lock contention and preserves a busy Gateway", l
     assert.match(result.stderr, /deployment lock is busy/);
     assert.equal(existsSync(f.runtimeDrop), false);
   });
-  await t.test("drain", t => {
+  await suite.test("drain", t => {
     const f = fixture(t, "always-draining");
     f.env.OPENCLAW_TEAM_DRAIN_BUDGET = "1";
     const result = run(f);
@@ -122,50 +120,40 @@ test("runtime switching reports lock contention and preserves a busy Gateway", l
   });
 });
 
-test("explicit bounded interruption arms native handoff before switching", linuxRoot, t => {
+test("explicit bounded interruption commits native handoff before switching", linuxRoot, t => {
   const f = fixture(t, "always-draining");
   f.env.OPENCLAW_TEAM_DRAIN_BUDGET = "1";
   accepted(f, run(f, [...f.target, "--interrupt-after-drain"]));
   const log = events(f);
-  assert.ok(log.indexOf("handoff.armed") >= 0 && log.indexOf("handoff.armed") < log.indexOf("service.system.restart"), log);
+  assert.ok(log.indexOf("handoff.committed") >= 0 && log.indexOf("handoff.committed") < log.indexOf("service.system.restart"), log);
   assert.equal(readFileSync(join(f.state, "shutdown-kind"), "utf8"), "external-restart");
 });
 
-test("failed runtime exec restores Node through the existing rollback", linuxRoot, t => {
-  const f = fixture(t, "runtime-start-fail");
-  const result = run(f);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /ROLLED_BACK/);
-  assert.equal(existsSync(f.runtimeDrop), false);
-  assert.equal(existsSync(f.journal), false);
-  assert.equal(readFileSync(join(f.state, "runtime-executable"), "utf8"), "/usr/bin/node");
-  assert.equal(readFileSync(join(f.state, "system"), "utf8"), "active");
-  assert.deepEqual(readFileSync(f.configPath), f.originalConfigBytes);
-});
-
-test("an unhealthy Bun successor is suspended before rolling back", linuxRoot, t => {
-  const f = fixture(t, "runtime-unhealthy");
-  f.env.OPENCLAW_TEAM_VERIFICATION_BUDGET = "8";
-  const result = run(f);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /ROLLED_BACK/);
-  const log = events(f);
-  assert.equal(log.split("service.system.restart\n").length - 1, 2, log);
-  assert.ok(log.lastIndexOf("gateway.suspend.prepare") > log.indexOf("service.system.restart"), log);
-  assert.equal(existsSync(f.runtimeDrop), false);
-  assert.equal(existsSync(f.journal), false);
-});
-
-test("service metadata cannot substitute for the actual selected executable", linuxRoot, t => {
-  const f = fixture(t, "runtime-wrong-executable");
-  f.env.OPENCLAW_TEAM_VERIFICATION_BUDGET = "8";
-  const result = run(f);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /process is not using the selected executable/);
-  assert.match(result.stderr, /ROLLED_BACK/);
-  assert.equal(existsSync(f.runtimeDrop), false);
-  assert.equal(existsSync(f.journal), false);
-});
+for (const [scenario, message] of [
+  ["runtime-start-fail", /ROLLED_BACK/],
+  ["runtime-unhealthy", /ROLLED_BACK/],
+  ["runtime-wrong-executable", /process is not using the selected executable/],
+]) {
+  test(`failed runtime activation ${scenario} rolls back through the existing owner`, linuxRoot, t => {
+    const f = fixture(t, scenario);
+    if (scenario !== "runtime-start-fail") { f.env.OPENCLAW_TEAM_VERIFICATION_BUDGET = "8"; }
+    const result = run(f);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.match(result.stderr, /ROLLED_BACK/);
+    assert.equal(existsSync(f.runtimeDrop), false);
+    assert.equal(existsSync(f.journal), false);
+    if (scenario === "runtime-start-fail") {
+      assert.equal(readFileSync(join(f.state, "runtime-executable"), "utf8"), "/usr/bin/node");
+      assert.equal(readFileSync(join(f.state, "system"), "utf8"), "active");
+      assert.deepEqual(readFileSync(f.configPath), f.originalConfigBytes);
+    } else if (scenario === "runtime-unhealthy") {
+      const log = events(f);
+      assert.equal(log.split("service.system.restart\n").length - 1, 2, log);
+      assert.ok(log.lastIndexOf("gateway.suspend.prepare") > log.indexOf("service.system.restart"), log);
+    }
+  });
+}
 
 test("unknown runtime override drift is retained without overwriting it", linuxRoot, t => {
   const f = fixture(t, "runtime-drop-drift");

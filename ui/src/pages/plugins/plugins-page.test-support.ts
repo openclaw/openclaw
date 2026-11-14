@@ -1,4 +1,4 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import { createRouter, type RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -16,14 +16,21 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginsPage } from "./plugins-page.tsx";
 import type { PluginsRouteData } from "./route-data.ts";
+import type { DetailProps } from "./settings-view.tsx";
 
-type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
+type RequestHandler = (
+  method: string,
+  params: unknown,
+  options?: Parameters<GatewayBrowserClient["request"]>[2],
+) => Promise<unknown>;
 
 const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
   "config.set",
@@ -83,6 +90,53 @@ export function createResult(
   };
 }
 
+export function createPluginSettingsDetailProps(
+  result: PluginListResult,
+  overrides: Partial<DetailProps> = {},
+): DetailProps {
+  return {
+    connected: true,
+    loading: false,
+    result,
+    error: null,
+    busy: {},
+    messages: {},
+    iconUrls: {},
+    canMutate: true,
+    mutationBlockedReason: null,
+    configBusy: false,
+    configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
+    configError: null,
+    canEditConfig: true,
+    configValue: {},
+    configHints: {},
+    configUnsupportedPaths: [],
+    pluginId: "workboard",
+    inspection: null,
+    inspectionRead: { receipt: () => null, value: () => null },
+    configSchema: null,
+    hostControlsSchema: null,
+    backHref: "/settings/plugins",
+    backLabel: "Plugins",
+    tab: "readme",
+    onBack: vi.fn(),
+    onRetryInspection: vi.fn(),
+    onTabChange: vi.fn(),
+    onIconError: vi.fn(),
+    onSetEnabled: vi.fn(),
+    onUninstall: vi.fn(),
+    onConfigPatch: vi.fn(),
+    onConfigRemove: vi.fn(),
+    onConfigReload: vi.fn(),
+    onConfigReadRetry: vi.fn(),
+    onConfigWriteRetry: vi.fn(),
+    onRefresh: vi.fn(),
+    ...overrides,
+  };
+}
+
 export function createDiscoveryDetail(plugin = createPlugin()): PluginDiscoveryDetailResult {
   return {
     plugin: {
@@ -129,18 +183,7 @@ export function createInspectResult(
       enabled: false,
     },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: createPluginDeclaredSurface(),
     components: {
       mapped: [],
       skills: [],
@@ -169,36 +212,70 @@ export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLoca
   };
 }
 
+const routeInventories = new WeakMap<
+  PluginsRouteData,
+  { client: GatewayBrowserClient; result: PluginListResult }
+>();
+const nextInventories = new WeakMap<GatewayBrowserClient, PluginListResult>();
+
 export function createPluginsRouteData(
   gateway: ApplicationGateway,
   result: PluginListResult | null = createResult(),
   location = createPluginsRouteLocation(),
 ): PluginsRouteData {
-  return { gateway, gatewaySnapshot: gateway.snapshot, location, result, error: null };
+  const data = { location };
+  const client = gateway.snapshot.client;
+  if (client && result) {
+    routeInventories.set(data, { client, result });
+  }
+  return data;
 }
 
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
-  return {
-    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
-    request,
-  };
+  const client = {
+    request(
+      method: string,
+      params: unknown,
+      ...options: [] | [Parameters<GatewayBrowserClient["request"]>[2]]
+    ) {
+      const inventory = nextInventories.get(client);
+      if (method === "plugins.list" && inventory) {
+        nextInventories.delete(client);
+        return Promise.resolve(inventory);
+      }
+      return request(method, params, ...options);
+    },
+    addEventListener: () => () => {},
+  } as unknown as GatewayBrowserClient;
+  return { client, request };
 }
 
 function createSnapshot(
   client: GatewayBrowserClient | null,
   connected: boolean,
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: PLUGINS_GATEWAY_HELLO,
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
+  });
+}
+
+export function createPluginCapabilities(
+  generation: number,
+  methods: string[] = [],
+): NonNullable<ApplicationGatewaySnapshot["pluginCapabilities"]> {
+  return {
+    ok: true,
+    generation,
+    descriptors: [],
+    methods,
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
   };
 }
 
@@ -215,6 +292,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     eventLogRevision: 0,
     loadSelfProfile: async () => null,
     connect: () => undefined,
+    defer: () => false,
     setSessionKey: () => undefined,
     start: () => undefined,
     stop: () => undefined,
@@ -230,15 +308,10 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     publishPlugins() {
       snapshot = {
         ...snapshot,
-        pluginCapabilities: {
-          ok: true,
-          generation: (snapshot.pluginCapabilities?.generation ?? 0) + 1,
-          descriptors: [],
-          methods: snapshot.hello?.features?.methods ?? [],
-          controlUiTabs: [],
-          controlUiWidgetKinds: [],
-          pluginSurfaceUrls: {},
-        },
+        pluginCapabilities: createPluginCapabilities(
+          (snapshot.pluginCapabilities?.generation ?? 0) + 1,
+          snapshot.hello?.features?.methods ?? [],
+        ),
       };
       for (const listener of listeners) {
         listener(snapshot);
@@ -384,8 +457,13 @@ export function createContext(
   const context = {
     gateway,
     plugins,
+    overlays: {
+      snapshot: { updateRunning: false, updateReconciliationPending: false },
+      subscribe: vi.fn(() => () => {}),
+    },
     basePath: "",
     resourceBasePath: "",
+    router: createRouter({ routes: [] }),
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),
@@ -409,6 +487,14 @@ export async function mountPage(
     ? "settings"
     : "discovery",
 ): Promise<{ page: TestPluginsPage }> {
+  function supplyInventory(data: PluginsRouteData | undefined) {
+    const fixture = data && routeInventories.get(data);
+    if (fixture) {
+      nextInventories.set(fixture.client, fixture.result);
+    }
+    return () => fixture && nextInventories.delete(fixture.client);
+  }
+  const clearInitialInventory = supplyInventory(routeData);
   const provider = createSolidApplicationContextProvider(context);
   const [currentRouteData, setRouteData] = createSignal(routeData);
   const [currentSurface, setSurface] = createSignal(surface);
@@ -427,12 +513,21 @@ export async function mountPage(
     },
   );
   await settlePlugins();
+  clearInitialInventory();
   const page = mounted.container.querySelector("openclaw-plugins-page") as TestPluginsPage;
   if (!page) {
     throw new Error("Plugins page did not render its host element");
   }
   Object.defineProperties(page, {
-    routeData: { get: currentRouteData, set: setRouteData },
+    routeData: {
+      get: currentRouteData,
+      set: (data: PluginsRouteData) => {
+        const clearInventory = supplyInventory(data);
+        setRouteData(data);
+        flush();
+        clearInventory();
+      },
+    },
     surface: { get: currentSurface, set: setSurface },
     updateComplete: { get: settlePlugins },
   });
@@ -461,4 +556,8 @@ export function resetPluginsPageTestState(): void {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+}
+
+export function methodCalls(request: ReturnType<typeof createClient>["request"], name: string) {
+  return request.mock.calls.filter(([method]) => method === name);
 }

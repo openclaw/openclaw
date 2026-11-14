@@ -33,6 +33,11 @@ describe("transport-owned form uploads", () => {
       agentId: "main",
       sessionKey: "agent:main:app",
     });
+    vi.mocked(source.assertCurrent).mockImplementationOnce(() => {
+      throw new Error("origin retired");
+    });
+    expect(options.assertCurrent).toThrow("origin retired");
+    vi.mocked(source.assertCurrent).mockClear();
     local = false;
     expect(options.assertCurrent).toThrow("transport changed");
     expect(source.assertCurrent).toHaveBeenCalled();

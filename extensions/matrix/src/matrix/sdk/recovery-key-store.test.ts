@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createClient } from "matrix-js-sdk";
 import type { CryptoCallbacks } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { encodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
@@ -66,10 +67,7 @@ function readKey(store: MatrixRecoveryKeyStore, ...keyIds: string[]) {
 
 function encodedKey(start: number) {
   const bytes = Array.from({ length: 32 }, (_, i) => i + start);
-  const encoded = encodeRecoveryKey(new Uint8Array(bytes));
-  if (!encoded) {
-    throw new Error("expected encoded synthetic key");
-  }
+  const encoded = expectDefined(encodeRecoveryKey(new Uint8Array(bytes)), "synthetic key");
   return { bytes, encoded };
 }
 
@@ -136,11 +134,7 @@ const readRecoveryState = (recoveryKeyPath: string) =>
   readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state);
 
 async function readStoredRecoveryKey(recoveryKeyPath: string) {
-  const state = await readRecoveryState(recoveryKeyPath);
-  if (!state) {
-    throw new Error("expected stored recovery key state");
-  }
-  return state;
+  return expectDefined(await readRecoveryState(recoveryKeyPath), "stored recovery key state");
 }
 
 function interceptRecoveryStore(hooks: {
@@ -194,10 +188,7 @@ describe("MatrixRecoveryKeyStore", () => {
       const held = holdRecoveryWrites();
       const { recoveryKeyPath, store, callbacks } = createStore(held.runtime);
       const privateKey = new Uint8Array(32).fill(7);
-      const encodedPrivateKey = encodeRecoveryKey(privateKey);
-      if (!encodedPrivateKey) {
-        throw new Error("expected encoded synthetic key");
-      }
+      const encodedPrivateKey = expectDefined(encodeRecoveryKey(privateKey), "synthetic key");
       await store.drainPendingPersistence();
       if (source === "staged") {
         await store.stageEncodedRecoveryKey({ encodedPrivateKey });

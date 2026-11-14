@@ -127,7 +127,7 @@ export async function handleCodexSubcommand(
     }
     const pluginConfig = readCodexPluginConfig(options.pluginConfig);
     if (normalized === "plugins") {
-      // Account-wide hosted refresh does not require plugin-management configuration IO.
+      // Hosted refresh is account-wide; it does not mutate plugin configuration.
       if (rest[0]?.toLowerCase() === "refresh") {
         if (rest.length !== 1) {
           return {
@@ -142,13 +142,6 @@ export async function handleCodexSubcommand(
         return await withCodexPluginCommandContext({ deps, ctx, pluginConfig }, (context) =>
           refreshCodexHostedApps(context),
         );
-      }
-      if (!deps.codexPluginsManagementIo) {
-        return {
-          text:
-            "Codex sub-plugin management is not wired up (codexPluginsManagementIo dep is undefined). " +
-            "Edit ~/.openclaw/openclaw.json or use `openclaw config patch` until the runtime exposes the IO.",
-        };
       }
       let appServerScope: ReturnType<typeof resolveCommandAppServerScope> | undefined;
       await using _ = {

@@ -1,4 +1,4 @@
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
@@ -179,16 +179,11 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
       picker.handleOpen();
     }
     initial.resolve([]);
-    async function waitDiscovery(index: number) {
-      const result = discovery.mock.results[index];
-      assert.isDefined(result);
-      await result.value;
-    }
-    await waitDiscovery(0);
+    await discovery.mock.results[0]!.value;
     const staleProbes = getUserMedia.mock.calls.length;
     if (transition === "replace") {
       replacement.resolve([]);
-      await waitDiscovery(1);
+      await discovery.mock.results[1]!.value;
     }
     expect(staleProbes).toBe(transition === "remain open" ? 1 : 0);
     const permits = transition === "remain open" || transition === "replace";
@@ -197,5 +192,40 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     expect(picker.open).toBe(permits);
     picker.dispose();
     expect(removeEventListener.mock.calls).toEqual(addEventListener.mock.calls);
+  },
+);
+
+it("loads only session-scoped dictation readiness for a guest", async () => {
+  const request = vi.fn().mockResolvedValue(catalog(true));
+  const client = {
+    request,
+    auth: { role: "operator", scopes: ["operator.sessions.write"] },
+  } as unknown as GatewayBrowserClient;
+  picker = new ComposerMicrophoneOwner();
+  picker.syncCatalog(client, true, "agent:roboclaw:guest-chat");
+  await vi.waitFor(() => expect(picker.dictationStatus).toBe("ready"));
+  expect(request.mock.calls).toEqual([
+    ["talk.catalog", { sessionKey: "agent:roboclaw:guest-chat" }],
+  ]);
+  expect(picker.realtimeStatus).toBe("unavailable");
+  expect(picker.canConfigure).toBe(false);
+});
+
+it.each([undefined, "agent:roboclaw:guest-chat"])(
+  "does not discover dictation without writable session authority (%s)",
+  async (sessionKey) => {
+    const request = vi.fn();
+    const client = {
+      request,
+      auth: {
+        role: "operator",
+        scopes: sessionKey ? ["operator.sessions.read"] : ["operator.sessions.write"],
+      },
+    } as unknown as GatewayBrowserClient;
+    picker = new ComposerMicrophoneOwner();
+    picker.syncCatalog(client, true, sessionKey);
+    expect(request).not.toHaveBeenCalled();
+    expectStatus("unavailable");
+    expect(picker.canConfigure).toBe(false);
   },
 );

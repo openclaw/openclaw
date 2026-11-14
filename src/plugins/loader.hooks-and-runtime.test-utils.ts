@@ -345,7 +345,6 @@ ${channelPluginSource({
     );
     const plugin = writePlugin({
       id: "auto-enabled-load-path-channel",
-      filename: "auto-enabled-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "auto-enabled-load-path-channel",
@@ -354,19 +353,11 @@ ${channelPluginSource({
   blurb: "auto-enabled load-path setup gate",
 })}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "auto-enabled-load-path-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["auto-enabled-load-path-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: "auto-enabled-load-path-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["auto-enabled-load-path-channel"],
+    });
 
     const scopedSetupRegistry = loadOpenClawPlugins({
       cache: false,
@@ -1131,7 +1122,7 @@ ${channelPluginSource({
         entries: {
           "hook-policy": {
             hooks: {
-              allowPromptInjection: false,
+              allowPromptModification: false,
               allowConversationAccess: true,
             },
           },
@@ -1149,7 +1140,7 @@ ${channelPluginSource({
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
-        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
+        "blocked by plugins.entries.hook-policy.hooks.allowPromptModification=false",
       ),
     );
     expect(blockedDiagnostics).toHaveLength(1);
@@ -1174,7 +1165,7 @@ ${channelPluginSource({
         entries: {
           "next-turn-policy": {
             hooks: {
-              allowPromptInjection: false,
+              allowPromptModification: false,
             },
           },
         },
@@ -1189,7 +1180,7 @@ ${channelPluginSource({
         (entry) =>
           entry.pluginId === "next-turn-policy" &&
           entry.message ===
-            "next-turn injection blocked by plugins.entries.next-turn-policy.hooks.allowPromptInjection=false",
+            "next-turn injection blocked by plugins.entries.next-turn-policy.hooks.allowPromptModification=false",
       ),
     ).toBe(true);
   });

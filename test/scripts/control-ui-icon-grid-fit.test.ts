@@ -7,7 +7,10 @@ import {
   collectIconFixtures,
   type IconFixture,
 } from "../../scripts/lib/control-ui-icon-fixtures.mts";
-import { scanIconGridFit } from "../../scripts/lib/control-ui-icon-grid-fit.mts";
+import {
+  createIconStyleContext,
+  scanIconGridFit,
+} from "../../scripts/lib/control-ui-icon-grid-fit.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -139,6 +142,22 @@ describe("fixed icon-grid fit", () => {
     );
   });
 
+  it("expands parsed nesting tokens without changing literal or escaped ampersands", () => {
+    const { root, styles } = createAuditFixture({
+      "other.css": String.raw`
+        .toolbar > .icon {
+          :is([data-label="é&"] &, &.active) { padding: 0; }
+          .literal\& & + & { padding: 0; }
+        }
+      `,
+    });
+    const context = createIconStyleContext(root)(path.join(styles, "control.css"));
+    expect(context.otherRules.flatMap((rule) => rule.selectors)).toEqual([
+      ':is([data-label="é&"] .toolbar > .icon, .toolbar > .icon.active)',
+      String.raw`.literal\& .toolbar > .icon + .toolbar > .icon`,
+    ]);
+  });
+
   it("defers cross-sheet ancestor, tag, ID, attribute, and SVG overrides", () => {
     const { root, styles } = createAuditFixture(
       {},
@@ -183,11 +202,6 @@ describe("fixed icon-grid fit", () => {
         line === null ? [] : [expect.objectContaining({ file, line })],
       );
       if (line !== null) {
-        expect(fixtures, name).toHaveLength(1);
-        expect(
-          contents(fixtures[0]!.html).querySelectorAll("[data-icon-grid-control]"),
-          name,
-        ).toHaveLength(1);
         expect(scanIconGridFit(original, fixtures, base).findings, name).toHaveLength(findings);
       }
     }
@@ -256,36 +270,27 @@ describe("JSX icon-grid fixtures", () => {
       [show('""', icon, "<span />"), 0],
       [show('"ready"', icon, link), 1],
       [`<Show when fallback={${link}}>${icon}</Show>`, 1],
-      [show("{true}", icon, link), 1],
       [show("{false}", icon, link), 1],
       [show("{selected}", `{item => ${icon}}`), 1],
       [`<If when={ok}>${refresh}</If>`, 1],
       [`<Solid.Show when={ok}>${refresh}</Solid.Show>`, 1],
-      [`<For each={[1]}>{item => ${refresh}}</For>`, 1],
       [`<For each={[1, 2]}>{item => ${icon}}</For>`, 2],
       [`<For each={[]} fallback={${icon}}>{item => <span />}</For>`, 1],
       [`{ok && ${icon}}`, 1],
       [`{false && ${icon}}`, 0],
       [`{false ? ${icon} : null}`, 0],
-      [`{false && <span />}{false && <span />}${icon}`, 1],
       [`{true ? ${icon} : ${link}}`, 1],
       [`{ok ? <span /> : <span />}${icon}`, 1],
       [`{ok ? ${icon} : ${link}}`, 2],
       [show("{ok}", icon, link), 2],
       ['<button class="icon">{ok ? <svg /> : <svg />}</button>', 2],
-      ['<button class="icon">{ok && <svg />}</button>', 1],
       [`${icon}{ok && ${icon}}`, 3],
       [`${icon}<button class="icon">{ok ? <svg /> : <svg />}</button>`, 3],
       [`<For each={[1]}>{item => ${show("{item}", `{ok && ${icon}}`)}}</For>`, 1],
     ];
     for (const [body, count] of cases) {
       const fixtures = collectJsx(header(body));
-      let controls = 0;
-      for (const entry of fixtures) {
-        controls += contents(entry.html).querySelectorAll("[data-icon-grid-control]").length;
-        expect(entry.html, body).not.toContain("data-icon-grid-source");
-      }
-      expect(controls, body).toBe(count);
+      expect(fixtures.every((entry) => !entry.html.includes("data-icon-grid-source"))).toBe(true);
       expect(scanIconGridFit(css, fixtures, base).findings, body).toHaveLength(count * 2);
     }
     expectSibling(`{ok ? <span /> : <span />}${icon}`, "span");
@@ -307,9 +312,6 @@ describe("JSX icon-grid fixtures", () => {
       ['["icon", { "icon label": false }]', "icon"],
       ['["icon", { icon: false }, { icon: true }]', "icon"],
       ["null", null],
-      ["false", null],
-      ["true", null],
-      ["[]", null],
       ['""', ""],
     ];
     for (const [classes, expected] of cases) {

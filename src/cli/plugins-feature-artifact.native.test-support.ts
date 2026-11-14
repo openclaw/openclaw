@@ -443,8 +443,12 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     manifest.controlUi = {
       entry: `${directory}/index.js`,
       styles: [`${directory}/theme.css`],
+      panelIcon: "panel.svg",
     };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    const panelSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>';
+    await fs.writeFile(path.join(rootDir, "panel.svg"), panelSvg);
     const files = {
       "index.js":
         'import { prefix } from "./chunks/shared.mjs"; export default { id: "draft-review", async activate() { return prefix + (await import("./chunks/lazy.js")).suffix; } };',
@@ -476,6 +480,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     await extract({ file: archive, cwd: extracted, strict: true });
     const packageRoot = path.join(extracted, "package");
     assert.equal(await activate(packageRoot), "Prebuilt ready");
+    assert.equal(await fs.readFile(path.join(packageRoot, "panel.svg"), "utf8"), panelSvg);
     assert.equal(
       await fs.readFile(path.join(packageRoot, directory, "theme.css"), "utf8"),
       files["theme.css"],
@@ -541,9 +546,9 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     const { rootDir, parent } = await fixture();
     const out = path.join(parent, "review.tgz");
     await fs.writeFile(out, "existing review");
-    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), {
-      code: "EEXIST",
-    });
+    const invalidOutput = runPluginsPackCommand({ root: rootDir, out: `${out}.zip` });
+    await assert.rejects(invalidOutput, { humanOutput: /must end in \.tgz or \.tar\.gz/ });
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), { code: "EEXIST" });
     assert.equal(await fs.readFile(out, "utf8"), "existing review");
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     await assert.rejects(runPluginsPackCommand({ root: rootDir }), hasMessage("missing or stale"));

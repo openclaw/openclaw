@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { SessionActorHotState } from "./session-actor-state.types.js";
+import { expect, it } from "vitest";
+import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
@@ -27,42 +27,16 @@ function fixture() {
     effectiveParentId: "user",
     activeMessagePosition: 1,
   };
-  const hot: SessionActorHotState = {
-    target: { database: { kind: "memory", handle: "test", incarnation: "test" }, sessionKey },
-    version: { epoch: "epoch", sequence: 1 },
-    writeToken: "committed",
-    dependencySessionIds: [scope.sessionId],
-    entry: {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      lifecycleRevision: "lifecycle",
-      activeWriterRunId: "run",
-    },
-    hasBoard: false,
-    participants: [],
-    members: [],
-    pendingInputs: [],
-    completionKeys: [],
-    transcript: {
-      watermark: { generation: "generation", maxSeq: 4 },
-      version: { generation: "generation", rawSeq: 4, updatedAt: 1 },
-      anchorsState: "resident",
-      anchors: [user, reply],
-      idempotency: [],
-      modelContext: {
-        kind: "resident",
-        entries: [
-          { rawSeq: 3, eventId: "user" },
-          { rawSeq: 4, eventId: "reply" },
-        ],
-      },
-    },
-  };
-  const message = {
-    role: "assistant",
-    content: [{ type: "text", text: "The answer" }],
-    __openclaw: { runId: "run" },
-  };
+  const { hot } = createMemoryTestState(sessionKey, {
+    sessionId: scope.sessionId,
+    updatedAt: 1,
+    lifecycleRevision: "lifecycle",
+    activeWriterRunId: "run",
+  });
+  hot.transcript.watermark = { generation: "generation", maxSeq: 4 };
+  hot.transcript.version = { generation: "generation", rawSeq: 4, updatedAt: 1 };
+  hot.transcript.anchors = [user, reply];
+  const message = { role: "assistant", content: "answer", __openclaw: { runId: "run" } };
   const tail = {
     coveredAfterSeq: 2,
     events: [
@@ -78,120 +52,91 @@ function fixture() {
   return { hot, user, reply, tail, message, read };
 }
 
-describe("actor transcript anchor projection", () => {
-  it("returns the committed reply and user anchors from a complete suffix", () => {
-    const { user, reply, message, read } = fixture();
-    expect(
-      read({
-        entryIds: ["user"],
-        afterSeq: 2,
-        includeMessagesForRunId: "run",
-        includeMessagePresence: true,
-        includeWatermark: true,
-      }),
-    ).toEqual({
-      anchors: [user, reply],
-      messagePresence: true,
-      watermark: { generation: "generation", maxSeq: 4 },
-      tail: {
-        lastSeq: 4,
-        entries: [
-          { entryId: "user", role: "user", anchor: user },
-          { entryId: "reply", role: "assistant", runId: "run", anchor: reply, message },
-        ],
+it("returns the committed reply and user anchors from a complete suffix", () => {
+  const { user, reply, message, read } = fixture();
+  expect(
+    read({
+      entryIds: ["user"],
+      afterSeq: 2,
+      includeMessagesForRunId: "run",
+      includeMessagePresence: true,
+      includeWatermark: true,
+    }),
+  ).toEqual({
+    anchors: [user, reply],
+    messagePresence: true,
+    watermark: { generation: "generation", maxSeq: 4 },
+    tail: {
+      lastSeq: 4,
+      entries: [
+        { entryId: "user", role: "user", anchor: user },
+        { entryId: "reply", role: "assistant", runId: "run", anchor: reply, message },
+      ],
+    },
+  });
+});
+
+it("uses admitted user bounds while validating the current writer and context", () => {
+  const { hot, user, read } = fixture();
+  expect(
+    read({
+      entryIds: ["user", "reply"],
+      includeMessagePresence: true,
+      contextValidation: { version: hot.transcript.version },
+      replayValidation: {
+        allowInitial: false,
+        expectedLifecycleRevision: "lifecycle",
+        expectedWriterRunId: "run",
+        admission: { ...user, logicalTurnId: "turn", role: "user" },
       },
-    });
+    }),
+  ).toEqual({
+    anchors: [],
+    contextValidated: true,
+    replayValidated: "current",
+    messagePresence: true,
   });
+});
 
-  it("uses admitted user bounds while validating the current writer and context", () => {
-    const { hot, user, read } = fixture();
-    expect(
-      read({
-        entryIds: ["user", "reply"],
-        includeMessagePresence: true,
-        contextValidation: { version: hot.transcript.version },
-        replayValidation: {
-          allowInitial: false,
-          expectedLifecycleRevision: "lifecycle",
-          expectedWriterRunId: "run",
-          admission: { ...user, logicalTurnId: "turn", role: "user" },
-        },
-      }),
-    ).toEqual({
-      anchors: [],
-      contextValidated: true,
-      replayValidated: "current",
-      messagePresence: true,
-    });
-  });
+it("refuses replay when the writer or selected session has changed", () => {
+  const { hot, read } = fixture();
+  const selection = {
+    entryIds: [],
+    replayValidation: { allowInitial: false, expectedWriterRunId: "run" },
+  };
+  for (const current of [
+    { ...hot.entry!, activeWriterRunId: "replacement-run" },
+    { ...hot.entry!, sessionId: "replacement-session" },
+  ]) {
+    expect(() => read(selection, { ...hot, entry: current }, null)).toThrow(
+      SessionTranscriptWriterClaimReboundError,
+    );
+  }
+});
 
-  it("refuses replay when the writer or selected session has changed", () => {
-    const { hot, read } = fixture();
-    for (const current of [
-      { ...hot.entry!, activeWriterRunId: "replacement-run" },
-      { ...hot.entry!, sessionId: "replacement-session" },
-    ]) {
-      expect(() =>
-        read(
-          {
-            entryIds: [],
-            replayValidation: { allowInitial: false, expectedWriterRunId: "run" },
-          },
-          { ...hot, entry: current },
-          null,
-        ),
-      ).toThrow(SessionTranscriptWriterClaimReboundError);
-    }
-  });
+it("rejects a rewritten completed-turn anchor and changed exact replay context", () => {
+  const { hot, user, read } = fixture();
+  for (const selection of [
+    { contextValidation: { through: { ...user, generation: "old-generation" } } },
+    {
+      replayValidation: { allowInitial: false },
+      contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
+    },
+  ]) {
+    expect(() => read({ entryIds: [], ...selection }, hot, null)).toThrow(
+      SessionTranscriptReadFenceError,
+    );
+  }
+});
 
-  it("rejects a rewritten completed-turn anchor and changed exact replay context", () => {
-    const { hot, user, read } = fixture();
-    expect(() =>
-      read(
-        {
-          entryIds: [],
-          contextValidation: { through: { ...user, generation: "old-generation" } },
-        },
-        hot,
-        null,
-      ),
-    ).toThrow(SessionTranscriptReadFenceError);
-    expect(() =>
-      read(
-        {
-          entryIds: [],
-          replayValidation: { allowInitial: false },
-          contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
-        },
-        hot,
-        null,
-      ),
-    ).toThrow(SessionTranscriptReadFenceError);
-  });
-
-  it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the reader", () => {
-    const { hot, tail, read } = fixture();
-    const selection = { entryIds: [], afterSeq: 2, includeMessagesForRunId: "run" };
-    expect(read(selection, hot, { ...tail, coveredAfterSeq: 3 })).toBeUndefined();
-    expect(
-      read(
-        selection,
-        {
-          ...hot,
-          transcript: {
-            ...hot.transcript,
-            watermark: { generation: "generation", maxSeq: 5 },
-            version: { generation: "generation", rawSeq: 5, updatedAt: 2 },
-          },
-        },
-        {
-          ...tail,
-          events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }],
-        },
-      ),
-    ).toBeUndefined();
-    expect(
-      read(selection, { ...hot, transcript: { ...hot.transcript, anchorsState: "unavailable" } }),
-    ).toBeUndefined();
-  });
+it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the reader", () => {
+  const { hot, tail, read } = fixture();
+  const selection = { entryIds: [], afterSeq: 2, includeMessagesForRunId: "run" };
+  expect(read(selection, hot, { ...tail, coveredAfterSeq: 3 })).toBeUndefined();
+  hot.transcript.watermark = { generation: "generation", maxSeq: 5 };
+  hot.transcript.version = { generation: "generation", rawSeq: 5, updatedAt: 2 };
+  const resetTail = { ...tail, events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }] };
+  expect(read(selection, hot, resetTail)).toBeUndefined();
+  hot.transcript.anchorsState = "unavailable";
+  expect(read(selection, hot)).toBeUndefined();
 });

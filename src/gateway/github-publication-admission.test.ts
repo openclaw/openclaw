@@ -54,7 +54,8 @@ async function sharedAdmission(
       agentId: "main",
       claimId,
       runId,
-      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+      owner:
+        surface === "local" ? { kind: "local" } : { kind: "worker", environmentId, ownerEpoch: 2 },
     });
   if (surface !== "local") {
     seedAttachedPlacementEnvironment(database, {
@@ -106,50 +107,63 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it("rejects a stale turn claim after awaited identity verification", async () => {
-    const { read, placements, requestClaim, claimTurn } = await sharedAdmission(
-      "deferred",
-      "environment-1",
-    );
-    const claim = await claimTurn("claim-1", "run-1");
-    const { entered, release } = holdIdentity(await mocks.prepareIdentity());
-    const pending = requestClaim(claim, "publish-stale").catch((error: unknown) => error);
-    let result: unknown;
-    try {
-      await Promise.race([
-        entered.promise,
-        pending.then((error) => {
-          throw error;
-        }),
-      ]);
-      await placements.releaseTurn(claim);
-    } finally {
-      release.resolve();
-      result = await pending;
-    }
+  it.each(["local", "deferred"] as const)(
+    "rejects a stale %s turn claim after awaited identity verification",
+    async (surface) => {
+      const { read, placements, requestClaim, claimTurn } = await sharedAdmission(
+        surface,
+        "environment-1",
+      );
+      const claim = await claimTurn("claim-1", "run-1");
+      const { entered, release } = holdIdentity(await mocks.prepareIdentity());
+      const pending = requestClaim(claim, "publish-stale").catch((error: unknown) => error);
+      let result: unknown;
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then((error) => {
+            throw error;
+          }),
+        ]);
+        await placements.releaseTurn(claim);
+      } finally {
+        release.resolve();
+        result = await pending;
+      }
 
-    expect(result).toBeInstanceOf(Error);
-    expect(result).toMatchObject({
-      message: "GitHub publication lost the live session turn claim after verification.",
-    });
-    expect(read("publish-stale")).toBeUndefined();
-    expect(commands).toEqual([]);
-  });
+      expect(result).toBeInstanceOf(Error);
+      expect(result).toMatchObject({
+        message: "GitHub publication lost the live session turn claim after verification.",
+      });
+      expect(read("publish-stale")).toBeUndefined();
+      expect(commands).toEqual([]);
+    },
+  );
 
-  it("rejects reuse of a worker publication idempotency key by a later turn", async () => {
-    const { placements, requestClaim, claimTurn } = await sharedAdmission(
-      "deferred",
-      "environment-idempotency",
-    );
-    const firstClaim = await claimTurn("claim-first", "run-first");
-    await requestClaim(firstClaim, "reused-worker-call");
-    await placements.releaseTurn(firstClaim);
-    const secondClaim = await claimTurn("claim-second", "run-second");
+  it.each(["local", "deferred"] as const)(
+    "rejects reuse of a %s publication idempotency key by a later turn",
+    async (surface) => {
+      const { placements, requestClaim, claimTurn, read } = await sharedAdmission(
+        surface,
+        "environment-idempotency",
+      );
+      const firstClaim = await claimTurn("claim-first", "run-first");
+      const admitted = await requestClaim(firstClaim, "reused-worker-call");
+      expect(read("reused-worker-call")).toMatchObject({
+        request_id: admitted.requestId,
+        claim_id: "claim-first",
+        run_id: "run-first",
+        status: "requested",
+      });
+      expect(commands).toEqual([]);
+      await placements.releaseTurn(firstClaim);
+      const secondClaim = await claimTurn("claim-second", "run-second");
 
-    await expect(requestClaim(secondClaim, "reused-worker-call")).rejects.toThrow(
-      "idempotency key was reused",
-    );
-  });
+      await expect(requestClaim(secondClaim, "reused-worker-call")).rejects.toThrow(
+        "idempotency key was reused",
+      );
+    },
+  );
 
   it.each([
     ["publish", "agent:main:main", "research", undefined],

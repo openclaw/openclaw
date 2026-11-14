@@ -2,7 +2,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -19,6 +19,7 @@ const acpCoreProtectedSources = [
   path.join(repoRoot, "src", "acp"),
   path.join(repoRoot, "src", "agents", "subagents", "spawn", "acp-spawn.ts"),
   path.join(repoRoot, "src", "auto-reply", "reply", "commands-acp"),
+  path.join(repoRoot, "src", "auto-reply", "reply", "commands-session.ts"),
   path.join(repoRoot, "src", "infra", "outbound", "conversation-id.ts"),
 ];
 
@@ -114,7 +115,11 @@ function collectChannelModuleViolations(sourceFile: ts.SourceFile) {
   visitModuleSpecifiers(
     sourceFile,
     ({ kind, node, specifier, specifierNode }) => {
-      if (channelSegmentRe.test(specifier.replaceAll("\\", "/"))) {
+      // The platform AbortSignal utility is unrelated to the Signal channel.
+      const channelPath = specifier
+        .replaceAll("\\", "/")
+        .replace(/(^|\/)infra\/abort-signal\.[cm]?[jt]s$/, "$1");
+      if (channelSegmentRe.test(channelPath)) {
         const verb =
           kind === "export"
             ? "re-exports"

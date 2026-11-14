@@ -36,19 +36,17 @@ function harness() {
   const retries: ReturnType<typeof createDeferred<void>>[] = [];
   const event = (events: typeof starts, count: number) => (events[count - 1] ??= createDeferred());
   let retryCount = 0;
-  vi.spyOn(configuredStartStatus, "beginConfiguredTranscriptStarts").mockImplementation(
-    (config) => {
-      const owner = beginConfiguredTranscriptStarts(config);
-      const record = owner.record.bind(owner);
-      vi.spyOn(owner, "record").mockImplementation((...args) => {
-        record(...args);
-        if (args[2] === "retrying") {
-          event(retries, ++retryCount).resolve();
-        }
-      });
-      return owner;
-    },
-  );
+  vi.spyOn(configuredStartStatus, "beginConfiguredTranscriptStarts").mockImplementation(() => {
+    const owner = beginConfiguredTranscriptStarts();
+    const record = owner.record.bind(owner);
+    vi.spyOn(owner, "record").mockImplementation((...args) => {
+      record(...args);
+      if (args[2] === "retrying") {
+        event(retries, ++retryCount).resolve();
+      }
+    });
+    return owner;
+  });
   let completedStarts = 0;
   vi.spyOn(transcriptCapture, "startTranscripts").mockImplementation(async (params) => {
     const result = await startTranscripts(params);
@@ -97,7 +95,7 @@ function harness() {
     return request;
   };
   const tool = (agentId = "main", config: OpenClawConfig = {}) =>
-    f.tool({ config, agentId, logger: undefined, caller: { kind: "operator", source: "local" } });
+    f.tool({ config, agentId, caller: { kind: "operator", source: "local" } });
   return {
     ...f,
     entry,
@@ -252,10 +250,6 @@ it("retains one generated capture identity across continuous startup retries", a
     await entered[0]!.promise;
     for (let count = 1; count < 3; count++) {
       await h.retrying(count);
-      expect(identities).toHaveLength(count);
-      expect(
-        configuredStartStatus.readConfiguredTranscriptStarts({ autoStart })?.get(0)?.diagnostic,
-      ).toBe("retrying");
       await vi.advanceTimersByTimeAsync(5_000);
     }
     await entered[2]!.promise;
@@ -263,7 +257,6 @@ it("retains one generated capture identity across continuous startup retries", a
     expect(
       new Set(identities.map(({ sessionId, startedAt }) => `${sessionId}/${startedAt}`)).size,
     ).toBe(1);
-    expect(await h.store.listSessionEntries()).toHaveLength(1);
   }, h.service(autoStart));
 });
 

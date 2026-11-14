@@ -7,8 +7,8 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 
 export function buildRestartLifecycleReplyText(): string {
   return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
@@ -89,9 +89,7 @@ export function resolveReplyOperationAbortReason(
               : undefined));
 }
 
-export function resolveRestartLifecycleError(
-  error: unknown,
-): GatewayDrainingError | CommandLaneClearedError | undefined {
+export function resolveRestartLifecycleError(error: unknown): GatewayDrainingError | undefined {
   const pending = [error];
   const seen = new Set<unknown>();
   for (const candidate of pending) {
@@ -99,7 +97,7 @@ export function resolveRestartLifecycleError(
       continue;
     }
     seen.add(candidate);
-    if (candidate instanceof GatewayDrainingError || candidate instanceof CommandLaneClearedError) {
+    if (candidate instanceof GatewayDrainingError) {
       return candidate;
     }
     if (isFallbackSummaryError(candidate)) {

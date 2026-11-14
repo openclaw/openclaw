@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -14,22 +16,89 @@ import {
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import { managedImageRecordReadOperations } from "../../gateway/managed-image-record-store.kernel.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { commitCronConversationResult } from "../conversation-result.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createCliDeps } from "../isolated-agent.delivery.test-helpers.js";
 import type { CronStoredJob } from "../types.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
+import type { dispatchCronDelivery } from "./delivery-dispatch.js";
 
 export const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=",
   "base64",
 );
 
-export async function createCompletionFixture(
+export function installCompletionChannel(
+  channel: ChannelPlugin["id"],
+  outbound: ChannelPlugin["outbound"],
+  messaging?: ChannelPlugin["messaging"],
+) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channel,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: channel }),
+          outbound,
+          ...(messaging ? { messaging } : {}),
+        },
+      },
+    ]),
+  );
+}
+
+export function expectDeliveryWarning(
+  result: Awaited<ReturnType<typeof dispatchCronDelivery>>,
+  message: unknown,
+) {
+  expect(result).toMatchObject({
+    delivered: true,
+    deliveryError: undefined,
+    diagnostics: {
+      entries: expect.arrayContaining([
+        expect.objectContaining({ source: "delivery", severity: "warn", message }),
+      ]),
+    },
+  });
+}
+
+export function withCompletionFixture(
+  run: (
+    fixture: Awaited<ReturnType<typeof createCompletionFixture>>,
+    state: OpenClawTestState,
+  ) => Promise<void>,
+  sessionTarget: "current" | "isolated" = "current",
+  sessionKey?: string,
+) {
+  return withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await using fixture = await createCompletionFixture(state, sessionTarget, sessionKey);
+    const registry = captureActivePluginRegistrySnapshot();
+    try {
+      await run(fixture, state);
+    } finally {
+      restoreActivePluginRegistrySnapshot(registry);
+    }
+  });
+}
+
+async function createCompletionFixture(
   state: OpenClawTestState,
   sessionTarget: "current" | "isolated" = "current",
   sessionKey = "agent:main:webchat:direct:report",
@@ -95,6 +164,13 @@ export async function createCompletionFixture(
   const records = () => listManagedImageRecordEntries({ stateDir: state.stateDir, sessionKey });
   const database = openOpenClawStateDatabase({ env: state.env });
   const downloads: Array<ReturnType<typeof resolveManagedOutgoingMediaArtifactDownload>> = [];
+  const downloadAttachment = (attachmentId: string) =>
+    resolveManagedOutgoingMediaArtifactDownload({
+      sessionKey,
+      agentId: "main",
+      stateDir: state.stateDir,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+    });
   const readDownloads = async () =>
     (await Promise.allSettled(downloads)).map((result) => {
       if (result.status === "rejected") {
@@ -114,12 +190,7 @@ export async function createCompletionFixture(
       database.db,
     );
     for (const { record } of entries) {
-      const pending = resolveManagedOutgoingMediaArtifactDownload({
-        sessionKey,
-        agentId: "main",
-        stateDir: state.stateDir,
-        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${record.attachmentId}`,
-      });
+      const pending = downloadAttachment(record.attachmentId);
       void pending.catch(() => {});
       downloads.push(pending);
     }
@@ -131,8 +202,9 @@ export async function createCompletionFixture(
     scope,
     records,
     downloads: readDownloads,
+    downloadAttachment,
     updates: () => updates,
-    dispose: async () => {
+    [Symbol.asyncDispose]: async () => {
       unsubscribe();
       await readDownloads();
     },
@@ -144,7 +216,6 @@ export async function createCompletionFixture(
         runStartedAt: params.runStartedAt,
         conversation: { sessionKey, ...generation },
         payloads: params.deliveryPayloads,
-        text: params.synthesizedText,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       }),

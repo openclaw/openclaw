@@ -78,6 +78,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario, expectedStatus 
       "import net from 'node:net';",
       "import path from 'node:path';",
       "import { PassThrough } from 'node:stream';",
+      "import { mock } from 'node:test';",
       `const scenario = ${JSON.stringify(scenario)};`,
       `const ownedPid = ${OWNED_PID}, foreignPid = ${FOREIGN_PID};`,
       "const cancellation = /^(sample|settle)-(sigterm|pipe)$/.exec(scenario);",
@@ -118,16 +119,12 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario, expectedStatus 
       "};",
       "const assertIsolatedEnv = (env, boundary) => {",
       "  if (scenario !== 'inherited-paths') return;",
-      "  assert.equal(env.HOME, configHome);",
-      "  assert.equal(env.USERPROFILE, configHome);",
-      "  assert.equal(env.OPENCLAW_HOME, configHome);",
-      "  assert.equal(env.OPENCLAW_STATE_DIR, path.join(configHome, '.openclaw'));",
-      "  assert.equal(env.OPENCLAW_CONFIG_PATH, path.join(configHome, '.openclaw', 'openclaw.json'));",
-      "  assert.equal(env.XDG_CONFIG_HOME, path.join(configHome, '.config'));",
-      "  assert.equal(env.XDG_CACHE_HOME, path.join(configHome, '.cache'));",
-      "  assert.equal(env.XDG_DATA_HOME, path.join(configHome, '.local', 'share'));",
-      "  assert.equal(env.XDG_STATE_HOME, path.join(configHome, '.local', 'state'));",
-      "  assert.equal(env.XDG_RUNTIME_DIR, path.join(configHome, '.run'));",
+      "  for (const [key, relative] of Object.entries({",
+      "    HOME: '', USERPROFILE: '', OPENCLAW_HOME: '', OPENCLAW_STATE_DIR: '.openclaw',",
+      "    OPENCLAW_CONFIG_PATH: '.openclaw/openclaw.json', XDG_CONFIG_HOME: '.config',",
+      "    XDG_CACHE_HOME: '.cache', XDG_DATA_HOME: '.local/share',",
+      "    XDG_STATE_HOME: '.local/state', XDG_RUNTIME_DIR: '.run',",
+      "  })) assert.equal(env[key], path.join(configHome, relative));",
       "  events.push('isolated:' + boundary);",
       "};",
       "fs.rmSync = (target, options) => {",
@@ -175,6 +172,16 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario, expectedStatus 
       "  }",
       "  signals.push([pid, signal]);",
       "  if (Math.abs(pid) === ownedPid && scenario !== 'ignored-stop') finish(null, signal);",
+      // The managed-child owner tests prove escalation and late-output drainage;
+      // this CLI case owns the failure report and retained resource claim.
+      "  if (scenario === 'ignored-stop' && signal === 'SIGTERM') {",
+      "    mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });",
+      "    setImmediate(async () => {",
+      "      mock.timers.tick(5_000);",
+      "      await new Promise(setImmediate);",
+      "      mock.timers.tick(5_000);",
+      "    });",
+      "  }",
       "  return true;",
       "};",
       "cp.spawn = (_bin, args, options) => {",
@@ -357,6 +364,25 @@ function expectJoined(journal: ReturnType<typeof runGatewayOwnershipFixture>["jo
   expect(journal).toMatchObject({ closed: true, alive: false });
 }
 
+function expectAborted(
+  { result, journal, summary }: ReturnType<typeof runGatewayOwnershipFixture>,
+  count: number,
+  diagnostic: string,
+) {
+  expect(result.stderr).toContain(diagnostic);
+  expect(result.stderr).not.toContain("Unhandled 'error' event");
+  expect(journal).toMatchObject({ closed: true, alive: false, rootExists: false });
+  expect(journal.samples).toEqual(ownedSamples(count));
+  expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
+  expect(summary).toBeUndefined();
+}
+
+function expectFinalized(journal: ReturnType<typeof runGatewayOwnershipFixture>["journal"]) {
+  expectJoined(journal);
+  expect(journal.samples).toHaveLength(3);
+  expect(journal.events).toEqual(["close", "cleanup", "summary"]);
+}
+
 function parseEnv(env: Record<string, string>, args: string[] = []) {
   return withEnv(
     Object.fromEntries(
@@ -404,18 +430,13 @@ describe("check-memory-fd-repro", () => {
           SAMPLE_DELAY_MS: "soon",
           SETTLE_DELAY_MS: "later",
         },
-        [
-          "--files",
-          "20",
-          "--max-workspace-reg-fds",
-          "4",
-          "--invoke-timeout-ms",
-          "1000",
-          "--sample-delay-ms",
-          "0",
-          "--settle-delay-ms",
-          "0",
-        ],
+        Object.entries({
+          "--files": 20,
+          "--max-workspace-reg-fds": 4,
+          "--invoke-timeout-ms": 1000,
+          "--sample-delay-ms": 0,
+          "--settle-delay-ms": 0,
+        }).flatMap(([flag, value]) => [flag, String(value)]),
       ),
     ).toMatchObject({
       fileCount: 20,
@@ -443,21 +464,15 @@ describe("check-memory-fd-repro", () => {
     }
   });
 
-  it("stops parsing options after the argument terminator", () => {
-    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
-      fileCount: 20,
-    });
-
-    expect(parseEnv({ FILES: "17" }, ["--", "--unknown"])).toMatchObject({
-      fileCount: 17,
-    });
-  });
-
-  it("accepts the leading package-manager argument separator", () => {
-    expect(parseArgs(["--", "--files", "20", "--allow-non-darwin"])).toMatchObject({
-      allowNonDarwin: true,
-      fileCount: 20,
-    });
+  it.each([
+    { args: ["--files", "20", "--", "--files", "99"], expected: { fileCount: 20 } },
+    { args: ["--", "--unknown"], env: { FILES: "17" }, expected: { fileCount: 17 } },
+    {
+      args: ["--", "--files", "20", "--allow-non-darwin"],
+      expected: { allowNonDarwin: true, fileCount: 20 },
+    },
+  ])("handles separators in $args", ({ args, env, expected }) => {
+    expect(parseEnv(env ?? {}, args)).toMatchObject(expected);
   });
 
   it("clamps oversized timers and sends the matching memory probe", async () => {
@@ -522,10 +537,7 @@ describe("check-memory-fd-repro", () => {
     const memorySearch = config.memory.search;
 
     expect(validateConfigObject(config)).toMatchObject({ ok: true });
-    expect(memorySearch).toMatchObject({
-      provider: "none",
-      model: "",
-    });
+    expect(memorySearch).toMatchObject({ provider: "none", model: "" });
     expect(memorySearch.store).toEqual({ vector: { enabled: false } });
     expect(memorySearch).not.toHaveProperty("sync");
   });
@@ -594,16 +606,10 @@ describe("check-memory-fd-repro", () => {
     it.each(["stdout-error", "stderr-error"] as const)(
       "diagnoses pipe failure after joining the owned process (%s)",
       (scenario) => {
-        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
+        const run = runGatewayOwnershipFixture(scenario);
         const channel = scenario === "stdout-error" ? "stdout" : "stderr";
-        expect(result.stderr).toContain(`injected Gateway ${channel} read EIO`);
-        expect(result.stderr).not.toContain("Unhandled 'error' event");
-        expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
-        expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
-        expectJoined(journal);
-        expect(journal.events).toEqual(["close", "cleanup"]);
-        expect(journal.rootExists).toBe(false);
-        expect(summary).toBeUndefined();
+        expectAborted(run, 1, `injected Gateway ${channel} read EIO`);
+        expect(run.journal.events).toEqual(["close", "cleanup"]);
       },
     );
 
@@ -615,22 +621,12 @@ describe("check-memory-fd-repro", () => {
     ] as const)(
       "cancels measurement waits and joins the owner ($scenario)",
       ({ scenario, phase, count, diagnostic }) => {
-        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(journal.wait).toEqual({
-          phase,
-          samples: count,
-          requestSettled: phase === "settle",
-        });
-        expect(journal.guardFired).toBe(false);
-        expect(journal.requestSettled).toBe(true);
-        expect(result.stderr).toContain(diagnostic);
-        expect(result.stderr).not.toContain("Unhandled 'error' event");
-        expect(journal.samples).toEqual(ownedSamples(count));
-        expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
-        expectJoined(journal);
-        expect(journal.rootExists).toBe(false);
+        const run = runGatewayOwnershipFixture(scenario);
+        const { journal } = run;
+        expectAborted(run, count, diagnostic);
+        expect(journal.wait).toEqual({ phase, samples: count, requestSettled: phase === "settle" });
+        expect(journal).toMatchObject({ guardFired: false, requestSettled: true });
         expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("cleanup"));
-        expect(summary).toBeUndefined();
       },
     );
 
@@ -689,7 +685,6 @@ describe("check-memory-fd-repro", () => {
 
     const second = updateGatewayReadyOutputState(first, "ghijkl", 8);
     expect(second).toEqual({ tail: "efghijkl", readySeen: false });
-    expect(second.tail).toHaveLength(8);
 
     const defaultBound = updateGatewayReadyOutputState(
       { tail: "", readySeen: false },
@@ -700,11 +695,10 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("keeps readiness after a coalesced noisy chunk truncates the marker", () => {
-    const state = ready("", `[gateway] ready\n${"x".repeat(10_000)}`);
-
-    expect(state.readySeen).toBe(true);
-    expect(state.tail).toHaveLength(64);
-    expect(state.tail).not.toContain("[gateway] ready");
+    expect(ready("", `[gateway] ready\n${"x".repeat(10_000)}`)).toEqual({
+      readySeen: true,
+      tail: "x".repeat(64),
+    });
   });
 
   it("recognizes readiness split across the existing tail and new chunk", () => {
@@ -720,9 +714,7 @@ describe("check-memory-fd-repro", () => {
       "retains a failed summary after owned cleanup fails (%s)",
       (scenario) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expectJoined(journal);
-        expect(journal.samples).toHaveLength(3);
-        expect(journal.events).toEqual(["close", "cleanup", "summary"]);
+        expectFinalized(journal);
         expect(summary).toMatchObject({
           passed: false,
           invoke: { ok: true },
@@ -742,9 +734,7 @@ describe("check-memory-fd-repro", () => {
       const { result, journal, summary } = runGatewayOwnershipFixture(
         "completed-threshold-cleanup-report-error",
       );
-      expectJoined(journal);
-      expect(journal.samples).toHaveLength(3);
-      expect(journal.events).toEqual(["close", "cleanup", "summary"]);
+      expectFinalized(journal);
       expect(journal.attemptedSummary?.passed).toBe(false);
       expect(summary).toBeUndefined();
       expect(result.stderr).toContain("below leak threshold 1");

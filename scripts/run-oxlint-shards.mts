@@ -207,7 +207,22 @@ export function createOxlintShards({
     ? createExtensionOxlintShards({ cwd, env, platform, readDir, chunkSize: extensionChunkSize })
     : [EXTENSIONS_SHARD];
 
-  return [...coreShards, ...extensionShards, SCRIPTS_SHARD];
+  // CI retains --only=scripts even when hosted jobs own core/extension stripes.
+  // Keep test and root-script resource safety there without a second full type-aware lint pass.
+  const rootFiles = listOxlintRootEntries(".", { cwd, readDir }).rootFiles;
+  const resourceTargets = ["test", ...rootFiles];
+  const resourceSafety = {
+    name: "scripts:resource-safety",
+    args: [
+      "--config",
+      "config/oxlint/resource-safety.json",
+      "--openclaw-focused-config",
+      "--ignore-pattern=test/fixtures/oxlint-boundary-guards/**",
+      ...resourceTargets,
+    ],
+    canonicalTargets: resourceTargets,
+  };
+  return [...coreShards, ...extensionShards, SCRIPTS_SHARD, resourceSafety];
 }
 
 function createCoreOxlintShards({

@@ -2,25 +2,29 @@ import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema"
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   normalizeFileToolPathParam,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
-import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import {
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
 } from "./before-tool-call-metadata.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+
+const objectSchema = (properties: Record<string, TSchema>) => ({ type: "object", properties });
 
 async function runToolCall(
   tool: AnyAgentTool,
@@ -53,18 +57,15 @@ async function runToolCall(
     [{ role: "user", content: "Call the tool", timestamp: Date.now() }],
     { systemPrompt: "test", messages: [], tools: [tool] },
     {
-      model: {
+      model: makeProviderModelFixture({
         id: "faux-1",
         name: "Faux",
         provider: "faux",
         api: "faux",
         baseUrl: "http://localhost:0",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128000,
         maxTokens: 1024,
-      },
+      }),
       convertToLlm: (agentMessages) => agentMessages as never,
     },
     (event) => {
@@ -96,16 +97,27 @@ describe("direct process tool schema", () => {
   });
 });
 
+it("returns HTML migration guidance for a retired A2UI call before argument validation blocks execution", async () => {
+  const tool = createShowWidgetTool();
+  const execute = vi.spyOn(tool, "execute");
+  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
+  const { events } = await runToolCall(
+    tool,
+    { title: "Retired widget", kind: "a2ui", widget_code: "{}" },
+    "retired-widget",
+  );
+  expect(execute).not.toHaveBeenCalled();
+  expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+    executionStarted: false,
+    isError: true,
+    errorKind: "argument-validation",
+    result: { content: [{ type: "text", text: 'A2UI widgets were removed; use kind "html"' }] },
+  });
+});
+
 describe("normalizeToolParameterSchema", () => {
   it("keeps normalized tool-schema profile behavior aligned with the cache key", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        sessionKey: {
-          anyOf: [{ type: "string" }, { type: "null" }],
-        },
-      },
-    };
+    const schema = objectSchema({ sessionKey: { anyOf: [{ type: "string" }, { type: "null" }] } });
 
     const defaultSchema = normalizeToolParameterSchema(schema, {
       modelProvider: "openai-compatible",
@@ -118,24 +130,16 @@ describe("normalizeToolParameterSchema", () => {
     });
 
     expect(defaultSchema).toEqual(schema);
-    expect(mixedCaseGeminiProfileSchema).toEqual({
-      type: "object",
-      properties: {
-        sessionKey: { type: "string" },
-      },
-    });
+    expect(mixedCaseGeminiProfileSchema).toEqual(objectSchema({ sessionKey: { type: "string" } }));
   });
 
   it("applies llama.cpp cleaning only for the explicit tool-schema profile", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        declarationKey: { type: "string", pattern: "^\\S+$", maxLength: 200 },
-        safe: { type: "string", maxLength: 1999 },
-        boundary: { type: "string", maxLength: 2000 },
-        script: { type: "string", minLength: 1, maxLength: 65_536 },
-      },
-    };
+    const schema = objectSchema({
+      declarationKey: { type: "string", pattern: "^\\S+$", maxLength: 200 },
+      safe: { type: "string", maxLength: 1999 },
+      boundary: { type: "string", maxLength: 2000 },
+      script: { type: "string", minLength: 1, maxLength: 65_536 },
+    });
 
     expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(schema);
     expect(
@@ -143,40 +147,29 @@ describe("normalizeToolParameterSchema", () => {
         modelProvider: "openai-compatible",
         modelCompat: { toolSchemaProfile: "llamacpp" },
       }),
-    ).toEqual({
-      type: "object",
-      properties: {
+    ).toEqual(
+      objectSchema({
         declarationKey: { type: "string", maxLength: 200 },
         safe: { type: "string", maxLength: 1999 },
         boundary: { type: "string" },
         script: { type: "string", minLength: 1 },
-      },
-    });
+      }),
+    );
   });
 
   it("applies explicit unsupported keyword stripping after Gemini cleanup", () => {
     expect(
       normalizeToolParameterSchema(
-        {
-          type: "object",
-          properties: {
-            count: {
-              anyOf: [{ type: "integer", vendorOnly: true }, { type: "null" }],
-            },
-          },
-        },
+        objectSchema({
+          count: { anyOf: [{ type: "integer", vendorOnly: true }, { type: "null" }] },
+        }),
         {
           modelProvider: "jjcc",
           modelId: "gemini-3.1-pro-preview",
           modelCompat: { unsupportedToolSchemaKeywords: ["vendorOnly"] },
         },
       ),
-    ).toEqual({
-      type: "object",
-      properties: {
-        count: { type: "integer" },
-      },
-    });
+    ).toEqual(objectSchema({ count: { type: "integer" } }));
   });
 
   it("rejects noncanonical array indices in local $ref paths", () => {
@@ -209,14 +202,24 @@ function makeTool(parameters: TSchema, overrides: Partial<AnyAgentTool> = {}): A
   };
 }
 
-describe("normalizeToolParameters", () => {
+function finalize(tool: AnyAgentTool) {
+  const [normalized] = finalizeAgentTools({
+    tools: [tool],
+    hookContext: {},
+    wrapBeforeToolCallHook: false,
+  });
+  assert.ok(normalized);
+  return normalized;
+}
+
+describe("finalized tool parameter schemas", () => {
   it("keeps deeply nested plugin tools callable through argument validation", async () => {
     let metadata: TSchema = { type: "string" };
     for (let depth = 0; depth < 5_000; depth++) {
       metadata = { type: "object", properties: { next: metadata } };
     }
     const execute = vi.fn().mockResolvedValue({ content: [], details: { called: true } });
-    const normalized = normalizeToolParameters(
+    const normalized = finalize(
       makeTool(
         {
           type: "object",
@@ -240,7 +243,7 @@ describe("normalizeToolParameters", () => {
     const hookContext = { agentId: "main", sessionId: "session-before-normalize" };
     const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
 
-    const normalized = normalizeToolParameters(wrapped);
+    const normalized = finalize(wrapped);
     expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
     expect(getBeforeToolCallSourceTool(normalized)).toBe(source);
     expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
@@ -255,7 +258,7 @@ describe("normalizeToolParameters", () => {
       { name: "query" },
     );
 
-    const normalized = normalizeToolParameters(tool);
+    const normalized = finalize(tool);
 
     expect(normalized.prepareArguments).toBeUndefined();
     expect(() =>
@@ -273,7 +276,7 @@ describe("normalizeToolParameters", () => {
       content: [{ type: "text", text: "wiki ok" }],
       details: { ok: true },
     });
-    const normalized = normalizeToolParameters(
+    const normalized = finalize(
       makeTool({ type: "object", properties: {}, required: [] }, { name: "wiki_lint", execute }),
     );
     const tool = wrapToolWithBeforeToolCallHook(normalized, {
@@ -334,11 +337,11 @@ describe("assertRequiredParams", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("preserves edit replacement payloads while cleaning the path", async () => {
+  it("preserves whitespace edit payloads while cleaning the path", async () => {
     const execute = vi.fn(async (_id, args) => args);
     const tool = makeValidatedFileTool("edit", execute);
 
-    const edits = [{ oldText: "literal old</arg_value>>", newText: "literal new</arg_value>>" }];
+    const edits = [{ oldText: "\n\n\n\n", newText: "literal new</arg_value>>" }];
     await tool.execute("id", { path: "notes.docxodex</arg_value>>>", edits });
 
     expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);

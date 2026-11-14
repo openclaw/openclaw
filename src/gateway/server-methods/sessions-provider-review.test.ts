@@ -5,8 +5,9 @@ import {
   readProviderReviewAcknowledgment,
   retireProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { projectSessionProviderReview } from "../session-provider-review-projection.js";
+import { buildGatewaySessionRow } from "../session-utils-row.js";
 import type { handleProviderReviewContinuationChat as ReviewHandoff } from "./chat-send-handler.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -116,35 +117,37 @@ afterEach(() => {
 });
 
 it("hands literal input and host capability to chat admission", async () => {
-  await coreGatewayHandlers["sessions.providerReview.continue"]!(request());
-  expect(mocks.handoff).toHaveBeenCalledTimes(1);
-  expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
-  const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0]!;
-  expect(chatOptions.params).toEqual({
-    ...target,
-    message,
-    idempotencyKey: "next-run",
-    deliver: false,
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await coreGatewayHandlers["sessions.providerReview.continue"]!(request());
+    expect(mocks.handoff).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseAuthorization).toHaveBeenCalledTimes(1);
+    const [chatOptions, acknowledgment] = mocks.handoff.mock.calls[0]!;
+    expect(chatOptions.params).toEqual({
+      ...target,
+      message,
+      idempotencyKey: "next-run",
+      deliver: false,
+    });
+    expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
+    await loadOrCreateProcessDeviceIdentityAsync();
+    await expect(
+      normalizeChatSendRequest({
+        params: chatOptions.params,
+        client: chatOptions.client,
+        providerReviewAcknowledgment: acknowledgment,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        inboundMessage: message,
+        rawMessage: message,
+        suppressCommandInterpretation: true,
+        stopCommand: false,
+        turnKind: "main",
+      },
+    });
+    expect(entry.providerReview?.id).toBe("review-a");
   });
-  expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
-  await loadOrCreateProcessDeviceIdentityAsync();
-  await expect(
-    normalizeChatSendRequest({
-      params: chatOptions.params,
-      client: chatOptions.client,
-      providerReviewAcknowledgment: acknowledgment,
-    }),
-  ).resolves.toMatchObject({
-    ok: true,
-    value: {
-      inboundMessage: message,
-      rawMessage: message,
-      suppressCommandInterpretation: true,
-      stopCommand: false,
-      turnKind: "main",
-    },
-  });
-  expect(entry.providerReview?.id).toBe("review-a");
 });
 
 it.each(["review", "generation", "authority"])(
@@ -174,7 +177,23 @@ it.each(["client-supplied authority", "synthetic UI", "ordinary API"])(
       options.client!.internal = { syntheticClient: true };
     } else if (source === "ordinary API") {
       Object.assign(entry.providerReview!, { runtimeId: "openclaw", api: "openai-responses" });
-      expect(projectSessionProviderReview(entry, sessionKey)).toEqual({
+      expect(
+        buildGatewaySessionRow({
+          cfg: {},
+          agentId: "main",
+          key: sessionKey,
+          entry,
+          store: { [sessionKey]: entry },
+          storePath: "",
+          now: 1,
+          preparedAcpMeta: null,
+          preparedRuntimeOwnership: null,
+          preparedModelMetadata: null,
+          modelCatalog: [],
+          skipTranscriptUsageFallback: true,
+          lightweightListRow: true,
+        }).providerReview,
+      ).toEqual({
         id: "review-a",
         runId: "failed-run",
         explanation: "Review the proposed operation.",

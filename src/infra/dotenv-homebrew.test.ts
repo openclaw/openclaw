@@ -66,7 +66,7 @@ describe("workspace .env Homebrew controls", () => {
       setTestEnvValue(shellKey, "https://shell.example/api");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
       const childEnv = resolveCommandEnv({ argv: ["brew", "install", "uv"] });
 
       expect(childEnv[shellKey]).toBe("https://shell.example/api");

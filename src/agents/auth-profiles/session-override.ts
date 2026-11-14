@@ -1,6 +1,9 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  matchesSessionAuthProfileOverrideSnapshot,
+  resolveSessionAuthProfileOverrideSource,
+} from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -14,7 +17,6 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
-import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -31,9 +33,9 @@ import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js"
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { resolveSessionAuthProfilePreference } from "./selection-preference.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import {
   ensureAuthProfileStoreAsync,
@@ -98,18 +100,6 @@ function applySessionAuthProfileOverrideState(
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
-function matchesSessionAuthProfileOverrideSnapshot(
-  entry: SessionEntry,
-  snapshot: SessionAuthProfileOverrideSnapshot,
-): boolean {
-  return (
-    entry.sessionId === snapshot.sessionId &&
-    entry.authProfileOverride === snapshot.authProfileOverride &&
-    entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
-  );
-}
-
 function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): void {
   for (const key of Object.keys(entry)) {
     if (!Object.hasOwn(latest, key)) {
@@ -119,16 +109,11 @@ function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): voi
   Object.assign(entry, latest);
 }
 
-async function persistSessionAuthProfileOverrideState(params: {
-  agentId: string;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  state: SessionAuthProfileOverrideState;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
-}): Promise<SessionEntry | undefined> {
+async function persistSessionAuthProfileOverrideState(
+  params: Parameters<typeof clearSessionAuthProfileOverride>[0] & {
+    state: SessionAuthProfileOverrideState;
+  },
+): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
   params.assertCommitAllowed?.();
   const updatedAt = Date.now();
@@ -212,6 +197,45 @@ function isProfileForProvider(params: {
   );
 }
 
+/** Shared compatibility decision; callers decide whether to persist a cleared pin. */
+export function resolveSessionAuthProfileOverrideCompatibility(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  entry: SessionEntry;
+  store: AuthProfileStore;
+  provider: string;
+  providers: readonly string[];
+}): "available" | "unavailable" | "personal-unavailable" | "incompatible" {
+  const { cfg, agentDir, entry, store, provider, providers } = params;
+  const profileId = entry.authProfileOverride?.trim();
+  if (!profileId) {
+    return "incompatible";
+  }
+  if (
+    !store.profiles[profileId] &&
+    !providers.some((candidateProvider) =>
+      isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider: candidateProvider, profileId }),
+    )
+  ) {
+    if (isUserModelAuthProfileId(profileId)) {
+      return "personal-unavailable";
+    }
+    return providers.some((candidateProvider) =>
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        cfg,
+        agentDir,
+        entry,
+        store,
+        currentProvider: entry.providerOverride ?? provider,
+        provider: candidateProvider,
+      }),
+    )
+      ? "unavailable"
+      : "incompatible";
+  }
+  return isProfileForProvider({ cfg, providers, profileId, store }) ? "available" : "incompatible";
+}
+
 function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
   return normalizeUniqueTrimmedStringList(
     acceptedProviderIds?.length ? acceptedProviderIds : [provider],
@@ -285,22 +309,11 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-async function resolveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  agentId: string;
-  agentDir: string;
-  reader?: SessionEntryCohortReader;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  isNewSession: boolean;
-  acceptedProviderIds?: string[];
-  requesterProfileId?: string;
-}): Promise<SessionAuthProfileOverrideResult> {
+async function resolveSessionAuthProfileOverride(
+  params: Omit<Parameters<typeof resolveSessionAuthSelection>[0], "configuredProfileId"> & {
+    acceptedProviderIds?: string[];
+  },
+): Promise<SessionAuthProfileOverrideResult> {
   const {
     agentId,
     cfg,
@@ -314,6 +327,17 @@ async function resolveSessionAuthProfileOverride(params: {
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return { profileId: sessionEntry?.authProfileOverride, store: undefined };
+  }
+
+  let current = sessionEntry.authProfileOverride?.trim();
+  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
+  if (
+    current &&
+    (source === "user" || source === "user-link") &&
+    params.nativeAuthProfileIds?.includes(current)
+  ) {
+    // Native pins belong to the admitted runtime; missing stored credentials do not invalidate them.
+    return { profileId: current, store: undefined };
   }
 
   const hasConfiguredAuthProfiles =
@@ -342,9 +366,6 @@ async function resolveSessionAuthProfileOverride(params: {
     }),
   );
   const order = [...new Set(orderResolutions.flatMap((resolution) => resolution.profileIds))];
-  let current = sessionEntry.authProfileOverride?.trim();
-  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
-
   const overrideTarget = {
     agentId,
     sessionEntry,
@@ -354,54 +375,35 @@ async function resolveSessionAuthProfileOverride(params: {
     assertCommitAllowed: params.assertCommitAllowed,
   };
 
-  const currentProfileId = current;
-  if (
-    currentProfileId &&
-    !store.profiles[currentProfileId] &&
-    !providers.some((candidateProvider) =>
-      isConfiguredAwsSdkAuthProfileForProvider({
-        cfg,
-        provider: candidateProvider,
-        profileId: currentProfileId,
-      }),
-    )
-  ) {
-    if (isUserModelAuthProfileId(currentProfileId)) {
-      // A missing personal owner must not let the next participant claim this session's billing.
-      throw new Error(
-        "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
-      );
-    }
-    if (
-      providers.some((candidateProvider) =>
-        shouldPreserveUnavailableSessionAuthProfileOverride({
-          cfg,
-          agentDir,
-          entry: sessionEntry,
-          store,
-          currentProvider: sessionEntry.providerOverride ?? provider,
-          provider: candidateProvider,
-        }),
-      )
-    ) {
-      authProfilesLog.warn(
-        "selected session auth profile is unavailable; explicit pin remains strict",
-        {
-          event: "session_auth_profile_unavailable",
-          sessionKey,
-          profileId: currentProfileId,
-          recovery:
-            "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
-          tags: ["auth_profiles", "session_recovery"],
-        },
-      );
-      return { profileId: currentProfileId, store };
-    }
-    await clearSessionAuthProfileOverride(overrideTarget);
-    current = undefined;
+  const compatibility = resolveSessionAuthProfileOverrideCompatibility({
+    cfg,
+    agentDir,
+    entry: sessionEntry,
+    store,
+    provider,
+    providers,
+  });
+  if (compatibility === "personal-unavailable") {
+    // A missing personal owner must not let the next participant claim this session's billing.
+    throw new Error(
+      "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
+    );
   }
-
-  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
+  if (compatibility === "unavailable") {
+    authProfilesLog.warn(
+      "selected session auth profile is unavailable; explicit pin remains strict",
+      {
+        event: "session_auth_profile_unavailable",
+        sessionKey,
+        profileId: current,
+        recovery:
+          "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
+        tags: ["auth_profiles", "session_recovery"],
+      },
+    );
+    return { profileId: current, store };
+  }
+  if (current && compatibility === "incompatible") {
     await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
@@ -496,7 +498,7 @@ async function resolveSessionAuthProfileOverride(params: {
           })
           .find(
             (profileId) =>
-              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              store.usageStats?.[profileId]?.lastRateLimitAt !== undefined &&
               !isProfileUnavailableForSessionModel(profileId),
           )
       : undefined;
@@ -590,6 +592,8 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
+  /** Native login identities admitted by the prepared runtime's core-owned policy. */
+  nativeAuthProfileIds?: readonly string[];
   agentDir: string;
   reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
@@ -616,25 +620,22 @@ export async function resolveSessionAuthSelection(params: {
       ? (resolveSessionAuthProfileOverrideSource(params.sessionEntry) ?? "auto")
       : "auto"
     : undefined;
-  // Person-linked pins carry user strength and outrank the agent's static @profile.
-  const rotatedPinnedProfileId =
-    rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
-  const configuredProfile = splitTrailingAuthProfile(
-    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
-  ).profile;
-  const defaultModel = configuredProfile
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : undefined;
-  const configuredProfileId =
-    params.configuredProfileId?.trim() ||
-    (defaultModel &&
-    resolveModelCatalogIdentityKey({ provider: params.provider, id: modelId }) ===
-      resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
-      ? configuredProfile
-      : undefined);
-  const profileId = rotatedPinnedProfileId ?? configuredProfileId ?? rotatedProfileId;
-  if (!profileId) {
+  const preference = resolveSessionAuthProfilePreference({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId,
+    configuredProfileId: params.configuredProfileId,
+    sessionProfileId: rotatedProfileId,
+    sessionProfileSource: rotatedSource,
+  });
+  if (!preference) {
     return undefined;
+  }
+  const { profileId, source } = preference;
+  if (params.nativeAuthProfileIds?.includes(profileId)) {
+    // Apply pin/default precedence first; native login identities are not stored credentials.
+    return { profileId, source, routeRequirement: undefined };
   }
   // A session pin overrides the configured account; that unused personal credential
   // does not belong in this operation's private auth view or its validation.
@@ -646,8 +647,7 @@ export async function resolveSessionAuthSelection(params: {
         })
       : store;
   if (
-    !rotatedPinnedProfileId &&
-    profileId === configuredProfileId &&
+    preference.origin === "model" &&
     !isProfileForProvider({
       cfg,
       providers: uniqueProviders(params.provider),
@@ -662,13 +662,11 @@ export async function resolveSessionAuthSelection(params: {
         modelId,
       });
     }
-    throw new Error(
-      `Auth profile "${configuredProfileId}" is not configured for ${params.provider}.`,
-    );
+    throw new Error(`Auth profile "${profileId}" is not configured for ${params.provider}.`);
   }
   return {
     profileId,
-    source: rotatedPinnedProfileId || configuredProfileId ? "user" : "auto",
+    source,
     routeRequirement: profileAuthRequirement({ cfg, store: authStore, profileId }),
   };
 }

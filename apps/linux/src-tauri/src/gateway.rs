@@ -150,6 +150,9 @@ struct DashboardResponse {
 }
 
 pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::status(cli);
+    }
     let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
@@ -228,7 +231,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     })
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {
@@ -264,6 +267,9 @@ fn wait_until_reachable(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
 }
 
 pub fn act(cli: &OpenClawCli, action: GatewayAction) -> Result<GatewaySnapshot, String> {
+    if crate::test_profile::enabled() {
+        return crate::test_profile::action(cli, action);
+    }
     run_service_command(cli, action.command())?;
     if matches!(action, GatewayAction::Stop) {
         return status(cli);

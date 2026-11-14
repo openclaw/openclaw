@@ -6,14 +6,10 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../infra/sqlite-worker-operation-admission.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import type {
-  WorkerOperationContext,
-  WorkerOperationHandlers,
-  WorkerOperations,
+  createCommittedWorkerMutation,
+  type WorkerWriteOperationContext,
+  type WorkerOperationHandlers,
+  type WorkerOperations,
 } from "../state/worker-operation-registry.js";
 import type {
   ManagedImageRecord,
@@ -247,34 +243,24 @@ function mutateManagedImageCleanupInDatabase(
   return true;
 }
 
-function mutation<Input>(type: string, apply: (db: EngineConnection, input: Input) => boolean) {
-  return (input: Input, { open }: WorkerOperationContext) =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = apply(db, input);
-        const receipt = { type, result };
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
-        deferSqliteWorkerCommitReceipt(db, receipt);
-        return result;
-      },
-      { database: open() },
-      { operationLabel: type },
-    );
-}
-
 export const managedImageRecordOperations = {
-  "managedImages.insert": mutation("managedImages.insert", insertManagedImageRecordInDatabase),
-  "managedImages.attach": mutation("managedImages.attach", attachManagedImageRecordInDatabase),
-  "managedImages.claimCleanup": mutation(
+  "managedImages.insert": createCommittedWorkerMutation(
+    "managedImages.insert",
+    insertManagedImageRecordInDatabase,
+  ),
+  "managedImages.attach": createCommittedWorkerMutation(
+    "managedImages.attach",
+    attachManagedImageRecordInDatabase,
+  ),
+  "managedImages.claimCleanup": createCommittedWorkerMutation(
     "managedImages.claimCleanup",
     (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "claim"),
   ),
-  "managedImages.deleteClaimed": mutation(
+  "managedImages.deleteClaimed": createCommittedWorkerMutation(
     "managedImages.deleteClaimed",
     (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "delete"),
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export const managedImageRecordReadOperations = {
   "managedImages.read": ({ attachmentId }: { attachmentId: string }, db) => ({
