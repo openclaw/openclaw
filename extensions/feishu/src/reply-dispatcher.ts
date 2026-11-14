@@ -260,6 +260,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let previewText = "";
   let previewBlockOffset = 0;
+  let closedPreviewText = "";
+  let undoProvisionalCredit: (() => void) | undefined;
+  let previewEpoch = 0;
   let reasoningText = "";
   let statusLine = "";
   let modelWaitLine = "";
@@ -293,6 +296,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   type PendingStreamingDelivery = {
     result: FeishuReplyDeliveryResult;
     infoKind?: string;
+    epoch: number;
+    previewCovered?: { text: string; epoch: number; from: number };
     resolve: (result: FeishuReplyDeliveryResult) => void;
     reject: (error: unknown) => void;
   };
@@ -325,14 +330,148 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta") => {
+  // The opener line of a fenced block that text leaves open, using core's fence rules on
+  // CommonMark lines: CRLF, CR and LF end a line, and a line or paragraph separator does not.
+  const openFence = (text: string) => {
+    let open: { line: string; char: string; size: number } | undefined;
+    for (const line of text.split(/\r\n?|\n/u)) {
+      const [, marker = "", info = ""] = /^ {0,3}(`{3,}|~{3,})(.*)$/su.exec(line) ?? [];
+      const char = marker.charAt(0);
+      if (open && char === open.char && marker.length >= open.size && !/[^ \t]/u.test(info)) {
+        open = undefined;
+      } else if (!open && marker && !(char === "`" && info.includes("`"))) {
+        open = { line, char, size: marker.length };
+      }
+    }
+    return open?.line;
+  };
+
+  // A closed card keeps its preview; the next card continues the same message. Only the
+  // separator after the closed text is dropped, never indentation or the first snapshot.
+  // A card cut inside a fenced block reopens it, so the continuation stays code.
+  const continuedPreview = (text: string, from = closedPreviewText) => {
+    if (!from || !text.startsWith(from)) {
+      return text;
+    }
+    const rest = text
+      .slice(from.length)
+      .replace(/[\r\n]$/u.test(from) ? /^\s*[\r\n]/u : /^\s*[\r\n]|^[^\S\r\n]+/u, "");
+    const opener = rest && openFence(from);
+    const at = text.length - rest.length;
+    const lineEnd = at + text.slice(at).search(/[\r\n]|$/u);
+    // A continuation that starts with or completes the closing fence drops it instead of reopening.
+    if (opener && !openFence(text.slice(0, lineEnd))) {
+      const lineStart =
+        Math.max(text.lastIndexOf("\n", at - 1), text.lastIndexOf("\r", at - 1)) + 1;
+      return openFence(text.slice(0, lineStart))
+        ? rest.replace(/^[^\r\n]*(?:\s*[\r\n])?/u, "")
+        : rest;
+    }
+    // A card cut inside its opening line finishes that line from the new snapshot.
+    const openerStart = Math.max(from.lastIndexOf("\n"), from.lastIndexOf("\r")) + 1;
+    const openerEnd = from.length + text.slice(from.length).search(/[\r\n]|$/u);
+    if (
+      opener &&
+      !openFence(from.slice(0, openerStart)) &&
+      /\S/u.test(text.slice(from.length, openerEnd))
+    ) {
+      const head = text.slice(openerStart, openerEnd);
+      const code = text.slice(openerEnd).replace(/^(?:\r\n?|\n)/u, "");
+      return code ? `${head}\n${code}` : head;
+    }
+    return opener ? `${opener}\n${rest}` : rest;
+  };
+
+  const setClosedPreview = (next: string, epoch = previewEpoch) => {
+    // A new assistant message restarts the preview; late settlements belong to the old one.
+    if (next === closedPreviewText || epoch !== previewEpoch) {
+      return;
+    }
+    const shown = `${snapshotBaseText}${continuedPreview(previewText)}`;
+    closedPreviewText = next;
+    // Rebuild only the preview part of an open card. A final owns its card and stays as delivered.
+    if (
+      !hasStreamingFinalText &&
+      lastPartial &&
+      (streaming || streamingStartPromise) &&
+      streamText.startsWith(shown)
+    ) {
+      const appended = streamText.slice(shown.length);
+      streamText = `${snapshotBaseText}${continuedPreview(previewText)}${appended}`;
+      flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    }
+  };
+
+  // Within a subscription, core's block index runs at previewEpoch plus a learned offset.
+  // A restarted subscription can reuse an index, so the index alone is not a unique source ID.
+  let sourceIndexOffset = 0;
+  // When no earlier text was observed, prefer a covered lower index as a restart.
+  // A previewless earlier message's late block is ambiguous, so this matches main.
+  let earlierText = false;
+  let epochText = false;
+  const isCurrentSource = (source: number | undefined, text: string) => {
+    if (source === undefined) {
+      return true;
+    }
+    const current = previewText.slice(previewBlockOffset);
+    if (
+      !earlierText &&
+      source < previewEpoch + sourceIndexOffset &&
+      (current.startsWith(text) || current.trimStart().startsWith(text))
+    ) {
+      sourceIndexOffset = source - previewEpoch;
+    }
+    sourceIndexOffset = Math.max(sourceIndexOffset, source - previewEpoch);
+    return source - sourceIndexOffset === previewEpoch;
+  };
+
+  // An accepted earlier copy leaves a matching current preview occurrence free to cover its block.
+  const earlierRests = new Map<number, string>();
+  let openEarlierRest = "";
+  let openEarlierEpoch = -1;
+  let openEarlierSource = -1;
+  let openEarlierLearned = false;
+  let openEarlierShown = 0;
+  const consumeEarlierBlock = (text: string, source: number | undefined) => {
+    const earlierRest = source === undefined ? "" : (earlierRests.get(source) ?? "");
+    const rest = earlierRest.startsWith(text) ? earlierRest : earlierRest.trimStart();
+    const current = previewText.slice(previewBlockOffset);
+    const currentRest = current.startsWith(text) ? current : current.trimStart();
+    const currentMatches = currentRest.startsWith(text);
+    if (source !== undefined && rest.startsWith(text)) {
+      earlierRests.set(source, rest.slice(text.length));
+      if (currentMatches) {
+        queueStreamingUpdate(text, "delta");
+      }
+      return currentMatches;
+    }
+    const openRest = openEarlierRest.startsWith(text)
+      ? openEarlierRest
+      : openEarlierRest.trimStart();
+    const sameOpen = source === openEarlierSource && openEarlierEpoch + 1 === previewEpoch;
+    if (!hasStreamingFinalText && sameOpen && openRest.startsWith(text)) {
+      // The copy advances past each block it heads, whether that block is suppressed or appended.
+      openEarlierRest = openRest.slice(text.length);
+      const shown = previewText.slice(Math.max(previewBlockOffset, openEarlierShown));
+      const shownRest = shown.startsWith(text) ? shown : shown.trimStart();
+      // Before a cursor is known the block appends, as an unmatched block would.
+      if (openEarlierLearned && shownRest.startsWith(text)) {
+        openEarlierShown = previewText.length - shownRest.length + text.length;
+        return true;
+      }
+      openEarlierLearned = true;
+    }
+    return false;
+  };
+
+  const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta" | "append") => {
     if (!nextText) {
       return;
     }
     if (mode === "snapshot" && nextText === lastPartial) {
       return;
     }
-    if (mode === "delta") {
+    if (mode !== "snapshot") {
       // Consume completed blocks in preview order, never by suffix overlap.
       let offset = previewBlockOffset;
       // Sentence chunks can omit the gap retained in the cumulative preview.
@@ -341,14 +480,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           offset++;
         }
       }
-      if (previewText.startsWith(nextText, offset)) {
+      if (mode === "delta" && previewText.startsWith(nextText, offset)) {
         previewBlockOffset = offset + nextText.length;
         return;
       }
       streamText = `${streamText}${nextText}`;
     } else {
       previewText = nextText;
-      streamText = `${snapshotBaseText}${nextText}`;
+      epochText = true;
+      streamText = `${snapshotBaseText}${continuedPreview(nextText)}`;
     }
     lastPartial = nextText;
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
@@ -415,6 +555,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const resetStreamingState = () => {
+    openEarlierRest = "";
     streaming = null;
     streamingStartPromise = null;
     partialUpdateQueue = Promise.resolve();
@@ -442,6 +583,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       disposition,
       content: finalizedAnswerText,
     };
+    const closingPreview = previewText;
+    const closingEpoch = previewEpoch;
+    const closingBase = snapshotBaseText;
+    const priorClosedPreview = closedPreviewText;
+    if (disposition === "closed" && streamingToClose.isActive()) {
+      // Provisional, so a card opened while this close is in flight continues after it.
+      // The settled result below confirms or corrects it.
+      closedPreviewText = closingPreview;
+      undoProvisionalCredit = () => setClosedPreview(priorClosedPreview, closingEpoch);
+    }
     resetStreamingState();
     try {
       if (startPromiseToClose) {
@@ -472,6 +623,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (result.visibleReplySent) {
           visibleReplySent = true;
         }
+        if (disposition === "closed") {
+          // Only text the provider accepted is shown; a rejected suffix stays for the next card.
+          const accepted = finalizationError === undefined || result.content === text;
+          const retained =
+            (finalizedReasoningText
+              ? result.content?.split("\n\n---\n\n").pop()
+              : result.content) ?? "";
+          // The frozen base belongs to an earlier message; only the receipt past it credits this one.
+          const answer = retained.startsWith(closingBase) ? retained.slice(closingBase.length) : "";
+          const body = continuedPreview(closingPreview, priorClosedPreview);
+          setClosedPreview(
+            result.visibleReplySent && accepted
+              ? closingPreview
+              : result.visibleReplySent && answer && body.startsWith(answer)
+                ? closingPreview.slice(0, closingPreview.length - body.length + answer.length)
+                : priorClosedPreview,
+            closingEpoch,
+          );
+        }
         // Only a retained final can satisfy a duplicate text payload. Requested removal
         // and actual accepted content are separate facts when provider cleanup fails.
         if (
@@ -489,11 +659,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         ...(finalizationError === undefined ? {} : { error: finalizationError }),
       };
     } catch (error: unknown) {
+      if (disposition === "closed") {
+        setClosedPreview(priorClosedPreview, closingEpoch);
+      }
       return {
         ...outcome,
         result: noVisibleFeishuReplyDelivery,
         error,
       };
+    } finally {
+      undoProvisionalCredit = undefined;
     }
   };
 
@@ -518,11 +693,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deferStreamingDelivery = (
     result: FeishuReplyDeliveryResult,
     infoKind?: string,
+    previewCovered?: { text: string; epoch: number; from: number },
   ): FeishuReplyDeliveryResultWithFinalization => {
     const { promise: finalization, resolve, reject } = createDeferred<FeishuReplyDeliveryResult>();
     pendingStreamingDeliveries.push({
       result,
+      epoch: previewCovered ? previewEpoch : -1,
       ...(infoKind ? { infoKind } : {}),
+      ...(previewCovered ? { previewCovered } : {}),
       resolve,
       reject,
     });
@@ -749,6 +927,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     FeishuReplyDeliveryResult,
     Map<string, Promise<FeishuReplyDeliveryResult>>
   >();
+  const creditedRecoveries = new WeakSet<object>();
+  // The message whose covered block first met a recovery (-1 if uncovered); only it may credit.
+  const recoveryEpochs = new WeakMap<object, number>();
 
   const ensureVisibleStreamingDelivery = async (
     result: FeishuReplyDeliveryResult | undefined,
@@ -806,6 +987,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 : { disposition: "closed", result: noVisibleFeishuReplyDelivery };
           for (const completion of completions) {
             const deliveryError = closeOutcome.error;
+            // Equal blocks share one recovery that shows a single copy. It moves the checkpoint once,
+            // and never over a preview copy while an equal block without preview needs it.
+            const advanceOnce = (recovery: object | undefined, next: string) => {
+              if (
+                recovery &&
+                recoveryEpochs.get(recovery) === completion.epoch &&
+                !creditedRecoveries.has(recovery) &&
+                !completions.some(
+                  (other) =>
+                    other !== completion &&
+                    !other.previewCovered &&
+                    other.result.content === completion.result.content,
+                )
+              ) {
+                creditedRecoveries.add(recovery);
+                setClosedPreview(next, completion.previewCovered?.epoch);
+              }
+            };
             if (closeOutcome.disposition === "discarded") {
               const retained = mergeFeishuReplyDeliveryResults(
                 [closeOutcome.result, completion.result],
@@ -825,10 +1024,43 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 completion.result.content,
                 completion.infoKind,
               );
+              if (providerFinalized && !recoveryEpochs.has(providerFinalized)) {
+                recoveryEpochs.set(providerFinalized, completion.epoch);
+              }
+              // A static recovery delivered this block, so the preview it consumed is shown.
+              const covered = completion.previewCovered;
+              if (
+                providerFinalized !== closeOutcome.result &&
+                covered?.text.startsWith(closedPreviewText) &&
+                covered.text.length > closedPreviewText.length &&
+                // Nothing before this block may be unshown, such as a block whose recovery failed.
+                covered.from <= closedPreviewText.length
+              ) {
+                advanceOnce(providerFinalized, covered.text);
+              }
             } catch (fallbackError: unknown) {
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
                 ? fallbackError.deliveryResult
                 : undefined;
+              if (fallbackPartial && !recoveryEpochs.has(fallbackPartial)) {
+                recoveryEpochs.set(fallbackPartial, completion.epoch);
+              }
+              const covered = completion.previewCovered;
+              const sent = fallbackPartial?.content;
+              const content = completion.result.content;
+              if (
+                fallbackPartial?.visibleReplySent &&
+                sent &&
+                content?.startsWith(sent) &&
+                covered &&
+                covered.from <= closedPreviewText.length &&
+                covered.text.startsWith(closedPreviewText)
+              ) {
+                const accepted = covered.text.slice(0, -content.length) + sent;
+                if (accepted.length > closedPreviewText.length) {
+                  advanceOnce(fallbackPartial, accepted);
+                }
+              }
               const fallbackCause =
                 fallbackPartial && fallbackError instanceof Error
                   ? (fallbackError.cause ?? fallbackError)
@@ -1242,11 +1474,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         const shouldStreamText = info?.kind === "block" || info?.kind === "final";
         if (shouldStreamText && (streaming?.isActive() || matchingClosingStream)) {
+          let previewCovered: { text: string; epoch: number; from: number } | undefined;
           if (!matchingClosingStream) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, "delta");
+              const consumedBefore = previewBlockOffset;
+              // An earlier block may use this preview only when its earlier copy was accepted.
+              epochText = true;
+              const mode = isCurrentSource(info.assistantMessageIndex, text) ? "delta" : "append";
+              if (mode === "delta" || !consumeEarlierBlock(text, info.assistantMessageIndex)) {
+                queueStreamingUpdate(text, mode);
+              }
+              if (previewBlockOffset > consumedBefore) {
+                previewCovered = {
+                  text: previewText.slice(0, previewBlockOffset),
+                  epoch: previewEpoch,
+                  from: consumedBefore,
+                };
+              }
             }
             if (info?.kind === "final") {
               // Final payloads can be cumulative snapshots or independent
@@ -1271,6 +1517,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return deferStreamingDelivery(
             mergeFeishuReplyDeliveryResults(deliveredResults, text),
             info?.kind,
+            previewCovered,
           );
         }
 
@@ -1391,12 +1638,42 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
         ? () => {
+            // A close still in flight credited its preview provisionally, and its settlement cannot
+            // correct a card opened after this start. Freeze the earlier prose without that credit.
+            undoProvisionalCredit?.();
+            earlierText ||= epochText;
+            epochText = false;
+            if (closedPreviewText) {
+              earlierRests.set(
+                previewEpoch + sourceIndexOffset,
+                closedPreviewText.slice(previewBlockOffset),
+              );
+            }
+            if (
+              !hasStreamingFinalText &&
+              streaming?.isActive() &&
+              previewText &&
+              streamText.endsWith(continuedPreview(previewText))
+            ) {
+              openEarlierRest = previewText.slice(
+                Math.max(previewBlockOffset, closedPreviewText.length),
+              );
+              openEarlierEpoch = previewEpoch;
+              openEarlierSource = previewEpoch + sourceIndexOffset;
+              openEarlierLearned = previewBlockOffset > 0;
+            } else if (!previewText && openEarlierEpoch + 1 === previewEpoch) {
+              // A message without text, such as a tool call, keeps the earlier card's copy.
+              openEarlierEpoch = previewEpoch;
+            }
             // Snapshots cover one assistant message. Freeze earlier prose at the
             // source boundary so tool continuations cannot replace it.
             snapshotBaseText = streamText ? `${streamText}\n\n` : "";
             lastPartial = "";
             previewText = "";
             previewBlockOffset = 0;
+            openEarlierShown = 0;
+            closedPreviewText = "";
+            previewEpoch += 1;
             modelWaitLine = "";
             return updateStreamingStatusLine("", false);
           }
