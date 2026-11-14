@@ -604,6 +604,29 @@ Example truncate response (`--max-lines 200`):
 }
 ```
 
+## Session token and cost usage
+
+Show per-session token and cost attribution from the Gateway's recorded usage ledger.
+
+```bash
+openclaw sessions usage
+openclaw sessions usage "agent:main:main" --json
+openclaw sessions usage --agent work --range 90d --group-family
+openclaw sessions usage --all --start 2026-10-01 --end 2026-10-31
+```
+
+| Flag                              | Description                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------- |
+| `--agent <id>`                    | Scope usage to one agent's sessions.                                            |
+| `--all`                           | List-style usage across every agent (cannot combine with a session key).        |
+| `--range <range>`                 | Preset range: `7d`, `30d` (default), `90d`, `1y`, or `all`.                     |
+| `--start <date>` / `--end <date>` | Explicit `YYYY-MM-DD` window instead of `--range` (`--end` requires `--start`). |
+| `--max-rows <count>`              | Max session rows, default 50, max 200.                                          |
+| `--group-family`                  | Roll up rotated session ids into their logical key.                             |
+| `--json`                          | Raw `sessions.usage` response.                                                  |
+
+The Gateway resolves usage scope from the session key and `--agent`, so the parent `sessions` list selectors (`--store`, `--all-agents`, `--active`, `--limit`, `--verbose`) do not apply.
+
 ## Related
 
 - [Session config](/gateway/config-agents/sessions#session)
