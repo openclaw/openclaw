@@ -17,6 +17,8 @@
  * pins that owner from any path. Compare work counts, selection digest, CPU and allocation
  * in separate timing/allocation passes; static exclusions must skip disclosure reads
  * without changing totals, facets or membership of the returned page.
+ * --selection-shapes compares retained paging, Activity people facets and sidebar
+ * owner counts at --sessions 15000/60000, with row churn across 15 live sessions.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -39,6 +41,7 @@ import { buildSubagentSessionListReadIndex } from "../../src/agents/subagents/re
 import { readSessionListSelectionFacts } from "../../src/gateway/session-list-target.js";
 import type { Row, SelectionChange } from "../../src/gateway/session-row-projection-record.js";
 import { createProfileSessionEntryFilter } from "../../src/gateway/session-sharing-read.js";
+import { selectSessionEntries } from "../../src/gateway/session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "../../src/gateway/session-utils-projection.js";
 import { notifyListeners } from "../../src/shared/listeners.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -52,6 +55,7 @@ const { values } = parseArgs({
     listeners: { type: "string", default: "20" },
     mode: { type: "string", default: "timing" },
     "sidebar-counts": { type: "boolean", default: false },
+    "selection-shapes": { type: "boolean", default: false },
     "filter-source": { type: "string", default: "src/gateway/session-list-filters.ts" },
   },
 });
@@ -108,9 +112,11 @@ const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 const results = [];
-const workloads = values["sidebar-counts"]
-  ? (["sidebar"] as const)
-  : (["unchanged", "presentation", "metadata"] as const);
+const workloads = values["selection-shapes"]
+  ? (["page", "people", "sidebar"] as const)
+  : values["sidebar-counts"]
+    ? (["sidebar"] as const)
+    : (["unchanged", "presentation", "metadata"] as const);
 for (const name of workloads) {
   const owners = Array.from({ length: listenerCount }, () =>
     createSessionRowSelection(cfg, scope, false, () => context),
@@ -155,15 +161,20 @@ for (const name of workloads) {
   }
   let revision = 0;
   let filterCalls = 0;
-  let filtered: ReturnType<typeof filterSessionEntries> | undefined;
+  let filtered:
+    | ReturnType<typeof filterSessionEntries>
+    | ReturnType<typeof selectSessionEntries>
+    | undefined;
+  const queryShape = name === "sidebar" || name === "page" || name === "people";
+  const retained: NonNullable<Parameters<typeof selectSessionEntries>[0]["retained"]> = new Map();
   const run = () => {
-    const index = revision++ % (name === "sidebar" ? Math.min(15, sessions) : sessions);
+    const index = revision++ % (queryShape ? Math.min(15, sessions) : sessions);
     let row = rows[index]!;
     if (name !== "unchanged") {
       const entry = {
         ...row.entry!,
-        ...(name === "sidebar"
-          ? { updatedAt: now + revision }
+        ...(queryShape
+          ? { updatedAt: now + revision, lastActivityAt: now + revision }
           : name === "presentation"
             ? { outputTokens: revision }
             : { label: `Changed ${revision}` }),
@@ -186,33 +197,48 @@ for (const name of workloads) {
     notifyListeners(listeners, change, (error) => {
       throw error;
     });
-    if (name === "sidebar") {
-      const selected = owners[0]!.read("updatedAt");
-      filtered = filterSessionEntries(
-        {
-          cfg,
-          now,
-          opts: {
-            limit: 1,
-            includeOwnerSessionCounts: true,
-            excludeSubagents: true,
-            excludeCron: true,
-            excludeSystem: true,
-            excludeDock: true,
-          },
-          entries: selected.entries,
-          entriesSorted: true,
-          getTarget: selected.get,
-          configuredAgentIds: agents,
-          getRowContext: () => context,
-          involvementKeys: selected.involvementKeys,
-          entryFilter: (key, entry) => {
-            filterCalls++;
-            return sharing(key, entry);
-          },
+    if (queryShape) {
+      const selected = owners[0]!.read(name === "people" ? "activity" : "updatedAt");
+      const params: Parameters<typeof selectSessionEntries>[0] = {
+        cfg,
+        now,
+        opts:
+          name === "page"
+            ? { limit: 200, ownerFirst: true }
+            : name === "people"
+              ? {
+                  limit: 100,
+                  includePeople: true,
+                  excludeSubagents: true,
+                  excludeDock: true,
+                  archived: "all",
+                  sortBy: "activity",
+                }
+              : {
+                  limit: 1,
+                  includeOwnerSessionCounts: true,
+                  excludeSubagents: true,
+                  excludeCron: true,
+                  excludeSystem: true,
+                  excludeDock: true,
+                },
+        entries: selected.entries,
+        entriesSorted: true,
+        getTarget: selected.get,
+        configuredAgentIds: agents,
+        getRowContext: () => context,
+        involvementKeys: selected.involvementKeys,
+        partitions: selected.partitions,
+        retained,
+        entryFilter: (key, entry) => {
+          filterCalls++;
+          return sharing(key, entry);
         },
-        { offset: 0, limit: 1, ownerLimit: 0 },
-      );
+      };
+      filtered =
+        name === "sidebar"
+          ? filterSessionEntries(params, { offset: 0, limit: 1, ownerLimit: 0 })
+          : selectSessionEntries(params);
     }
   };
   for (let index = 0; index < 500; index++) {

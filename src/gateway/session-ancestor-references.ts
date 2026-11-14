@@ -198,13 +198,15 @@ export class ConnectionSessionRows {
       let result: SessionRowWire | undefined;
       let encoding: string | undefined;
       if (retain && previous && sameGeneration) {
-        const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
-        const patchJSON = JSON.stringify(patch);
-        const patchBytes = Buffer.byteLength(patchJSON);
+        const delta = diff(previous.fields, fields, row);
+        const patchHeader = { ...header, base: previous.version };
+        const prefix = JSON.stringify(patchHeader).slice(0, -1);
+        // Joining replaces the delta opening brace with a comma of the same byte width.
+        const patchBytes = Buffer.byteLength(prefix) + delta.utf8Bytes;
         // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
         if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
-          result = patch;
-          encoding = patchJSON;
+          result = { ...patchHeader, ...delta.patch };
+          encoding = `${prefix},${delta.json.slice(1)}`;
         }
       }
       encoded.push(encoding);
