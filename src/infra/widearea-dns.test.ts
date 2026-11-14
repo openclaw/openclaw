@@ -158,7 +158,9 @@ it.runIf(process.platform !== "win32")("preserves the zone after an OS file-size
             await writeWideAreaGatewayZone({
               domain: "openclaw.internal",
               gatewayPort: 18789,
-              displayName: "X".repeat(8192),
+              // Escaping keeps each wire TXT string valid while the zone exceeds the OS limit.
+              displayName: '"'.repeat(243),
+              cliPath: "/" + "a".repeat(246),
               tailnetIPv4: "100.64.0.1",
             });
             process.exitCode = 24;
