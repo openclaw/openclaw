@@ -12,7 +12,7 @@ export function describeExecTool(params?: {
       : [
           "Run shell now; background continuation supported.",
           "Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle.",
-          "Long run: automatic completion wake, when enabled, occurs only after exit; otherwise process confirms completion. Output while still running does not automatically start another turn. Background commands can outlive the turn; use process kill when no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.",
+          "Long run: when the running result says its exit wakes this conversation, end the turn instead of waiting; otherwise process poll collects the result. Output while still running does not start another turn. Background commands can outlive the turn; use process kill when no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.",
         ];
   const base = [
     params?.hasCronTool

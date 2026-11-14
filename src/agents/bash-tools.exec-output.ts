@@ -49,6 +49,56 @@ export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 // Keep launch and later process observations consistent without naming an aliased tool.
 export const EXEC_MANUAL_COLLECTION_FOLLOW_UP =
   "Automatic completion wake is disabled for this command. If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.";
+export const MAX_EXEC_YIELD_MS = 120_000;
+const BACKGROUND_EXEC_FOLLOW_UP =
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. New output while this command is running does not start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
+
+type ExitWakeFacts = {
+  notifyOnExit?: boolean;
+  notifyOnExitEmptySuccess?: boolean;
+  notifySessionTarget?: object;
+};
+
+/** Whether a process's exit starts a turn in its originating conversation. Hidden subagents have no target. */
+export function hasExitWake(session: ExitWakeFacts): boolean {
+  return session.notifyOnExit === true && session.notifySessionTarget !== undefined;
+}
+
+/**
+ * Exit-wake fact plus the condition for ending the turn, or undefined when the exit starts no turn.
+ * A silent success wakes nobody unless notifyOnExitEmptySuccess is set.
+ */
+export function describeExitWake(session: ExitWakeFacts): string | undefined {
+  if (!hasExitWake(session)) {
+    return undefined;
+  }
+  return session.notifyOnExitEmptySuccess
+    ? "Its exit wakes this conversation. If only waiting remains, end this turn"
+    : "Its exit wakes this conversation if it prints output or fails, not after a silent success. If only waiting remains and it prints its result, end this turn";
+}
+
+/** Guidance for a running background handle, read when the handle is returned. */
+export function buildBackgroundExecFollowUp(
+  session: ExitWakeFacts,
+  requestedYieldMs: number | undefined,
+  otherRunning: string[],
+): string {
+  const exitWake = describeExitWake(session);
+  return [
+    (requestedYieldMs ?? 0) > MAX_EXEC_YIELD_MS && `yieldMs is capped at ${MAX_EXEC_YIELD_MS}.`,
+    exitWake &&
+      `${exitWake} now; do not poll it or start another command that waits for the same result. To wait for a condition, loop inside one command until it holds and prints the result.`,
+    exitWake &&
+      !session.notifyOnExitEmptySuccess &&
+      "If it may succeed silently, collect it with poll before ending the turn.",
+    otherRunning.length > 0 &&
+      `Also running in this conversation: ${otherRunning.join("; ")}. Keep one command per awaited result.`,
+    BACKGROUND_EXEC_FOLLOW_UP,
+    !exitWake && EXEC_MANUAL_COLLECTION_FOLLOW_UP,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 export const EXEC_TIMEOUT_RETRY_GUIDANCE =
   "The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun commands unless repeating them is safe. Use a higher timeout only when the command is known to be safe to retry.";
 

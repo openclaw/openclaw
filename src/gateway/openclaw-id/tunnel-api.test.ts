@@ -17,7 +17,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
   linkedClaw,
   nowSeconds,

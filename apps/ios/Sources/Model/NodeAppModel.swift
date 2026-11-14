@@ -4907,9 +4907,11 @@ extension NodeAppModel {
             error: error,
             preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem)
             ?? GatewayConnectionProblem.unmapped(error)
+        let url = self.activeGatewayConnectConfig?.url
         return GatewayConnectionIssue.addingEndpointGuidance(
             to: problem,
-            host: self.activeGatewayConnectConfig?.url.host)
+            host: url?.host,
+            port: url.map { $0.port ?? ($0.scheme == "wss" ? 443 : 80) })
     }
 
     private func resetNodeGatewayLoopStatusIfCurrent(routeGeneration: UInt64, stableID: String) {

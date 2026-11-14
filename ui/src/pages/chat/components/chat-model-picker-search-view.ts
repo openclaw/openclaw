@@ -232,26 +232,3 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
     view.reveal(next.row.key);
   }
 }
-
-/** A disappearing refresh control can return focus; catalog presentation is already derived. */
-export function restoreChatModelRefreshFocus(details: Element | undefined): void {
-  if (!(details instanceof HTMLDetailsElement) || !details.open) {
-    return;
-  }
-  const state = chatModelSearchState(details);
-  const active = details.ownerDocument.activeElement;
-  if (!state || !active?.closest("[data-chat-model-refresh]") || !details.contains(active)) {
-    return;
-  }
-  queueMicrotask(() => {
-    if (
-      !active.isConnected &&
-      details.isConnected &&
-      details.open &&
-      details.ownerDocument.activeElement === details.ownerDocument.body
-    ) {
-      const target = state.input && !state.input.disabled ? state.input : state.summary;
-      target?.focus({ preventScroll: true });
-    }
-  });
-}
