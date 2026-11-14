@@ -7,10 +7,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import {
-  isWellFormedApprovalId,
   type ApprovalDecision,
   type ApprovalGetResult,
-  type ApprovalKind,
   type ApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type {
@@ -51,6 +49,7 @@ import {
 } from "./exec-approvals-cli.shared.js";
 import { saveSnapshotLocal } from "./exec-approvals-local.js";
 import { registerNativeExecApprovalsCli } from "./exec-approvals-native-cli.js";
+import { loadPendingApprovals, type PendingApprovalCliEntry } from "./exec-approvals-pending.js";
 import {
   isFileApprovalsSnapshot,
   isNativeApprovalsSnapshot,
@@ -72,8 +71,6 @@ type ConfigSnapshotLike = {
   config?: OpenClawConfig;
 };
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
-
-type PendingApprovalCliEntry = NonNullable<ReturnType<typeof readPendingApprovalEntry>>;
 
 const APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
@@ -223,86 +220,6 @@ function decodeDisplayedApprovalId(value: string): string | null {
   }
   const decoded = Buffer.from(encoded, "base64url").toString("utf16le");
   return Buffer.from(decoded, "utf16le").toString("base64url") === encoded ? decoded : null;
-}
-
-function readPendingApprovalEntry(value: unknown, kind: ApprovalKind) {
-  if (!isRecord(value) || !isRecord(value.request)) {
-    return null;
-  }
-  // Approval ids are opaque and stored verbatim by the gateway — never trim
-  // them, or two ids differing only in whitespace collapse into one display
-  // form and resolving could target the wrong request. Whitespace-bearing ids
-  // fail the terminal-safe charset and render as exact-round-trip id64 tokens.
-  // Ill-formed (lone-surrogate) ids are skipped outright: the unified
-  // approval.get/resolve schema rejects them, so listing one would advertise
-  // a token that can never be resolved.
-  const id = typeof value.id === "string" && isWellFormedApprovalId(value.id) ? value.id : null;
-  const createdAtMs = value.createdAtMs;
-  const expiresAtMs = value.expiresAtMs;
-  if (
-    !id ||
-    typeof createdAtMs !== "number" ||
-    !Number.isFinite(createdAtMs) ||
-    typeof expiresAtMs !== "number" ||
-    !Number.isFinite(expiresAtMs)
-  ) {
-    return null;
-  }
-  const request = value.request;
-  const agentId = normalizeOptionalString(request.agentId) ?? null;
-  const sessionKey = normalizeOptionalString(request.sessionKey) ?? null;
-  const command = typeof request.command === "string" && request.command ? request.command : null;
-  const title = typeof request.title === "string" && request.title ? request.title : null;
-  const description =
-    typeof request.description === "string" && request.description ? request.description : null;
-  const prose = title && description ? `${title}: ${description}` : (title ?? description);
-  // System-agent approvals stay on their reviewer-safe presentation (title,
-  // description); the raw operation is host-local by contract and must not
-  // leak into terminals, scripts, or logs.
-  const summarySource =
-    kind === "exec"
-      ? command
-      : kind === "plugin" && command
-        ? `${prose ? `${prose} — ` : ""}Command: ${command}`
-        : prose;
-  return {
-    id,
-    kind,
-    agentId,
-    sessionKey,
-    createdAtMs,
-    expiresAtMs,
-    summary: summarySource ?? "(summary unavailable)",
-  };
-}
-
-function readPendingApprovalList(value: unknown, kind: ApprovalKind): PendingApprovalCliEntry[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Invalid ${kind} approval list response.`);
-  }
-  return value.flatMap((entry) => {
-    const parsed = readPendingApprovalEntry(entry, kind);
-    return parsed ? [parsed] : [];
-  });
-}
-
-async function loadPendingApprovals(
-  opts: ExecApprovalsCliOpts,
-): Promise<PendingApprovalCliEntry[]> {
-  // The owner-specific list methods retain requester filtering unless the caller is an admin.
-  // Request admin explicitly so this operator command cannot silently omit live approvals.
-  const listCall = (method: string) =>
-    callGatewayFromCli(method, opts, {}, { scopes: [ADMIN_SCOPE] });
-  const [exec, plugin, systemAgent] = await Promise.all([
-    listCall("exec.approval.list"),
-    listCall("plugin.approval.list"),
-    listCall("openclaw.approval.list"),
-  ]);
-  return [
-    ...readPendingApprovalList(exec, "exec"),
-    ...readPendingApprovalList(plugin, "plugin"),
-    ...readPendingApprovalList(systemAgent, "system-agent"),
-  ].toSorted((a, b) => b.createdAtMs - a.createdAtMs);
 }
 
 function describeGrantState(grant: ExecApprovalStandingGrant, nowMs: number): string {
@@ -597,8 +514,21 @@ export function registerExecApprovalsCli(program: Command) {
     .command("pending")
     .description("List pending exec, plugin, and system-agent approvals")
     .action(async (opts: ExecApprovalsCliOpts) => {
+      // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+      const signal = getAsyncWorkSignal();
       await runApprovalsAction(opts, async () => {
-        const entries = await loadPendingApprovals(opts);
+        let entries: PendingApprovalCliEntry[] | undefined;
+        try {
+          entries = await loadPendingApprovals(opts, signal);
+        } catch (error) {
+          if (signal?.aborted) {
+            return;
+          }
+          throw error;
+        }
+        if (signal?.aborted) {
+          return;
+        }
         if (opts.json) {
           defaultRuntime.writeJson({ approvals: entries }, 0);
           return;
