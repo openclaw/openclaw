@@ -14,6 +14,7 @@ import {
 import {
   compareProcessSessionStartOrder,
   getSession,
+  hasExitWake,
   listFinishedSessions,
   listRunningSessions,
   processSessionInstanceId,
@@ -94,6 +95,15 @@ export function readBackgroundProcesses(scope: ProcessObservationScope): {
       tail: output,
       truncated: session.truncated || session.totalOutputChars > output.length,
       canStop: isBackgroundExecCancellable(session) && !session.cancellationRequested,
+      // Mirrors the completion owner's guards; a requested Stop never wakes the chat.
+      ...(session.backgrounded &&
+      !session.exited &&
+      !session.exitNotified &&
+      !session.cancellationRequested &&
+      !session.requestCancelled &&
+      hasExitWake(session)
+        ? { wakesSession: true as const }
+        : {}),
       ...(session.exitCode !== undefined ? { exitCode: session.exitCode } : {}),
       ...(session.exitSignal !== undefined ? { exitSignal: session.exitSignal } : {}),
       ...(session.exitReason !== undefined ? { exitReason: session.exitReason } : {}),

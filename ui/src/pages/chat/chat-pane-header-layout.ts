@@ -67,6 +67,11 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     });
   };
 
+  /** Opens one process's output; Back returns to the process list, not Details. */
+  protected readonly showProcess = (instanceId: string) => {
+    this.requestBackgroundPanel("processes", "open", { instanceId, fromDetails: false });
+  };
+
   protected readonly returnToProcessDetails = () => {
     if (!this.state) {
       return;

@@ -1,0 +1,121 @@
+/* Shares the goal and progress card shell so the composer stack reads as one family. */
+.agent-chat__waiters-float {
+  width: 100%;
+}
+
+.chat-waiters {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--chat-composer-hairline);
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
+  backdrop-filter: blur(8px);
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-waiters__row {
+  display: grid;
+  grid-template-columns: var(--chat-stack-icon-size, 14px) minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  min-width: 0;
+  /* The surrounding card supplies the two border pixels. */
+  min-height: calc(var(--chat-stack-header-height, 40px) - 2px);
+  padding: 6px var(--chat-stack-trailing-inset, 8px) 6px var(--chat-stack-leading-inset, 13px);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+button.chat-waiters__row {
+  cursor: var(--cursor-action);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -3px;
+    border-radius: inherit;
+  }
+}
+
+.chat-waiters__list {
+  display: grid;
+  padding-bottom: 4px;
+  border-top: 1px solid var(--chat-composer-hairline);
+
+  &[hidden] {
+    display: none;
+  }
+
+  .chat-waiters__row {
+    min-height: 32px;
+    padding-block: 4px;
+  }
+}
+
+.chat-waiters__icon {
+  display: grid;
+  place-items: center;
+  width: var(--chat-stack-icon-size, 14px);
+  height: 18px;
+  color: var(--muted);
+
+  > svg {
+    width: var(--chat-stack-icon-size, 14px);
+    height: var(--chat-stack-icon-size, 14px);
+  }
+}
+
+.chat-waiters__icon > .session-run-spinner {
+  display: block;
+  width: var(--chat-stack-icon-size, 14px);
+  height: var(--chat-stack-icon-size, 14px);
+  animation-duration: 1.8s;
+}
+
+.chat-waiters__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3em;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-waiters__lead {
+  flex: none;
+}
+
+.chat-waiters__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+
+  &[data-scrollable="true"] {
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  }
+}
+
+.chat-waiters__elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-waiters__chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}

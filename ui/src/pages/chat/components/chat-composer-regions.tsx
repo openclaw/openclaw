@@ -8,6 +8,10 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 const ChatQueue = lazy(() => import("./chat-composer-queue.tsx"), {
   export: "renderChatQueueSolid",
 });
+// Loads only while the session row reports background work.
+const ChatComposerWaiters = lazy(() => import("./chat-composer-waiters.tsx"), {
+  export: "ChatComposerWaiters",
+});
 const SessionProgressCard = lazy(
   () => import("../../../components/session-progress-card-solid.tsx"),
   {
@@ -44,6 +48,30 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           onQueueRemove={view.composer.onQueueRemove}
         />
       </ChatLazyBoundary>
+    </Show>
+  );
+}
+
+export function ComposerWaiters(view: { composer: ChatComposerProps }) {
+  return (
+    <Show
+      when={
+        (view.composer.selectedSession?.backgroundProcessCount ?? 0) > 0 && view.composer.sessionKey
+          ? JSON.stringify([view.composer.currentAgentId, view.composer.sessionKey])
+          : undefined
+      }
+      keyed
+    >
+      {(_identity: string) => (
+        <ChatLazyBoundary>
+          <ChatComposerWaiters
+            sessionKey={view.composer.sessionKey}
+            agentId={view.composer.currentAgentId}
+            hidden={isChatRunWorking(view.composer)}
+            onOpen={view.composer.onOpenProcess}
+          />
+        </ChatLazyBoundary>
+      )}
     </Show>
   );
 }
