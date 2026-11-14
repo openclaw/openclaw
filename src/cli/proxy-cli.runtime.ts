@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
@@ -58,9 +59,9 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
         });
         finalizers.unshift(() => server.stop());
         signal.throwIfAborted();
-        process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
-        process.stdout.write(`CA cert: ${ca.certPath}\n`);
-        process.stdout.write(`Capture DB: ${store.dbPath}\n`);
+        process.stdout.write(terminalText`Debug proxy: ${server.proxyUrl}\n`);
+        process.stdout.write(terminalText`CA cert: ${ca.certPath}\n`);
+        process.stdout.write(terminalText`Capture DB: ${store.dbPath}\n`);
         process.stdout.write("Press Ctrl+C to stop.\n");
         await new Promise<void>((resolve) => {
           const onSignal = () => resolve();
@@ -239,7 +240,7 @@ export async function runProxyValidateCommand(opts: {
     if (result.config.errors.length > 0) {
       lines.push("", theme.heading("Problems"));
       for (const error of result.config.errors) {
-        lines.push(`  - ${theme.error(error)}`);
+        lines.push(`  - ${theme.error(terminalText`${error}`)}`);
       }
     }
     if (result.checks.length > 0) {
@@ -251,10 +252,10 @@ export async function runProxyValidateCommand(opts: {
           check.status === undefined
             ? ""
             : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
-        const detail = check.error
-          ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
-          : "";
-        lines.push(`  ${icon} ${paddedKind} ${check.url}${status}${detail}`);
+        // Escape diagnostic data before styling; JSON and validation inputs remain raw.
+        const error = terminalText`${check.error ?? ""}`;
+        const detail = error ? ` — ${check.ok ? theme.muted(error) : theme.error(error)}` : "";
+        lines.push(`  ${icon} ${paddedKind} ${terminalText`${check.url}`}${status}${detail}`);
       }
     }
     if (!result.ok) {

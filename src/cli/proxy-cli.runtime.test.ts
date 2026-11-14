@@ -385,6 +385,37 @@ describe("proxy cli runtime", () => {
     );
   });
 
+  it.each([false, true])("keeps controls in JSON only (json: %s)", async (json) => {
+    const value = "café\u001b[2J\nforged\tvalue\rend\u202e";
+    const result = {
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "http://proxy.example:3128/",
+        source: "override",
+        errors: [value],
+      },
+      checks: [
+        { kind: "allowed", url: value, ok: false, error: value },
+        { kind: "denied", url: "http://example.test/", ok: true, error: value },
+      ],
+    };
+    runProxyValidationMock.mockResolvedValueOnce(result);
+    await proxyCliRuntime.runProxyValidateCommand({ json, allowedUrls: [value] });
+    const output = String(stdoutWrite.mock.calls[0]?.[0] ?? "");
+    if (json) {
+      expect(JSON.parse(output)).toEqual(result);
+    } else {
+      expect(output).not.toContain(value);
+      expect(output.replaceAll("\n", "")).not.toMatch(/[\p{Cc}\p{Bidi_Control}]/u);
+      expect(output.match(/café\\nforged\\tvalue\\rend/gu)).toHaveLength(4);
+    }
+    expect(runProxyValidationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedUrls: [value] }),
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("prints actionable check failure output", async () => {
     runProxyValidationMock.mockResolvedValueOnce({
       ok: false,

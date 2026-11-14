@@ -60,6 +60,8 @@ See [Network Proxy](/security/network-proxy) for deployment guidance and denial 
 
 `start` launches a local capturing proxy and prints its URL, CA cert path, and capture DB path. Stop it with Ctrl+C. Defaults to binding `127.0.0.1` unless `--host` is set.
 
+Human-readable startup paths and validation diagnostics escape embedded line breaks, tabs, and carriage returns and remove other terminal controls. This keeps path and destination text from changing the diagnostic layout. JSON retains the original diagnostic strings and existing proxy URL credential redaction; captured blobs remain raw.
+
 `run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session. An OpenClaw child forwards instrumented HTTPS and WebSocket payloads to the parent through an ephemeral, session-bound capture token in its debug endpoint URL. Normal HTTP proxy variables and stored capture URLs remain credential-free. The parent remains the only persistence client; the child does not open a capture database. The private capture endpoint cannot read or purge captures and closes with the proxy. For child commands that mutate other OpenClaw state, run the Gateway first so those commands can route their writes. Offline capture retains exclusive parent ownership until the child exits.
 
 If `run` has no command after `--`, or `blob` cannot find the requested id,

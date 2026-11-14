@@ -1,0 +1,2 @@
+31
+# Preserve human/JSON control-character behavior without changing validation inputs.
