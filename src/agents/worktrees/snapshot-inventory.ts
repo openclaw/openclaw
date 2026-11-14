@@ -1,5 +1,7 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode, isMissingPathError } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
@@ -69,32 +71,70 @@ async function walkCollapsedPaths(
     ) {
       return true;
     }
-    // Buffer one directory's names at a time; classify raw paths without relying
-    // on Buffer-encoded Dirent metadata or following symlinks.
-    const names = await fs.readdir(checkoutPathFromGitBytes(checkoutPath, relative), {
-      encoding: "buffer",
-    });
+    const directoryPath = checkoutPathFromGitBytes(checkoutPath, relative);
+    const decoded = relative.toString("utf8");
+    let directoryEntries: Dirent[] | undefined;
+    if (!decoded.includes("\uFFFD")) {
+      try {
+        // Node's DT_UNKNOWN fallback needs a string parent for string names.
+        directoryEntries = await fs.readdir(path.join(checkoutPath, decoded), {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        // A lossy DT_UNKNOWN name can fail Node's internal stat before readdir
+        // returns. Retry with raw bytes; a missing directory still fails there.
+        if (!isMissingPathError(error) && !hasErrnoCode(error, "ENAMETOOLONG")) {
+          throw error;
+        }
+      }
+    }
+    // One lossy name invalidates the entire decoded listing, including siblings.
+    if (directoryEntries?.some((entry) => entry.name.includes("\uFFFD"))) {
+      directoryEntries = undefined;
+    }
+    const names =
+      directoryEntries?.map((entry) => Buffer.from(entry.name)) ??
+      (await fs.readdir(directoryPath, { encoding: "buffer" }));
     for (let offset = 0; offset < names.length; offset += 64) {
       const children = names
         .slice(offset, offset + 64)
-        .map((name) => Buffer.concat([relative, Buffer.from("/"), name]))
-        .filter((child) => !options.skip?.has(gitPathKey(child)));
+        .map((name, index) => {
+          const entry = directoryEntries?.[offset + index];
+          return {
+            path: Buffer.concat([relative, Buffer.from("/"), name]),
+            directory: entry?.isDirectory()
+              ? true
+              : entry && (entry.isFile() || entry.isSymbolicLink())
+                ? false
+                : undefined,
+          };
+        })
+        .filter((child) => !options.skip?.has(gitPathKey(child.path)));
       // Join every read before recursing or retaining a nested repository.
-      const stats = await Promise.allSettled(
-        children.map((child) => rawPathStat(checkoutPathFromGitBytes(checkoutPath, child))),
-      );
-      for (const [index, result] of stats.entries()) {
-        if (result.status === "rejected") {
+      const stats = children.some((child) => child.directory === undefined)
+        ? await Promise.allSettled(
+            children.map(
+              async (child) =>
+                child.directory ??
+                (
+                  await rawPathStat(checkoutPathFromGitBytes(checkoutPath, child.path))
+                )?.isDirectory() ??
+                false,
+            ),
+          )
+        : undefined;
+      for (const [index, child] of children.entries()) {
+        const result = stats?.[index];
+        if (result?.status === "rejected") {
           throw result.reason;
         }
-        const child = children[index]!;
-        if (result.value?.isDirectory()) {
-          if (await visitDirectory(child)) {
+        if (result ? result.value : child.directory) {
+          if (await visitDirectory(child.path)) {
             return true;
           }
         } else {
           // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
-          await options.visitFile?.(child);
+          await options.visitFile?.(child.path);
         }
       }
     }
