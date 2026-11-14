@@ -2078,11 +2078,10 @@ if (process.env.PR_TEST_INSTALL_GATE) {
   itPosix.each(["hold"])("recovers the next scripts/pr invocation after SIGKILL during %s", () => {
     const fixture = makeFrozenDependencyFixture();
     const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
-    let anchor;
-    ({ anchor } = materializeAnchor(fixture, {
+    const { anchor } = materializeAnchor(fixture, {
       ...fixture.env,
       OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
-    }));
+    });
     expect(prCacheEntries(cache)).toHaveLength(1);
     expect(readPrCacheState(join(cache, prCacheEntries(cache)[0]!)).anchors).toEqual([anchor]);
     fixture.git(fixture.canonical, ["checkout", "main"]);

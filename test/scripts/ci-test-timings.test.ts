@@ -1452,10 +1452,11 @@ it.todo("retains todo coverage");
       github: {},
     });
     // Neither runner profile owns both children of any complete parent.
-    const splitProfiles = runs.map((run) => ({
-      ...run,
-      logs: run.logs.filter((_log, index) => index === 0 || index === 5),
-    }));
+    const splitProfiles = runs.map((run) =>
+      Object.assign({}, run, {
+        logs: run.logs.filter((_log, index) => index === 0 || index === 5),
+      }),
+    );
     const incomplete = refitTestTimings(splitProfiles).timings.compactGroupSeconds;
     expect(incomplete.blacksmith).not.toHaveProperty(parentShardName);
     expect(incomplete.github).not.toHaveProperty(parentShardName);
