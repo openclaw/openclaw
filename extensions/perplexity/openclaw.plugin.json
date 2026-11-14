@@ -1,7 +1,8 @@
 {
   "id": "perplexity",
   "categories": [
-    "web"
+    "web",
+    "models"
   ],
   "activation": {
     "onStartup": false

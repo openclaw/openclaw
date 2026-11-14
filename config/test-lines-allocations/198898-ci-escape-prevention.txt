@@ -1,4 +1,0 @@
-# Six CI escape regressions: owner selection, declaration emission, and native
-# merge admission. The same compiler regression now exercises a real offline
-# install and materialized wrapper instead of faking pnpm; net test growth 461.
-61

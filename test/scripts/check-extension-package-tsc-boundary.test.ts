@@ -192,7 +192,6 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
     "src/shared/non-packaged-plugin-dirs.ts",
-    "src/infra/directory-walk.ts",
     "src/plugins/package-entrypoints.ts",
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });

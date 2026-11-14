@@ -156,7 +156,6 @@ function createPreparationCli(workload = "", preparationCheckpoint = "") {
     { dependencies: ["tsx", "@openclaw/fs-safe", "@openclaw/proc-safe"] },
   );
   write("src/shared/deferred.ts", fs.readFileSync("src/shared/deferred.ts", "utf8"));
-  write("src/infra/directory-walk.ts", fs.readFileSync("src/infra/directory-walk.ts", "utf8"));
   wrapScript(
     "generate-kysely-types",
     `
