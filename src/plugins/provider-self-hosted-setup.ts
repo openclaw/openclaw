@@ -9,7 +9,10 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
 } from "../agents/self-hosted-provider-defaults.js";
-import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -61,6 +64,12 @@ function buildOpenAICompatibleSelfHostedProviderConfig(
 ): { config: OpenClawConfig; modelRef: string; profileId: string } {
   const modelRef = `${params.providerId}/${params.modelId}`;
   const profileId = `${params.providerId}:default`;
+  const contextWindow = params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
+  // A saved row limit wins; a provider-wide limit applies within this model's context.
+  const saved = resolveMergedModelProviderConfig(params.cfg, params.providerId);
+  const savedMaxTokens =
+    findConfiguredProviderModel(saved, params.providerId, params.modelId)?.maxTokens ??
+    (saved?.maxTokens === undefined ? undefined : Math.min(saved.maxTokens, contextWindow));
   return {
     config: {
       ...params.cfg,
@@ -80,12 +89,9 @@ function buildOpenAICompatibleSelfHostedProviderConfig(
                 reasoning: params.reasoning ?? false,
                 input: params.input ?? ["text"],
                 cost: SELF_HOSTED_DEFAULT_COST,
-                contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+                contextWindow,
                 maxTokens:
-                  params.maxTokens ??
-                  resolveDefaultModelMaxTokens(
-                    params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-                  ),
+                  savedMaxTokens ?? params.maxTokens ?? resolveDefaultModelMaxTokens(contextWindow),
               },
             ],
           },

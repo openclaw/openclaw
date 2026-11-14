@@ -402,6 +402,24 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     });
   });
 
+  it.each([
+    { expected: 8_192, saved: [expectedModel("Qwen/Qwen3-32B", { maxTokens: 8_192 })] },
+    { expected: 4_096, saved: [] },
+    { expected: 128_000, providerLimit: 200_000, saved: [] },
+  ])("uses the saved row, then the provider limit within the context ($expected)", async (row) => {
+    const ctx = createContext();
+    const maxTokens = row.providerLimit ?? 4_096;
+    ctx.config = {
+      models: { providers: { vllm: { baseUrl: vllmUrl, maxTokens, models: row.saved } } },
+    };
+
+    const cfg = await configureSelfHostedTestProvider({ ctx });
+
+    expect(cfg?.models?.providers?.vllm?.models).toEqual([
+      expectedModel("Qwen/Qwen3-32B", { maxTokens: row.expected }),
+    ]);
+  });
+
   it("reuses an existing provider auth profile in ref mode", async () => {
     const params = vllm;
     const modelId = "Qwen/Qwen3-32B";
