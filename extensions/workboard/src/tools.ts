@@ -177,20 +177,6 @@ const toolSchemas = {
     createdCardIds: Type.Optional(
       Type.Array(Type.String(), { description: "Cards created during this run." }),
     ),
-    claims: Type.Optional(
-      Type.Array(
-        strictObject({
-          statement: Type.String({ description: "One thing you claim the result does." }),
-          proofId: Type.Optional(
-            Type.String({ description: "Existing proof id that backs this claim." }),
-          ),
-        }),
-        {
-          description:
-            "Optional itemized claims, recorded as your claims; completion never waits on them.",
-        },
-      ),
-    ),
   }),
   verify: strictObject({
     id: cardIdField(),
@@ -199,8 +185,7 @@ const toolSchemas = {
       WORKBOARD_VERIFICATION_OUTCOMES.map((outcome) => Type.Literal(outcome)),
       { description: "Your conclusion." },
     ),
-    claimId: Type.Optional(Type.String({ description: "Claim record you checked." })),
-    proofId: Type.Optional(Type.String({ description: "Proof record you checked." })),
+    proofId: Type.Optional(Type.String({ description: "Worker proof record you checked." })),
     artifactId: Type.Optional(Type.String({ description: "Artifact you checked." })),
     runId: Type.Optional(Type.String({ description: "Run whose result you checked." })),
     note: Type.Optional(Type.String({ description: "Short finding." })),
