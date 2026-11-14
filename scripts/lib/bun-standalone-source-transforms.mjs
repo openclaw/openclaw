@@ -36,7 +36,8 @@ function handler(plugin, name) {
   if (typeof hook.handler === "function" && !hook.filter) {
     return hook.handler;
   }
-  // Evaluate the filter shapes the build plugins declare, as Rolldown does natively.
+  // Evaluate the filter shapes the build plugins declare, as Rolldown does natively,
+  // including its forward-slash id normalization.
   const { id, code, ...unsupported } = hook.filter ?? {};
   if (
     typeof hook.handler === "function" &&
@@ -46,7 +47,10 @@ function handler(plugin, name) {
   ) {
     return function filtered(...args) {
       const [source, moduleId] = name === "transform" ? args : [undefined, args[0]];
-      if ((id && !id.test(moduleId)) || (code !== undefined && !source.includes(code))) {
+      if (
+        (id && !id.test(String(moduleId).replaceAll("\\", "/"))) ||
+        (code !== undefined && !source.includes(code))
+      ) {
         return undefined;
       }
       return hook.handler.apply(this, args);
