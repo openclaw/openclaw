@@ -185,7 +185,8 @@ function planCompactionSource(
       const classify = createRealConversationClassifier();
       for (const message of context.messages()) {
         control.throwIfCancelled();
-        hasRealConversation = classify(message) || hasRealConversation;
+        // Only existence matters here; keep visiting messages for planning and cancellation.
+        hasRealConversation = hasRealConversation || classify(message);
         yield message;
       }
     },

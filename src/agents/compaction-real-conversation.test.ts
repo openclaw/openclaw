@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createRealConversationClassifier,
   isRealConversationMessage,
+  prepareRealConversationFacts,
 } from "./compaction-real-conversation.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -14,6 +15,28 @@ function summaryMessage(role: SummaryRole, summary: string): AgentMessage {
 }
 
 describe("compaction real conversation classification", () => {
+  it.each([
+    { content: "Inspect the repo", expected: true },
+    { content: "<b>HEARTBEAT_OK</b>", expected: false },
+  ])("reads anchor content once when preparing facts ($expected)", ({ content, expected }) => {
+    let contentReads = 0;
+    const message: AgentMessage = {
+      role: "user",
+      get content() {
+        contentReads++;
+        return content;
+      },
+      timestamp: 1,
+    };
+
+    expect(prepareRealConversationFacts(message)).toEqual({
+      toolResult: false,
+      meaningful: expected,
+      anchor: expected,
+    });
+    expect(contentReads).toBe(1);
+  });
+
   it("expires streaming tool-result anchors after the 20-message lookback", () => {
     const classify = createRealConversationClassifier();
     expect(classify({ role: "user", content: "Inspect the repo", timestamp: 1 })).toBe(true);
