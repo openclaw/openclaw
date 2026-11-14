@@ -41,6 +41,12 @@ const lanes = new Map<string, HeldOccurrence[]>();
 const BATCH_SETTLE_MS = 1_000;
 
 /**
+ * Each exec result carries up to a 2,000-char tail. Occurrence text must stay byte-exact,
+ * so bound the shared turn by membership: results past this budget start the next turn.
+ */
+const BATCH_MAX_CHARS = 8_000;
+
+/**
  * Admit one producer occurrence. With no turn of this lane in flight it starts at once,
  * like enqueueSessionEventForHost. Otherwise it waits, and every compatible occurrence still
  * waiting shortly after that turn settles starts one shared turn.
@@ -160,8 +166,10 @@ function flush(key: string, held: HeldOccurrence[]) {
   }
   const group = [first];
   let target = first.options.expectedTarget;
+  let chars = first.occurrence.text.length;
   for (const member of held.slice(1)) {
-    if (!sameBatch(first, member)) {
+    chars += 1 + member.occurrence.text.length;
+    if (chars > BATCH_MAX_CHARS || !sameBatch(first, member)) {
       break;
     }
     try {

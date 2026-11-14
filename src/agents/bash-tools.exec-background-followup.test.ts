@@ -423,7 +423,15 @@ test.for([
     runIds: ["run-0", "run-0", "run-1"],
     turns: [[1], [2], [3]],
   },
-])("completions pending behind a completion turn $label", async ({ runIds, turns }, { signal }) => {
+  // About 2,040 chars per result: three later results fit the shared turn, the fourth waits.
+  {
+    label: "stay within the size bound",
+    runIds: Array(5).fill("run-0"),
+    pad: 1_990,
+    sizes: [1, 3, 1],
+  },
+])("completions pending behind a completion turn $label", async (testCase, { signal }) => {
+  const { runIds } = testCase;
   const sessionKey = `agent:main:dashboard:batched-${runIds.join("-")}`;
   await seedOrigin(sessionKey);
   const gate = createDeferredCore();
@@ -443,7 +451,7 @@ test.for([
   // Every command captures its destination before any exit changes the session.
   for (const [index, runId] of runIds.entries()) {
     const job = index + 1;
-    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release(job))})) { clearInterval(t); process.stdout.write("BATCH_${job}"); } }, 20);`;
+    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release(job))})) { clearInterval(t); process.stdout.write("BATCH_${job}" + "x".repeat(${testCase.pad ?? 0})); } }, 20);`;
     runningSession(
       (await backgroundExec(sessionKey, { agentId: "main", runId })(`batch-${job}`, script))
         .details,
@@ -453,14 +461,16 @@ test.for([
   await withinTest(firstTurn.promise, signal);
   await fs.writeFile(release(2), "");
   await withinTest(waitForExecScope(sessionKey), signal);
-  // Exit notification follows process settlement; wait until both later exits are queued.
-  await vi.waitFor(() => expect(peekSystemEventEntries(sessionKey)).toHaveLength(2), {
-    timeout: 30_000,
-  });
+  // Exit notification follows process settlement; wait until every later exit is queued.
+  await vi.waitFor(
+    () => expect(peekSystemEventEntries(sessionKey)).toHaveLength(runIds.length - 1),
+    { timeout: 30_000 },
+  );
   // The later exits wait for the running completion turn instead of queueing their own.
   expect(receipts).toHaveLength(1);
   gate.resolve();
-  await vi.waitFor(() => expect(receipts).toHaveLength(turns.length), { timeout: 30_000 });
+  const turnCount = testCase.sizes?.length ?? testCase.turns.length;
+  await vi.waitFor(() => expect(receipts).toHaveLength(turnCount), { timeout: 30_000 });
   await completion(signal);
   // Each turn names the run that launched its commands; later exits may finish in any order.
   const observed = calls.map((params) => ({
@@ -470,8 +480,15 @@ test.for([
     runId: params.inputProvenance?.runId,
   }));
   expect(observed[0]?.jobs).toEqual([1]);
+  if (testCase.sizes) {
+    expect(observed.map((turn) => turn.jobs.length)).toEqual(testCase.sizes);
+    expect(observed.flatMap((turn) => turn.jobs).toSorted((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+    return;
+  }
   expect(observed.toSorted((a, b) => (a.jobs[0] ?? 0) - (b.jobs[0] ?? 0))).toEqual(
-    turns.map((jobs) => ({ jobs, runId: runIds[(jobs[0] ?? 1) - 1] })),
+    testCase.turns.map((jobs) => ({ jobs, runId: runIds[(jobs[0] ?? 1) - 1] })),
   );
 });
 
