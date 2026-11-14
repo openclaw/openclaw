@@ -24,6 +24,7 @@ import ai.openclaw.app.chat.ChatMessageCost
 import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
+import ai.openclaw.app.chat.ChatPendingInputsPage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatPlanStepStatus
@@ -431,6 +432,7 @@ internal fun ChatScreen(
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
+  val pendingInputs by viewModel.chatPendingInputs.collectAsState()
   val outboxPresentationRestored by viewModel.chatOutboxPresentationRestored.collectAsState()
   val messageSpeechState by viewModel.chatMessageSpeech.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
@@ -493,6 +495,8 @@ internal fun ChatScreen(
       sessionKey = sessionKey,
       mainSessionKey = mainSessionKey,
     )
+  val pendingInputPage = pendingInputs?.takeIf { it.owner == composerOwner }?.page
+  val serverInputRunIds = pendingInputPage?.items.orEmpty().mapNotNullTo(mutableSetOf()) { it.runId }
   val currentSessionOutboxItems =
     outboxItemsForSession(
       items = outboxItems,
@@ -500,6 +504,7 @@ internal fun ChatScreen(
       mainSessionKey = mainSessionKey,
       ownerAgentId = composerOwner.agentId,
       messages = messages,
+      serverInputRunIds = serverInputRunIds,
     )
   var providerSignIn by remember { mutableStateOf<ProviderAuthController?>(null) }
 
@@ -1097,6 +1102,7 @@ internal fun ChatScreen(
         if (!tabletop) conversationStatus()
       },
       progressCard = progressCard,
+      pendingInputPage = pendingInputPage,
       value = input,
       onValueChange = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
@@ -3207,6 +3213,7 @@ private fun ChatComposer(
   conversationHeader: @Composable (() -> Unit) -> Unit,
   conversationStatus: @Composable () -> Unit,
   progressCard: ChatProgressCard?,
+  pendingInputPage: ChatPendingInputsPage?,
   value: String,
   onValueChange: (String) -> Unit,
   attachments: List<PendingAttachment>,
@@ -3273,6 +3280,7 @@ private fun ChatComposer(
   val attachedProgress = progressCard != null && voiceNoteState !is VoiceNoteRecorderState.Recording && voiceNoteState !is VoiceNoteRecorderState.Preparing
   val auxiliaryContent: @Composable (Dp) -> Unit = { availableHeight ->
     conversationStatus()
+    pendingInputPage?.let { ChatGatewayQueue(it) }
     if (shareImportNotice != null) {
       ComposerWarning(shareImportNotice) {
         IconButton(onClick = onDismissShareImportNotice, modifier = Modifier.size(32.dp)) {
