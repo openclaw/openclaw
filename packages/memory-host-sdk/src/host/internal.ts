@@ -40,6 +40,11 @@ export {
   MEMORY_CHUNKING_VERSION,
   type MemoryChunk,
 } from "./markdown-chunks.js";
+export {
+  blankDreamingFencedRanges,
+  isDreamingFenceMarkerLine,
+  lineRangeOverlapsDreamingFence,
+} from "./dreaming-fences.js";
 
 export type MemoryFileEntry = {
   path: string;
