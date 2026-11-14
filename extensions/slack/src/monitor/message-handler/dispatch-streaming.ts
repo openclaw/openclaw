@@ -17,6 +17,7 @@ import {
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
+  SlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError,
   startSlackStream,
   stopSlackStream,
@@ -206,7 +207,8 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return undefined;
     }
     let fallbackError = err;
-    if (!session.stopped) {
+    // A stop would flush the rejected text again and fail the same way.
+    if (!session.stopped && !(err instanceof SlackStreamMessageTooLongError)) {
       try {
         const stopResult = await stopStream(session);
         if (session.stoppedBySlack) {
@@ -276,10 +278,22 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           await stopStream(session, chunks);
           state.observedReplyDelivery ||= session.delivered;
         } catch (error) {
-          if (!(error instanceof SlackStreamNotDeliveredError)) {
+          if (error instanceof SlackStreamMessageTooLongError && chunks?.length) {
+            // The closeout pushed the message past Slack's size. Stop without
+            // it so the message still leaves streaming state.
+            runtime.error?.(
+              danger(
+                "slack-stream: Slack rejected the closeout with msg_too_long; stopping without it",
+              ),
+            );
+            markSlackStreamFallbackDelivered(session);
+            await stopStream(session);
+            state.observedReplyDelivery ||= session.delivered;
+          } else if (error instanceof SlackStreamNotDeliveredError) {
+            await deliverPendingStreamFallback(session, error);
+          } else {
             throw error;
           }
-          await deliverPendingStreamFallback(session, error);
         }
       } catch (error) {
         state.streamFailed = true;

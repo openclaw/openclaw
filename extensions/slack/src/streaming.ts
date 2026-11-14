@@ -79,6 +79,19 @@ export class SlackStreamNotDeliveredError extends Error {
   }
 }
 
+/**
+ * Slack rejected an append or stop with `msg_too_long`: the message already
+ * holds as much as Slack allows. Nothing from the rejected call landed and the
+ * stream stays open; discard the text the SDK kept
+ * ({@link discardSlackStreamPendingText}) before stopping it.
+ */
+export class SlackStreamMessageTooLongError extends SlackStreamNotDeliveredError {
+  constructor(pendingText: string) {
+    super(pendingText, "msg_too_long");
+    this.name = "SlackStreamMessageTooLongError";
+  }
+}
+
 type SlackClientStreams = {
   sessions: Set<SlackStreamSession>;
   stopped: Map<string, true>;
@@ -277,6 +290,11 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
 
 function throwSlackStreamFailure(session: SlackStreamSession, err: unknown): never {
   const code = extractSlackErrorCode(err) ?? "unknown";
+  if (code === "msg_too_long") {
+    // Slack sized the message, not the stream: it stays open to be stopped.
+    stateBySession.get(session)?.sessions.add(session);
+    throw new SlackStreamMessageTooLongError(session.pendingText);
+  }
   if (
     session.pendingText &&
     (BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code) || code === "missing_scope")
