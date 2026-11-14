@@ -257,6 +257,7 @@ const enCron = {
       timeoutHelp: "Leave blank to use the default timeout for this reply.",
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
+      promptPreview: "Prompt preview",
       deliveryModeLabel: "Mode",
       selectDeliveryMode: "Choose a delivery mode",
       announceDefault: "Announce summary",
