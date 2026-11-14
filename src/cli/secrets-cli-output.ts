@@ -9,14 +9,18 @@ export async function runSecretsCommand<T>(
   renderHumanFailure: (error: unknown) => void,
   failureExit: number | ((error: unknown) => { error: unknown; exitCode: number }),
   jsonResult?: (result: T) => unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   try {
+    signal?.throwIfAborted();
     const result = await run();
+    signal?.throwIfAborted();
     if (json) {
       defaultRuntime.writeJson(jsonResult ? jsonResult(result) : result);
     }
     return result;
   } catch (error) {
+    signal?.throwIfAborted();
     const failure =
       typeof failureExit === "function" ? failureExit(error) : { error, exitCode: failureExit };
     if (json) {

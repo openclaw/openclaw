@@ -6,6 +6,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   expectObjectFields,
   mockCall,
@@ -237,6 +239,15 @@ describe("secrets CLI", () => {
 
   it.each([
     {
+      name: "audit",
+      prepare: async () => {
+        runSecretsAudit.mockRejectedValue(new Error("provider unavailable"));
+      },
+      args: ["secrets", "audit", "--json"],
+      exitCode: 2,
+      message: "provider unavailable",
+    },
+    {
       name: "apply",
       prepare: async () => {
         await fs.rm(missingPlan, { force: true });
@@ -302,6 +313,78 @@ describe("secrets CLI", () => {
 
     await runSecrets(["secrets", "audit", "--allow-exec"]);
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
+  });
+
+  it.each(
+    ["pre-aborted", "late-success", "late-failure"].flatMap((phase) =>
+      [false, true].map((json) => ({ phase, json })),
+    ),
+  )("keeps interrupted audit quiet ($phase, json=$json)", async ({ phase, json }) => {
+    const scope = new AsyncWorkScope();
+    runSecretsAudit.mockImplementationOnce(async () => {
+      scope.beginClose(new Error("audit interrupted"));
+      if (phase === "late-failure") {
+        throw new Error("provider failed after interrupt");
+      }
+      return createAuditReport({ status: "unresolved", unresolvedRefCount: 1 });
+    });
+    await scope.track(() => {
+      if (phase === "pre-aborted") {
+        scope.beginClose();
+      }
+      return runSecrets(["secrets", "audit", ...(json ? ["--json"] : [])]);
+    });
+    expect(runSecretsAudit).toHaveBeenCalledTimes(phase === "pre-aborted" ? 0 : 1);
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("stops an audit-owned provider process when interrupted", async () => {
+    const scope = new AsyncWorkScope();
+    let result: Awaited<ReturnType<typeof runCommandWithTimeout>> | undefined;
+    await withPlanFile(async (marker) => {
+      runSecretsAudit.mockImplementationOnce(async () => {
+        result = await runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)",
+            marker,
+          ],
+          { timeoutMs: 2000, killProcessTree: true },
+        );
+        return createAuditReport({ status: "clean" });
+      });
+      const pending = scope.track(() => runSecrets(["secrets", "audit", "--allow-exec", "--json"]));
+      try {
+        await vi.waitFor(async () => {
+          expect(Number.isInteger(Number(await fs.readFile(marker, "utf8")))).toBe(true);
+        });
+        scope.beginClose();
+        await pending;
+        expect(result?.termination).toBe("signal");
+        expect(runtimeLogs).toEqual([]);
+        expect(runtimeErrors).toEqual([]);
+      } finally {
+        scope.beginClose();
+        await pending;
+      }
+    });
+  });
+
+  it("finishes an admitted apply after its read work scope closes", async () => {
+    const scope = new AsyncWorkScope();
+    const result = createSecretsApplyResult({ mode: "write", changed: true });
+    runSecretsApply.mockImplementationOnce(async () => {
+      scope.beginClose();
+      return result;
+    });
+    await withPlanFile((planPath) =>
+      scope.track(() => runSecrets(["secrets", "apply", "--from", planPath, "--json"])),
+    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+    expect(runtimeErrors).toEqual([]);
   });
 
   it("shows the irreversibility warning before applying configured targets (#83883)", async () => {
