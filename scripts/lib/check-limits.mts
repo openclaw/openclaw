@@ -45,8 +45,10 @@ export type LimitViolation = {
 };
 
 export function limitsAreAdvisory(env: NodeJS.ProcessEnv = process.env) {
-  // Local check runners also set CI=1. Only GitHub Actions changes limit severity.
-  return env.GITHUB_ACTIONS === "true";
+  // Local check runners also set CI=1. Only GitHub Actions and update candidate builds
+  // change limit severity: installed updaters (old ones too) send OPENCLAW_UPDATE_IN_PROGRESS,
+  // and a maintainer size budget must never fail a user's update.
+  return env.GITHUB_ACTIONS === "true" || env.OPENCLAW_UPDATE_IN_PROGRESS === "1";
 }
 
 function escapeCommand(value: string, property = false) {
@@ -70,10 +72,12 @@ export function reportLimitViolations(
 ) {
   const advisory = limitsAreAdvisory(env);
   for (const { file, title, message, line = 1 } of violations) {
-    if (advisory) {
+    if (advisory && env.GITHUB_ACTIONS === "true") {
       console.error(
         `::warning file=${escapeCommand(file, true)},line=${line},col=0,title=${escapeCommand(title, true)}::${escapeCommand(message)}`,
       );
+    } else if (advisory) {
+      console.error(`Warning: ${title}\n  ${file}: ${message}`);
     } else {
       console.error(`${title}\n  ${file}: ${message}`);
     }

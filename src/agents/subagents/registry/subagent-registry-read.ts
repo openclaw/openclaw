@@ -132,16 +132,16 @@ function resolveYieldWaitingChild(
     ) {
       continue;
     }
-    const childSource = isYieldedSubagentRun(child)
-      ? owesRequesterCompletion(child)
-        ? resolveSubagentYieldWaitSource(child, visited)
-        : undefined
-      : owesRequesterCompletion(child) &&
-          (isSubagentRunLive(child) ||
-            (child.execution.status === "terminal" &&
-              !subagentRuns.isCompletionAuthorityRetired(child)))
-        ? "waiting"
-        : "resume";
+    const childSource = subagentRuns.isCompletionAuthorityRetired(child)
+      ? "resume"
+      : isYieldedSubagentRun(child)
+        ? owesRequesterCompletion(child)
+          ? resolveSubagentYieldWaitSource(child, visited)
+          : undefined
+        : owesRequesterCompletion(child) &&
+            (isSubagentRunLive(child) || child.execution.status === "terminal")
+          ? "waiting"
+          : "resume";
     // Stopped descendants need root reconciliation, even beside a surviving wait.
     if (childSource === "resume") {
       return childSource;
@@ -327,12 +327,14 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
+  options?: { excludeSuspendedDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   await prepareSubagentSessionListReadCache();
   assertCurrent();
   return buildSubagentSessionListReadIndex(Date.now(), [rootSessionKey]).countPendingDescendantRuns(
     rootSessionKey,
+    options,
   );
 }
 
@@ -393,6 +395,10 @@ export function listSubagentRunsForRequester(
     lookup
       .selectReadScope([requesterSessionKey], lookup, false)
       .map((runId) => subagentRuns.get(runId)!),
+    {
+      getLatestSubagentRun: (key, agentId) =>
+        getLatestLiveSubagentRunByChildSessionKey(key, undefined, agentId),
+    },
   );
 }
 

@@ -63,6 +63,8 @@ type PageDefinition = {
   rows?: { selector: string; minimum: number; totalSelector?: string };
   /** Keep the measurement open through incremental mounting, after first visibility. */
   completion?: { selector: string; minimum: number; maximum?: number }[];
+  /** First rows can precede the code font's final layout. */
+  fontFamily?: string;
   landed?: RouteId;
   search?: string;
   action?: PageAction;
@@ -738,6 +740,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "plugin-settings": {
     ready: "openclaw-plugins-page [data-plugin-id]",
+    fontFamily: "JetBrains Mono",
     completion: [
       { selector: "openclaw-plugins-page [data-plugin-id]", minimum: quantity.catalog },
       {
@@ -825,6 +828,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   secrets: {
+    fontFamily: "JetBrains Mono",
     ready:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
     rows: {
@@ -896,6 +900,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "skill-settings": {
     ready: ".skills-group .plugins-item",
+    fontFamily: "JetBrains Mono",
     rows: { selector: ".skills-group .plugins-item", minimum: 1000 },
     action: {
       label: "Type a search to filter 1,000 installed skills to one match",
@@ -1833,6 +1838,7 @@ async function measureVisit(
       selector,
       rows,
       completion,
+      fontFamily,
       timeoutMs: limitMs,
     }) =>
       new Promise<{
@@ -1909,12 +1915,18 @@ async function measureVisit(
             routeId === "config"
               ? document.getElementById("settings-language")?.getBoundingClientRect().top
               : undefined;
+          // The floating phone header reserves the anchor's scroll destination.
+          const scrollPaddingTop =
+            anchorTop === undefined
+              ? 0
+              : Number.parseFloat(getComputedStyle(scrollport).scrollPaddingTop) || 0;
           const anchorSettled =
             routeId !== "config" ||
             (anchorTop !== undefined &&
               anchorTop >= -1 &&
               anchorTop < window.innerHeight &&
-              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top) < 1 ||
+              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top - scrollPaddingTop) <
+                1 ||
                 Math.abs(scrollport.scrollHeight - scrollport.clientHeight - scrollport.scrollTop) <
                   1) &&
               anchorTop === previousAnchorTop);
@@ -1922,6 +1934,13 @@ async function measureVisit(
           const contentReady =
             pageReady &&
             anchorSettled &&
+            (!fontFamily ||
+              ([...document.fonts].some(
+                (face) =>
+                  face.family.replace(/^['"]|['"]$/gu, "") === fontFamily &&
+                  face.status === "loaded",
+              ) &&
+                document.fonts.check(`12px "${fontFamily}"`))) &&
             (!completion ||
               completion.every(({ selector: contentSelector, minimum, maximum }) => {
                 const count = document.querySelectorAll(contentSelector).length;
@@ -1952,6 +1971,7 @@ async function measureVisit(
       selector: definition.ready,
       rows: definition.rows,
       completion: definition.completion,
+      fontFamily: definition.fontFamily,
       timeoutMs,
     },
   );

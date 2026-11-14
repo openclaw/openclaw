@@ -28,7 +28,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
-import { getSessionControllerWorkCount } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getCurrentSessionControllerClaim,
+  getSessionControllerWorkCount,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import {
   createOrResumeClientVoiceSession,
@@ -556,6 +559,13 @@ it.each([
     voiceMocks.executionReady.mockImplementationOnce(gate.wait);
     const { consult, clients, client, context, cancelBrowserSession } =
       await createBrowserConsult(publicOnly);
+    const execute = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
+    let claimedInput: unknown;
+    let registeredInput: unknown;
+    voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      claimedInput = getCurrentSessionControllerClaim()?.inputs[0];
+      return await execute(params);
+    });
     const accepted = consult({ prompt: "Read the project status" });
     const settled = accepted.then(
       (result) => ({ result }),
@@ -564,6 +574,8 @@ it.each([
     try {
       await awaitGateBeforeSettlement(gate.entered, accepted, "Consult settled before loading");
       expect(rpcSourceTesting.size).toBe(1);
+      registeredInput = [...rpcSourceTesting.values()][0]?.input;
+      expect(registeredInput).toBeDefined();
       expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
       if (ending === "close") {
         expectOk(await invokeClient("close", { sessionKey, voiceSessionId: ownedVoiceSessionId }));
@@ -576,6 +588,7 @@ it.each([
       gate.release();
     }
     expect(await settled).toEqual({ result: { text: "fixture status" } });
+    expect(claimedInput).toBe(registeredInput);
     expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(rpcSourceTesting.size).toBe(0);
     expect(cancelBrowserSession).toHaveBeenCalledTimes(publicOnly ? 0 : 1);

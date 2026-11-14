@@ -292,6 +292,8 @@ const enActivity = {
   activityFeed: {
     partialHistory:
       "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
+    partialHistoryTooltip:
+      "Counts cover recorded sessions you can access. Older history and people may be missing.",
     sessionsMode: "Sessions",
     searchPlaceholder: "Search session titles…",
     time: "Time",

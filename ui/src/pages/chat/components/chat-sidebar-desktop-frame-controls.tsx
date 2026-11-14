@@ -183,7 +183,7 @@ export function DesktopFrameControls(
         <button
           type="button"
           class="oc-icon-button oc-icon-button--28 rail-header__action side-panel__frame-action"
-          title={t("chat.sidePanel.minimize")}
+          title={t("chat.sidePanel.minimizeTooltip")}
           aria-label={t("chat.sidePanel.minimize")}
           disabled={!props.callbacks}
           onClick={() => props.callbacks?.setOpen(false)}

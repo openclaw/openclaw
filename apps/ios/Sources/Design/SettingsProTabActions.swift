@@ -236,7 +236,9 @@ extension SettingsProTab {
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         guard !self.appModel.isLocalGatewayFixtureEnabled,
-              let stableID = self.currentManualGatewayStableID
+              let stableID = Self.defaultCredentialTargetStableID(
+                  manualStableID: self.currentManualGatewayStableID,
+                  registry: self.gatewayRegistry)
         else {
             self.gatewayAuthFields = .init()
             return
@@ -249,6 +251,7 @@ extension SettingsProTab {
     func syncAfterOnboardingReset() {
         self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
+        self.setupCode = ""
         self.stagedGatewaySetupLink = nil
         self.gatewayAuthFields.pendingOverride = nil
         self.syncSettingsState()
@@ -590,7 +593,19 @@ extension SettingsProTab {
     var gatewayCredentialTargetStableID: String? {
         // Auth fields follow the selected route. Otherwise a discovered-gateway retry can save
         // credentials under the unrelated manual endpoint and immediately reload an empty bundle.
-        self.gatewayAuthFields.targetStableID ?? self.currentManualGatewayStableID
+        self.gatewayAuthFields.targetStableID ?? Self.defaultCredentialTargetStableID(
+            manualStableID: self.currentManualGatewayStableID,
+            registry: self.gatewayRegistry)
+    }
+
+    /// The manual endpoint when one is set; otherwise the active saved gateway. Pairing from
+    /// onboarding leaves the manual host empty, and a credential typed then must reach the gateway
+    /// the app actually connects to.
+    static func defaultCredentialTargetStableID(
+        manualStableID: String?,
+        registry: GatewaySettingsStore.GatewayRegistry) -> String?
+    {
+        manualStableID ?? registry.activeEntry?.stableID
     }
 
     var gatewayCustomHeadersTargetStableID: String? {
@@ -648,11 +663,17 @@ extension SettingsProTab {
         Binding(
             get: { self.gatewayAuthFields[keyPath: field] },
             set: { value in
-                self.gatewayAuthFields[keyPath: field] = value
-                guard !self.suppressCredentialPersist else { return }
-                self.gatewayAuthFields.persist(
+                guard !self.suppressCredentialPersist else {
+                    self.gatewayAuthFields[keyPath: field] = value
+                    return
+                }
+                self.gatewayAuthFields.edit(
+                    field,
+                    to: value,
                     instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
-                    targetStableID: self.gatewayCredentialTargetStableID)
+                    defaultTarget: Self.defaultCredentialTargetStableID(
+                        manualStableID: self.currentManualGatewayStableID,
+                        registry: self.gatewayRegistry))
             })
     }
 
@@ -735,17 +756,12 @@ extension SettingsProTab {
             return problem.localizedMessage
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
+        // An idle gateway adds nothing unless an action left a notice.
+        let source = GatewayStatusBuilder.source(for: self.appModel.connection.node, appModel: self.appModel)
+        let gatewayStatus = source == .phase(.idle) ? nil : source.statusText
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
-        if self.isTransientSetupStatus(trimmedSetup),
-           !gatewayStatus.isEmpty,
-           gatewayStatus != "Offline"
-        {
-            return gatewayStatus
-        }
+        if self.isTransientSetupStatus(trimmedSetup), let gatewayStatus { return gatewayStatus }
         if !trimmedSetup.isEmpty { return trimmedSetup }
-        if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
     }
 
@@ -837,7 +853,7 @@ extension SettingsProTab {
         }
         let connected = self.gatewayConnected
         return (
-            connected ? String(localized: "Connected") : self.appModel.gatewayDisplayStatusText,
+            self.appModel.gatewayDisplayStatusText,
             connected ? String(localized: "online") : String(localized: "offline"),
             connected ? OpenClawBrand.ok : .secondary)
     }

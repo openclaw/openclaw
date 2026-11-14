@@ -100,8 +100,7 @@ return await conversations_send({
 
 The nested calls still use normal tool policy, hooks, and approvals. If a full
 contract is exact but too large for the bounded quick index, it remains
-available through the callable handle's `describe()` and the arrow stays
-`-> ?`.
+available through the native declaration below and the arrow stays `-> ?`.
 
 Full native-tool declarations are also available on demand through
 `API.list("tools")` and `API.read("tools/<callableName>.d.ts")`, using the same
@@ -118,8 +117,10 @@ object used by runtime normalization; genuinely required inputs remain required.
 Known output declarations describe intact normalized tool values. Program-data
 admission rejects an oversized reply rather than substituting a successful
 truncation marker. Declarations have
-independent size, depth, and traversal bounds; use `describe()` for the original
-schema when those bounds require an unknown type. Reading declarations does not
+independent size, depth, and traversal bounds; use
+`describe({ includeRarelyNeededOutputSchema: true })` for the original schema
+when those bounds require an unknown type. Plain `describe()` omits
+`outputSchema` to keep large schemas out of context. Reading declarations does not
 execute tools or typecheck cells; they guide the agent's JavaScript composition.
 
 The contract rules are strict:
@@ -130,7 +131,8 @@ The contract rules are strict:
   the tool has no stable structured result.
 - Close object layers with `{ additionalProperties: false }` for a complete
   quick-index hint. Open, oversized, or otherwise partial schemas stay
-  available through handle `describe()` but do not enable one-turn field use.
+  available through `API.read` declarations but do not enable one-turn field
+  use.
 - OpenClaw compiles the schema before running the tool, then validates final
   `details` after normal tool hooks and before a catalog call returns. An
   invalid schema cannot run the tool; a mismatch fails without printing the
@@ -140,8 +142,8 @@ The contract rules are strict:
   Code Mode, without running the tool or throwing a call error. Policy blocks
   retain their existing call-error behavior for tools with declared outputs.
   Tool-authored lookalike fields do not bypass output validation.
-- Compact hints follow fixed rules and size limits. Handle `describe()` exposes
-  the full trusted schema when the compact hint is insufficient.
+- Compact hints follow fixed rules and size limits. `API.read` declarations
+  render the full trusted schema when the compact hint is insufficient.
 - Installed plugin code is already trusted local code. Remote MCP and client
   metadata remains untrusted and cannot opt into these quick-index hints.
 
@@ -425,5 +427,5 @@ still shorten or replace historical tool text. Already-sent results stay
 unchanged during ordinary continuation. Conventional tools keep their own text
 and image formats: a declared output schema describes `details`, not model-visible
 text. The file-read producer reserves its exact paging footer within the same
-model limits, and oversized skill instructions are refused rather than silently
-served in part.
+model limits. Oversized skill instructions page through that same continuation
+rather than being silently served in part.

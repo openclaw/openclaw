@@ -1,4 +1,5 @@
 import type { AgentHarnessRuntimeAvailability } from "../../agents/harness/runtime-plugin.js";
+import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 
 export type ModelRow = {
   key: string;
@@ -50,3 +51,24 @@ export type StatusRuntimeAuthRoute =
       runtimeDetail: string;
       runtimePluginIds: string[];
     });
+
+export type ModelsStatusOptions = {
+  json?: boolean;
+  plain?: boolean;
+  check?: boolean;
+  probe?: boolean;
+  probeProvider?: string;
+  probeProfile?: string | string[];
+  probeTimeout?: string;
+  probeConcurrency?: string;
+  probeMaxTokens?: string;
+  agent?: string;
+};
+
+export type StatusSyntheticAuth = {
+  value: string;
+  source: string;
+  credential?: string;
+  mode?: ProviderSyntheticAuthResult["mode"];
+  expiresAt?: number;
+};

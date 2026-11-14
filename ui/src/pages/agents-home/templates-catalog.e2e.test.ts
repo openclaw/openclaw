@@ -1,8 +1,15 @@
 import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import type {
+  ClawHubTemplateCatalogDetail,
+  ClawHubTemplateCatalogEntry,
+} from "../../../../src/templates/clawhub-source.ts";
+import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
+import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
@@ -40,7 +47,10 @@ const workflowOperator = {
   channel: "official",
   official: true,
   ownerHandle: "openclaw",
-};
+  downloads: 1200,
+  installs: 200,
+  updatedAtMs: 1_790_000_000_000,
+} satisfies ClawHubTemplateCatalogEntry;
 const researchTemplate = {
   ...workflowOperator,
   packageName: "@maker/release-scout",
@@ -67,11 +77,13 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   async function fixture(
     viewport = { width: 1440, height: 900 },
-    entry = workflowOperator,
-    detailPublisher: Partial<Pick<typeof workflowOperator, "ownerHandle" | "official">> = {},
+    entry: ClawHubTemplateCatalogEntry = workflowOperator,
+    detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
     loading = false,
+    colorScheme: "light" | "dark" = "light",
   ) {
     const context = await browser.newContext({
+      colorScheme,
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: viewport.width, height: viewport.height },
@@ -96,10 +108,25 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "templates.catalog.search",
         "templates.catalog.detail",
         "templates.catalog.preview",
+        "templates.add.plan",
         "templates.add.apply",
         "plugins.list",
+        "plugins.catalog.get",
       ],
       methodResponses: {
+        "plugins.catalog.get": {
+          ...inspection.catalog,
+          plugin: {
+            ...inspection.catalog.plugin,
+            local: {
+              present: false,
+              installed: false,
+              enabled: false,
+              state: "not-installed",
+              action: "install",
+            },
+          },
+        } satisfies PluginDiscoveryDetailResult,
         "config.get": sourceConfigSnapshot(config),
         "agents.list": agentsList,
         "templates.catalog.search": {
@@ -112,18 +139,37 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
             ...detailPublisher,
             version: "1.2.0",
             agentName: "Workflow Operator",
+            workspaceFiles: 2,
+            skills: 1,
+            plugins: 1,
+            mcpServers: 0,
+            scheduledJobs: 0,
             contents: {
               instructions: [
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
                 { name: "AGENTS.md", source: "workspace/AGENTS.md" },
               ],
-              skills: [{ name: "Trip research", excerpt: skillExcerpt }],
+              skills: [
+                {
+                  name: "Trip research",
+                  source: "clawhub",
+                  ref: "@openclaw/trip-research",
+                  version: "2.0.0",
+                  excerpt: skillExcerpt,
+                },
+              ],
               integrations: [
-                { name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" },
+                {
+                  name: "@openclaw/workflow-tools",
+                  kind: "plugin",
+                  source: "clawhub",
+                  ref: "@openclaw/workflow-tools",
+                  version: "1.2.0",
+                },
               ],
               automations: [],
             },
-          },
+          } satisfies ClawHubTemplateCatalogDetail,
         },
         "plugins.list": {
           plugins: [
@@ -132,6 +178,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
               name: "Workflow Tools",
               packageName: "@openclaw/workflow-tools",
               clawhubPackage: "@openclaw/workflow-tools",
+              version: "1.2.0",
               installed: true,
               enabled: true,
               state: "enabled",
@@ -139,6 +186,18 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           ],
           diagnostics: [],
           mutationAllowed: true,
+        },
+        "templates.add.plan": {
+          schemaVersion: "openclaw.templatesGatewayPlan.v1",
+          operation: "add",
+          planIntegrity: "sha256:template-e2e",
+          target: { agentId: "workflow-operator", name: "Workflow Operator" },
+          actions: [],
+          capabilities: [],
+          pluginReviews: [],
+          skillReviews: [],
+          blockers: [],
+          riskAcknowledgementRequired: false,
         },
         "templates.add.apply": {
           agentId: "workflow-operator",
@@ -197,11 +256,69 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   async function openDetail(page: Page) {
     const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
-    await card.getByRole("button", { name: "Add" }).click();
+    await card.locator(".agents-home__template-card-link").click();
     const detail = page.locator(".plugin-catalog-detail");
     await detail.getByRole("heading", { name: "Workspace files" }).waitFor();
     return detail;
   }
+
+  it.each(["light", "dark"] as const)(
+    "keeps headerless detail phone gutters on cold and Settings-warmed entry in %s",
+    async (theme) => {
+      const { page, gateway } = await fixture(
+        { width: 390, height: 844 },
+        undefined,
+        undefined,
+        false,
+        theme,
+      );
+      const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
+      await card.waitFor();
+      const templateUrl =
+        server.baseUrl + "templates/packages/%40openclaw%2Fworkflow-operator?version=1.2.0";
+      expect(await page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
+      await capture(page, "gutter-catalog-phone-" + theme, card);
+      const detail = await openDetail(page);
+      const checkInsets = async (stage: string, expected = [12, 12]) => {
+        await capture(page, "gutter-" + stage + "-" + theme, detail);
+        const geometry = await detail.evaluate((element) => {
+          const content = element.closest("main.content")!;
+          const box = element.getBoundingClientRect();
+          const parent = content.getBoundingClientRect();
+          return [
+            Math.round(box.left - parent.left - content.clientLeft),
+            Math.round(parent.left + content.clientLeft + content.clientWidth - box.right),
+          ];
+        });
+        console.info("gutter geometry", stage, geometry);
+        expect.soft(geometry, stage).toEqual(expected);
+      };
+      await checkInsets("detail-phone");
+      for (const width of [820, 1400]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await checkInsets("detail-" + width, [36, 36]);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(templateUrl);
+      await detail.getByRole("heading", { name: "Workspace files" }).waitFor();
+      await checkInsets("cold-phone");
+      await evaluateControlUiContext(page, (app) => app.navigate("appearance"));
+      await page.locator(".settings-section").first().waitFor();
+      await evaluateControlUiContext(page, (app) => app.navigate("templates"));
+      await openDetail(page);
+      await checkInsets("warm-phone");
+      await page.goto(
+        new URL(pathForPluginCatalogEntry(inspection.catalog.plugin.id), server.baseUrl).href,
+      );
+      await detail.getByRole("heading", { name: "README", exact: true }).waitFor();
+      await checkInsets("plugin-phone");
+      for (const width of [820, 1400]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await checkInsets("plugin-" + width, [36, 36]);
+      }
+      expect(await gateway.getRequests("plugins.catalog.get")).not.toHaveLength(0);
+    },
+  );
 
   async function expectPublisher(detail: Locator, handle: string, official: boolean) {
     const publisher = detail.locator(".plugin-catalog-detail__publisher");
@@ -211,6 +328,91 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     );
     expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(Number(official));
   }
+
+  it("shows dependency origins and versions without treating another plugin version as installed", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("plugins.list", {
+      plugins: [
+        {
+          id: "workflow-tools",
+          name: "Workflow Tools",
+          clawhubPackage: "@openclaw/workflow-tools",
+          version: "1.1.0",
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    const detail = await openDetail(page);
+    await capture(page, "dependency-provenance", detail.getByRole("heading", { name: "Skills" }));
+    await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
+    await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
+    expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
+  });
+
+  it.each([viewports[0], viewports[3]])(
+    "shows bundled and referenced contents at $name width",
+    async (viewport) => {
+      const { page, gateway } = await fixture(viewport);
+      await gateway.setMethodResponse("templates.catalog.detail", {
+        detail: {
+          ...workflowOperator,
+          version: "1.2.0",
+          agentName: "Workflow Operator",
+          contents: {
+            instructions: [{ name: "AGENTS.md", source: "workspace/AGENTS.md" }],
+            skills: [
+              {
+                name: "Local research",
+                source: "bundled",
+                path: "skills/research",
+                excerpt: "Research public releases.",
+              },
+              {
+                name: "Trip research",
+                source: "clawhub",
+                ref: "@openclaw/trip-research",
+                version: "2.0.0",
+              },
+            ],
+            integrations: [
+              {
+                name: "workflow-tools",
+                kind: "plugin",
+                source: "bundled",
+                path: "plugins/workflow-tools",
+              },
+              {
+                name: "@openclaw/workflow-tools",
+                kind: "plugin",
+                source: "clawhub",
+                ref: "@openclaw/workflow-tools",
+                version: "1.2.0",
+              },
+            ],
+            automations: [],
+          },
+        },
+      });
+      const detail = await openDetail(page);
+      await capture(
+        page,
+        `bundled-provenance-${viewport.name}`,
+        detail.getByRole("heading", { name: "Skills" }),
+      );
+      expect(await detail.getByText("Bundled with template", { exact: true }).count()).toBe(2);
+      await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
+      await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
+      expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
+      expect(await detail.textContent()).not.toContain("undefined");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+    },
+  );
 
   async function expectClamped(description: Locator) {
     const layout = await description.evaluate((element) => {
@@ -298,14 +500,14 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
       const detail = await openDetail(page);
-      await page.waitForURL(/\/templates\/packages\/%40openclaw%2Fworkflow-operator$/u);
-      if (viewport.name === "desktop") {
-        await capture(
-          page,
-          "after-detail",
-          detail.getByRole("heading", { name: "Workspace files" }),
-        );
-      }
+      await page.waitForURL(
+        /\/templates\/packages\/%40openclaw%2Fworkflow-operator\?version=1\.2\.0$/u,
+      );
+      await capture(
+        page,
+        `after-detail-${viewport.name}`,
+        detail.getByRole("heading", { name: "Workspace files" }),
+      );
       await expectPublisher(detail, "openclaw", true);
       const workspace = detail.locator(".plugin-capabilities").first();
       const help = workspace.getByRole("button", { name: "About SOUL.md" });
@@ -346,6 +548,38 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       );
     },
   );
+
+  it("shows paused automation declarations in details and the inline preview", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("templates.catalog.detail", {
+      detail: {
+        ...workflowOperator,
+        version: "1.2.0",
+        contents: {
+          instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
+          skills: [],
+          integrations: [],
+          automations: [
+            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+          ],
+        },
+      },
+    });
+    const detail = await openDetail(page);
+    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    await capture(page, "paused-automation-detail", automation);
+    expect(await automation.textContent()).toContain("Paused");
+    await page.goto(`${server.baseUrl}chat/main`);
+    await page.locator("a.markdown-template-link").first().click();
+    const shell = page.getByRole("dialog", { name: "Template details", exact: true });
+    await shell.getByRole("button", { name: /Automations/ }).click();
+    const row = shell.getByRole("button", { name: /Weekly brief/ });
+    expect(await row.textContent()).toContain("Paused");
+    await row.click();
+    await capture(page, "paused-automation-preview", shell);
+    expect(await shell.textContent()).toContain("Paused");
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+  });
 
   it("keeps the inline preview shell stable through category and file navigation", async () => {
     const { page, gateway } = await fixture();
@@ -411,34 +645,176 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.getByText("No templates yet.", { exact: true }).waitFor();
   });
 
-  it("uses the accepted publisher to add a personal Template and open its main session despite pending setup", async () => {
-    const community = {
-      ...workflowOperator,
-      packageName: "@maker/workflow-operator",
-      channel: "community",
-    };
-    const { page, gateway } = await fixture(undefined, community, {
-      ownerHandle: "maker",
-      official: false,
-    });
-    const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
-    await card.waitFor();
-    expect(await card.textContent()).toContain("@openclaw");
+  it("prepares the authoritative Add review while the Template detail opens", async () => {
+    const { page, gateway } = await fixture();
     const detail = await openDetail(page);
-    expect(await detail.locator("[data-templates-confirm] button").isEnabled()).toBe(true);
-    await expectPublisher(detail, "maker", false);
-    await gateway.setMethodResponse("agents.list", {
-      ...agentsList,
-      agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
-    });
-    await page.locator("[data-templates-confirm] button").click();
-    await page.waitForURL(/\/chat\/workflow-operator$/u);
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
-    expect((await gateway.waitForRequest("templates.add.apply")).params).toMatchObject({
-      source: { packageName: community.packageName, version: "1.2.0" },
-    });
-    expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
-    expect(await gateway.getRequests("templates.status")).toHaveLength(0);
+    await expect.poll(() => gateway.getRequests("templates.add.plan")).toHaveLength(1);
+    await expect
+      .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
+      .toBe(true);
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
+
+  it("retries a failed prepared review without applying the Template", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.deferNext("templates.add.plan");
+    const detail = await openDetail(page);
+    await gateway.waitForRequest("templates.add.plan");
+    expect(await detail.locator("[data-templates-confirm] button").isDisabled()).toBe(true);
+    await gateway.rejectDeferred("templates.add.plan", {
+      code: "UNAVAILABLE",
+      message: "Review temporarily unavailable",
+    });
+    const alert = detail.getByRole("alert");
+    await alert.getByText("Review temporarily unavailable", { exact: true }).waitFor();
+    await alert.getByRole("button", { name: "Retry", exact: true }).click({ timeout: 1500 });
+    await expect
+      .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
+      .toBe(true);
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+  });
+
+  it.each([400, 820, 1280])(
+    "adds a personal Template directly from its card with stable chat and retained input at %i px",
+    async (width) => {
+      const community: ClawHubTemplateCatalogEntry = {
+        ...workflowOperator,
+        packageName: "@maker/workflow-operator",
+        channel: "community",
+      };
+      const { page, gateway } = await fixture({ width, height: 900 }, community, {
+        ownerHandle: "maker",
+        official: false,
+      });
+      const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
+      await card.waitFor();
+      expect(await card.textContent()).toContain("@openclaw");
+      expect(await card.getByRole("button", { name: "Add", exact: false }).isEnabled()).toBe(true);
+      await gateway.setMethodResponse("agents.list", {
+        ...agentsList,
+        agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
+      });
+      await gateway.deferNext("templates.add.apply");
+      await page.evaluate(() => {
+        const frames: Array<{
+          chat: boolean;
+          content: boolean;
+          surface: string;
+          headerY: number | null;
+          emptyDom?: string;
+        }> = [];
+        let chatMounted = false;
+        Object.assign(window, { templateAddFrames: frames, templateAddRecording: true });
+        const sample = () => {
+          const pane = document.querySelector(".chat-pane-cache__pane--visible");
+          chatMounted ||= Boolean(pane);
+          // URL updates before route commit. The retained catalog and visible
+          // cold-route skeleton are real content, not an empty chat frame.
+          const surface =
+            pane ??
+            (!chatMounted
+              ? (document.querySelector("[data-templates-explore]") ??
+                document.querySelector(".lazy-view-state--route[data-chat] .loading-skeleton"))
+              : null);
+          const content =
+            surface instanceof HTMLElement &&
+            surface.checkVisibility() &&
+            Boolean(
+              surface.textContent?.trim() ||
+              (surface.matches(".loading-skeleton") && surface.getBoundingClientRect().height > 0),
+            );
+          frames.push({
+            chat: location.pathname.includes("/chat/workflow-operator"),
+            content,
+            surface: pane
+              ? "chat"
+              : surface?.matches(".loading-skeleton")
+                ? "loading"
+                : surface
+                  ? "catalog"
+                  : "none",
+            headerY:
+              pane?.querySelector(".sidebar-region__header")?.getBoundingClientRect().y ?? null,
+            ...(!content && location.pathname.includes("/chat/workflow-operator")
+              ? { emptyDom: document.body.outerHTML }
+              : {}),
+          });
+          if (Reflect.get(window, "templateAddRecording")) {
+            requestAnimationFrame(sample);
+          }
+        };
+        requestAnimationFrame(sample);
+      });
+      await capture(page, `template-add-${width}-catalog`, card);
+      await card.getByRole("button", { name: "Add", exact: false }).click();
+      const apply = await gateway.waitForRequest("templates.add.apply");
+      await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
+      const pending = page.locator("openclaw-pending-session-create");
+      await pending.getByText("Creating new agent…", { exact: true }).waitFor();
+      expect(await pending.locator("textarea").isEnabled()).toBe(true);
+      await pending.locator("textarea").fill("Keep my draft while setup finishes");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      const pendingFooter = await pending.locator(".chat-footer").boundingBox();
+      await capture(page, `template-add-${width}-pending`, pending);
+      await gateway.emitGatewayEvent("templates.add.progress", {
+        requestId: "unrelated-request",
+        stage: "agent-ready",
+        agentId: "workflow-operator",
+        sessionKey: "agent:workflow-operator:main",
+      });
+      expect(await pending.locator("textarea").inputValue()).toBe(
+        "Keep my draft while setup finishes",
+      );
+      await gateway.emitGatewayEvent("templates.add.progress", {
+        requestId: apply.id,
+        stage: "agent-ready",
+        agentId: "workflow-operator",
+        sessionKey: "agent:workflow-operator:main",
+      });
+      await pending.waitFor({ state: "hidden" });
+      const composer = page.locator(".chat-pane-cache__pane--visible textarea");
+      await composer.waitFor();
+      await expect.poll(() => composer.isEnabled()).toBe(true);
+      await expect.poll(() => composer.inputValue()).toBe("Keep my draft while setup finishes");
+      const admittedPane = page.locator(".chat-pane-cache__pane--visible");
+      const admittedFooter = await admittedPane.locator(".chat-footer").boundingBox();
+      expect(admittedFooter).not.toBeNull();
+      expect(pendingFooter).not.toBeNull();
+      expect(Math.abs(admittedFooter!.y - pendingFooter!.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(admittedFooter!.height - pendingFooter!.height)).toBeLessThanOrEqual(1);
+      await capture(page, `template-add-${width}-admitted`, admittedPane);
+      await gateway.resolveDeferred("templates.add.apply", {
+        agentId: "workflow-operator",
+        sessionKey: "agent:workflow-operator:main",
+        status: "complete",
+        readiness: { ready: false },
+      });
+      expect(await composer.inputValue()).toBe("Keep my draft while setup finishes");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(apply.params).toMatchObject({
+        source: { packageName: community.packageName, version: "1.2.0" },
+        planIntegrity: "sha256:template-e2e",
+      });
+      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.catalog.detail")).toHaveLength(0);
+      expect(await gateway.getRequests("templates.status")).toHaveLength(0);
+      const frames = await page.evaluate(() => {
+        Reflect.set(window, "templateAddRecording", false);
+        return Reflect.get(window, "templateAddFrames") as Array<{
+          chat: boolean;
+          content: boolean;
+          surface: string;
+          headerY: number | null;
+        }>;
+      });
+      await writeFile(
+        `${proofDir}/template-add-${width}-frames.json`,
+        JSON.stringify(frames, null, 2),
+      );
+      expect(frames.filter((frame) => frame.chat && !frame.content)).toEqual([]);
+      const positions = frames.flatMap((frame) => (frame.headerY === null ? [] : [frame.headerY]));
+      expect(positions.length).toBeGreaterThan(0);
+      expect(Math.max(...positions) - Math.min(...positions)).toBeLessThanOrEqual(1);
+    },
+  );
 });

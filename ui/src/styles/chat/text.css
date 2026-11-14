@@ -1,11 +1,32 @@
+/* Reasoning reads like a tool row (tool-cards.css shares its type and color):
+   one line that opens into the full thought. The collapsed preview overlays
+   the toggle's middle column. */
+.chat-reasoning {
+  display: grid;
+  grid-template-columns: 18px minmax(0, auto) 14px;
+}
+
+.chat-reasoning > button {
+  display: grid;
+  grid-area: 1 / 1 / 2 / -1;
+  grid-template-columns: subgrid;
+  padding: 0;
+}
+
+/* Activity text keeps the row's color and font smoothing, like the tool rows. */
 .chat-thinking {
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
+  grid-column: 2 / -1;
+}
+
+/* The inert collapsed thought clamps to its first line. The negative margin
+   cancels the first block's default 1em top margin inside the clamp. */
+.chat-thinking--preview {
+  display: -webkit-box;
+  grid-area: 1 / 2;
+  margin-top: -1em;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .chat-message-disclosure {
@@ -37,7 +58,7 @@
   );
 
   /* Expand a human message before scrolling code outside its readable preview. */
-  .chat-group.user & :where(pre) {
+  .chat-group.user & :where(pre, .code-block-viewport) {
     overflow: clip;
   }
 }
@@ -415,8 +436,14 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, excluding reserved Details space, owns spare width.
-   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+/* Resolve transcript-relative lengths before inheriting into message containers. */
+@property --chat-table-outset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* Only top-level assistant tables borrow spare width; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
     --chat-leading-table-clearance: var(--chat-avatar-column);
@@ -440,19 +467,22 @@
   }
 
   .chat-virtual-row {
-    --chat-table-outset: max(
+    --chat-table-outset: clamp(
       0px,
-      min(
-        12rem,
-        calc(
-          (
-              100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
-            ) /
-            2
-        )
-      )
+      calc(
+        (
+            100cqw - var(--chat-table-reserved-space, 0px) -
+              var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
+          ) /
+          2
+      ),
+      12rem
     );
+  }
+
+  /* Bubble surfaces own their width; wide tables scroll inside that surface. */
+  .chat--bubbles .chat-virtual-row {
+    --chat-table-outset: 0px;
   }
 
   .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
@@ -461,9 +491,9 @@
   }
 
   .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
-    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    width: calc(100% + 2 * var(--chat-table-outset));
     max-width: none;
-    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+    margin-inline: calc(-1 * var(--chat-table-outset));
   }
 
   /* Keep the existing phone-landscape layout, including its touch controls. */
@@ -471,7 +501,7 @@
     .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
       width: max-content;
       min-width: 100%;
-      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      max-width: calc(100% + 2 * var(--chat-table-outset));
       margin-inline: 0;
       margin-bottom: 24px;
       left: 50%;
@@ -1184,6 +1214,40 @@
   background: transparent;
 }
 
+/* Human fences keep the passive block's box; their one control sits in the
+   corner of the first row instead of taking a toolbar row. */
+.code-block-wrapper.code-block-wrapper--wrap-only {
+  border-color: var(--border-strong);
+  background: var(--user-code-bg);
+}
+
+.chat-group.user .code-block-wrapper--wrap-only pre {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.code-block-wrapper--wrap-only > .code-block-wrap {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+}
+
+.code-block-wrapper--wrap-only .code-block-wrap__icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Keep the first wrapped row clear of the control. */
+.code-block-wrapper--wrap-only.is-wrapped code::before {
+  float: right;
+  width: 26px;
+  height: 1lh;
+  content: "";
+}
+
 .chat-group.assistant .chat-bubble:has(.code-block-wrapper),
 .chat-group.assistant .chat-text:has(.code-block-wrapper) {
   width: 100%;
@@ -1226,7 +1290,7 @@
 }
 
 .code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-wrap {
-  display: none;
+  visibility: hidden;
 }
 
 .code-block-expand {
@@ -1261,10 +1325,10 @@
   --code-block-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
 }
 
-/* The wrap control is offered only once a line measurably overflows, so it never
-   advertises an action that would change nothing. */
+/* Reserve the wrap slot during streaming; hidden controls remain unfocusable. */
 .code-block-wrap {
-  display: none;
+  display: inline-flex;
+  visibility: hidden;
   align-items: center;
   justify-content: center;
   width: 32px;
@@ -1279,7 +1343,7 @@
 
 .code-block-wrapper.has-horizontal-overflow .code-block-wrap,
 .code-block-wrapper.is-wrapped .code-block-wrap {
-  display: inline-flex;
+  visibility: visible;
 }
 
 .code-block-wrap__icon {
@@ -1297,6 +1361,39 @@
 
 .code-block-wrapper.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+
+/* Human fences wrap by default, so the toggle appears only while it changes the
+   layout, and unwrapping must outrank the human-fence wrap rule above. */
+.code-block-wrapper--wrap-only:not(.has-horizontal-overflow) .code-block-wrap {
+  visibility: hidden;
+}
+
+.code-block-wrapper--wrap-only:not(.is-wrapped) .code-block-viewport :where(pre code) {
+  width: max-content;
+  min-width: 100%;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+/* Include the end padding in the scrollable width so every line can clear the fade. */
+.chat-group.user .code-block-wrapper--wrap-only:not(.is-wrapped) pre {
+  width: max-content;
+  min-width: 100%;
+  padding-right: 48px;
+}
+
+.code-block-wrapper--wrap-only.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
+  --code-block-first-row: calc(10px + var(--code-block-line-height));
+
+  mask-image:
+    linear-gradient(to right, black calc(100% - 48px), transparent calc(100% - 34px)),
+    linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-position: top, bottom;
+  mask-size:
+    100% var(--code-block-first-row),
+    100% calc(100% - var(--code-block-first-row));
+  mask-repeat: no-repeat;
 }
 
 .code-block-wrap:hover {
@@ -1413,7 +1510,7 @@
   > .chat-assistant-attachments,
   > .chat-assistant-attachment-card,
   > .chat-pairing-qr-notices,
-  > .chat-thinking,
+  > .chat-reasoning,
   > .chat-tool-card__widget-host,
   > .chat-text,
   > .chat-message-disclosure,
@@ -1425,7 +1522,7 @@
     + .chat-assistant-attachments,
     + .chat-assistant-attachment-card,
     + .chat-pairing-qr-notices,
-    + .chat-thinking,
+    + .chat-reasoning,
     + .chat-tool-card__widget-host,
     + .chat-text,
     + .chat-message-disclosure,

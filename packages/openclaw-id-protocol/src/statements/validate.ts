@@ -14,12 +14,13 @@ import {
   MAX_NODE_PLATFORM,
   MAX_NODE_SURFACE_ITEMS,
   MAX_NODE_SURFACE_NAME,
-  MEMBER_ROLES,
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
   REVOCATION_KINDS,
   ROOT_EPOCH,
   STATEMENT_TYPES,
+  type MemberRole,
+  type NodeDescription,
   type SignedStatement,
   type StatementType,
 } from "./types.js";
@@ -128,8 +129,18 @@ function list(check: Check, minLength = 0, maxLength = MAX_LIST): Check {
   };
 }
 
+const OPTIONAL = new WeakSet<Check>();
+
+// A member that may be absent; when present it must pass `check`.
+function optional(check: Check): Check {
+  const wrapped: Check = (value, path) => check(value, path);
+  OPTIONAL.add(wrapped);
+  return wrapped;
+}
+
 // An object with exactly these members. Unknown members are rejected: a new signed field
-// needs a new envelope version (docs/versioning.md, "Unknown fields").
+// needs a new envelope version (docs/versioning.md, "Unknown fields"). Pre-release v1-draft
+// additions use `optional` instead (statements.md, "Node-only statements and membership").
 function object(shape: Record<string, Check>): Check {
   return (value, path) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -144,6 +155,9 @@ function object(shape: Record<string, Check>): Check {
     }
     for (const [key, check] of Object.entries(shape)) {
       if (!Object.hasOwn(record, key)) {
+        if (OPTIONAL.has(check)) {
+          continue;
+        }
         fail(`${path}.${key}`, "missing field");
       }
       check(record[key], `${path}.${key}`);
@@ -180,7 +194,28 @@ const nodeDescription = object({
   commands: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
   caps: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
 });
-const role = oneOf(MEMBER_ROLES);
+/** Validates an opaque, signed member role name without assigning it authority or rank. */
+export function isMemberRole(value: unknown): value is MemberRole {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value);
+}
+
+const role = predicate(
+  isMemberRole,
+  "expected role name: 1-64 lowercase ASCII letters, digits, - or _, starting with a letter",
+);
+
+/** Whether an untrusted value is a bounded node description (as signed in NodeRedemption). */
+export function isNodeDescription(value: unknown): value is NodeDescription {
+  try {
+    nodeDescription(value, "$");
+    return true;
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      return false;
+    }
+    throw error;
+  }
+}
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
   peer_keys: list(irohKey),
@@ -260,6 +295,13 @@ const V1_BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
+      add_member_device: object({
+        op: oneOf(["add_member_device"]),
+        account_id: nonEmptyText,
+        peer_key: irohKey,
+        device_pub: ed25519Key,
+        label: text,
+      }),
       add_node: object({
         op: oneOf(["add_node"]),
         peer_key: irohKey,
@@ -274,6 +316,7 @@ const V1_BODIES: Record<StatementType, Check> = {
         op: oneOf(["add_owner_device"]),
         // A v1 MembershipChange carries a v1 certificate.
         cert: (value, path) => envelope("OwnerDeviceCert", 1, ownerDeviceCertBody)(value, path),
+        node: optional(object({ peer_key: irohKey, label: text, description: nodeDescription })),
       }),
       deny_invite: object({ op: oneOf(["deny_invite"]), invite_id: randomId }),
     } satisfies Record<(typeof MEMBERSHIP_OPS)[number], Check>),
@@ -300,6 +343,7 @@ const V1_BODIES: Record<StatementType, Check> = {
     issued_at: seconds,
   }),
   InviteRedemption: object({
+    label: text,
     claw_id: clawId,
     invite_id: randomId,
     account_id: nonEmptyText,

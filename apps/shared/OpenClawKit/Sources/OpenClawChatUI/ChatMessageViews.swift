@@ -367,6 +367,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     }
 
     var body: some View {
+        // View builders reject `_ = …`; `let _` is the only statement form they accept.
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("bubble")
         if self.isUser {
             self.messageBody
                 .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .trailing)
@@ -1130,6 +1133,8 @@ struct ChatStreamingAssistantBubble: View {
     let isClean: Bool
 
     var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("live")
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(

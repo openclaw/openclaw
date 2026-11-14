@@ -35,14 +35,15 @@ function createSearchFixture(
     callGateway: async <T>(request: GatewayRequest): Promise<T> => {
       requests.push(request);
       if (request.method === "sessions.list") {
-        const params = request.params as { archived: boolean; agentId?: string };
-        if (params.archived && params.agentId === "main") {
-          onListed?.();
-        }
+        const params = request.params as { archived: boolean | "all"; agentId?: string };
         return {
-          sessions: params.archived ? [] : keys.map((key) => ({ key, agentId: "main" })),
+          sessions: params.archived === true ? [] : keys.map((key) => ({ key, agentId: "main" })),
           hasMore: false,
         } as T;
+      }
+      if (request.method === "sessions.describe") {
+        onListed?.();
+        return { session: null } as T;
       }
       expect(request.method).toBe("sessions.search");
       return { results: typeof results === "function" ? results(request) : results } as T;
@@ -75,7 +76,6 @@ describe("sessions_search candidate matching", () => {
         params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
       }),
     ]);
-    expect(requests.filter((request) => request.method === "sessions.list")).toHaveLength(4);
     const aliasKeys = new Set(aliases);
     const aliasParses = parse.mock.calls.filter(
       ([key]) => typeof key === "string" && aliasKeys.has(key),

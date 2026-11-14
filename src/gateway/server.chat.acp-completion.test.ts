@@ -33,7 +33,53 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 const runtime = vi.hoisted(() => ({
   runTurn: vi.fn(),
   rejectTranscript: false,
+  terminalBarrier: undefined as
+    | {
+        runId: string;
+        entered: ReturnType<typeof createDeferred<void>>;
+        joined: ReturnType<typeof createDeferred<void>>;
+        release: ReturnType<typeof createDeferred<void>>;
+      }
+    | undefined,
 }));
+
+vi.mock("./session-lifecycle-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-lifecycle-state.js")>();
+  return {
+    ...actual,
+    prepareGatewaySessionLifecycleEvent: (
+      params: Parameters<typeof actual.prepareGatewaySessionLifecycleEvent>[0],
+    ) => {
+      const persist = actual.prepareGatewaySessionLifecycleEvent(params);
+      const barrier = runtime.terminalBarrier;
+      if (
+        !barrier ||
+        barrier.runId !== params.event.runId ||
+        !["end", "error"].includes(String(params.event.data?.phase))
+      ) {
+        return persist;
+      }
+      return async () => {
+        barrier.entered.resolve();
+        await barrier.release.promise;
+        await persist();
+      };
+    },
+  };
+});
+
+vi.mock("./chat-abort-lifecycle-internal.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-abort-lifecycle-internal.js")>();
+  return {
+    ...actual,
+    waitForChatAbortTerminalPersistence: (
+      entry: Parameters<typeof actual.waitForChatAbortTerminalPersistence>[0],
+    ) => {
+      runtime.terminalBarrier?.joined.resolve();
+      return actual.waitForChatAbortTerminalPersistence(entry);
+    },
+  };
+});
 
 vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importOriginal) => {
   const { persistAcpDispatchTranscript } =
@@ -93,6 +139,7 @@ describe("Gateway ACP completion ownership", () => {
     dispatchInboundMessageMock.mockReset();
     runtime.runTurn.mockReset();
     runtime.rejectTranscript = false;
+    runtime.terminalBarrier = undefined;
     testState.sessionStorePath = undefined;
     vi.restoreAllMocks();
   });
@@ -341,6 +388,14 @@ describe("Gateway ACP completion ownership", () => {
           message: `request ${temperature}`,
           idempotencyKey: runId,
         };
+        runtime.terminalBarrier = scenario.rpcAbort
+          ? undefined
+          : {
+              runId,
+              entered: createDeferred(),
+              joined: createDeferred(),
+              release: createDeferred(),
+            };
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
         expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
         if (scenario.rpcAbort) {
@@ -353,6 +408,18 @@ describe("Gateway ACP completion ownership", () => {
         }
         const admitted = await admissionCapture.promise;
         expect(admitted.release).toBeDefined();
+        const barrier = runtime.terminalBarrier;
+        if (barrier) {
+          await withinTest(Promise.all([barrier.entered.promise, barrier.joined.promise]), signal);
+          // The real lifecycle writer is held after capture, before its durable commit.
+          // Even once dispatch has joined that receipt, neither RPC may expose completion.
+          const pendingReplay = await rpcReq(ws, "chat.send", sendParameters);
+          expect.soft(pendingReplay.payload).toMatchObject({ runId, status: "in_flight" });
+          const pendingWait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 0 });
+          expect.soft(pendingWait.payload).toMatchObject({ status: "timeout" });
+          expect.soft(asOptionalRecord(pendingWait.payload)?.endedAt).toBeUndefined();
+          barrier.release.resolve();
+        }
         // Notifications coalesce; the captured owner releases only after post-dispatch cleanup.
         await admitted.release;
         let replayPayload: unknown;
@@ -509,6 +576,7 @@ describe("Gateway ACP completion ownership", () => {
         }
       }
     } finally {
+      runtime.terminalBarrier?.release.resolve();
       releaseTurn.resolve();
       await Promise.all(admittedReleases);
       ws.off("message", capture);

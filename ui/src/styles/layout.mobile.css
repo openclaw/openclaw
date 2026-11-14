@@ -23,7 +23,8 @@
   grid-template-areas:
     "topbar"
     "notice"
-    "content";
+    "content"
+    "save-status";
   /* The nav collapses to an overlay drawer here, so it no longer reserves a
      column. Zero the width the docked terminal reads or it would leave a
      258px gap and waste most of a phone viewport. */
@@ -278,10 +279,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     var(--floating-header-control) / 2 * var(--openclaw-corner-radius-scale)
   );
   grid-template-rows: 0 auto minmax(0, 1fr);
-  grid-template-areas:
-    "topbar"
-    "notice"
-    "content";
 
   & .topbar {
     position: absolute;
@@ -568,6 +565,13 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     padding-bottom: 0;
   }
 
+  /* Full-bleed route edges belong to the shell, including cold Systems entry
+     before the lazy chat sheets load. New Session keeps its own inset contract. */
+  .shell--mobile-nav .content--chat:not(.content--new-session) {
+    --content-inline-padding: 0px;
+    padding-inline: 0;
+  }
+
   /* Custodian owns its page inset and vertical rhythm. Keep the generic mobile
      content rule below from stacking shell spacing onto that owner. */
   main.content--custodian {
@@ -617,13 +621,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     margin: 0 8px 10px;
   }
 
-  .agent-chat__input-btn,
-  .chat-send-btn {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-  }
-
   .agent-chat__input-btn svg,
   .chat-send-btn svg {
     width: 16px;
@@ -670,6 +667,28 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* Controls take their phone size with the floating header and stacked rows. */
 @media (max-width: 640px) {
+  /* Page traits own the phone gutter even when a detail has no hub header.
+     Full-bleed panes keep their inset if a nested SettingsPage reports a trait. */
+  .shell--settings .content:not(.content--custodian),
+  .content.content--hub-header:not(.content--systems),
+  .content.content--settings-page:where(
+      :not(
+        .content--chat,
+        .content--custodian,
+        .content--workboard,
+        .content--plugin-embed,
+        .content--systems
+      )
+    ) {
+    --content-inline-padding: var(--space-3);
+    --settings-header-inline-padding: 0;
+    padding: var(--space-3) var(--space-3) var(--space-4);
+
+    .settings-page {
+      padding-inline: 0;
+    }
+  }
+
   .field input,
   .field textarea,
   .field select {

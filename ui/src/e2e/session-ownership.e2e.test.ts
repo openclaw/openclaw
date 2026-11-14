@@ -363,11 +363,11 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      // The 30px picker is centered in the 44px toolbar; the list adds 6px below it.
+      // The 28px picker is centered in the 44px toolbar; the list adds 6px below it.
       const ownerTitleBottom = await page
         .locator("#sidebar-session-owner-title")
         .evaluate((element) => element.getBoundingClientRect().bottom);
-      expect(idle.top - ownerTitleBottom).toBeCloseTo(13, 1);
+      expect(idle.top - ownerTitleBottom).toBeCloseTo(14, 1);
     }
     if (
       process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" &&
@@ -687,7 +687,7 @@ suite.define(() => {
     await menu.getByRole("dialog").waitFor();
     expect(await menu.locator("#sidebar-sessions-owner").count()).toBe(0);
     await menu.locator("#sidebar-sessions-group").click();
-    expect(await menu.getByRole("option", { name: "Person", exact: true }).count()).toBe(0);
+    await expectBrowser(menu.getByRole("option", { name: "Person", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await menu.locator("#sidebar-sessions-sort").click();
     expect(await menu.getByRole("option", { name: "Owners", exact: true }).count()).toBe(0);

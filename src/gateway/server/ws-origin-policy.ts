@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
@@ -7,6 +8,10 @@ import {
   isWebchatClient,
 } from "../../utils/message-channel.js";
 import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { resolveProfileActivityViewerId } from "../session-profile-activity-policy.js";
@@ -72,19 +77,25 @@ export function disconnectDisallowedGatewayPolicyClients(
     let currentRole: ReturnType<typeof resolveOperatorRolePolicyForProfile> = undefined;
     if (client.connect?.role === "operator") {
       try {
-        currentRole = resolveOperatorRolePolicyForProfile(
-          client.authenticatedUserProfile?.profileId,
-          cfg,
+        const principal = client.internal?.openclawIdPrincipal;
+        const member = principal?.kind === "member";
+        if (principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+          throw new Error("OpenClaw ID owner authority changed");
+        }
+        // A linked owner device keeps the owner's grants under its person's profile.
+        currentRole = openclawIdSubjectRolePolicy(principal, () =>
+          resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
         );
         roleAuthorityRevoked =
-          currentRole !== undefined &&
-          (!roleScopesAllow({
-            role: "operator",
-            requestedScopes: client.connect.scopes ?? [],
-            allowedScopes: currentRole.scopes,
-          }) ||
-            currentRole.accessPolicyPlugin !==
-              client.internal?.operatorAccessAuthority?.requiredPolicyPlugin);
+          (member && !isDeepStrictEqual(currentRole, client.internal?.openclawIdRolePolicy)) ||
+          (currentRole !== undefined &&
+            (!roleScopesAllow({
+              role: "operator",
+              requestedScopes: client.connect.scopes ?? [],
+              allowedScopes: currentRole.scopes,
+            }) ||
+              currentRole.accessPolicyPlugin !==
+                client.internal?.operatorAccessAuthority?.requiredPolicyPlugin));
       } catch {
         // A retired profile cannot retain its connection's grants.
         roleAuthorityRevoked = true;

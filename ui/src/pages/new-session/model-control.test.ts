@@ -113,10 +113,10 @@ it("waits for selected-agent defaults after catalog hydration", async () => {
   await vi.waitFor(() => expect(find("model-option", "openai/gpt-5.6-luna")).not.toBeNull());
   const loading = draw(null);
   const trigger = loading.querySelector("[data-chat-model-select]")!;
-  expect(trigger.getAttribute("aria-busy")).toBe("true");
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Loading models…");
-  expect(trigger.querySelector(".skeleton")?.getAttribute("aria-hidden")).toBe("true");
-  expect(trigger.textContent).not.toMatch(/Loading models|Default model/);
+  expect(trigger.getAttribute("aria-busy")).not.toBe("true");
+  expect(trigger.getAttribute("aria-label")).not.toContain("Loading models");
+  expect(trigger.querySelector(".skeleton")).toBeNull();
+  expect(trigger.textContent).not.toContain("Loading models");
   expect(controlElement(loading, "thinking-select")?.dataset.chatThinkingDisabled).toBe("true");
   const ready = draw(effortAgent);
   expect(controlElement(ready, "model-default", "true")?.textContent).toContain(sol.name);
@@ -140,7 +140,7 @@ it("preserves an explicitly remembered Off effort", async () => {
   expect(control.selected).toBe("");
 });
 
-it("renders an all-cold catalog as setup actions", async () => {
+it("keeps an all-cold catalog disabled with provider setup", async () => {
   const { control, context, draw, find, navigate } = setup(
     [luna, sol].map((model) =>
       Object.assign({}, model, {
@@ -150,16 +150,18 @@ it("renders an all-cold catalog as setup actions", async () => {
     ),
   );
   control.load(context, "main", true);
-  await vi.waitFor(() => expect(find("model-catalog-state", "ready")).not.toBeNull());
+  await vi.waitFor(() =>
+    expect(draw().querySelector("[data-chat-model-auth-state]")).not.toBeNull(),
+  );
   const container = draw();
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(luna.name);
-  const options = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
+  const options = [...container.querySelectorAll<HTMLElement>("[data-chat-model-option]")];
   expect(options).toHaveLength(2);
-  expect(options[0]?.textContent).toContain("Sign-in needed");
-  expect(
-    options.every((option) => !option.disabled && option.dataset.chatModelSetup === "true"),
-  ).toBe(true);
-  expect(container.textContent).toContain("No models available");
+  expect(options[0]?.getAttribute("aria-label")).toContain("Sign-in needed");
+  expect(options.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
+  expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
+    "Sign-in needed",
+  );
   find("model-setup", "true")!.click();
   expect(navigate).toHaveBeenCalledWith("model-setup");
 });
@@ -179,7 +181,7 @@ it("does not restore a stale preference when picker-open recovery succeeds", asy
   control.invalidate(false);
   control.load(context, "main", true, options);
   expect(find("model-catalog-state")).toBeNull();
-  expect(find("model-option", "openai/gpt-5.6-sol")?.disabled).toBe(false);
+  expect(find("model-option", "openai/gpt-5.6-sol")?.getAttribute("aria-disabled")).toBeNull();
   find("model-option", "openai/gpt-5.6-sol")!.click();
   expect(control.selected).toBe("openai/gpt-5.6-sol");
   refresh.reject(new Error("refresh failed"));
@@ -227,7 +229,7 @@ it("clears xhigh when an interactive model switch targets a profile ending at hi
     }),
   ]);
   control.load(context, "main", true);
-  await vi.waitFor(() => expect(find("model-option", "demo/limited")).not.toBeNull());
+  await vi.waitFor(() => expect(find("model-option", "kimi/k3")).not.toBeNull());
   control.selected = "kimi/k3";
   control.thinkingLevel = "xhigh";
   const search = draw().querySelector<HTMLInputElement>("[data-chat-model-search]")!;
@@ -260,6 +262,9 @@ it("retries failed discovery from the error action without refreshing models", a
   );
   control.load(context, "main", true);
   control.loadCatalogTargets(context, "main", true);
+  await vi.waitFor(() => expect(find("model-provider-toggle", "target:cliAgents")).not.toBeNull());
+  find("model-provider-toggle", "target:cliAgents")!.click();
+  flush();
   await vi.waitFor(() => expect(find("model-target-retry", "cliAgents")).not.toBeNull());
   control.loadCatalogTargets(context, "main", true);
   expect(catalogs).toHaveBeenCalledOnce();
@@ -531,7 +536,10 @@ it("clears speed when switching to a provider without a wire mapping", async () 
   ]);
   control.load(context, "main", true);
 
-  await vi.waitFor(() => expect(find("model-option", "ollama/llama-4")).not.toBeNull());
+  await vi.waitFor(() => expect(find("model-provider-toggle", "ollama")).not.toBeNull());
+  find("model-provider-toggle", "ollama")!.click();
+  flush();
+  expect(find("model-option", "ollama/llama-4")).not.toBeNull();
   find("speed-option", "on")?.click();
   expect(control.fastMode).toBe(true);
 
@@ -619,7 +627,7 @@ describe("runtime choices", () => {
     },
   ];
 
-  it("keeps the same-name runtime choice through preferences and create while using its own capabilities", async () => {
+  it("persists the same-name runtime and its capabilities, then restores the configured runtime", async () => {
     const { context } = contextWith(models);
     const gatewayUrl = "ws://runtime-choice.example";
     const changed = vi.fn((selection) =>
@@ -635,7 +643,17 @@ describe("runtime choices", () => {
       await vi.waitFor(() => expect(find("model-runtime", "codex")).not.toBeNull());
       find("model-runtime", "codex")!.click();
       expect(control).toMatchObject({ selected: "openai/gpt-5.6-sol", agentRuntime: "codex" });
-      find("context-window-toggle", "64k")!.click();
+      const container = draw();
+      const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
+      if (!picker.open) {
+        picker.querySelector("summary")!.click();
+        flush();
+      }
+      container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger")!.click();
+      flush();
+      [...container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
+        .find((item) => item.textContent?.trim() === "64K")!
+        .click();
       expect(control.contextWindow).toBe("64k");
       const changesBeforeReselect = changed.mock.calls.length;
       find("model-runtime", "codex")!.click();
@@ -679,7 +697,9 @@ describe("runtime choices", () => {
         preference: loadNewSessionPreference(gatewayUrl, "main"),
       });
       await vi.waitFor(() => expect(control.agentRuntime).toBe("codex"));
-      find("model-default", "true")!.click();
+      picker.querySelector("summary")!.click();
+      flush();
+      find("model-runtime", "openclaw")!.click();
       expect(control.modelForSubmission()).toBe("");
       expect(control.agentRuntime).toBeUndefined();
       expect(loadNewSessionPreference(gatewayUrl, "main")?.agentRuntime).toBeUndefined();

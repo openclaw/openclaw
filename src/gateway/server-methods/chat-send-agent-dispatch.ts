@@ -76,6 +76,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     client,
     context,
     toolsAllow,
+    deferWorkspaceBootstrap,
     skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
@@ -380,6 +381,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                     : {}),
                   runId: clientRunId,
                   operatorAuthority: admission.operatorAuthority,
+                  deferWorkspaceBootstrap,
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
@@ -428,11 +430,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(injectionDisposition.isCollaborationBlocked()
-                    ? { messageInjectionDisposition: "collaborative-steering-disabled" as const }
-                    : p.queueMode === "steer" && messageInjectionTarget
-                      ? { messageInjectionDisposition: "rejected" as const }
-                      : {}),
+                  ...injectionDisposition.replyOptions(
+                    p.queueMode === "steer" && Boolean(messageInjectionTarget),
+                  ),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({
@@ -618,6 +618,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           const hasTerminalAgentError =
             dispatchResult.collaborativeSteeringRefused ||
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
+          await dispatchErrorLifecycle.settleTerminalPersistence();
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
               await dispatchErrorLifecycle.recordUnstartedFailure({

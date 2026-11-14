@@ -40,6 +40,23 @@ const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
   "close-and-restart",
 );
+const signalObservers = resolveGlobalSet<unknown>(
+  Symbol.for("openclaw.signalExitObservers"),
+  "close-and-restart",
+);
+
+/** SIGINT/SIGTERM listeners added by `start` only redraw; the CLI owner keeps the exit. */
+export function startSignalObserver(start: () => void): () => void {
+  const before = new Set([...process.listeners("SIGINT"), ...process.listeners("SIGTERM")]);
+  start();
+  const added = [...process.listeners("SIGINT"), ...process.listeners("SIGTERM")].filter(
+    (listener) => !before.has(listener),
+  );
+  for (const listener of added) {
+    signalObservers.add(listener);
+  }
+  return () => added.forEach((listener) => signalObservers.delete(listener));
+}
 
 export function registerSignalExitGate(
   finished: Promise<void>,
@@ -142,7 +159,9 @@ function handleCliSignal(signal: CliExitSignal): void {
   }
   if (
     !cliDoctorSignalOwner &&
-    process.listeners(signal).some((existing) => existing !== cliSignalListeners[signal])
+    process
+      .listeners(signal)
+      .some((existing) => existing !== cliSignalListeners[signal] && !signalObservers.has(existing))
   ) {
     // Run first and relinquish the fallback synchronously: signal-exit observers
     // must see their original listener count, and custom owners retain their drain.

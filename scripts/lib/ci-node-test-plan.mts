@@ -5,10 +5,8 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
-import {
-  databaseWorkerCoreTestFiles,
-  isDatabaseWorkerCoreTestFile,
-} from "../../test/vitest/vitest.database-worker-core-paths.mjs";
+import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
@@ -71,6 +69,7 @@ import {
   EXTRA_LARGE_NODE_TEST_RUNNER,
   TOOLING_CONFIG,
   TOOLING_LARGE_CAPACITY_TEST_FILES,
+  routeBoatNodeTestJobs,
   resolveCompactNodeTestRunner,
   resolveSelectedNodeTestRunner,
 } from "./ci-node-test-capacity.mts";
@@ -152,6 +151,7 @@ export type NodeTestShard = Omit<
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
+  cpuBudget?: number;
   predictedSeconds?: number;
   predictedTestSeconds?: number;
 };
@@ -356,6 +356,9 @@ const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
   ["agentic-control-plane-agent-chat", 30],
   ["agentic-gateway-methods", 96],
+  // Run 43604797931 spent 21 and 29 minutes in 235- and 305-file groups.
+  ["agentic-agents-support", 64],
+  ["core-runtime-config", 64],
 ]);
 const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
 // Trusted forks can use the GitHub profile on Blacksmith. Every compact
@@ -1778,13 +1781,8 @@ function resolveAgentCoreShardName(file: string): string {
 }
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
-  const excludedTests = new Set(agentVitestProjectOwners.core.exclude);
   const groups = groupBy(
-    listTrackedTestFiles("src/agents").filter(
-      (file) =>
-        !relative("src/agents", file).replaceAll("\\", "/").includes("/") &&
-        !excludedTests.has(file),
-    ),
+    listScopedOwnerTestFiles(agentVitestProjectOwners.core),
     resolveAgentCoreShardName,
   );
 
@@ -2055,7 +2053,11 @@ function resolveInfraShardName(file: string): string {
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
   const groups = groupBy(
-    listTrackedTestFiles("src/infra").filter((file) => !isDatabaseWorkerCoreTestFile(file)),
+    listScopedOwnerTestFiles({
+      root: "src/infra",
+      include: ["src/infra/**/*.test.ts"],
+      exclude: [...databaseWorkerCoreTestFiles, ...boundaryTestFiles, ...cliProcessTestFiles],
+    }),
     resolveInfraShardName,
   );
   groups.set("core-runtime-infra-storage-state", [
@@ -3151,6 +3153,20 @@ export function createNodeTestShardBundles(options?: NodeTestPlanOptions): NodeT
 export function createNodeTestShardBundles(
   options: NodeTestPlanOptions = {},
 ): NodeTestShard[] | CompactNodeTestShard[] {
+  if (options.runnerBackend === "boat") {
+    const jobs = createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" });
+    const compact = options.compactMode !== undefined || options.compact === true;
+    return routeBoatNodeTestJobs(
+      jobs,
+      compact
+        ? Math.min(
+            COMPACT_NODE_TEST_JOB_CAP,
+            (options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP) +
+              jobs.filter((job) => job.requiresDist).length,
+          )
+        : undefined,
+    );
+  }
   const compactMode =
     options.compactMode ?? (options.compact === true ? "pull-request" : undefined);
   if (compactMode !== undefined) {
@@ -4214,6 +4230,13 @@ export function createSelectedNodeTestShardBundles(
       preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
     } = {},
 ): CompactNodeTestShard[] | null {
+  if (options.runnerBackend === "boat") {
+    const selected = createSelectedNodeTestShardBundles(targets, {
+      ...options,
+      runnerBackend: "hybrid",
+    });
+    return selected && routeBoatNodeTestJobs(selected, COMPACT_NODE_TEST_JOB_CAP);
+  }
   if (options.runnerBackend === "runson") {
     const selected = createSelectedNodeTestShardBundles(targets, {
       ...options,
@@ -4867,7 +4890,8 @@ function createCompactNodeTestShardBundles(
             hostedToolingTailDonation,
             collectTailDonation,
             selectedToolingFiles,
-            compactMode === "push" && options.runnerBackend === "github",
+            options.runnerBackend === "github" &&
+              (compactMode === "push" || options.mainValidation === true),
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const reducedToolingTier =

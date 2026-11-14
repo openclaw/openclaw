@@ -281,6 +281,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["device.token.revoke", "devices", "operator.pairing", "<=2026.7"],
   ["device.pair.setupCode", "device-pair-setup", "operator.admin", "<=2026.7", UNADVERTISED],
   ["device.pair.setupStatus", "device-pair-setup", "operator.admin", "2026.8", UNADVERTISED],
+  ["device.pair.code", "device-pair-code", "operator.admin", "2026.11", UNADVERTISED],
   ["node.rename", "nodes", "operator.pairing", "<=2026.7"],
   ["node.list", "nodes", "operator.read", "<=2026.7"],
   ["node.describe", "nodes", "operator.read", "<=2026.7"],
@@ -750,5 +751,9 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],
   ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
   ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
+  ["openclawId.account", "openclaw-id", "operator.read", "2026.11"],
   ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ["toolUsage.status", "tool-usage", "operator.admin", "2026.11"],
+  ["toolUsage.import", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
+  ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

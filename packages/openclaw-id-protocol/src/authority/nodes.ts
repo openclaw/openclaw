@@ -1,12 +1,19 @@
 // Node-only authority: pending invitations never admit a key; an owner signs every addition.
 import { hexToBytes } from "../bytes.js";
 import { inviteSecretHash } from "../invites.js";
-import { fingerprint, formatIrohEndpointKey, rawPublicKey, type IrohEndpointKey } from "../keys.js";
+import {
+  fingerprint,
+  formatIrohEndpointKey,
+  rawPublicKey,
+  type IrohEndpointKey,
+  type KeyFingerprint,
+} from "../keys.js";
 import { MAX_NODE_INVITE_LIFETIME_SECONDS, verifyNodeRedemption } from "../node-invites.js";
 import {
   MAX_INVITES,
   MAX_NODES,
   type MembershipTarget,
+  type OwnerDeviceNode,
   type UnixSeconds,
 } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
@@ -21,6 +28,7 @@ import {
   type AuthorityEvent,
   type AuthorityResult,
   type AuthorityState,
+  type OwnerApprover,
 } from "./state.js";
 
 /** Register a single-use NodeInviteCap directly; member and node invite IDs share one namespace. */
@@ -143,19 +151,13 @@ export async function addNode(
   if (invite.pending.peer_key !== target.peer_key) {
     return refuse(state, "target_mismatch", "approval does not match pending node");
   }
-  // A raw key cannot have both node authority and human/root authority, even with a different prefix.
-  if (
-    formatIrohEndpointKey(rawPublicKey(state.anchor.root_pub)) === target.peer_key ||
-    Object.values(state.owner_devices).some(
-      (record) =>
-        formatIrohEndpointKey(rawPublicKey(record.cert.body.device_pub)) === target.peer_key ||
-        record.cert.body.peer_keys.includes(target.peer_key),
-    ) ||
-    Object.values(state.members).some((member) => member.peer_keys.includes(target.peer_key))
-  ) {
+  if (isHumanKey(state, target.peer_key)) {
     return refuse(state, "target_mismatch", "node key is already a human authority key");
   }
   const existing = state.nodes[target.peer_key];
+  if (existing?.owner_device) {
+    return refuse(state, "target_mismatch", "node key belongs to an owner device");
+  }
   if (!existing && Object.keys(state.nodes).length >= MAX_NODES) {
     return refuse(state, "limit_reached", `a claw has at most ${MAX_NODES} nodes`);
   }
@@ -182,6 +184,74 @@ export async function addNode(
       { type: "notify_owners", event: "redemption_resolved", ref: target.invite_id },
       { type: "publish_snapshot" },
     ],
+  );
+}
+
+/** A raw key cannot have both node authority and human/root authority, even with a different prefix. */
+export function isHumanKey(state: AuthorityState, key: IrohEndpointKey): boolean {
+  return (
+    formatIrohEndpointKey(rawPublicKey(state.anchor.root_pub)) === key ||
+    Object.values(state.owner_devices).some(
+      (record) =>
+        formatIrohEndpointKey(rawPublicKey(record.cert.body.device_pub)) === key ||
+        record.cert.body.peer_keys.includes(key),
+    ) ||
+    Object.values(state.members).some((member) => member.peer_keys.includes(key))
+  );
+}
+
+/** Node keys bound to these owner devices. */
+export function ownerDeviceNodes(
+  state: AuthorityState,
+  fps: ReadonlySet<KeyFingerprint>,
+): IrohEndpointKey[] {
+  return (
+    Object.entries(state.nodes)
+      .filter(([, node]) => node.owner_device !== undefined && fps.has(node.owner_device))
+      // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+      .map(([key]) => key as IrohEndpointKey)
+  );
+}
+
+/**
+ * Lists `node` as the node of owner device `fp`, replacing any other node bound to it. `state`
+ * already lists the device (with its new certificate), so its own keys count as human keys.
+ */
+export function bindOwnerDeviceNode(
+  state: AuthorityState,
+  fp: KeyFingerprint,
+  node: OwnerDeviceNode,
+  approver: OwnerApprover,
+  now: UnixSeconds,
+): AuthorityResult {
+  if (isHumanKey(state, node.peer_key)) {
+    return refuse(state, "target_mismatch", "node key is already a human authority key");
+  }
+  const existing = state.nodes[node.peer_key];
+  if (existing && existing.owner_device !== fp) {
+    return refuse(state, "target_mismatch", "node key is already another node");
+  }
+  const replaced = ownerDeviceNodes(state, new Set([fp])).filter((key) => key !== node.peer_key);
+  const kept = withoutNodes(state, replaced);
+  if (!existing && Object.keys(kept.nodes).length >= MAX_NODES) {
+    return refuse(state, "limit_reached", `a claw has at most ${MAX_NODES} nodes`);
+  }
+  return applied(
+    {
+      ...kept,
+      nodes: {
+        ...kept.nodes,
+        [node.peer_key]: {
+          label: node.label,
+          description: node.description,
+          listed_seq: existing?.listed_seq ?? state.seq,
+          added_by: approver,
+          last_seen: existing?.last_seen ?? now,
+          owner_device: fp,
+        },
+      },
+    },
+    replaced.length ? nodeRemovalEvents(replaced) : [],
   );
 }
 

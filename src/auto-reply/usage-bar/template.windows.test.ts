@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { captureModelCostPricing } from "../../utils/usage-format.js";
 import { resolveResponseUsageLine } from "../reply/agent-runner-usage-line.js";
 import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 
@@ -31,14 +32,15 @@ describe.runIf(process.platform === "win32")("usage footer Windows home paths", 
         JSON.stringify({ segments: [{ text: "WINDOWS CUSTOM FOOTER" }] }),
       );
 
-      const rendered = resolveResponseUsageLine({
+      const rendered = await resolveResponseUsageLine({
+        preparePricing: () =>
+          captureModelCostPricing({}, "C:\\openclaw\\agents\\main\\agent", false),
         config: {
           messages: {
             responseUsage: "full",
             usageTemplate: `~\\${fileName}`,
           },
         } as OpenClawConfig,
-        agentDir: "C:\\openclaw\\agents\\main\\agent",
         sessionRaw: "full",
         usage: { input: 12, output: 3 },
         provider: "fixture",
