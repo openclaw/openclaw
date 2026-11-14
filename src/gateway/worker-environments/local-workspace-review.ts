@@ -39,7 +39,10 @@ export async function readLocalWorkspaceReviewBase(params: {
   ) {
     throw new Error("Local workspace review binding belongs to another session incarnation");
   }
-  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", {
+    id: binding.id,
+    ownerKind: "session",
+  });
   const worktree = await readRegistryWorktree(context, binding.id);
   const assertWorktreeCurrent = accept(worktree);
   const assertCurrent = () => {

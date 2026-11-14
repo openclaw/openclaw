@@ -16,6 +16,8 @@ import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
+import { readLocalWorkspacePath } from "../../gateway/worker-environments/local-workspace-read.js";
+import { readLocalWorkspaceReviewBase } from "../../gateway/worker-environments/local-workspace-review.js";
 import { withLocalWorkspaceStore } from "../../gateway/worker-environments/local-workspace-store.js";
 import { localWorkspaceProjectionFixture } from "../../gateway/worker-environments/local-workspace-store.test-support.js";
 import * as nativeSqlite from "../../infra/node-sqlite.js";
@@ -60,39 +62,45 @@ async function managedWorkspace(row = localWorkspaceProjectionFixture(randomUUID
   return { row, sessionKey, worktree, scope, session, cfg };
 }
 
+function changeDuringRegistryRead(
+  worktree: ManagedWorktreeRecord,
+  change: string,
+  reader: "readRegistryWorktree" | "readLiveRegistryWorktreeByPath" = "readRegistryWorktree",
+) {
+  const read = registryRead[reader];
+  return vi.spyOn(registryRead, reader).mockImplementationOnce(async (...args) => {
+    const selected = await read(...args);
+    if (change === "unrelated publication") {
+      await insertRegistryWorktree(process.env, {
+        ...worktree,
+        id: randomUUID(),
+        name: "unrelated",
+        path: path.join(state.root, "unrelated"),
+        ownerId: "agent:main:unrelated",
+      });
+    } else {
+      await updateRegistryWorktree(
+        process.env,
+        worktree.id,
+        change === "selected removal"
+          ? { removedAt: 2 }
+          : {
+              repositoryIdentity: {
+                repoRoot: path.join(state.root, "replacement"),
+                repoFingerprint: "replacement",
+              },
+            },
+      );
+    }
+    return selected;
+  });
+}
+
 it.each(["unrelated publication", "selected identity", "selected removal"])(
   "scopes local workspace resolution while reading across %s",
   async (change) => {
     const { worktree, scope, cfg } = await managedWorkspace();
-    const read = registryRead.readRegistryWorktree;
-    using _ = vi
-      .spyOn(registryRead, "readRegistryWorktree")
-      .mockImplementationOnce(async (...args) => {
-        const selected = await read(...args);
-        if (change === "unrelated publication") {
-          await insertRegistryWorktree(process.env, {
-            ...worktree,
-            id: randomUUID(),
-            name: "unrelated",
-            path: path.join(state.root, "unrelated"),
-            ownerId: "agent:main:unrelated",
-          });
-        } else {
-          await updateRegistryWorktree(
-            process.env,
-            worktree.id,
-            change === "selected removal"
-              ? { removedAt: 2 }
-              : {
-                  repositoryIdentity: {
-                    repoRoot: path.join(state.root, "replacement"),
-                    repoFingerprint: "replacement",
-                  },
-                },
-          );
-        }
-        return selected;
-      });
+    using _ = changeDuringRegistryRead(worktree, change);
     const resolving = resolveLocalWorkspaceOwner({ ...scope, cfg });
     if (change === "unrelated publication") {
       using owner = await resolving;
@@ -103,6 +111,37 @@ it.each(["unrelated publication", "selected identity", "selected removal"])(
     }
   },
 );
+
+it.each([
+  ["review base", "unrelated publication"],
+  ["review base", "selected removal"],
+  ["path", "unrelated publication"],
+  ["path", "selected removal"],
+])("scopes the local workspace %s read across %s", async (reader, change) => {
+  const { row, sessionKey, worktree, session } = await managedWorkspace();
+  row.projection_path = localWorkspaceProjectionPath({ worktree, env: process.env });
+  await withLocalWorkspaceStore({ worktreeId: worktree.id }, (store) => store.create(row));
+  const review = reader === "review base";
+  using _ = changeDuringRegistryRead(
+    worktree,
+    change,
+    review ? "readRegistryWorktree" : "readLiveRegistryWorktreeByPath",
+  );
+  const read = review
+    ? readLocalWorkspaceReviewBase({
+        agentId: "main",
+        sessionKey,
+        entry: session,
+        cwd: worktree.path,
+        assertCurrent: () => {},
+      })
+    : readLocalWorkspacePath({ cwd: worktree.path, worktreeId: worktree.id });
+  await (change === "unrelated publication"
+    ? expect(read).resolves.toMatchObject(
+        review ? { baseCommit: row.base_commit } : { worktreeId: worktree.id },
+      )
+    : expect(read).rejects.toBeInstanceOf(WorktreeRemovalContentionError));
+});
 
 it.each([
   ["retired worktree", "Worktree owner or binding changed"],
