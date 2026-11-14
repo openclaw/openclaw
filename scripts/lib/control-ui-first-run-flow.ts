@@ -18,7 +18,7 @@ const aliasInput = `${wizard} input[placeholder="e.g. local, ollama"]`;
 const imageChoice = `${wizard} .wizard-step__message + openclaw-modal-actions button`;
 const setupConsent = '.custodian__option-card [data-option-value="Yes — set it up"]';
 const agentHandoff = '.custodian__option-card [data-option-value="Talk to my agent"]';
-const composer = '.chat-pane-cache__pane--active textarea[aria-label="Chat composer"]';
+const composer = ".chat-pane-cache__pane--active .agent-chat__composer-combobox > textarea";
 const send = '.chat-pane-cache__pane--active button[aria-label="Send message"]';
 const reply = ".chat-pane-cache__pane--active .chat-group.assistant .chat-text";
 

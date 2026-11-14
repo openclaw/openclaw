@@ -81,6 +81,15 @@ async function mountTalk(
   return { ...view, request };
 }
 
+// Safari AutoFill reads a field's label element; with only aria-label it guesses the
+// field type from nearby transcript text and offers AutoFill Contact on iPhone.
+it("names the composer with a label element", () => {
+  const { textarea } = renderComposer({}, true);
+  expect(Array.from(textarea.labels ?? [], (label) => label.textContent)).toEqual([
+    t("chat.composer.composerInput"),
+  ]);
+});
+
 it("shares the active caret on input and selection-only changes", () => {
   const draft = "First line\n😀 second line\nLast line  ";
   const onTypingChange = vi.fn();
