@@ -10,6 +10,7 @@ import { buildTemplateAddPlan } from "./lifecycle.js";
 import { buildTemplateProject } from "./project-build.js";
 import { templateProjectBuildEntrypoint } from "./project-runtime.test-support.js";
 import { TemplateProjectError, createTemplateProject, validateTemplateProject } from "./project.js";
+import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GOLDEN_ARTIFACT_INTEGRITY =
@@ -485,5 +486,27 @@ describe("Template project packages", () => {
     const second = await buildTemplateProject(project, join(dirname(output), "second.tgz"));
 
     expect(first.integrity).not.toBe(second.integrity);
+  });
+
+  it("builds a package bootstrap between the managed-file and workspace-bootstrap byte limits", async () => {
+    const { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } =
+      await import("../agents/workspace-bootstrap-read.js");
+    const bootstrapBytes = 1_680_008;
+    expect(bootstrapBytes).toBeGreaterThan(MAX_MANAGED_FILE_BYTES);
+    expect(bootstrapBytes).toBeLessThanOrEqual(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+    await writeFile(
+      join(project, "BOOTSTRAP.md"),
+      `${"# Bootstrap\n\n".padEnd(bootstrapBytes, " ")}Done.\n`,
+    );
+
+    const validation = await validateTemplateProject(project);
+    assert(validation.ok, JSON.stringify(validation.diagnostics));
+
+    const result = await buildTemplateProject(project, output);
+    expect(result.files).toContain("BOOTSTRAP.md");
+    const unpacked = tempDirs.make("openclaw-template-bootstrap-limit-unpacked-");
+    await tar.x({ cwd: unpacked, file: output, strict: true });
+    const extracted = await readFile(join(unpacked, "package", "BOOTSTRAP.md"), "utf8");
+    expect(extracted).toContain("Done.");
   });
 });
