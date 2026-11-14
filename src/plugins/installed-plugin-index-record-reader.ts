@@ -436,6 +436,14 @@ function mergeRecoveredManagedNpmInstallRecords(
   const recovered = buildRecoveredManagedNpmInstallRecords(persisted, options);
   const merged = copyPluginInstallRecordMap(persisted ?? undefined);
   for (const [pluginId, record] of Object.entries(recovered)) {
+    // A recovered manifest plugin ID can supersede a persisted record that a
+    // strict reader keyed by the npm package name for the same install path.
+    // Drop the superseded key so the path keeps a single authoritative owner.
+    for (const [persistedId, persistedRecord] of Object.entries(merged)) {
+      if (persistedId !== pluginId && recordsShareInstallPath(persistedRecord, record)) {
+        delete merged[persistedId];
+      }
+    }
     setPluginInstallRecordMapEntry(
       merged,
       pluginId,

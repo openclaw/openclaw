@@ -236,6 +236,33 @@ describe("plugin index install records store", () => {
     );
   });
 
+  it("reconciles a persisted package-name record when the JSON5 manifest declares its id", async () => {
+    const stateDir = makeStateDir();
+    const packageName = "@vendor/demo";
+    const packageDir = managedPlugin(stateDir, "demo", "2026.5.2", packageName);
+    // A strict reader cannot parse this JSON5 manifest, so a released install
+    // records the fallback npm package name as its key.
+    fs.writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      `{
+        // JSON5 manifest with an unquoted key and trailing comma.
+        id: 'demo',
+        configSchema: { type: 'object' },
+      }`,
+      "utf8",
+    );
+    await seedRecords(
+      stateDir,
+      {
+        [packageName]: npmRecord(packageName, "2026.5.2", packageDir),
+      },
+      [createPluginCandidate(stateDir, "demo")],
+    );
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expect(loaded.demo).toMatchObject(npmRecord(packageName, "2026.5.2", packageDir));
+    expect(loaded[packageName]).toBeUndefined();
+  });
+
   it("recovers a valid managed generation with an obsolete exact-version selector", async () => {
     const recoveredVersion = "2026.7.1";
     const stateDir = makeStateDir();
