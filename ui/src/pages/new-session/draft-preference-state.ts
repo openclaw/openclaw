@@ -181,15 +181,11 @@ export class DraftPreferenceState {
       return ordinary;
     }
     const palette = this.callbacks.readPalettePreference?.();
-    const selection =
-      palette?.agentId === normalizeAgentId(agentId) ? palette.selection : undefined;
     // Name is one-use input belonging to the foreground draft, not a default
     // the lightweight launcher can silently borrow or consume.
     return {
       ...ordinary,
-      ...selection,
-      // A remembered palette model must not borrow another model’s ordinary runtime pin.
-      ...(selection && "model" in selection ? { agentRuntime: selection.agentRuntime } : {}),
+      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
       worktreeName: "",
     };
   }

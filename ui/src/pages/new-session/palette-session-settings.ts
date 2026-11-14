@@ -5,6 +5,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { pathDisplayName } from "../../lib/path-display.ts";
 import type { NewSessionDraft } from "./draft.ts";
 import { environmentCloudDisabledReason } from "./hosted-environments.ts";
+import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { draftWhereChipParams, resolveWhereChip } from "./where-chip.ts";
 import "../../styles/palette-session-settings.css";
@@ -16,6 +17,7 @@ registerCommandPaletteEnglish();
 export type SettingsOptions = {
   draft: NewSessionDraft;
   context: ApplicationContext | undefined;
+  preferences: PaletteSessionPreferences;
   identityTargetsRef: (read: () => readonly string[]) => void;
   onIdentityTargetsChange: () => void;
   onChange: () => void;

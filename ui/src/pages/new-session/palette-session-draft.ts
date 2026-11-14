@@ -5,7 +5,6 @@ import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { showToast } from "../../lib/toast.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import {
@@ -13,9 +12,9 @@ import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
-import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { showBackgroundSessionCreated } from "./background-session-notice.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraft } from "./draft.ts";
@@ -24,7 +23,6 @@ import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteDraftSlot, PaletteReleasedStarts } from "./palette-session-starts.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
-import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
 
 registerCommandPaletteEnglish();
@@ -151,7 +149,7 @@ export class PaletteSessionDraft {
     return (
       submission?.error ??
       (submission?.submissionOutcomeUnknown ? submission.submitDisabledReason() : null) ??
-      null
+      (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
   }
   get disabledReason(): string | undefined {
@@ -349,6 +347,7 @@ export class PaletteSessionDraft {
         onInvalidate: () => {
           if (owns()) {
             this.retireSubmissionPresentation();
+            this.preferences.retirePresentation();
             this.connectMachine.close();
           }
         },
@@ -359,27 +358,6 @@ export class PaletteSessionDraft {
         },
         onAccepted: (result) => {
           slot.accepted = true;
-          const context = this.read().context;
-          const preferenceOwner = slot.draft.gateway.preferenceState;
-          if (context && preferenceOwner && preferenceOwner.mode !== "local") {
-            const isCurrentOwner = captureSessionNoticeOwner(context);
-            const place = slot.draft.place;
-            const selection = place.preferenceSelection();
-            // Last-used defaults exclude one-use worktree names and account pins.
-            delete selection.worktreeName;
-            selection.model = place.modelControl.selected;
-            selection.agentRuntime = place.modelControl.agentRuntime;
-            slot.preferenceWrite = slot.draft.gateway
-              .savePalettePreference({ agentId: result.agentId, selection })
-              .then((saved) => {
-                if (!saved && this.read().context === context && isCurrentOwner()) {
-                  showToast({
-                    severity: "warning",
-                    message: t("commandPalette.lastUsedSaveFailed"),
-                  });
-                }
-              });
-          }
           showBackgroundSessionCreated(
             () => this.read().context,
             result,
@@ -397,6 +375,7 @@ export class PaletteSessionDraft {
 
   close() {
     this.retireSubmissionPresentation();
+    this.preferences.retirePresentation();
     this.coldSubmit = undefined;
     // Dismissal hides the launcher, not its new-session draft. Reads retain their
     // original custody until completion, owner replacement, or disconnect.
@@ -531,6 +510,7 @@ export class PaletteSessionDraft {
       options: {
         draft,
         context: this.read().context,
+        preferences: this.preferences,
         identityTargetsRef: (read: () => readonly string[]) => {
           this.readAgentIdentityTargets = read;
         },

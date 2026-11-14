@@ -126,22 +126,14 @@ new background session without changing your current conversation or composer.
 
 Each newly added attachment switches the palette to **Compose**, including after
 you return to Search with an attachment still in the draft.
-Add optional instructions, choose the agent, project, and model, then send
-or press **Cmd/Ctrl+Enter**. The agent selector appears only when more than one
-agent is available. The **New worktree** switch stays inside the project menu, and
-the project shows a branch icon while it is on. Dropping a
-file does not start the session by itself. Images can still be pasted and files
-dropped without an attachment button.
+Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
+button at the left of the composer opens **New session settings** for the agent,
+folder, worktree, and **Remember settings**; the model picker sits beside Send.
+Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
-
-For signed-in users, successful session creation remembers the palette’s agent,
-project, worktree, and model choices for that account and Gateway. Browsing,
-cancelling, or a failed creation does not replace those choices. This does not
-change the full New Session page’s preferences. The Gateway’s configured-model
-defaults policy still applies; reasoning follows the ordinary defaults.
 
 Closing the palette keeps its attachment draft in memory for the same Gateway
 and account. When files moved the palette to Compose, removing them and clearing

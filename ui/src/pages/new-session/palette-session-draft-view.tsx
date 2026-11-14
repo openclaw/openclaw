@@ -16,6 +16,7 @@ export function PaletteSessionControls(props: DraftProps) {
   return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
 }
 
+/** The existing New Session model picker; effort keeps following ordinary defaults. */
 export function PaletteSessionModel(props: DraftProps) {
   const view = createMemo(() => {
     void props.revision;
