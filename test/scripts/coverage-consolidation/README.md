@@ -65,3 +65,11 @@ test/tsconfig/tsconfig.core.test.gateway-other.json --incremental`) stopped on
 missing `tsrs/package.json`; the other gateway typecheck shards were not run.
 Pinned formatting and syntax checks passed for all 28 surviving TypeScript
 files. Runtime/typecheck validation remains pending exact-head draft CI.
+
+## Validation restorations
+
+`src/gateway/session-history-cold.benchmark.test.ts` is retained at its original
+136 lines from `18892937`. Its real cold-history RPC coverage did not transfer
+to the worker fixture: the added historical-session selector was invalid.
+The archived worker case is restored from the same revision; no deletion credit
+or equivalent-coverage claim remains for the benchmark.
