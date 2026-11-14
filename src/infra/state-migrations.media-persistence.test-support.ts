@@ -39,6 +39,7 @@ import {
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 export const PREVIOUS_VERSION = 16;
 
@@ -75,7 +76,9 @@ export function createLegacyDatabaseFixture(params: {
   {
     using database = openNodeSqliteDatabase(databasePath);
     if (legacy) {
-      seedOpenClawAgentSchemaV21(database, agentId);
+      runSqliteImmediateTransactionSync(database, () => {
+        seedOpenClawAgentSchemaV21(database, agentId);
+      });
     }
     database.exec("PRAGMA foreign_keys = ON;");
     if (schemaVersion < 21) {
