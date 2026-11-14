@@ -38,6 +38,25 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun claudeCliHistoryShowsBridgedOpenClawToolsAsTheCalledTool() {
+    val cases =
+      listOf(
+        """"name":"mcp__openclaw__exec","arguments":{"command":"ls -la"}""" to "exec",
+        """"name":"mcp_openclaw_exec","arguments":{"command":"ls -la"}""" to "exec",
+        """"name":"mcp__openclaw__tool_call","arguments":{"id":"exec","args":{"command":"ls -la"}}""" to "exec",
+        """"name":"mcp__github__search_issues","arguments":{"command":"ls -la"}""" to "mcp__github__search_issues",
+      )
+    for ((fields, name) in cases) {
+      val tool =
+        checkNotNull(
+          parseChatMessageContent(Json.parseToJsonElement("""{"type":"toolcall","id":"toolu_1",$fields}"""))?.toolActivity,
+        )
+      assertEquals(fields, name, tool.name)
+      assertEquals(fields, "command: ls -la", tool.detail)
+    }
+  }
+
+  @Test
   fun invalidDispatcherIdsKeepTheOriginalDisplayArguments() {
     for (idField in listOf("", "\"id\":\"\",", "\"id\":\" \",", "\"id\":3,", "\"id\":null,", "\"id\":{},", "\"id\":[],")) {
       val tool =
