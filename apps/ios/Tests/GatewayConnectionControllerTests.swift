@@ -521,6 +521,22 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `current commands include location when enabled`() {
+        withUserDefaults([
+            "node.instanceId": "ios-test",
+            "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
+            let commands = Set(controller._test_currentCommands())
+
+            #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
+        }
+    }
+
     @Test(arguments: [CLAuthorizationStatus.notDetermined, .denied, .restricted])
     @MainActor func `location permission without app authorization skips global services`(
         status: CLAuthorizationStatus) async
