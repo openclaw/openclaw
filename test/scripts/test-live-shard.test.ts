@@ -60,12 +60,17 @@ it("discovers live tests without scanning source roots in-process", () => {
   });
 });
 
-it("covers every native live test in the release partition", () => {
+it("covers every native live test except the manual thinking experiment in the release partition", () => {
   const selectedFiles = live.RELEASE_LIVE_TEST_SHARDS.flatMap((shard) =>
     live.selectLiveShardFiles(shard, allFiles),
   );
   expect(allFiles.length).toBeGreaterThan(0);
-  expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
+  const manualProbe = "src/gateway/gateway-thinking-probe.live.test.ts";
+  expect(allFiles).toContain(manualProbe);
+  expect(selectedFiles).not.toContain(manualProbe);
+  expect(
+    [...new Set([...selectedFiles, manualProbe])].toSorted((a, b) => a.localeCompare(b)),
+  ).toEqual(allFiles);
 });
 
 it.each([
@@ -198,6 +203,10 @@ it("requires live shard report evidence for each selected file", () => {
 
 it.each([
   ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
+  [
+    "src/gateway/gateway-personal-native-child-abort.live.test.ts",
+    "OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP",
+  ],
   ["src/agents/tools/sessions-send-retained-child.live.test.ts", "OPENCLAW_LIVE_RETAINED_CHILD"],
 ])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
   const payload = report(

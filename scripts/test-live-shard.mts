@@ -97,6 +97,10 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-codex-bind.live.test.ts", ["OPENCLAW_LIVE_CODEX_BIND"]],
   ["src/gateway/gateway-codex-harness.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/gateway/gateway-openai-long-context.live.test.ts", ["OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"]],
+  [
+    "src/gateway/gateway-personal-native-child-abort.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP"],
+  ],
   ["src/gateway/gateway-trajectory-export.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/infra/push-apns-http2.live.test.ts", ["OPENCLAW_LIVE_APNS_REACHABILITY"]],
   ["test/e2e/crabbox-sandbox.live.test.ts", ["OPENCLAW_E2E_CRABBOX"]],
@@ -271,7 +275,12 @@ function isExtensionInRange(file: string, start: string, end: string) {
 }
 
 function isSourceGatewayLiveTest(file: string) {
-  return file.startsWith("src/gateway/") || file.startsWith("src/system-agent/");
+  // The thinking experiment is deliberately manual-only; its dedicated command
+  // records observations and refuses CI execution, rather than qualifying a release.
+  return (
+    file !== "src/gateway/gateway-thinking-probe.live.test.ts" &&
+    (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"))
+  );
 }
 
 function isGatewayBackendLiveTest(file: string) {
