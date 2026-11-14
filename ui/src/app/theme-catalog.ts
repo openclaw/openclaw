@@ -48,6 +48,8 @@ export function createThemeCatalog(
   const definitionErrors = new Map<string, Error | string>();
   const requested = new Set<string>();
   let readScope = {};
+  // Each refresh supersedes earlier list and palette reads on the same connection and profile.
+  let generation = 0;
   let retired = Promise.withResolvers<void>();
   let catalogRead: Promise<void> | undefined;
   const definitionReads = new Map<ThemeName, Promise<void>>();
@@ -73,8 +75,13 @@ export function createThemeCatalog(
     };
   };
 
-  const remainsCurrent = (client: ApplicationGateway["snapshot"]["client"], profile?: string) =>
+  const remainsCurrent = (
+    client: ApplicationGateway["snapshot"]["client"],
+    profile: string | undefined,
+    read: number,
+  ) =>
     !disposed &&
+    read === generation &&
     gateway.snapshot.phase === "connected" &&
     gateway.snapshot.client === client &&
     gateway.snapshot.selfUser?.id === profile;
@@ -107,13 +114,14 @@ export function createThemeCatalog(
     ownerClient = client;
     ownerProfile = gateway.snapshot.selfUser?.id;
     const profile = ownerProfile;
+    const read = ++generation;
     requested.clear();
     definitionErrors.clear();
     definitionReads.clear();
     const operation = (async () => {
       try {
         const result = await client.request<ThemesListResult>("themes.list", {});
-        if (!remainsCurrent(client, profile)) {
+        if (!remainsCurrent(client, profile, read)) {
           return;
         }
         const available = new Set<string>(result.themes.map((theme) => theme.id));
@@ -132,7 +140,7 @@ export function createThemeCatalog(
         };
         onChange();
       } catch (error) {
-        if (remainsCurrent(client, profile)) {
+        if (remainsCurrent(client, profile, read)) {
           snapshot = {
             ...snapshot,
             error: error instanceof ThemeValidationError ? error : formatUiError(error),
@@ -161,16 +169,20 @@ export function createThemeCatalog(
     }
     requested.add(id);
     const profile = gateway.snapshot.selfUser?.id;
+    const read = generation;
+    // A refresh may remove the theme while its palette read is still pending.
+    const publishes = () =>
+      remainsCurrent(client, profile, read) && snapshot.themes.some((theme) => theme.id === id);
     const operation = client.request<ThemesGetResult>("themes.get", { id }).then(
       (result) => {
-        if (!remainsCurrent(client, profile)) {
+        if (!publishes()) {
           return;
         }
         rememberDefinition(result);
         onChange();
       },
       (error: unknown) => {
-        if (remainsCurrent(client, profile)) {
+        if (publishes()) {
           definitionErrors.set(
             id,
             error instanceof ThemeValidationError ? error : formatUiError(error),
