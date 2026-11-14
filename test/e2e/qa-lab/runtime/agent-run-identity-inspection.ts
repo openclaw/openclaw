@@ -440,7 +440,6 @@ async function runProof(options: QaProducerOptions): Promise<string> {
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(options.repoRoot, "dist/index.js")],

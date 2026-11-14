@@ -134,7 +134,6 @@ describe.skipIf(process.platform !== "linux")("Codex worker-hosted app-server co
           catalogPreload.searchParams.set("provisioning", staged.sourceHome);
           gateway = await gatewayOwner.start({
             repoRoot: process.cwd(),
-            initializeCurrentRuntimeState: true,
             command: {
               executablePath: process.execPath,
               argsPrefix: ["dist/index.js"],

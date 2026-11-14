@@ -96,14 +96,6 @@ export async function runQaFlowSuiteStandard(
     const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
-      // Telegram's bounded package command targets this candidate's dist entry.
-      // Alternate/released commands keep the upgrade repair path.
-      initializeCurrentRuntimeState:
-        params?.channelDriver === "live" &&
-        params.channelId === "telegram" &&
-        (!params.sutOpenClawCommand ||
-          params.sutOpenClawCommand.processBoundary?.runtimeArgsPrefix.at(-1) ===
-            path.join(repoRoot, "dist", "index.js")),
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
       transport,
       transportBaseUrl: lab.listenUrl,

@@ -251,7 +251,6 @@ async function runPluginToolProof(repoRoot: string) {
   try {
     gateway = await gatewayOwner.start({
       repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       providerMode: "mock-openai",
