@@ -130,7 +130,6 @@
 .usage-toolbar,
 .daily-chart-header,
 .sessions-card-header,
-.sessions-card-meta,
 .timeseries-header-row,
 .context-breakdown-header,
 .session-detail-header,
@@ -1685,13 +1684,9 @@ select.usage-creator-filter {
   gap: 14px;
 }
 
-.sessions-card-stats {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
+/* Sort controls share the count row and stay together at its end. */
 .sessions-sort {
+  margin-inline-start: auto;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2111,7 +2106,6 @@ select.usage-creator-filter {
 
   .usage-date-range,
   .usage-query-actions,
-  .sessions-card-meta,
   .timeseries-controls {
     justify-content: flex-start;
   }
