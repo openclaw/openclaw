@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 export async function prepareControlUiSettings(
   repoRoot: string,
   scripts = path.resolve(import.meta.dirname, ".."),
+  pluginIds: readonly string[] = [],
 ): Promise<void> {
   if (!fs.existsSync(path.join(repoRoot, "extensions"))) {
     return;
@@ -26,6 +27,7 @@ export async function prepareControlUiSettings(
       distArtifactEntryArgs(path.join(scripts, "build-plugin-control-ui.mts"), [
         "--prepare-settings",
         repoRoot,
+        ...pluginIds,
       ]),
       { cwd: repoRoot, maxBuffer: 1024 * 1024 },
     ),

@@ -75,13 +75,29 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
   });
   plugin.write("index.ts", "export {};");
   plugin.write("browser.ts", 'export default {label: "Fixture"};');
+  // Comparisons request non-Settings plugin UIs that another checkout packaged.
+  for (const id of ["panel", "unrequested"]) {
+    const extra = fixtureFiles(files.file(`extensions/${id}`));
+    extra.json("package.json", {
+      name: `@openclaw/${id}`,
+      type: "module",
+      openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
+    });
+    extra.json("openclaw.plugin.json", {
+      id,
+      configSchema: { type: "object" },
+      controlUi: { entry: "dist/control-ui/source/index.js" },
+    });
+    extra.write("index.ts", "export {};");
+    extra.write("browser.ts", `export default {label: "${id}"};`);
+  }
   files.write("dist/plugin-sdk/provider-usage.js", "export const usage = 42;");
 
   const lock = await acquireDistArtifactOwnership(root);
   const builders = [0, 1].map(() => {
     const child = spawn(
       process.execPath,
-      ["--import", tsx, buildScript, "--prepare-settings", root],
+      ["--import", tsx, buildScript, "--prepare-settings", root, "panel"],
       {
         cwd: root,
         signal,
@@ -116,6 +132,11 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
   const manifest = JSON.parse(distribution.read("openclaw.plugin.json"));
   expect(manifest.controlUi.settingsViews).toEqual([{ section: "memory", panel: "overview" }]);
   expect(distribution.read(manifest.controlUi.entry)).toContain("Fixture");
+  const panel = fixtureFiles(files.file("dist/extensions/panel"));
+  expect(panel.read(JSON.parse(panel.read("openclaw.plugin.json")).controlUi.entry)).toContain(
+    "panel",
+  );
+  expect(fs.existsSync(files.file("dist/extensions/unrequested"))).toBe(false);
   expect(
     files.read("dist/extensions/node_modules/openclaw/plugin-sdk/provider-usage.js"),
   ).toContain('export * from "../../../../plugin-sdk/provider-usage.js"');

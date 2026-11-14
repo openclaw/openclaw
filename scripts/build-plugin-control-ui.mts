@@ -48,8 +48,14 @@ async function buildBundledPluginControlUi(
   }
 }
 
-/** UI-only commands need static Settings presenters even without a runtime build. */
-async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
+/**
+ * UI-only commands need static Settings presenters even without a runtime build.
+ * Comparisons also request the other plugin UIs a full build packaged elsewhere.
+ */
+async function prepareBundledSettingsControlUi(
+  repoRoot: string,
+  pluginIds: ReadonlySet<string>,
+): Promise<void> {
   const { controlUiSource, normalizeManifestControlUi } =
     await import("../src/plugins/manifest-control-ui.js");
   const { copyBundledPluginMetadata } = await import("./copy-bundled-plugin-metadata.mts");
@@ -69,7 +75,7 @@ async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> 
     if (!declaration.ok) {
       throw new Error(`Invalid Control UI declaration for ${entry.id}: ${declaration.error}`);
     }
-    if (!declaration.value?.settingsViews?.length) {
+    if (!declaration.value?.settingsViews?.length && !pluginIds.has(entry.id)) {
       continue;
     }
     await buildBundledPluginControlUi(rootDir);
@@ -89,7 +95,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (packageDir === "--prepare-settings") {
     const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
     const repoRoot = path.resolve(process.argv[3] ?? ".");
-    await withDistArtifactOwnership(repoRoot, () => prepareBundledSettingsControlUi(repoRoot));
+    const pluginIds = new Set(process.argv.slice(4));
+    await withDistArtifactOwnership(repoRoot, () =>
+      prepareBundledSettingsControlUi(repoRoot, pluginIds),
+    );
   } else {
     await buildBundledPluginControlUi(packageDir, { copy: process.argv.includes("--copy") });
   }
