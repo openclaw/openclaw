@@ -11,6 +11,14 @@ import type {
   TranscriptActiveFactsBackfillSession,
 } from "./session-transcript-active-facts-backfill.worker.js";
 
+// Admitted execution includes reply pickup, so startup or main-thread contention can
+// inflate one charge to seconds; 20x of that would park the pass for minutes.
+const MAX_YIELD_MS = 30_000;
+
+function yieldAfter(executionMs: number): number {
+  return Math.min(MAX_YIELD_MS, Math.max(250, 20 * executionMs));
+}
+
 export type SessionTranscriptFactsBackfill = {
   runBatch(): Promise<{ complete: boolean; delayMs: number }>;
   close(): Promise<void>;
@@ -102,7 +110,7 @@ export function createSessionTranscriptFactsBackfill(params: {
         }
         return {
           complete: sessions.length === 0,
-          delayMs: Math.max(250, 20 * writeExecutionMs),
+          delayMs: yieldAfter(writeExecutionMs),
         };
       }
       const session = sessions[sessionIndex];
@@ -118,8 +126,7 @@ export function createSessionTranscriptFactsBackfill(params: {
       contentionDelayMs = batch.busy ? Math.min(5_000, contentionDelayMs * 2) : 250;
       // Charge preparation and reply delivery while holding the writer, not foreground FIFO wait.
       const delayMs = Math.max(
-        250,
-        20 * Math.max(batch.elapsedMs, writeExecutionMs),
+        yieldAfter(Math.max(batch.elapsedMs, writeExecutionMs)),
         contentionDelayMs,
       );
       afterPosition = batch.afterPosition;
