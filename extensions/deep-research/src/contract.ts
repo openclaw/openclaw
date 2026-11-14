@@ -131,6 +131,6 @@ export const researchToolDefinition = {
   name: "deep_research",
   label: "Deep Research",
   description:
-    "Start, inspect, resume or cancel evidence-backed research. Portable uses the configured isolated model runtime (explicit OAuth-only uses direct completion) and configured web tools; Google uses an explicitly activated managed research service. Reuse the same idempotency key for a retried start. Results include honest gaps and route-specific evidence.",
+    "Use for explicit conversational requests to perform deep research or produce a substantial source-backed report, and follow-ups on its retained jobs. Do not use for quick general answers, explanations of Deep Research, quoted/code mentions, or a request not to research. Use the current chat’s sources and budget; supplied documents default to no web. Portable uses the configured model/runtime and credentials (OAuth-only is direct); Google must be configured explicitly. Reuse the start key after uncertainty. Use the returned jobId for status, result, resume or cancellation; report only its actual state, evidence and gaps, never started without a receipt.",
   parameters: researchToolSchema,
 };
