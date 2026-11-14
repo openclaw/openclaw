@@ -39,6 +39,9 @@ Options:
   --delete             Delete the cluster instead of creating it
   -h, --help           Show this help message
 
+Environment:
+  KIND_EXPERIMENTAL_PROVIDER  Use docker or podman instead of auto-detection
+
 Examples:
   $(basename "$0")                          # Create cluster (auto-detect engine)
   $(basename "$0") --delete                 # Delete the cluster
@@ -64,6 +67,17 @@ done
 detect_provider() {
   local candidate
 
+  if [[ -n "${KIND_EXPERIMENTAL_PROVIDER:-}" ]]; then
+    case "$KIND_EXPERIMENTAL_PROVIDER" in
+      docker|podman)
+        command -v "$KIND_EXPERIMENTAL_PROVIDER" &>/dev/null || fail "$KIND_EXPERIMENTAL_PROVIDER is not installed."
+        echo "$KIND_EXPERIMENTAL_PROVIDER"
+        return 0
+        ;;
+      *) fail "Unsupported KIND_EXPERIMENTAL_PROVIDER: $KIND_EXPERIMENTAL_PROVIDER. Use docker or podman." ;;
+    esac
+  fi
+
   for candidate in podman docker; do
     if command -v "$candidate" &>/dev/null && "$candidate" info &>/dev/null; then
       echo "$candidate"
@@ -88,7 +102,7 @@ detect_provider() {
 }
 
 CONTAINER_CMD=$(detect_provider)
-info "Auto-detected container engine: $CONTAINER_CMD"
+info "Container engine: $CONTAINER_CMD"
 
 if ! command -v kind &>/dev/null; then
   fail "kind is not installed. Install it from https://kind.sigs.k8s.io/"

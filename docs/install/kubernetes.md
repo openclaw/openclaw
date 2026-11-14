@@ -47,6 +47,17 @@ If you do not have a cluster, create one locally with [Kind](https://kind.sigs.k
 ./scripts/k8s/create-kind.sh --delete  # tear down
 ```
 
+When both engines are available, pin the one that owns your cluster with Kind's
+provider variable. Use the same selection for creation and teardown:
+
+```bash
+KIND_EXPERIMENTAL_PROVIDER=docker ./scripts/k8s/create-kind.sh
+KIND_EXPERIMENTAL_PROVIDER=docker ./scripts/k8s/create-kind.sh --delete
+```
+
+The helper supports `docker` and `podman`. An explicitly selected engine must be
+available; the helper does not switch engines if that selection fails.
+
 Then deploy as usual with `./scripts/k8s/deploy.sh`.
 
 ## Step by step
