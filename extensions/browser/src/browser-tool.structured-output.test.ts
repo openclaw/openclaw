@@ -1,8 +1,12 @@
 import "./browser-tool.test-support.js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createBrowserTool } from "./browser-tool.js";
-const { gatewayMocks, mockSingleBrowserProxyNode, registerBrowserToolAfterEachReset } =
-  await import("./browser-tool.test-support.js");
+const {
+  browserClientMocks: client,
+  gatewayMocks,
+  mockSingleBrowserProxyNode,
+  registerBrowserToolAfterEachReset,
+} = await import("./browser-tool.test-support.js");
 
 registerBrowserToolAfterEachReset();
 
@@ -48,5 +52,44 @@ it.each(["ai", "aria", "text"] as const)(
       externalContent: { untrusted: true, source: "browser", wrapped: true },
     });
     expect(details).not.toHaveProperty("snapshot");
+  },
+);
+
+it.each(["tabs", "open"] as const)(
+  "keeps CDP connection metadata out of %s content and details",
+  async (action) => {
+    const tab = {
+      targetId: "credentialed-tab",
+      title: "Example",
+      url: "https://example.com/",
+      type: "page",
+      wsUrl:
+        "ws://synthetic-user:synthetic-password@127.0.0.1:9222/devtools/page/tab?token=synthetic-token",
+      wsLookup: vi.fn(),
+    };
+    if (action === "tabs") {
+      client.browserTabs.mockResolvedValueOnce({ running: true, tabs: [tab] });
+    } else {
+      client.browserOpenTab.mockResolvedValueOnce(tab);
+    }
+
+    const result = await createBrowserTool().execute("credential-output", {
+      action,
+      target: "host",
+      url: tab.url,
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("synthetic-password");
+    expect(serialized).not.toContain("synthetic-token");
+    expect(serialized).not.toContain("wsUrl");
+    const details = result.details as Record<string, unknown>;
+    const visible = action === "tabs" ? (details.tabs as unknown[])[0] : details;
+    expect(visible).not.toHaveProperty("wsLookup");
+    expect(visible).toMatchObject({
+      targetId: tab.targetId,
+      title: tab.title,
+      url: tab.url,
+      type: tab.type,
+    });
   },
 );
