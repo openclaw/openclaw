@@ -11,7 +11,11 @@ import {
   canEncodeAudio,
   canEncodeVideo,
 } from "mediabunny";
-import type { VideoCompressionRequest, VideoCompressionResponse } from "./chat-attachment-video.ts";
+import type {
+  VideoCompressionRequest,
+  VideoCompressionResponse,
+  VideoCompressionStage,
+} from "./chat-attachment-video.ts";
 
 const reply = (message: VideoCompressionResponse) =>
   globalThis.postMessage(message, { transfer: [] });
@@ -19,12 +23,13 @@ const reply = (message: VideoCompressionResponse) =>
 async function compress(data: VideoCompressionRequest) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(data.file) });
   let conversion: Conversion | undefined;
+  let stage: VideoCompressionStage = "input";
   try {
     const videos = await input.getVideoTracks();
     const audios = await input.getAudioTracks();
     const duration = await input.computeDuration();
     if (videos.length !== 1 || !Number.isFinite(duration) || duration <= 0) {
-      reply({ type: "error", reason: "unsupported" });
+      reply({ type: "error", reason: "unsupported", stage });
       return;
     }
     const width = await videos[0]!.getDisplayWidth();
@@ -34,6 +39,7 @@ async function compress(data: VideoCompressionRequest) {
     const outputHeight = Math.max(2, Math.round((height * scale) / 2) * 2);
     // Keep audio rather than silently dropping it. WebM is the fallback on
     // browsers without an H.264/AAC encoder (notably Linux Chromium).
+    stage = "codec";
     const mp4 =
       (await canEncodeVideo("avc", { width: outputWidth, height: outputHeight })) &&
       (audios.length === 0 || (await canEncodeAudio("aac")));
@@ -44,9 +50,10 @@ async function compress(data: VideoCompressionRequest) {
       (!(await canEncodeVideo(codec, { width: outputWidth, height: outputHeight })) ||
         (audios.length > 0 && !(await canEncodeAudio(audioCodec))))
     ) {
-      reply({ type: "error", reason: "unsupported" });
+      reply({ type: "error", reason: "unsupported", stage });
       return;
     }
+    stage = "budget";
     const audioBitrate = 96_000;
     let videoBitrate = Math.floor(
       (data.maxBytes * 8 * 0.82) / duration - audios.length * audioBitrate,
@@ -55,8 +62,9 @@ async function compress(data: VideoCompressionRequest) {
     // this capacity across attempts; bitrate is only an advisory codec target.
     const buffer = new Uint8Array(data.maxBytes * 2);
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      stage = "budget";
       if (videoBitrate < 100_000) {
-        reply({ type: "error", reason: "too-large" });
+        reply({ type: "error", reason: "too-large", stage });
         return;
       }
       let size = 0;
@@ -84,6 +92,7 @@ async function compress(data: VideoCompressionRequest) {
         target,
         format: mp4 ? new Mp4OutputFormat() : new WebMOutputFormat(),
       });
+      stage = "conversion";
       conversion = await Conversion.init({
         input,
         output,
@@ -105,7 +114,7 @@ async function compress(data: VideoCompressionRequest) {
         },
       });
       if (!conversion.isValid || conversion.discardedTracks.length > 0) {
-        reply({ type: "error", reason: "unsupported" });
+        reply({ type: "error", reason: "unsupported", stage });
         return;
       }
       let lastProgress = -1;
@@ -119,6 +128,7 @@ async function compress(data: VideoCompressionRequest) {
           });
         }
       };
+      stage = "encoding";
       try {
         await conversion.execute();
       } catch (error) {
@@ -126,8 +136,9 @@ async function compress(data: VideoCompressionRequest) {
           throw error;
         }
       }
+      stage = "output";
       if (exceeded) {
-        reply({ type: "error", reason: "too-large" });
+        reply({ type: "error", reason: "too-large", stage });
         return;
       }
       if (size === 0) {
@@ -146,9 +157,9 @@ async function compress(data: VideoCompressionRequest) {
       // allowed; bytes are checked again by the attachment admission owner.
       videoBitrate = Math.floor(((videoBitrate * data.maxBytes) / size) * 0.8);
     }
-    reply({ type: "error", reason: "too-large" });
+    reply({ type: "error", reason: "too-large", stage });
   } catch {
-    reply({ type: "error", reason: "failed" });
+    reply({ type: "error", reason: "failed", stage });
   } finally {
     await conversion?.cancel();
     input.dispose();
@@ -157,7 +168,7 @@ async function compress(data: VideoCompressionRequest) {
 
 function onMessage({ data }: MessageEvent<VideoCompressionRequest>) {
   globalThis.removeEventListener("message", onMessage);
-  void compress(data).catch(() => reply({ type: "error", reason: "failed" }));
+  void compress(data).catch(() => reply({ type: "error", reason: "failed", stage: "input" }));
 }
 
 // The dedicated worker accepts one job; onMessage detaches before encoding it.
