@@ -895,7 +895,7 @@ const startupEnglish = {
       externalPost: "Posts externally to {target}",
     },
 
-    reviewOnly: "You need approval access to approve.",
+    reviewOnly: "You can review this request, but you don’t have permission to approve or deny it.",
 
     labels: {},
   },
