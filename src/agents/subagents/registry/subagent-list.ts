@@ -172,6 +172,13 @@ function buildChildSessionIndex(
   return childSessionsByController;
 }
 
+/** Settlement records when a private parent turn consumed the result without user delivery. */
+export function resolveSubagentDeliveryStatus(entry: SubagentRunRecord) {
+  return entry.delivery?.status === "delivered" && entry.delivery.consumedPrivately
+    ? "consumed_privately"
+    : entry.delivery?.status;
+}
+
 export function buildSubagentList(params: {
   context: SubagentListReadContext;
   sessionEntries: ReadonlyMap<string, SessionEntry>;
@@ -205,6 +212,7 @@ export function buildSubagentList(params: {
     const pausedForMs = resolveYieldedLeafPausedForMs(entry, execution, now);
     const pausedAge =
       pausedForMs === undefined ? undefined : formatDurationCompact(pausedForMs, { spaced: true });
+    const deliveryStatus = resolveSubagentDeliveryStatus(entry);
     const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplayName(modelSelection)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${pausedAge ? `, paused ${pausedAge}` : ""}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view = {
       index,
@@ -216,7 +224,7 @@ export function buildSubagentList(params: {
       task,
       status,
       execution,
-      ...(entry.delivery ? { deliveryStatus: entry.delivery.status } : {}),
+      ...(deliveryStatus ? { deliveryStatus } : {}),
       pendingDescendants,
       runtime,
       runtimeMs,

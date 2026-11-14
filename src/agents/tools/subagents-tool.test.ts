@@ -168,6 +168,13 @@ describe("subagents native run contract", () => {
     expect(owner.listeners.size).toBe(0);
     expect(entry.delivery.status).toBe("pending");
   });
+  it("reports private parent consumption without claiming user delivery", async () => {
+    entry.execution = { status: "terminal", endedAt: 100, outcome: { status: "ok" } };
+    entry.delivery = { status: "delivered", consumedPrivately: true };
+    expect((await wait(0)).details).toMatchObject({
+      runs: [{ runId: entry.runId, deliveryStatus: "consumed_privately" }],
+    });
+  });
   it("rechecks wait ownership without disclosing revoked results and reports suspended delivery", async () => {
     const pending = wait();
     entry.requesterSessionKey = "agent:other:main";

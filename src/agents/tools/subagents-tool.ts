@@ -31,6 +31,7 @@ import {
 import {
   buildSubagentList,
   readSubagentListSessionEntries,
+  resolveSubagentDeliveryStatus,
 } from "../subagents/registry/subagent-list.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "../subagents/registry/subagent-registry-persistence.js";
@@ -98,7 +99,7 @@ function mapRun(
             }) || undefined,
         }
       : undefined,
-    deliveryStatus: run.delivery?.status,
+    deliveryStatus: resolveSubagentDeliveryStatus(run),
     startedAt: run.execution.startedAt,
     endedAt: run.execution.endedAt,
     ...(pausedForMs === undefined ? {} : { pausedForMs }),

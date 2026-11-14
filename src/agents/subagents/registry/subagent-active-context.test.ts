@@ -179,6 +179,17 @@ it("shows retained completed children on later parent turns with retry/recovery 
   ]);
 });
 
+it("labels a recent private consumption as delivery=consumed_privately", async () => {
+  seed({
+    runId: "recent-private",
+    endedAt: Date.now() - 60_000,
+    outcome: { status: "ok" },
+    completionTarget: "parent",
+    delivery: { status: "delivered", consumedPrivately: true },
+  });
+  expect(await promptFor()).toContain("delivery=consumed_privately;");
+});
+
 it.each([
   { status: "failed", cleaned: true, wake: false, outstanding: false },
   { status: "failed", cleaned: false, wake: false, outstanding: true },
