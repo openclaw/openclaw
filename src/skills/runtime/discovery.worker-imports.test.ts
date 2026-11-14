@@ -127,4 +127,11 @@ it("scans workspace and prepared plugin skills without loading metadata discover
       ]),
     },
   });
+  await expect(
+    worker.read({
+      kind: "library",
+      nativeMode: "off",
+      input: { kind: "selection", selections: [], revisions: [], stateDir: workspaceDir },
+    }),
+  ).resolves.toEqual({ kind: "library", result: { kind: "selection", entries: [] } });
 });

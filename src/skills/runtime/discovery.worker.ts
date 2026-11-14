@@ -1,6 +1,7 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
+import { withWorkerFsSafeNativeMode } from "../../infra/worker-fs-safe.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   createPluginCache,
@@ -65,6 +66,12 @@ serveWorkerTasks<SkillsDiscoveryOutput>(async (input, channel) => {
   // SAFETY: This private worker only receives the discovery owner's typed requests.
   const request = input as SkillsDiscoveryInput;
   channel?.consumeInput();
+  if (request.kind === "library") {
+    return withWorkerFsSafeNativeMode(request.nativeMode, async () => {
+      const { executeSkillLibraryFilesystemTask } = await import("../library/filesystem.kernel.js");
+      return { kind: "library", result: await executeSkillLibraryFilesystemTask(request.input) };
+    });
+  }
   if (request.kind === "plan") {
     applyEnvironment(request.input.environment);
     return { kind: "plan", plan: resolveInputPlan(request.input) };

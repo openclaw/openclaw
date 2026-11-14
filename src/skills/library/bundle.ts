@@ -1,6 +1,7 @@
 import { isAscii } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -55,6 +56,24 @@ const manifestSchema = Type.Array(
 
 /** Published executable flags are portable metadata; host mode bits are not their authority. */
 export async function readSkillLibraryManifestTree(
+  directory: string,
+  manifestJson: string,
+  revision: string,
+): Promise<SkillLibraryFile[]> {
+  const nativeMode = getFsSafeNativeConfig().mode;
+  // The worker imports the bounded implementation without creating another host owner.
+  const { runSkillLibraryFilesystemTask } = await import("../runtime/refresh.js");
+  const result = await runSkillLibraryFilesystemTask(
+    { kind: "manifest", directory, manifestJson, revision },
+    nativeMode,
+  );
+  if (result.kind !== "manifest") {
+    throw new Error("Unexpected skill library manifest response");
+  }
+  return result.files;
+}
+
+export async function readSkillLibraryManifestTreeOnWorker(
   directory: string,
   manifestJson: string,
   revision: string,
