@@ -13,6 +13,8 @@ export type CronCreatorToolAllowlistEntry =
       /** Canonical policy name persisted into toolsAllow caps. */
       name: string;
       pluginId?: string;
+      /** Node-claimed owners cannot grant plugin-scoped access. */
+      ownerUnverified?: true;
       /** Runtime-specific alias the creator surface presented for this tool. */
       aliasName?: string;
       /** Runtime owner that supplied exec; required for process-bearing stream writes. */

@@ -127,7 +127,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
 /** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */
 export function applyToolPolicyPipeline<TTool extends { name: string }>(params: {
   tools: TTool[];
-  toolMeta: (tool: TTool) => { pluginId: string } | undefined;
+  toolMeta: (tool: TTool) => { pluginId: string; ownerUnverified?: boolean } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
   declaredToolAllowlist?: DeclaredToolAllowlistContext;

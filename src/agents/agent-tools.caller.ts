@@ -32,11 +32,14 @@ export function createCodingToolsGatewayCaller(params: {
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
   // Dispatch controls and their targets share the same admitted ownership snapshot.
-  const toolMetadata = new Map<string, { pluginId: string }>();
+  const toolMetadata = new Map<string, { pluginId: string; ownerUnverified?: true }>();
   for (const tool of params.tools ?? []) {
     const meta = getPluginToolMeta(tool);
     if (meta) {
-      toolMetadata.set(normalizeToolPolicyName(tool.name), { pluginId: meta.pluginId });
+      toolMetadata.set(normalizeToolPolicyName(tool.name), {
+        pluginId: meta.pluginId,
+        ...(meta.ownerUnverified ? { ownerUnverified: true as const } : {}),
+      });
     }
   }
   const activeCaller = getGatewayToolCallerIdentity();

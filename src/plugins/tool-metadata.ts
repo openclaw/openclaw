@@ -37,6 +37,8 @@ type PluginToolMeta = {
   replaySafe?: boolean;
   sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
+  /** Node-claimed plugin ids can match denies, but cannot grant plugin-scoped access. */
+  ownerUnverified?: true;
   mcp?: PluginToolMcpMeta;
 };
 
