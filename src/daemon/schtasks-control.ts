@@ -5,7 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
-import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "./program-args.js";
@@ -20,7 +19,7 @@ import {
   waitForGatewayPortRelease,
 } from "./schtasks-port-diagnostics.js";
 import {
-  findInstalledProcessPid,
+  findInstalledProcessPids,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
 } from "./schtasks-process-snapshot.js";
@@ -39,13 +38,11 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
-  readScheduledTaskRuntime,
   removeStartupEntries,
   resolveFallbackRuntime,
   restartStartupEntry,
   startStartupEntry,
   stopStartupEntry,
-  SCHEDULED_TASK_FALLBACK_POLL_MS,
   SCHEDULED_TASK_FALLBACK_TIMEOUT_MS,
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
@@ -66,6 +63,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
   taskSettlement?: ScheduledTaskSettlement;
@@ -73,114 +71,74 @@ type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
 };
 export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
 
-async function shouldFallbackScheduledTaskLaunch(params: {
-  env: GatewayServiceEnv;
-  scriptPath: string;
-}): Promise<boolean> {
-  const readLaunchObservation = async (timeoutMs?: number) => {
-    const runtime = await readScheduledTaskRuntime(params.env, { timeoutMs }).catch(() => null);
-    let state: "running" | "not-yet-run" | "stopped-success" | "other" = "other";
-    if (runtime?.status === "running") {
-      state = "running";
-    } else if (runtime?.status === "stopped") {
-      // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
-      if (runtime.lastRunResult === "267011") {
-        state = "not-yet-run";
-      } else if (runtime.lastRunResult === "0") {
-        state = "stopped-success";
-      }
+/** Capture every pre-activation owner so a direct fallback cannot duplicate it. */
+async function readPreLaunchTaskPids(
+  env: GatewayServiceEnv,
+  scriptPath: string,
+): Promise<{ pids: ReadonlySet<number>; complete: boolean }> {
+  const pids = new Set<number>();
+  try {
+    const command = await readScheduledTaskCommand(env, { profileScope: "registered" });
+    if (!command) {
+      return { pids, complete: false };
     }
-    return {
-      state,
-      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-        .filter(Boolean)
-        .join("|"),
-    };
-  };
-
-  const hasLaunchEvidence = async (): Promise<boolean> => {
-    const command = await readScheduledTaskCommand(params.env).catch(() => null);
-    const installedArguments = command?.programArguments;
-    const taskPort = resolveScheduledTaskCommandPort(params.env, command);
-    const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
-    if (manageGatewayPort && taskPort) {
-      const probeHosts = await resolveGatewayServiceProbeHosts({ env: params.env, command });
-      const ownedPids = await resolveScheduledTaskOwnedGatewayPids(
-        params.env,
-        { port: taskPort, probeHosts },
+    const port = resolveScheduledTaskCommandPort(env, command);
+    const manageGatewayPort = shouldManageGatewayListenerPort(env);
+    if (port && manageGatewayPort) {
+      const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+      for (const pid of await resolveScheduledTaskOwnedGatewayPids(
+        env,
+        { port, probeHosts },
         command,
-      );
-      if (ownedPids.length > 0) {
-        return true;
+      )) {
+        pids.add(pid);
       }
     }
 
-    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
-      params.scriptPath.replaceAll("/", "\\"),
-    );
-    if (!scriptPathNeedle) {
-      return false;
+    // Finish asynchronous command and ownership preparation before the final
+    // process snapshot so a wrapper started during preparation is still baseline state.
+    const snapshot = readWindowsProcessSnapshot();
+    if (!snapshot && process.platform === "win32") {
+      return { pids, complete: false };
     }
-    const entries = readWindowsProcessSnapshot();
-    if (!entries) {
-      return false;
-    }
-    if (
-      entries.some((entry) =>
+    const entries = snapshot ?? [];
+    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
+    for (const entry of entries) {
+      const pid = entry.ProcessId;
+      if (
+        typeof pid === "number" &&
+        Number.isFinite(pid) &&
+        pid > 0 &&
+        scriptPathNeedle &&
         normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
           .replaceAll("/", "\\")
-          .includes(scriptPathNeedle),
-      )
-    ) {
-      return true;
+          .includes(scriptPathNeedle)
+      ) {
+        pids.add(pid);
+      }
     }
-    if (!taskPort) {
-      return false;
-    }
-    if (!installedArguments?.length) {
-      return false;
-    }
-    return (
-      findInstalledProcessPid(
-        entries,
-        taskPort,
-        installedArguments,
-        manageGatewayPort
-          ? (argv) => classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
-          : isNodeHostArgv,
-      ) != null
-    );
-  };
 
-  let previous = await readLaunchObservation();
-  if (previous.state !== "not-yet-run" && previous.state !== "stopped-success") {
-    return false;
+    const installedArguments = command.programArguments;
+    if (snapshot && installedArguments?.length) {
+      const candidates = manageGatewayPort
+        ? [installedArguments, [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG]]
+        : [installedArguments];
+      const matchPort = manageGatewayPort ? port : null;
+      for (const argv of candidates) {
+        for (const pid of findInstalledProcessPids(
+          snapshot,
+          matchPort,
+          argv,
+          manageGatewayPort ? () => true : isNodeHostArgv,
+        )) {
+          pids.add(pid);
+        }
+      }
+    }
+  } catch {
+    return { pids, complete: false };
   }
-  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
-    // Periodic observations keep their existing short budget after the initial cold read.
-    const current = await readLaunchObservation(5_000);
-    if (current.state !== "not-yet-run" && current.state !== "stopped-success") {
-      return false;
-    }
-    if (
-      current.state === "not-yet-run" &&
-      previous.state === "not-yet-run" &&
-      current.signature !== previous.signature
-    ) {
-      return false;
-    }
-    // A queued task may finish before its process is observable; the reverse transition means a new run is starting.
-    if (previous.state === "stopped-success" && current.state === "not-yet-run") {
-      return false;
-    }
-    previous = current;
-    if (await hasLaunchEvidence()) {
-      return false;
-    }
-  }
-  return true;
+  return { pids, complete: true };
 }
 
 export async function runScheduledTaskOrThrow(params: {
@@ -190,24 +148,57 @@ export async function runScheduledTaskOrThrow(params: {
   onMutation?: () => void;
   assertCurrent?: () => void;
   allowFallback?: boolean;
+  acceptProcessLaunchEvidence?: boolean;
 }): Promise<ScheduledTaskActivation> {
+  params.assertCurrent?.();
+  const preLaunch = await readPreLaunchTaskPids(params.env, params.scriptPath);
   params.assertCurrent?.();
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
   params.onMutation?.();
+  params.assertCurrent?.();
   if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+    await waitForScheduledTaskRunningEvidence(params.env, {
+      settleAfterRun: true,
+      assertCurrent: params.assertCurrent,
+    })
+  ) {
+    params.assertCurrent?.();
+    return "scheduled-task";
+  }
+  const current = await readPreLaunchTaskPids(params.env, params.scriptPath);
+  params.assertCurrent?.();
+  if (
+    params.acceptProcessLaunchEvidence === true &&
+    preLaunch.complete &&
+    current.complete &&
+    Array.from(current.pids).some((pid) => !preLaunch.pids.has(pid))
   ) {
     return "scheduled-task";
   }
-  if (params.allowFallback !== false && !shouldManageGatewayListenerPort(params.env)) {
-    await launchFallbackTaskScript(params.env, undefined, params.assertCurrent);
-    return "direct-fallback";
+  if (
+    params.allowFallback !== false &&
+    !shouldManageGatewayListenerPort(params.env) &&
+    preLaunch.complete &&
+    preLaunch.pids.size === 0
+  ) {
+    const scheduler = probeScheduledTaskState(params.taskName);
+    if (
+      current.complete &&
+      current.pids.size === 0 &&
+      scheduler.status === "found" &&
+      (scheduler.state === 1 || scheduler.state === 3) &&
+      (scheduler.lastRunResult === "267011" || scheduler.lastRunResult === "0")
+    ) {
+      params.assertCurrent?.();
+      await launchFallbackTaskScript(params.env, undefined, params.assertCurrent);
+      return "direct-fallback";
+    }
   }
   throw new Error(
-    `Scheduled Task ${params.taskName} did not start within ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
+    `Scheduled Task ${params.taskName} did not sustain Running for ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
   );
 }
 
@@ -645,6 +636,7 @@ export async function restartRegisteredScheduledTask(params: {
     assertCurrent: params.assertCurrent,
     env: params.env,
     scriptPath: resolveTaskScriptPath(params.env),
+    acceptProcessLaunchEvidence: params.mode.kind === "fallback-takeover",
     ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
   }).catch((error: unknown) => {
     throw Object.assign(toErrorObject(error, "Scheduled Task restart failed."), facts);

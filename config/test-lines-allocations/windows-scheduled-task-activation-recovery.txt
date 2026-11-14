@@ -1,0 +1,3 @@
+# Exact regression coverage for Windows Scheduled Task activation, upgrade,
+# provenance, fallback, stop, and service-definition recovery paths.
+872

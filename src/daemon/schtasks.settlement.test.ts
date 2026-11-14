@@ -284,7 +284,10 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     },
   );
 
-  test("restart falls back promptly after a definitive stop rejection", async ({ env, stdout }) => {
+  test("restart verifies Scheduler takeover after a definitive stop rejection", async ({
+    env,
+    stdout,
+  }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const ended = killedOwner;
     readGatewayOwnerLease.mockImplementation(() => (ended() ? undefined : GATEWAY_OWNER));
@@ -309,7 +312,8 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     await restartScheduledTask({ env, stdout });
 
     expect(ended()).toBe(true);
-    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(15_000);
+    expect(Date.now() - started).toBeLessThanOrEqual(30_000);
     expect(taskAction("/Run")).toBe(true);
   });
 

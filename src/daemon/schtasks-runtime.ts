@@ -73,7 +73,7 @@ import {
 } from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
-export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
+const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 export const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
 /** Read policy independently of runtime state; unavailable policy is not disabled. */
@@ -164,21 +164,45 @@ function createStartupEntryRemovalError(error: unknown): Error {
 
 export async function waitForScheduledTaskRunningEvidence(
   env: GatewayServiceEnv,
+  options?: { settleAfterRun?: boolean; assertCurrent?: () => void },
 ): Promise<boolean> {
   const deadline = performance.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  const settlingDeadline =
+    deadline + (options?.settleAfterRun ? SCHEDULED_TASK_FALLBACK_TIMEOUT_MS : 0);
+  let runningSince: number | undefined;
+  let previousRunningSignature: string | undefined;
   while (true) {
-    const remaining = deadline - performance.now();
+    options?.assertCurrent?.();
+    const remaining = settlingDeadline - performance.now();
     if (remaining <= 0) {
       return false;
     }
     const probe = probeScheduledTaskState(resolveTaskName(env), remaining);
-    if (performance.now() >= deadline) {
+    const now = performance.now();
+    if (!options?.settleAfterRun && now >= deadline) {
       return false;
     }
     // Only Scheduler supervision, not an old Startup process, proves takeover.
-    if (probe.status === "found" && probe.state === 4) {
+    const running = probe.status === "found" && probe.state === 4;
+    const signature = running ? (probe.lastRunTime ?? "running") : undefined;
+    if (running && !options?.settleAfterRun) {
       return true;
     }
+    if (!running || signature !== previousRunningSignature) {
+      runningSince = undefined;
+    }
+    if (running && runningSince === undefined && now < deadline) {
+      runningSince = now;
+    }
+    // /Run is only an accepted request. A late start still needs one full,
+    // continuous settling interval, without extending the original start deadline.
+    if (runningSince !== undefined && now - runningSince >= SCHEDULED_TASK_FALLBACK_TIMEOUT_MS) {
+      return true;
+    }
+    if (now >= settlingDeadline || (now >= deadline && runningSince === undefined)) {
+      return false;
+    }
+    previousRunningSignature = signature;
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
   }
 }
