@@ -205,6 +205,7 @@ function recordCapabilityRead(
 class SessionCapabilityReadRequired extends Error {
   constructor(readonly query: SessionCapabilityRead) {
     super("Session capability metadata requires worker preparation");
+    this.name = "SessionCapabilityReadRequiredError";
   }
 }
 

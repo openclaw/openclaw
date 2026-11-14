@@ -286,6 +286,30 @@ describe("persisted subagent capability lookups", () => {
     }
   });
 
+  it("stops model fallback when an unprepared capability read escapes", async () => {
+    const { storePath, key } = fixture("subagent-capability-unprepared-");
+    writeEntries(storePath, { [key]: makeEntry("unprepared-child", { spawnDepth: 2 }) });
+    const store = createSubagentSessionStore(storePath, "main");
+    const run = vi.fn(async () => store.get(key));
+    const failure = await runWithModelFallback({
+      cfg: undefined,
+      provider: "fixture-provider",
+      model: "fixture-model",
+      manifestPlugins: [],
+      fallbacksOverride: ["fixture-next/fixture-model"],
+      run,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    // Another model cannot prepare session metadata, so the local error must surface unchanged.
+    expect(run).toHaveBeenCalledOnce();
+    expect(failure).toMatchObject({
+      name: "SessionCapabilityReadRequiredError",
+      message: "Session capability metadata requires worker preparation",
+    });
+  });
+
   it.each([1, 2])(
     "bounds capability refresh after %s intervening publications",
     async (changes) => {
