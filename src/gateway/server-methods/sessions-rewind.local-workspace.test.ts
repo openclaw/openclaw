@@ -114,10 +114,9 @@ it.each([
                   .mockReturnValue(false)
               : undefined;
           try {
-            // A lagging active-path projection must not turn an invalid selection into
-            // a retired runtime: the preflight reconciles through the projection owner
-            // and still refuses before the workspace is touched. The first selection
-            // below runs against the dirty projection; the preflight cleans it.
+            // A lagging projection must not turn an invalid selection into a retired
+            // runtime: the preflight reconciles through the projection owner and still
+            // refuses first. The first selection below runs against the dirty one.
             if (failure === "invalid worker") {
               runOpenClawAgentWriteTransaction(
                 (current) =>

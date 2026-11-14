@@ -39,8 +39,8 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { createSessionMessageCutReader as createMessageCutReader } from "./session-message-cut-in-place.kernel.js";
+import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
 import { prepareSessionTranscriptActivePathRepoint as prepareRepoint } from "./session-transcript-active-path-repoint.js";
-import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -103,8 +103,7 @@ async function seedLegacyNavigation(kind: "parentless" | "side-cursor" | "reset-
       message("u2", "s", 3),
       message("a2", "u2", 4),
     ],
-    // A reset taken while sibling b1 was active re-roots later navigation, so a1
-    // predates the boundary.
+    // A reset taken while b1 was active re-roots navigation: a1 predates it.
     "reset-boundary": [
       message("b1", "u1", 2),
       { type: "reset", id: "r1", parentId: "b1", firstKeptEntryId: "b1", timestamp: at(3) },
@@ -418,22 +417,21 @@ it.each(["parentless", "side-cursor", "reset-boundary"] as const)(
 );
 
 // A rewind repoints incrementally, so oversized history must not send readers
-// through a full rebuild (which failed reads with "rebuilding"). The repoint also
-// refuses by retained bytes, so a large branch cannot materialize in the shared
-// worker: the streaming reconcile owner publishes that one.
+// through a full rebuild (which failed reads with "rebuilding"), and the repoint
+// refuses by retained bytes so a large branch never materializes in the worker.
 it("repoints oversized history without hydrating it in one transaction", async () => {
   const { env, scope, params } = await createSession();
-  await appendEvent(scope, {
-    type: "custom",
-    id: "oversized-branch-tip",
-    customType: "synthetic",
+  // An oversized stored user turn: navigation never decodes it; the editor read
+  // refuses it by budget.
+  await appendMessage(scope, {
+    eventId: "oversized-branch-tip",
     parentId: "off-path-user",
-    timestamp: "2026-07-18T02:00:00.000Z",
-    data: { padding: "x".repeat(SYNC_REBUILD_MAX_BYTES) },
+    message: { role: "user", content: "x".repeat(SESSION_MESSAGE_CUT_MAX_BYTES) },
+    now: Date.parse("2026-07-18T02:00:00.000Z"),
   });
 
   // The append made the oversized row the active leaf; leave it, then select it so
-  // the repoint must plan that whole branch back onto the active path.
+  // the repoint must plan that branch back onto the active path.
   const select = (leafEntryId: string) => switchBranch({ agentId, env, sessionKey, leafEntryId });
   const stateDir = env.OPENCLAW_STATE_DIR as string;
   expect(await select("assistant-2")).toMatchObject({ status: "created" });
@@ -454,9 +452,14 @@ it("repoints oversized history without hydrating it in one transaction", async (
   expect(planned("assistant-2")).toBeDefined();
   expect(planned("oversized-branch-tip")).toBeUndefined();
 
+  // A switch needs navigation facts only, so it succeeds over the oversized row,
+  // and only a rewind reads that payload, after validating the selection.
   expect(await select("oversized-branch-tip")).toMatchObject({ status: "created" });
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-  expect(activeMessageIds(scope)).toEqual(["user-1", "off-path-user"]);
+  expect(activeMessageIds(scope)).toEqual(["user-1", "off-path-user", "oversized-branch-tip"]);
+  await expect(rewind({ ...params, entryId: "oversized-branch-tip" })).rejects.toThrow(
+    /read budget/,
+  );
 });
 
 // The lifecycle revision is the fence that retires a live writer holding pre-rewind
@@ -467,7 +470,6 @@ it("fences a live writer that holds the pre-rewind incarnation", async () => {
   assert(before);
   // Captured by a live SessionManager before the cut.
   const staleOwner = { lifecycleRevision: before.lifecycleRevision };
-
   const result = await rewind(params);
   assert(result.status === "created");
   expect(result.entry.sessionId).toBe(scope.sessionId);

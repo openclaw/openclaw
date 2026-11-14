@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
@@ -21,6 +22,7 @@ import {
   planInPlaceSessionMessageCut,
   type SessionMessageCutReader,
 } from "./session-message-cut-plan.js";
+import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
@@ -33,7 +35,8 @@ import {
   reconcileSessionTranscriptIndexInTransaction,
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
-import { readTranscriptPayload } from "./transcript-payload.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { readTranscriptPayload, transcriptPredicateSql } from "./transcript-payload.js";
 import {
   selectSessionTranscriptTreePathNodes,
   selectSessionTranscriptTreeTipNodes,
@@ -150,6 +153,13 @@ export function createSessionMessageCutReader(
       ) !== undefined
     );
   };
+  /**
+   * Identity, predecessor and tip lookups read navigation and projection columns
+   * only. A stored event can be arbitrarily large, and a branch switch never needs
+   * its body, so no payload is selected or decoded here: the message role comes
+   * from the same navigation predicate history visibility uses, and the stored
+   * byte count is carried for the budget check the editor read makes later.
+   */
   const readIdentity = (entryId: string) =>
     executeSqliteQueryTakeFirstSync(
       database.db,
@@ -170,10 +180,9 @@ export function createSessionMessageCutReader(
           "identity.parent_id",
           "identity.seq",
           "active.active_position",
-          "event.event_json",
-          "event.event_zstd",
-          "event.event_utf8_bytes",
         ])
+        .select(transcriptPredicateSql(database.db, "message_role", "event").as("message_role"))
+        .select(transcriptEventReadBytesSql("event").as("payload_bytes"))
         .where("identity.session_id", "=", sessionId)
         .where("identity.event_id", "=", entryId),
     );
@@ -184,16 +193,39 @@ export function createSessionMessageCutReader(
         return undefined;
       }
       return {
-        event: asRecord(
-          row.event_json === null && row.event_zstd === null
-            ? undefined
-            : JSON.parse(readTranscriptPayload(row)),
-        ),
         eventType: row.event_type,
+        messageRole: row.message_role,
         onActivePath: row.active_position !== null,
         repointTargetId:
           row.active_position === null ? null : readActivePredecessorId(row.active_position),
       };
+    },
+    readEditorMessage(entryId) {
+      // The one payload an in-place cut reads, after the selection is validated:
+      // the rewind's editor text and attachments. Oversized rows are refused with
+      // the shared read-budget error instead of entering the worker heap.
+      const row = readIdentity(entryId);
+      if (!row) {
+        return undefined;
+      }
+      if ((row.payload_bytes ?? 0) > SESSION_MESSAGE_CUT_MAX_BYTES) {
+        throw new SqliteJsonlReadBudgetExceededError(
+          `Session history editor content exceeds its ${SESSION_MESSAGE_CUT_MAX_BYTES}-byte read budget; export the transcript to inspect it without changing this session.`,
+        );
+      }
+      const payload = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select(["event_json", "event_zstd", "event_utf8_bytes"])
+          .where("session_id", "=", sessionId)
+          .where("seq", "=", row.seq),
+      );
+      const event =
+        payload && (payload.event_json !== null || payload.event_zstd !== null)
+          ? asRecord(JSON.parse(readTranscriptPayload(payload)))
+          : undefined;
+      return asRecord(event?.message);
     },
     isBranchTip(entryId) {
       // Raw child links are not canonical, and a tip the canonical owner cannot

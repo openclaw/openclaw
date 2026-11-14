@@ -51,9 +51,9 @@ export type SessionMessageCutInPlacePlan =
     };
 
 export type SessionMessageCutTarget = {
-  /** Parsed payload of the target row; the only event body this path reads. */
-  event: Record<string, unknown> | undefined;
   eventType: string | null;
+  /** Stored message role from navigation facts; no payload is decoded for it. */
+  messageRole: string | null;
   /** Visible predecessor on the active path, or null at the root. */
   repointTargetId: string | null;
   onActivePath: boolean;
@@ -61,6 +61,11 @@ export type SessionMessageCutTarget = {
 
 export type SessionMessageCutReader = {
   readTarget(entryId: string): SessionMessageCutTarget | undefined;
+  /**
+   * The selected user message, read only after the cut is validated: a rewind
+   * returns its editor text and attachments. Over-budget payloads are refused.
+   */
+  readEditorMessage(entryId: string): Record<string, unknown> | undefined;
   /** True when the canonical navigation owner lists this entry as a selectable tip. */
   isBranchTip(entryId: string): boolean;
   /**
@@ -112,13 +117,15 @@ export function createMemorySessionMessageCutReader(
         return undefined;
       }
       const record = asRecord(node.entry);
+      const role = asRecord(record?.message)?.role;
       return {
-        event: record,
         eventType: typeof record?.type === "string" ? record.type : null,
+        messageRole: typeof role === "string" ? role : null,
         onActivePath: activeIds.has(entryId),
         repointTargetId: node.parentId,
       };
     },
+    readEditorMessage: (entryId) => asRecord(asRecord(tree.byId.get(entryId)?.entry)?.message),
     isBranchTip(entryId) {
       const node = tree.byId.get(entryId);
       return (
@@ -216,8 +223,7 @@ export function planInPlaceSessionMessageCut(
     }
     repointTargetId = params.entryId;
   } else {
-    message = asRecord(target.event?.message);
-    if (target.event?.type !== "message" || message?.role !== "user") {
+    if (target.eventType !== "message" || target.messageRole !== "user") {
       return { status: "not-user-message" };
     }
     if (!target.onActivePath) {
@@ -232,6 +238,10 @@ export function planInPlaceSessionMessageCut(
   }
   if (settledWorkspaceConflicts(currentEntry, params)) {
     return { status: "conflict" };
+  }
+  // Validated: the rewind's editor payload is the only body this path reads.
+  if (params.mode === "rewind") {
+    message = reader.readEditorMessage(params.entryId);
   }
   return {
     status: "prepared",

@@ -67,6 +67,10 @@ type SessionUsageRollupContribution = {
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
   usageTotals?: CostUsageTotals;
+  /** False for a billed row the canonical active path no longer contains. */
+  activePath?: boolean;
+  /** Latency source for those rows: the newest user turn of their own path. */
+  displacedUserTimestamp?: number;
 };
 
 function emptyMessageCounts(): SessionMessageCounts {
@@ -222,8 +226,15 @@ export function appendSessionUsageRollupContribution(
     return;
   }
   if (contribution.role === "assistant") {
+    // Latency follows the turn this reply answers. Billing also folds displaced
+    // paths, so a row off the canonical active path measures inside its own path
+    // while active rows measure from the active branch's cursor.
     const sourceUserTimestamp =
-      contribution.durationMs === undefined ? rollup.lastUserTimestamp : undefined;
+      contribution.durationMs !== undefined
+        ? undefined
+        : contribution.activePath === false
+          ? contribution.displacedUserTimestamp
+          : rollup.lastUserTimestamp;
     const latencyMs =
       contribution.durationMs ??
       (sourceUserTimestamp !== undefined
@@ -233,7 +244,9 @@ export function appendSessionUsageRollupContribution(
       addLatencyValue(timedBucket.latency, latencyMs);
     }
   }
-  if (contribution.role === "user") {
+  if (contribution.role === "user" && contribution.activePath !== false) {
+    // Only the active branch advances the persisted cursor, so the next
+    // append-only scan measures its first reply against the branch it continues.
     rollup.lastUserTimestamp = timedBucket.timestampMs;
   }
 }

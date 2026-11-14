@@ -189,8 +189,7 @@ describe("memory actor fork and cut", () => {
     // The cut keeps the transcript identity; the writer claim is what is retired.
     expect(rewind.entry.sessionId).toBe("parent-session");
     expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
-    // The appended control rotates the transcript generation, as SQLite does, so a
-    // cursor captured before the cut is refused instead of resuming as an append.
+    // The control rotates the generation, as SQLite does: a pre-cut cursor is refused.
     expect(
       await readMemory(storage(parent), "session.history.raw-delta", {
         limits: { cursor: drained.cursor },
@@ -214,8 +213,8 @@ describe("memory actor fork and cut", () => {
     expect(old.kind).toBe("full");
     if (old.kind === "full") {
       // The original window is retained: every seeded event plus the one control.
-      expect(old.snapshot.events.slice(0, transcript.length)).toEqual(transcript);
-      expect(old.snapshot.events.slice(transcript.length)).toMatchObject([
+      expect(old.snapshot.events).toMatchObject([
+        ...transcript,
         { type: "leaf", parentId: "a2", targetId: "a1" },
       ]);
     }

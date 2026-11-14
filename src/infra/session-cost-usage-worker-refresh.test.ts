@@ -179,33 +179,43 @@ it.each<[string, Row[], [number, number, string], string?]>([
 // Billing a rewound turn must not move the latency cursor off the active branch:
 // the next append-only assistant event measures from the newest active user turn,
 // exactly as base does for the same continuation without the rewind.
-it("keeps the rewound branch's timing cursor on its active turn", async () => {
-  const at = (second: number) => new Date(timestamp + second * 1_000).toISOString();
-  const stamp = <T extends Record<string, unknown>>(event: T, second: number) => ({
-    ...event,
-    timestamp: at(second),
-  });
-  // u2 at 12:00:02 is displaced by a rewind; u3 lands at 12:00:04 with its reply
-  // at 12:00:05, then an append-only assistant event arrives at 12:00:06.
-  const events = [
-    stamp(userEvent("u1", null), 0),
-    stamp(answerEvent("a1", "u1", 1), 1),
-    stamp(userEvent("u2", "a1"), 2),
-    { type: "leaf", id: "cut", parentId: "u2", targetId: "a1" },
-    stamp(userEvent("u3", "a1"), 4),
-    stamp(answerEvent("a3", "u3", 1), 5),
-    stamp(answerEvent("a4", "a3", 1), 6),
-  ];
-  const result = await scan(events.map((event, seq) => ({ seq, event: event as Row["event"] })));
+// The cursor follows the canonical active branch, not whichever displaced path
+// billing folded: u1@12:00:00, a1@12:00:01, u2@12:00:02 displaced by a rewind to a1,
+// a reply at 12:00:06. With a new turn u3@12:00:04 it measures 2 s; without one 6 s,
+// as the never-rewound control does.
+it.each([
+  ["new turn", true, false, 4, 3, 4_000],
+  ["no new turn", true, true, 0, 2, 7_000],
+  ["never rewound", false, true, 0, 2, 7_000],
+] as const)(
+  "takes the continuation cursor from the active branch (%s)",
+  async (_label, rewound, bare, cursorSecond, latencyCount, latencySum) => {
+    const stamp = <T extends Record<string, unknown>>(event: T, second: number) => ({
+      ...event,
+      timestamp: new Date(timestamp + second * 1_000).toISOString(),
+    });
+    const events = [
+      stamp(userEvent("u1", null), 0),
+      stamp(answerEvent("a1", "u1", 1), 1),
+      ...(rewound
+        ? [
+            stamp(userEvent("u2", "a1"), 2),
+            { type: "leaf", id: "c", parentId: "u2", targetId: "a1" },
+          ]
+        : []),
+      ...(bare ? [] : [stamp(userEvent("u3", "a1"), 4), stamp(answerEvent("a3", "u3", 1), 5)]),
+      stamp(answerEvent("a4", bare ? "a1" : "a3", 1), 6),
+    ];
+    const result = await scan(events.map((event, seq) => ({ seq, event: event as Row["event"] })));
 
-  expect(result.rollup.lastUserTimestamp).toBe(timestamp + 4_000);
-  // a1 and a3 measure 1,000 ms from their own user turn; a4 measures 2,000 ms from u3.
-  const latency = Object.values(result.rollup.buckets).reduce(
-    (total, b) => ({ count: total.count + b.latency.count, sum: total.sum + b.latency.sum }),
-    { count: 0, sum: 0 },
-  );
-  expect(latency).toEqual({ count: 3, sum: 4_000 });
-});
+    expect(result.rollup.lastUserTimestamp).toBe(timestamp + cursorSecond * 1_000);
+    const latency = Object.values(result.rollup.buckets).reduce(
+      (total, b) => ({ count: total.count + b.latency.count, sum: total.sum + b.latency.sum }),
+      { count: 0, sum: 0 },
+    );
+    expect(latency).toEqual({ count: latencyCount, sum: latencySum });
+  },
+);
 
 it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
   const user = (at: number) => ({

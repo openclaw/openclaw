@@ -25,6 +25,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 import { sha256Base64Url } from "./crypto-digest.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
+  selectActivePathTranscriptEvents,
   selectBilledTranscriptEvents,
   projectUsageScanFields,
 } from "./session-cost-usage-inherited.js";
@@ -548,8 +549,13 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     ? records.filter(isCanonicalSessionTranscriptEntry)
     : selectBilledTranscriptEvents(records);
   const scan = createUsageRollupScan({ ...params, appendOnly });
+  const usageEntries = (rows: readonly (typeof records)[number][]) =>
+    rows.flatMap((record) => (record.usageEntry ? [record.usageEntry] : []));
+  // An appended tail is already the active branch; a full scan folded displaced
+  // paths too, so it names which of its rows the active path still contains.
   await scan.addEntries(
-    selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),
+    usageEntries(selected),
+    appendOnly ? undefined : new Set(usageEntries(selectActivePathTranscriptEvents(records))),
   );
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId

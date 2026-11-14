@@ -53,9 +53,9 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
   // billed. A sibling that was never active is not reachable this way and stays
   // unbilled, matching the retired-copy accounting this replaced.
   //
-  // Displaced paths are emitted before the active path so that consumers folding
-  // these rows in order (the usage rollup's latency cursor) end on the active
-  // branch's newest turn instead of a rewound one.
+  // Order carries no meaning: consumers that need the branch a row belongs to ask
+  // `selectActivePathTranscriptEvents`, not the emission sequence.
+  addPath(tree.leafId);
   for (const node of tree.nodes) {
     if (!isSessionTranscriptLeafControl(node.entry)) {
       continue;
@@ -66,7 +66,6 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
       addPath(previousTip);
     }
   }
-  addPath(tree.leafId);
   // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
   // and publishes its own leaf control, so both the copy and the original become
   // reachable. They are one spend, not two: drop every selected row that another
@@ -89,6 +88,20 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
     records,
     billed.length === 0 && !tree.hasLeafControl ? [...records] : billed,
   );
+}
+
+/**
+ * Rows on the canonical active path, in order.
+ *
+ * Billing decides which rows count; this decides whose turn the next continuation
+ * follows. The two differ after a cut: a displaced turn still counts, but the
+ * branch a later assistant event continues is the active one.
+ */
+export function selectActivePathTranscriptEvents<T extends Record<string, unknown>>(
+  records: readonly T[],
+): T[] {
+  const tree = scanSessionTranscriptTree(records);
+  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.entry);
 }
 
 /**

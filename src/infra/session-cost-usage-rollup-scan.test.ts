@@ -31,21 +31,14 @@ const scan = (json: string[]) =>
   });
 
 it("does not retain decoded payloads while refreshing memory usage", async () => {
-  // Eight ordinary turns carrying the id and parent link a real appender writes,
-  // so every turn is billed, as base reports for this history (72 tokens).
+  // Eight ordinary turns with real id/parent links, so every turn is billed (72).
   const count = 8;
-  const rowJson = (index: number, text: string) => {
-    const event = message(7, { id: `a${index}`, parentId: index === 0 ? null : `a${index - 1}` });
-    return JSON.stringify({
-      ...event,
-      message: {
-        ...event.message,
-        content: [{ type: "text", text }, ...event.message.content],
-      },
-    });
-  };
   const result = await scan(
-    Array.from({ length: count }, (_row, index) => rowJson(index, "🌞".repeat(16))),
+    Array.from({ length: count }, (_row, index) =>
+      JSON.stringify(
+        message(7, { id: `a${index}`, parentId: index === 0 ? null : `a${index - 1}` }),
+      ),
+    ),
   );
   const bucket = Object.values(result.rollup.buckets)[0]!;
   expect(result.parsedRecords).toBe(count);

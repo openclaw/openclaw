@@ -86,8 +86,8 @@ describe("rewind composer ownership", () => {
     expect(state.chatMessage).toBe("edit me");
   });
 
-  // The restored prompt is the next action after a rewind. Waiting for the
-  // transcript reload left the composer empty for the whole read.
+  // The restored prompt is the next action after a rewind; waiting for the reload
+  // left the composer empty for the whole read.
   it("refills the composer before the rewind history reload resolves", async () => {
     const history = createDeferred<ChatHistoryResult>();
     const started = createDeferred();

@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import {
+  selectActivePathTranscriptEvents,
   selectBilledTranscriptEvents,
   projectUsageScanFields,
 } from "./session-cost-usage-inherited.js";
@@ -50,11 +51,22 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;
+  // Cursor for billed rows off the active path; the active one is the rollup's own.
+  let displacedUserTimestamp: number | undefined;
   // Catalog prices are inputs only for turns without a recorded cost.
   let priced =
     previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
   return {
-    async addEntries(entries: Iterable<ParsedTranscriptEntry>): Promise<void> {
+    /**
+     * `activePath` names the billed rows the canonical active path still contains.
+     * Billing decides which rows count; this decides whose turn a reply answers,
+     * so a displaced path measures inside itself and never moves the cursor the
+     * next append-only scan continues from. Omitted: every row is active.
+     */
+    async addEntries(
+      entries: Iterable<ParsedTranscriptEntry>,
+      activePath?: ReadonlySet<ParsedTranscriptEntry>,
+    ): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
       const flush = async () => {
         const estimated = batch.filter(needsUsageCostEstimate);
@@ -88,6 +100,7 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             }
           }
           const timestamp = entry.timestamp?.getTime();
+          const onActivePath = activePath?.has(entry) ?? true;
           appendSessionUsageRollupContribution(rollup, {
             timestamp,
             role: entry.role,
@@ -98,7 +111,12 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             toolNames: entry.toolNames,
             toolResultCounts: entry.toolResultCounts,
             usageTotals,
+            activePath: onActivePath,
+            displacedUserTimestamp,
           });
+          if (entry.role === "user" && !onActivePath && timestamp !== undefined) {
+            displacedUserTimestamp = timestamp;
+          }
           countedRecords += entry.usage && timestamp ? 1 : 0;
           parsedRecords += entry.usage ? 1 : 0;
         }
@@ -151,10 +169,11 @@ export async function scanMemoryUsageCostRollup(params: {
     return record;
   });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
+  const usageEntries = (selected: readonly (typeof records)[number][]) =>
+    selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : []));
   await scan.addEntries(
-    selectBilledTranscriptEvents(records).flatMap((record) =>
-      record.usageEntry ? [record.usageEntry] : [],
-    ),
+    usageEntries(selectBilledTranscriptEvents(records)),
+    new Set(usageEntries(selectActivePathTranscriptEvents(records))),
   );
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;
   return scan.finish({
