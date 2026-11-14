@@ -42,7 +42,6 @@ const commandsLightEntries = [
     source: "src/commands/gateway-status/helpers.ts",
     test: "src/commands/gateway-status/helpers.test.ts",
   },
-  { test: "src/commands/models/auth.test.ts" },
   {
     source: "src/commands/models/list.status-command.ts",
     test: "src/commands/models/list.status.test.ts",
