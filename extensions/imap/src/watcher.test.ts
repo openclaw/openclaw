@@ -62,6 +62,56 @@ type Admission = Partial<{
 }>;
 
 describe("IMAP watcher protocol boundary", () => {
+  it.each([false, true])(
+    "ignores unsolicited FETCH rows outside the source batch (source=%s)",
+    async (withSource) => {
+      const clock = createGatewaySchedulerClock();
+      const { server, state, dispatch, waitForCursor } = await startWatcher({
+        clock,
+        messages: existingMail([99, 100]),
+        account: { watch: { mode: "interval", pollSeconds: 0.02 } },
+      });
+      const cursorWrites: number[] = [];
+      const register = state.cursors.register.bind(state.cursors);
+      vi.spyOn(state.cursors, "register").mockImplementation(async (key, cursor) => {
+        cursorWrites.push(cursor.lastSeenUid);
+        return register(key, cursor);
+      });
+      server.beforeBodyFetch = (socket) => {
+        server.beforeBodyFetch = undefined;
+        server.messages.push(...existingMail(Array.from({ length: 49 }, (_, i) => i + 102)));
+        socket.write("* 52 EXISTS\r\n");
+        for (const [sequence, uid] of [
+          [1, 99],
+          [52, 150],
+        ]) {
+          const source = mailText("Unrequested");
+          socket.write(
+            withSource
+              ? `* ${sequence} FETCH (UID ${uid} BODY[] {${Buffer.byteLength(source)}}\r\n${source})\r\n`
+              : `* ${sequence} FETCH (UID ${uid} FLAGS (\\Seen))\r\n`,
+          );
+        }
+      };
+      server.append(mailText("Requested 101"));
+      await clock.advanceBy(20);
+      await clock.advanceBy(0);
+      await waitForCursor(101);
+      expect(cursorWrites).toEqual([101]);
+      expect(
+        dispatch.mock.calls.map(([request]) => Number(request.sessionKey.split(":").at(-1))),
+      ).toEqual([101]);
+
+      await clock.advanceBy(20);
+      await clock.advanceBy(0);
+      await waitForCursor(150);
+      expect(cursorWrites).toEqual(Array.from({ length: 50 }, (_, i) => i + 101));
+      expect(
+        dispatch.mock.calls.map(([request]) => Number(request.sessionKey.split(":").at(-1))),
+      ).toEqual(Array.from({ length: 50 }, (_, i) => i + 101));
+    },
+  );
+
   it.each([
     ["9007199254740993", 9007, undefined],
     ["17", 0, undefined],
