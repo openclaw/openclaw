@@ -1,5 +1,6 @@
 # Required #198193 review regressions: real completion/SQLite/filesystem custody,
 # rollback/source isolation, private vision, exact-task correction/admission,
-# automatic-versus-review identity and bounded candidate discovery/continuation.
-# Net test growth above landed identity is 942 lines; covers only excess above 400.
-542
+# automatic-versus-review identity, bounded candidate discovery/continuation,
+# and real scheduled release after the approving transcript attempt is disposed.
+# Net test growth above landed identity is 1075 lines; covers only excess above 400.
+675
