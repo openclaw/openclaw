@@ -103,7 +103,7 @@ function originalMethod<T, K extends keyof T>(owner: T, key: K): T[K] {
 // Mirrors the Codex plugin's private CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS.
 const CODEX_UNLOAD_CONFIRMATION_MS = 10_000;
 const RECOVERY_FAILURE_TEXT =
-  "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+  "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
 const SHUTDOWN_FAILURE_DETAIL =
   "The previous conversation process did not confirm shutdown; the conversation was preserved.";
 

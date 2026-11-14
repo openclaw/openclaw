@@ -301,12 +301,12 @@ struct ApprovalDashboardReviewButton: View {
                     self.authorityGeneration = self.appModel.operatorAuthorityGeneration
                     self.isPresented = true
                 } label: {
-                    Text("Review in Dashboard")
+                    Text("Review in web app")
                         .font(OpenClawType.subheadSemiBold)
                 }
                 .accessibilityIdentifier("approval-dashboard-review")
             } else {
-                Text("Open Dashboard on an authorized device to review this approval.")
+                Text("Open OpenClaw on an authorized device to review this approval.")
                     .font(OpenClawType.footnote)
             }
         }

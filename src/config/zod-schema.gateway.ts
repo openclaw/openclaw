@@ -689,7 +689,7 @@ export const GatewayConfigSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["portals", "ingress", "domain"],
-        message: "Portal ingress must use a separate domain from Gateway and Control UI origins",
+        message: "Portal ingress must use a separate domain from Gateway and web app origins",
       });
     }
     if (ingress.port === (gateway.port ?? 18789)) {

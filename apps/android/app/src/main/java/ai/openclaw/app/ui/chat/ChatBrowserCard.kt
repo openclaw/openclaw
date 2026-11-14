@@ -110,7 +110,7 @@ internal fun ChatBrowserCard(
         when {
           !connected || page == null -> nativeString("Browser offline. Reconnect to continue in this tab.")
           !canControl -> nativeString("Browser control is unavailable with your current Gateway permissions.")
-          !page.browserFocusAvailable -> nativeString("Browser view unavailable. Update your Gateway and use its bundled Control UI.")
+          !page.browserFocusAvailable -> nativeString("Browser view unavailable. Update your Gateway and use its bundled web app.")
           else -> null
         }
       if (notice != null) {

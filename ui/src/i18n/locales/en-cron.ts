@@ -247,7 +247,7 @@ const enCron = {
       command: "Command",
       script: "Script",
       readOnlyPayloadHelp:
-        "This task was created outside the Control UI. You can’t edit its contents here, but saving other changes keeps them.",
+        "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",

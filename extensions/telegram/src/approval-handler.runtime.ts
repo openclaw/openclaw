@@ -127,9 +127,7 @@ function buildPendingPayload(params: {
     const buttons = decisionButtons.length > 0 ? [decisionButtons] : [];
     return {
       text: lines.join("\n"),
-      buttons: reviewUrl
-        ? [[{ text: "Review in Control UI", url: reviewUrl }], ...buttons]
-        : buttons,
+      buttons: reviewUrl ? [[{ text: "Review in OpenClaw", url: reviewUrl }], ...buttons] : buttons,
     };
   }
   const execView = params.view.approvalKind === "exec" ? params.view : undefined;

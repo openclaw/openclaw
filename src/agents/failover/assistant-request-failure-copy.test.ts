@@ -15,7 +15,7 @@ import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
   const runFailure =
-    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
   const live = (fields: Parameters<typeof makeAssistant>[0]) =>
     formatUserFacingAssistantErrorText(makeAssistant(fields));
   const copies = (assistant: ReturnType<typeof makeAssistant>) => [
@@ -188,7 +188,7 @@ describe("renderAssistantRequestFailureCopy", () => {
         errorBody,
       }),
     ).toBe(
-      "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
+      "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the OpenClaw app.",
     );
   });
 

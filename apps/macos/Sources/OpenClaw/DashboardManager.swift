@@ -336,9 +336,9 @@ final class DashboardManager {
             guard self.endpointGeneration == generation else { return }
             for controller in currentControllers() {
                 controller.showFailure(
-                    title: "Dashboard unavailable",
+                    title: "OpenClaw unavailable",
                     message: error.localizedDescription,
-                    detail: "Reconnect to the Gateway to verify its dashboard sign-in address.",
+                    detail: "Reconnect to the Gateway to verify its sign-in address.",
                     present: false)
             }
             return
@@ -395,7 +395,7 @@ final class DashboardManager {
             target: .primary,
             present: false)
         replacement?.showFailure(
-            title: "Dashboard reconnecting",
+            title: "Reconnecting",
             message: "The selected Gateway changed.",
             detail: "Waiting for a fresh authenticated connection.",
             present: false,
@@ -631,7 +631,7 @@ final class DashboardManager {
             return .success(())
         } catch {
             if reportErrors, isCurrent(), !(error is CancellationError) {
-                self.presentGatewayError(error, title: "Could Not Open Dashboard", over: currentSource()?.window)
+                self.presentGatewayError(error, title: "Could Not Open OpenClaw", over: currentSource()?.window)
             }
             return .failure(error)
         }

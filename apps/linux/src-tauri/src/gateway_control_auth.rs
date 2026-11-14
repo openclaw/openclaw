@@ -125,7 +125,7 @@ pub(crate) fn connect_auth(
 ) -> Result<Value, String> {
     if auth.is_none() {
         return Err(
-            "The native Gateway has not accepted dashboard authentication. Reconnect the app."
+            "The Gateway has not accepted this window's sign-in. Reconnect the app."
                 .into(),
         );
     }

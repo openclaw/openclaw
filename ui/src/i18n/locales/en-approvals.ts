@@ -97,7 +97,7 @@ const enApprovals = {
     actionsLabel: "Approval decisions",
     resolvingDecision: "Recording {decision}…",
     safeToClose: "The decision is recorded. You can close this page.",
-    openControlUi: "Open Control UI",
+    openControlUi: "Open OpenClaw",
   },
   standingGrants: {
     title: "Standing grants",

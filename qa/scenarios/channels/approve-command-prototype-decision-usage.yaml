@@ -82,7 +82,7 @@ flow:
             timeoutMs: 60000
           saveAs: realReply
         - assert:
-            expr: "realReply.text === 'That approval is no longer available. Check the request in the Control UI.'"
+            expr: "realReply.text === 'That approval is no longer available. Check the request in the OpenClaw app.'"
             message:
               expr: "`real decision did not receive the unknown-approval response: ${realReply.text}`"
       detailsExpr: "formatTransportTranscript(state, { conversationId: config.conversationId })"

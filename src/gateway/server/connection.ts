@@ -264,7 +264,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     closeGatewayTransportWithGrace(socket, code, reason ?? "");
   };
   const close = closeWithGrace;
-  const closeRemoteIngress = () => closeWithGrace(1008, "remote Control UI ingress closed");
+  const closeRemoteIngress = () => closeWithGrace(1008, "remote web app ingress closed");
   remoteIngress?.signal.addEventListener("abort", closeRemoteIngress, { once: true });
   socket.once("close", () =>
     remoteIngress?.signal.removeEventListener("abort", closeRemoteIngress),

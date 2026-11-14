@@ -6,7 +6,7 @@ import Testing
 struct DashboardFailurePageTests {
     @Test func `generic failure page offers reload through the native bridge`() {
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable", message: "The Gateway returned HTTP 503.",
+            title: "OpenClaw unavailable", message: "The Gateway returned HTTP 503.",
             detail: "Choose Reload to try again.", url: nil)
         #expect(html.contains("class=\"primary\""))
         #expect(html.contains(">Reload</button>"))
@@ -79,7 +79,7 @@ struct DashboardFailurePageTests {
             for: (endpointURL, fragmentAuth ? token : nil, nil),
             mode: .remote)
         let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
+            title: "OpenClaw unavailable",
             message: "Could not connect to the server.",
             detail: nil,
             url: url)

@@ -428,7 +428,7 @@ describe("ModelProvidersPage agent scope", () => {
             },
           },
         },
-        note: "Update defaults from Control UI",
+        note: "Update defaults from the OpenClaw app",
         replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
       });
     },
@@ -455,7 +455,7 @@ describe("ModelProvidersPage agent scope", () => {
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
   });
@@ -988,7 +988,7 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
     expect(request.mock.calls.some(([method]) => method.startsWith("models."))).toBe(false);

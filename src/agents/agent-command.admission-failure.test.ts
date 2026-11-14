@@ -117,7 +117,7 @@ it.each(["sent", "failed"] as const)(
         const payload = params.payloads?.[0];
         assert.isDefined(payload);
         expect(payload.text).toBe(
-          "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+          "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
         );
         expect(getReplyPayloadMetadata(payload)).toMatchObject({
           deliverDespiteSourceReplySuppression: true,

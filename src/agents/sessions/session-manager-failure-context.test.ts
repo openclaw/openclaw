@@ -41,7 +41,7 @@ it("persists storage worker memory guidance for a native worker OOM", async () =
         customType: "run-failed-before-reply",
         display: true,
         content:
-          "⚠️ OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+          "⚠️ OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.",
       }),
     );
   });

@@ -286,7 +286,7 @@ struct EmbeddedDashboardContent: View {
     private var accessUnavailable: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(
-                "Dashboard unavailable with this Cloudflare session. Native chat and settings still work.")
+                "The web app is unavailable with this Cloudflare session. Native chat and settings still work.")
                 .font(OpenClawType.body)
             if let openGateway {
                 Button(action: openGateway) {
@@ -303,7 +303,7 @@ struct EmbeddedDashboardContent: View {
         if self.config?.ingressAuthorization != nil {
             VStack(alignment: .leading, spacing: 8) {
                 Text(
-                    "This Dashboard requires a Gateway UI that supports native app sign-in. " +
+                    "This page requires a Gateway web app that supports native app sign-in. " +
                         "If it cannot connect, update the Gateway. " +
                         "Native chat and settings remain available.")
                     .font(OpenClawType.footnote)
@@ -330,7 +330,7 @@ struct EmbeddedDashboardContent: View {
             statusCode,
             HTTPURLResponse.localizedString(forStatusCode: statusCode).capitalized)
         return VStack(spacing: 12) {
-            Text("Dashboard unavailable")
+            Text("Web app unavailable")
                 .font(OpenClawType.subheadSemiBold)
             Text(message)
                 .font(OpenClawType.caption)
@@ -359,7 +359,7 @@ struct EmbeddedDashboardContent: View {
     @ViewBuilder private var gatewayUpgradeBanner: some View {
         if let openGateway, self.embedCompatibility?.needsGatewayUpgrade == true {
             VStack(alignment: .leading, spacing: 8) {
-                Text("This Gateway's Dashboard is older than the app; update the Gateway to manage app settings here")
+                Text("This Gateway's web app is older than the app; update the Gateway to manage app settings here")
                     .font(OpenClawType.footnote)
                     .accessibilityIdentifier("SettingsHub.GatewayUpgradeWarning")
                 Button(action: openGateway) {

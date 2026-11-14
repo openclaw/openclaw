@@ -87,7 +87,7 @@ describe("embedded lifecycle", () => {
     expectEvent(onAgentEvent, {
       phase: "error",
       error:
-        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+        "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
       errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "auth_html" }),
       livenessState: "blocked",
     });
@@ -325,7 +325,7 @@ describe("embedded lifecycle", () => {
       expectEvent(onAgentEvent, {
         phase: "error",
         error:
-          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
         errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
         livenessState: "blocked",
       });

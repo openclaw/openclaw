@@ -33,7 +33,7 @@ const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
 const MISSING_PROFILE_ID = "openai:missing";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
+  "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXPECTED_LOGIN = {

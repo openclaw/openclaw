@@ -64,7 +64,7 @@ const enUpdateActions = {
         install: "Installing dependencies",
         update: "Installing OpenClaw",
         build: "Building OpenClaw",
-        buildUi: "Building the Control UI",
+        buildUi: "Building the web app",
         doctor: "Checking configuration and data",
       },
     },
@@ -78,7 +78,7 @@ const enUpdateActions = {
       macMessage:
         "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
       impact:
-        "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
+        "Running sessions are interrupted and this page disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
       versionsBehind: "Installed {installed} · {available}",
       macAction: "Update Mac app and restart",

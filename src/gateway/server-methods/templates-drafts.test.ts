@@ -607,7 +607,7 @@ Research public sources.
         code: change === "authority" ? "FORBIDDEN" : "INVALID_REQUEST",
         message:
           change === "authority"
-            ? "Create, review, and publish Templates from an active administrator Control UI connection."
+            ? "Create, review, and publish Templates from the OpenClaw app while connected as an administrator."
             : "The draft or publisher changed. Review the current files before publishing.",
       });
       expect(fixture.posts).toBe(0);

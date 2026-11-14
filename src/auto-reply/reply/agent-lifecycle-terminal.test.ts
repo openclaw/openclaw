@@ -187,7 +187,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       [
         kind,
         "selected_auth_profile_unavailable",
-        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+        "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.",
       ],
       [
         kind,

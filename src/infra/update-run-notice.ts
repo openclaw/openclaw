@@ -44,8 +44,8 @@ export function renderUpdateRunSummary(
       ? UPDATE_RUN_HEADLINES.get(run.status)
       : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
   const nextStep = options.manualCommand
-    ? `Open Settings → Updates in the Control UI for details. To continue, run \`${options.manualCommand}\` in your terminal.`
-    : "For details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.";
+    ? `Open Settings → Updates in the OpenClaw app for details. To continue, run \`${options.manualCommand}\` in your terminal.`
+    : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
   if (run.status === "failed" && run.steps) {
     const phase =
       run.steps.findLast(
@@ -108,12 +108,18 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
       return true;
     }
   }
+  // Previously stored completion notices keep their original wording on replay.
+  const currentText = text.replace(
+    "\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+    "\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
+  );
   return (
     [...UPDATE_RUN_HEADLINES.keys()].some(
-      (status) => status !== "running" && text === renderUpdateRunSummary({ status, reason: null }),
+      (status) =>
+        status !== "running" && currentText === renderUpdateRunSummary({ status, reason: null }),
     ) ||
     [null, ...SKIPPED_UPDATE_RUN_HEADLINES.keys()].some(
-      (reason) => text === renderUpdateRunSummary({ status: "skipped", reason }),
+      (reason) => currentText === renderUpdateRunSummary({ status: "skipped", reason }),
     )
   );
 }

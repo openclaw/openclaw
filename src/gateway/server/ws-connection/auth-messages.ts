@@ -27,9 +27,9 @@ export function formatGatewayAuthFailureMessage(params: {
   if (client?.mode === "node" && reason?.startsWith("trusted_proxy_missing_header_")) {
     return "gateway rejected this node: trusted-proxy identity-header authentication is required and no usable machine credential was accepted; run `openclaw doctor` on the Gateway";
   }
-  const uiHint = "open the dashboard URL and paste the token in Control UI settings";
+  const uiHint = "open the OpenClaw URL and paste the token in OpenClaw settings";
   const missingUiTokenHint =
-    "paste in Control UI settings or openclaw doctor --generate-gateway-token; restart";
+    "paste in OpenClaw settings or openclaw doctor --generate-gateway-token; restart";
   // Local CLI clients share this gateway's config and have no gateway.remote
   // block; pointing them at gateway.remote.* would be a dead end.
   const tokenHint = isCli
@@ -44,7 +44,7 @@ export function formatGatewayAuthFailureMessage(params: {
       ? "use this gateway's gateway.auth.password"
       : "set gateway.remote.password to match gateway.auth.password"
     : isControlUi || isWebchat
-      ? "enter the password in Control UI settings"
+      ? "enter the password in OpenClaw settings"
       : "provide gateway auth password";
   switch (reason) {
     case "token_missing":

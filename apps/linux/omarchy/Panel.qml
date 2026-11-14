@@ -240,7 +240,7 @@ Panel {
         Flow {
           width: parent.width
           spacing: Style.space(6)
-          Button { text: "Dashboard"; enabled: !root.routeChanged; focusable: true; onClicked: root.activate("dashboard") }
+          Button { text: "Open OpenClaw"; enabled: !root.routeChanged; focusable: true; onClicked: root.activate("dashboard") }
           Button { text: "Quick Chat"; visible: !!root.service && root.service.desktop; enabled: !root.routeChanged; focusable: true; onClicked: root.activate("quickchat") }
           Button { text: "Updates"; visible: !!root.service && root.service.desktop; enabled: !root.routeChanged; focusable: true; onClicked: root.activate("updates") }
           Button { text: "Quit app"; visible: !!root.service && root.service.desktop; enabled: !root.routeChanged; focusable: true; onClicked: root.activate("quit") }
@@ -342,7 +342,7 @@ Panel {
         }
         FullWidthCopy {
           visible: root.hasMore
-          text: "Showing recent and active sessions. Open the dashboard for the full history."
+          text: "Showing recent and active sessions. Open OpenClaw for the full history."
           font.pixelSize: Style.font.caption
           opacity: 0.6
         }

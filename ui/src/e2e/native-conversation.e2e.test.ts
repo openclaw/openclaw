@@ -323,9 +323,7 @@ suite.define(() => {
         }, response);
         await pane.getByRole("link", { name: "Settings", exact: true }).click();
         const toast = page.locator(".app-toast");
-        await expect
-          .poll(() => toast.textContent())
-          .toContain("Couldn't open that page in the Dashboard");
+        await expect.poll(() => toast.textContent()).toContain("Couldn't open that page");
         expect(page.url()).toBe(conversationUrl);
         expect(await composer.isVisible()).toBe(true);
         await toast.getByRole("button", { name: "Dismiss", exact: true }).click();

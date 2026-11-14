@@ -133,7 +133,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (options.getConfig().cloudWorkers?.desktop !== true) {
       throw serviceError(
         "invalid_state",
-        `worker desktop ${operation} is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)`,
+        `worker desktop ${operation} is disabled; enable the Desktop lab under Settings -> Labs in the OpenClaw app (config: cloudWorkers.desktop)`,
       );
     }
     if (policy.signal.aborted) {

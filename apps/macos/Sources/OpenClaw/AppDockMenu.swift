@@ -19,7 +19,7 @@ final class AppDockMenu: NSObject {
     func menu(entries: [DashboardGatewayEntry], selectedTarget: DashboardGatewayTarget?) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(self.item("Open Dashboard", symbol: "gauge", action: #selector(self.showDashboard)))
+        menu.addItem(self.item("Open OpenClaw", symbol: "gauge", action: #selector(self.showDashboard)))
         let gateways = DashboardGatewayMenuModel.items(from: entries)
         if gateways.count > 1 {
             menu.addItem(.separator())

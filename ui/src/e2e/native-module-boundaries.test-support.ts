@@ -158,7 +158,7 @@ export function defineNativeModuleBoundaryTests(
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       const buildLink = sidebar.getByRole("menuitem", {
-        name: "Control UI build details",
+        name: "Web app build details",
         exact: true,
       });
       const hoverCard = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip");

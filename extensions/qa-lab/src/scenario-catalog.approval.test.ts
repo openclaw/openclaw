@@ -51,7 +51,7 @@ it("accepts an unavailable approval response for the configured command owner's 
           state.addOutboundMessage({
             accountId: "qa-channel",
             to: "dm:approve-prototype-dm",
-            text: "That approval is no longer available. Check the request in the Control UI.",
+            text: "That approval is no longer available. Check the request in the OpenClaw app.",
           });
         },
       }),

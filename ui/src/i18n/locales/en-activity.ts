@@ -189,7 +189,7 @@ const enActivity = {
           "This records whose authority the operation selected. It does not prove that the person requested or approved it, or that the operation was authorized.",
         boundaryLabel: "Decision boundary",
         ownerNote:
-          "The Gateway exposes explanations only from a verified owning call path. Receipt-controlled explanations and next steps are hidden; the Control UI does not infer trust from receipt metadata.",
+          "The Gateway exposes explanations only from a verified owning call path. Receipt-controlled explanations and next steps are hidden; OpenClaw does not infer trust from receipt metadata.",
         evidenceHeading: "Evidence limits",
         contextFieldsLabel: "Context fields used",
         noContextFields: "No context fields were recorded as used.",

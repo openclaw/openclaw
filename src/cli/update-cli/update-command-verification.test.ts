@@ -434,7 +434,7 @@ it.each([true, false])(
     const deadline = "Gateway restart observation timed out during health-wait:port-inspection.";
     // Before the first observation, the wait owner's placeholder carries no probe result.
     const message = observed
-      ? `${deadline} Last health probe: protocol mismatch: Control UI v5, Gateway v4, connection check min v3`
+      ? `${deadline} Last health probe: protocol mismatch: Web app v5, Gateway v4, connection check min v3`
       : deadline;
     expect(result.steps[0]?.failureFacts).toContainEqual({
       check: "settled",

@@ -22,7 +22,7 @@ impl PendingApproval {
             ApprovalKind::Device => "Device",
         };
         format!(
-            "{kind} pairing request from {} — open the dashboard to approve",
+            "{kind} pairing request from {} — open OpenClaw to approve",
             self.label
         )
     }

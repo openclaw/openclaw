@@ -651,7 +651,7 @@ impl GatewayClient {
                         .ok()
                         .and_then(|notice| notice.clone())
                         .unwrap_or_else(|| {
-                            "Connect the native app to this Gateway before opening its dashboard."
+                            "Connect the app to this Gateway before opening it."
                                 .into()
                         }));
                 }
@@ -725,10 +725,10 @@ impl GatewayClient {
             || config.ownership != GatewayOwnership::Remote
             || !crate::gateway_windows::matches_route(dashboard, &expected)
         {
-            return Err("The native Gateway connection changed. Reconnect the dashboard.".into());
+            return Err("The Gateway connection changed. Reload this window.".into());
         }
         let session = state.native_control_session.as_ref().ok_or(
-            "The native Gateway has not accepted dashboard authentication. Reconnect the app.",
+            "The Gateway has not accepted this window's sign-in. Reconnect the app.",
         )?;
         let store = self
             .inner
@@ -1613,9 +1613,9 @@ fn connection_notice(
     reconnect_paused: bool,
 ) -> Option<String> {
     let fallback = match state {
-        GatewayConnectionState::PairingRequired => "Approve this device in the dashboard (Nodes)",
+        GatewayConnectionState::PairingRequired => "Approve this device in OpenClaw (Nodes)",
         GatewayConnectionState::CredentialRequired => {
-            "Gateway requires a credential — open the dashboard on the gateway host"
+            "Gateway requires a credential — open OpenClaw on the gateway host"
         }
         _ if reconnect_paused => "Gateway connection paused — reopen Quick Chat to retry",
         _ => return None,
@@ -4126,7 +4126,7 @@ esac
             let notice = connection_notice(state, &failure.connect_details, true);
             assert_eq!(
                 notice.as_deref(),
-                Some("Gateway requires a credential — open the dashboard on the gateway host")
+                Some("Gateway requires a credential — open OpenClaw on the gateway host")
             );
             assert_eq!(
                 serde_json::to_value(GatewayStateEvent::new(
@@ -4140,7 +4140,7 @@ esac
                 json!({
                     "state": "credential-required",
                     "gatewayGeneration": 1,
-                    "notice": "Gateway requires a credential — open the dashboard on the gateway host"
+                    "notice": "Gateway requires a credential — open OpenClaw on the gateway host"
                 })
             );
         }
@@ -4205,7 +4205,7 @@ esac
                 true,
             )
             .as_deref(),
-            Some("Gateway requires a credential — open the dashboard on the gateway host")
+            Some("Gateway requires a credential — open OpenClaw on the gateway host")
         );
         assert_eq!(
             connection_notice(

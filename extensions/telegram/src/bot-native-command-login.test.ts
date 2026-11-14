@@ -276,7 +276,7 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(loginFlow).not.toHaveBeenCalled();
     const texts = messages(sendMessage);
     expect(texts).toContain(
-      "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
+      "Provider login requires a private chat or the OpenClaw app. Open a private chat with OpenClaw and send `/login` there.",
     );
     expect(texts.join("\n")).not.toContain("SECRET");
     expect(texts.join("\n")).not.toContain("https://auth.openai.com/codex/device");

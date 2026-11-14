@@ -1445,12 +1445,12 @@ impl GatewayWindows {
                 }
                 let view = app
                     .get_webview("main")
-                    .ok_or("The dashboard is no longer available.")?;
+                    .ok_or("This window is no longer available.")?;
                 let current = view
                     .url()
-                    .map_err(|_| "Could not read the current dashboard address.")?;
+                    .map_err(|_| "Could not read the current address.")?;
                 view.navigate(current).map_err(|_| {
-                    "Could not reload the current dashboard. Open Connection Settings to retry."
+                    "Could not reload OpenClaw. Open Connection Settings to retry."
                 })?;
                 Ok(true)
             }
@@ -1511,7 +1511,7 @@ impl GatewayWindows {
         url: &Url,
     ) -> Result<DocumentRegistration, String> {
         if !crate::external_browser_url_allowed(url) {
-            return Err("Invalid Gateway dashboard address.".into());
+            return Err("Invalid Gateway address.".into());
         }
         let origin = url.origin().ascii_serialization();
         let grant = {
@@ -2468,7 +2468,7 @@ fn replace_document(
     }
     let owner = app.state::<GatewayWindows>();
     let window = app.get_window(label).ok_or(STALE)?;
-    retire_document(app, label, "Could not replace the Gateway dashboard.")?;
+    retire_document(app, label, "Could not switch this window to the Gateway.")?;
     let size = window
         .inner_size()
         .map_err(|_| "Could not measure the Gateway window.")?;
@@ -2499,7 +2499,7 @@ fn replace_document(
         });
     let view = window
         .add_child(builder, LogicalPosition::new(0, 0), size)
-        .map_err(|_| "Could not open the Gateway dashboard.")?;
+        .map_err(|_| "Could not open OpenClaw for this Gateway.")?;
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(&view)
         .map_err(|_| "Could not prepare Gateway window controls.")?;

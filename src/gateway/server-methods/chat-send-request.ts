@@ -279,7 +279,7 @@ export function normalizeChatSendRequest(params: {
       !ordinaryChat)
   ) {
     return reject(
-      "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
+      "Human mentions require a signed-in chat in the OpenClaw app. Remove the selected mentions to use this mode.",
     );
   }
   if (p.appContext && !ordinaryChat) {

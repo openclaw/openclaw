@@ -136,7 +136,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       expect(mockedFormatAssistantErrorText).toHaveBeenLastCalledWith(current, expect.anything());
       await expect(promise).rejects.toThrow(
         completed
-          ? "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal."
+          ? "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal."
           : "deepseek (deepseek-chat) returned a billing error",
       );
     },

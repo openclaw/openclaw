@@ -57,7 +57,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       })?.assertCurrent();
     } catch (error) {
       throw new PersonalFileAccessError(
-        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        "Personal instructions are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.",
         { cause: error },
       );
     }
