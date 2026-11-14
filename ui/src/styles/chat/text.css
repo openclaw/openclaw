@@ -912,7 +912,7 @@
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution, .chat-question-panel__source)
   a.markdown-session-link--titled {
-  display: inline-grid;
+  display: inline-block;
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;
   padding-inline-start: 1.5em;
@@ -923,12 +923,14 @@
   white-space: nowrap;
 }
 
-/* The grid supplies the text baseline; only its label clips for ellipsis. */
+/* Keep the label inline-level so native paragraph selection crosses the chip.
+   Clip only horizontally: visible vertical overflow preserves its text baseline. */
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution, .chat-question-panel__source)
   .markdown-session-link--titled
   > .session-label {
-  min-width: 0;
-  overflow: hidden;
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: clip;
   text-overflow: ellipsis;
 }
 
