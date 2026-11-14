@@ -142,16 +142,20 @@ describe("assistant mirror media identity", () => {
         message: original,
       });
       expect(first.ok).toBe(true);
+      const displayContent = [{ type: "text" as const, text: "Prepared chart" }];
+      const prepareDisplayContent = vi.fn(async () => displayContent);
+      const replay = { ...params, prepareDisplayContent };
       const before = readRawEvents(scope.sessionId);
       expect(before.length).toBeGreaterThan(0);
-      expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+      expect(await appendAssistantMessageToSessionTranscript(replay)).toEqual(first);
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       const owner = database();
       expect(await closeOpenClawAgentDatabaseByPathAsync(owner.path, scope.agentId)).toBe(true);
       expect(owner.db.isOpen).toBe(false);
-      expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+      expect(await appendAssistantMessageToSessionTranscript(replay)).toEqual(first);
       expect(database()).not.toBe(owner);
+      expect(prepareDisplayContent).not.toHaveBeenCalled();
       expect(readRawEvents(scope.sessionId)).toEqual(before);
       const assistants = (await loadTranscriptEvents(scope))
         .map(readTranscriptEventMessage)
@@ -168,10 +172,14 @@ describe("assistant mirror media identity", () => {
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       // A legacy row cannot relax URL identity for new rows in the same database.
-      const fresh = { ...params, idempotencyKey: "new-media-reply" };
-      const admitted = await appendAssistantMessageToSessionTranscript(fresh);
+      const fresh = { ...replay, idempotencyKey: "new-media-reply" };
+      const [admitted, repeated] = await Promise.all([
+        appendAssistantMessageToSessionTranscript(fresh),
+        appendAssistantMessageToSessionTranscript(fresh),
+      ]);
       expect(admitted.ok).toBe(true);
-      expect(await appendAssistantMessageToSessionTranscript(fresh)).toEqual(admitted);
+      expect(repeated).toEqual(admitted);
+      expect(prepareDisplayContent).toHaveBeenCalledOnce();
       await expect(
         appendAssistantMessageToSessionTranscript({
           ...fresh,
@@ -199,6 +207,7 @@ describe("assistant mirror media identity", () => {
           message: expect.objectContaining({
             role: "assistant",
             openclawDelivery: { mediaUrls: fresh.mediaUrls },
+            openclawDisplayContent: displayContent,
             content: [{ type: "text", text: explicitContent ? "Chart" : "Chart\nchart.png" }],
           }),
         }),

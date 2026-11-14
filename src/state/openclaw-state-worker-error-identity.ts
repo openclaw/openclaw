@@ -24,6 +24,7 @@ import {
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
+import { SqliteJsonlReadBudgetExceededError } from "../infra/sqlite-jsonl-budget-error.js";
 import {
   SqliteCoordinatorError,
   OpenClawStateExternalOwnershipError,
@@ -55,6 +56,7 @@ const MESSAGE_ONLY_ERRORS = {
   coordinator: SqliteCoordinatorError,
   ownership: OpenClawStateOwnershipError,
   "newer-schema": SqliteSchemaVersionError,
+  "jsonl-read-budget": SqliteJsonlReadBudgetExceededError,
   "range-error": RangeError,
   "syntax-error": SyntaxError,
   "type-error": TypeError,

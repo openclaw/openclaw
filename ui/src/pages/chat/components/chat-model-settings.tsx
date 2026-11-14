@@ -22,7 +22,7 @@ export function providerRuntimeOptions(
   );
 }
 
-export function ChatModelRuntimeControl(props: {
+function ChatModelRuntimeControl(props: {
   options: ChatModelPickerOption[];
   model: string;
   selected: string | null;

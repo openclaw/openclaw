@@ -103,6 +103,15 @@ migrations, noncanonical schema changes, and explicit FULL verification retain
 their checks. Older crash-recovery quick receipts remain readable until their
 existing expiry; new crash admissions do not create them.
 
+When native retirement revokes a completed background verification, the next
+runtime admission schedules a new background check. A completed attempt cannot
+stand in for revoked proof. Pending and inconclusive attempts remain shared to
+avoid repeated scans on worker churn. Successful verification publishes through
+the admitted writer and supplies the existing clean-close seal. Runtime-admitted
+stores retain their physical database and Gateway lifetime checks independently
+of the configured startup roster; configuration-selected startup stores also
+retain their configuration-change checks.
+
 The borrowing process never checked the file itself, so if it closes last it
 leaves the next opener to verify instead of writing a seal. Live-peer provenance
 still binds macOS `kern.bootsessionuuid` or Windows `LastBootUpTime`; unknown

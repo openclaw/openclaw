@@ -2,22 +2,31 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { IrohEndpointKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import { requestPairing } from "../../infra/device-pairing-fixtures.test-support.js";
 import { verifyDeviceToken } from "../../infra/device-pairing-tokens.js";
 import { getPairedDevice } from "../../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
 
 const roots = createSuiteTempRootTracker({ prefix: "openclaw-remote-signout-" });
 let baseDir: string;
 beforeAll(async () => {
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  });
   baseDir = await roots.setup();
   vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
 });
 afterAll(async () => {
+  clearRuntimeConfigSnapshot();
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   await roots.cleanup();

@@ -4191,7 +4191,8 @@ jobs:
           SKIP_NPM_LOCK: ${{ steps.npm-lock-scope.outputs.skip }}
           FROZEN_TARGET: *frozen_target
           HISTORICAL_TARGET: *historical_target
-          FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          # The required docs job owns formatting when selected for current targets.
+          FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check == 'true' && (needs.preflight.outputs.frozen_target == 'true' || needs.preflight.outputs.run_check_docs != 'true') }}
           RUN_PR_MADGE_IMPORT_CYCLES: ${{ needs.preflight.outputs.run_pr_madge_import_cycles }}
           RUN_PR_KYSELY_GUARDRAILS: ${{ needs.preflight.outputs.run_pr_kysely_guardrails }}
           SPLIT_PR_GUARDS: ${{ needs.preflight.outputs.split_pr_guards }}

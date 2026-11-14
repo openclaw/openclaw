@@ -7,6 +7,7 @@ import { captureScheduledOperatorSource } from "../../agents/operator-run-recove
 import { ToolSearchRuntime } from "../../agents/tool-search-runtime.js";
 import { resolveToolSearchConfig } from "../../agents/tool-search.js";
 import { jsonResult } from "../../agents/tools/common.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { admitScheduledOccurrence } from "../../cron/execution-context-admission.js";
 import { readScheduledSenderBit } from "../../cron/execution-context-registry.js";
@@ -28,6 +29,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -68,6 +70,9 @@ it.each([
     const editor = "editor" in scenario ? scenario.editor : undefined;
     const originalRevoked = "originalRevoked" in scenario && scenario.originalRevoked;
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      setRuntimeConfigSnapshot({
+        gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+      });
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
@@ -306,6 +311,9 @@ it.each(["member", "owner"] as const)(
   "recovers a serialized OCID %s source without replacing membership with profile authority",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      setRuntimeConfigSnapshot({
+        gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+      });
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
@@ -412,6 +420,9 @@ it.each(["member", "owner"] as const)(
 
 it("keeps owner-only standing within the retained scope and fences control edits to it", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({
+      gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+    });
     const device: OpenClawIdTunnelPrincipal = {
       kind: "owner",
       peerKey: `iroh:${"ce".repeat(32)}`,
