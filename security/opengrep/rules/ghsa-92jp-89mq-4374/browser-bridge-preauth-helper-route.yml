@@ -1,0 +1,53 @@
+rules:
+  - id: openclaw-browser-bridge-preauth-helper-route
+    message: Privileged browser bridge helper route is registered before auth middleware, so helper access can bypass bridge auth.
+    severity: ERROR
+    languages:
+      - typescript
+      - javascript
+    patterns:
+      - pattern-inside: |
+          export async function $F(...){
+            ...
+          }
+      # A helper route is just as reachable when it is registered under another
+      # verb or on a router/server instance, so match every registration shape.
+      # $APP and $M bind once per match, so the exemptions below only apply to
+      # the same receiver and verb.
+      - pattern: |
+          $APP.$M($ROUTE, ...)
+      - metavariable-regex:
+          metavariable: $APP
+          regex: ^(app|server|router)$
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(get|post|put|patch|delete|options|head|all)$
+      - metavariable-regex:
+          metavariable: $ROUTE
+          regex: ^["'`](?:/sandbox/novnc|/[^"'`]*(?:helper|observer|novnc)[^"'`]*)["'`]$
+      - pattern-not-inside: |
+          export async function $F(...){
+            ...
+            installBrowserAuthMiddleware($APP, ...)
+            ...
+            $APP.$M($ROUTE, ...)
+            ...
+          }
+      - pattern-not: |
+          $APP.$M($ROUTE, ($REQ, $RES) => {
+            if (!hasVerifiedBrowserAuth($REQ)) {
+              ...
+            }
+            ...
+          })
+    metadata:
+      category: security
+      technology:
+        - express
+      confidence: medium
+      ghsa: GHSA-92JP-89MQ-4374
+      rationale: Helper routes like noVNC observer/token redemption should not be reachable before bridge auth is established.
+      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-92JP-89MQ-4374
+      detector-bucket: precise
+      source-run: 2026-04-17T07-37-10Z
+      source-rule-id: openclaw-browser-bridge-preauth-helper-route
