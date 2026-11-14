@@ -7,6 +7,7 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollText,
@@ -40,6 +41,7 @@ suite.define(() => {
           const before = await controls.boundingBox();
           const shifts = await observeLayoutShifts(page);
           await gateway.resolveDeferred("models.list");
+          await pollText(trigger).toContain("gpt-5.5");
           await pollAttribute(trigger, "aria-busy").toBe("false");
           await page.evaluate(
             () =>
@@ -136,6 +138,7 @@ suite.define(() => {
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
       await gateway.waitForRequest("models.list");
+      await captureUiProof(suite, page, "model-catalog-pending.png");
       await pollAttribute(modelTrigger, "aria-busy").not.toBe("true");
       expect(await modelTrigger.getAttribute("aria-label")).not.toContain("Loading models…");
       expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
@@ -160,6 +163,7 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
       await gateway.resolveDeferred("models.list");
       await pollText(modelTrigger).toContain("GPT-5.6 Luna");
+      await captureUiProof(suite, page, "model-catalog-ready.png");
       expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");
       const effortPicker = page.locator(
         ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",

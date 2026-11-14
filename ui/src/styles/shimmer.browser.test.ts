@@ -4,12 +4,7 @@ import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-su
 
 const fixture = styleFixture("shimmer-", { ignoreCloseErrors: true });
 
-const skeletons = [
-  "skeleton-line",
-  "usage-skeleton-block",
-  "memory-import__skeleton",
-  "chat-controls__model-trigger-skeleton",
-] as const;
+const skeletons = ["skeleton-line", "usage-skeleton-block", "memory-import__skeleton"] as const;
 const skeletonFixture = styleDocument(
   readStyles(
     "styles/base",

@@ -55,7 +55,6 @@ const MODEL_SELECTION_SCOPE_LABELS = new Map([
 function resolveCatalogTriggerStatus(
   state: ChatModelCatalogState,
   optionCount: number,
-  selectionKnown: boolean,
 ): string | undefined {
   if (state.status === "offline") {
     return undefined;
@@ -64,7 +63,7 @@ function resolveCatalogTriggerStatus(
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
   if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
-    return selectionKnown ? undefined : t("chat.modelControls.loadingModels");
+    return undefined;
   }
   if (state.hasSnapshot && optionCount === 0) {
     return t("chat.modelControls.noModelsAvailable");
@@ -504,7 +503,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       providerAuth,
       currentOverride,
       defaultModel,
-      modelOverrideSource,
       modelOptions,
       activeModelOption,
       pickerValue,
@@ -531,22 +529,15 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const fastMode = props.modelSwitching
       ? { ...presentedFastMode, disabled: true }
       : presentedFastMode;
-    const catalogLoadingWithoutSnapshot =
-      !catalogState.hasSnapshot && ["idle", "loading"].includes(catalogState.status);
-    // The session owns the selected model; its account-scoped catalog only owns
-    // picker availability. Refreshing that catalog must not hide a known selection.
-    const selectionKnown = Boolean(
-      currentOverride || (modelOverrideSource === null && defaultModel),
-    );
     const catalogTriggerStatus = retired
-      ? resolveCatalogTriggerStatus(catalogState, 0, false)
+      ? resolveCatalogTriggerStatus(catalogState, 0)
       : policy?.restricted && !currentOverride && !defaultModel
         ? t(
             modelOptions.length
               ? "chat.modelControls.selectionRequired"
               : "chat.modelControls.noPermittedModels",
           )
-        : resolveCatalogTriggerStatus(catalogState, modelOptions.length, selectionKnown);
+        : resolveCatalogTriggerStatus(catalogState, modelOptions.length);
     const hasResolvableModel =
       catalogState.hasSnapshot &&
       (catalogState.status === "ready" ||
@@ -646,8 +637,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue: triggerModelValue || undefined,
         triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
-        triggerLoading:
-          !props.modelSelectionLocked && catalogLoadingWithoutSnapshot && !selectionKnown,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
