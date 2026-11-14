@@ -194,6 +194,8 @@ describe("redactSensitiveText", () => {
         "GITHUB_TOKEN=${GITHUB_TOKEN}",
       ].join("\n"),
       "Use either --password or --password-file.",
+      // A published model id that shares the Perplexity API key prefix.
+      '{"id":"pplx-decider-v1.2","provider":"perplexity-decisions"}',
       [
         "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs gloas-docs gldt-docs glcbt-docs glptt-docs glft-docs glimt-docs glagent-docs glwt-docs glsoat-docs glffct-docs glrt-docs glrtr-docs GOCSPX-docs GR1348941-docs _gitlab_session=short dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
         `fixturefw-${"C".repeat(40)}`,
@@ -239,6 +241,8 @@ describe("redactSensitiveText", () => {
       `fw-${"C".repeat(40)}`,
       `fw_${"A".repeat(40)}`,
       `fpk_${"B".repeat(40)}`,
+      "pplx-abcdefghij12345",
+      "pplx-deciderabcdefghij",
     ];
     // Isolated inputs require each grammar to reach the default prefilter itself.
     for (const token of tokens) {
