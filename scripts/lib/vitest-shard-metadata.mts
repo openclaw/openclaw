@@ -283,6 +283,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/server.sessions.create.projects.test.ts", 15],
   // The same runs exposed the 3s fallback on support's worktree owners. Keep
   // these as relative LPT weights, not whole-parent admission.
+  ["src/agents/worktrees/service.gc.test.ts", 41],
   ["src/agents/worktrees/service.test.ts", 43],
   ["src/agents/worktrees/service.input-files.test.ts", 21],
   ["src/agents/worktrees/service.canonical-paths.test.ts", 17],

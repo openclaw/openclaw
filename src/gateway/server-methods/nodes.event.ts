@@ -3,10 +3,12 @@ import { validateNodeEventParams } from "../../../packages/gateway-protocol/src/
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
+  isPairedDeviceNodeBindingCurrent,
 } from "../../infra/device-pairing-node-state.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
 import { NodeWorkerProcessesChangedSchema } from "../../worker/worker-process-observation.js";
+import { pairingBindingForSession } from "../node-registry-pairing.js";
 import type { NodeEventContext, NodeEventHandleResult } from "../server-node-events-types.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -44,6 +46,12 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
       const nodeSession = context.nodeRegistry.get(nodeId);
       const eventConnId = client?.connId;
       const eventPairingGeneration = nodeSession?.pairingGeneration;
+      const eventPairingBinding = nodeSession?.pairingIdentity
+        ? pairingBindingForSession({
+            pairingIdentity: nodeSession.pairingIdentity,
+            pairingGeneration: eventPairingGeneration,
+          })
+        : undefined;
       const sessionForGeneration = (generation: string) =>
         resolveDispatchableNodeSession(
           context.nodeRegistry.getForPairingGeneration(nodeId, generation),
@@ -196,6 +204,14 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertAgentTurnCurrent: () => {
+            if (
+              !eventPairingBinding?.generation ||
+              !isPairedDeviceNodeBindingCurrent(nodeId, eventPairingBinding)
+            ) {
+              throw new Error("Node pairing changed before agent turn admission");
+            }
+          },
           assertSessionEventCurrent: () => {
             const current = eventPairingGeneration
               ? sessionForGeneration(eventPairingGeneration)

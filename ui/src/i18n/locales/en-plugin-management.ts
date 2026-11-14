@@ -85,7 +85,6 @@ const enPluginManagement = {
       thisGateway: "this Gateway",
       alternatives: "Or use another AI",
       signInTitle: "Connect ChatGPT to get started",
-      signInBody: "OpenClaw is ready to connect your ChatGPT account.",
       signIn: "Sign in with ChatGPT",
       startingSignIn: "Opening ChatGPT sign-in…",
       unavailableTitle: "Couldn’t connect your AI",

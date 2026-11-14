@@ -315,6 +315,8 @@ export function createOpenClawIdAuthority(
 
     /** Reads member display from the canonical profile owner, never as access authority. */
     memberProfiles: profiles.read,
+    /** Eligible local profiles for owner-selected invitations; never membership authority. */
+    inviteProfiles: profiles.inviteProfiles,
 
     /** The current record, if loaded. */
     current(): StoredClaw | undefined {
@@ -456,7 +458,7 @@ export function createOpenClawIdAuthority(
      * owner device (tunnel or loopback, never the mailbox).
      */
     registerInvite(
-      input: { cap: unknown; proofKey: Uint8Array },
+      input: { cap: unknown; proofKey: Uint8Array; existingProfileId?: string },
       channel: Channel,
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
       return serialize(async () => {
@@ -479,7 +481,35 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
-        await commit({ ...current, authority: result.state });
+        let inviteReports = current.invite_reports;
+        if (input.existingProfileId !== undefined) {
+          const profile = (await profiles.inviteProfiles()).find(
+            ({ id }) => id === input.existingProfileId,
+          );
+          if (!profile) {
+            return {
+              ok: false,
+              code: "profile_unavailable",
+              detail:
+                "Choose a personal profile that is not linked to OpenClaw ID, or invite without an existing profile.",
+            };
+          }
+          const inviteId = Object.keys(result.state.invites).find(
+            (id) => !Object.hasOwn(current.authority.invites, id),
+          )!;
+          inviteReports = {
+            ...inviteReports,
+            [inviteId]: {
+              email: null,
+              display_name: null,
+              location_hint: null,
+              existingProfile: profile,
+            },
+          };
+        }
+        const next = { ...current, authority: result.state };
+        Object.assign(next, inviteReports ? { invite_reports: inviteReports } : {});
+        await commit(next);
         return { ok: true, status: result.status, events: [...events, ...result.events] };
       });
     },
@@ -515,6 +545,7 @@ export function createOpenClawIdAuthority(
         const display = (value: string | null | undefined) =>
           value ? truncateUtf16Safe(value.trim(), 256) : null;
         const report: InviteReport = {
+          ...(inviteId.ok ? current.invite_reports?.[inviteId.statement.body.invite_id] : {}),
           account_id: sender.account_id,
           email: display(sender.email),
           display_name: display(sender.display_name),

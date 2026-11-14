@@ -46,6 +46,13 @@ the Gateway checks its pairing identity and generation against the persisted
 approval and limits access to the capabilities and commands that connection
 declared.
 
+Node-originated agent requests and voice transcripts retain the pairing identity
+and generation that admitted them. If a turn waits in the session queue, the
+Gateway rechecks that authority when the turn is selected, before preflight or
+model execution. Removing and re-pairing the node does not restore an older
+queued turn. Reconnecting with the same pairing remains valid, and work that
+already started may finish.
+
 An initial unapproved surface has no effective commands. While a later expansion
 waits, previously approved commands remain effective only if the node still
 declares them and Gateway command policy allows them.

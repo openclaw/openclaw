@@ -356,6 +356,9 @@ const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
   ["agentic-control-plane-agent-chat", 30],
   ["agentic-gateway-methods", 96],
+  // Run 43604797931 spent 21 and 29 minutes in 235- and 305-file groups.
+  ["agentic-agents-support", 64],
+  ["core-runtime-config", 64],
 ]);
 const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
 // Trusted forks can use the GitHub profile on Blacksmith. Every compact
@@ -655,6 +658,7 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/templates/package-update.test.ts", 4.164],
   ["src/cli/update-cli.git-service.test.ts", 24.578],
   ["src/flows/doctor-health.fleet-preflight.test.ts", 8.648],
+  ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
   ["src/agents/tools/transcripts-tool.selection.test.ts", 14.535],

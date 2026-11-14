@@ -139,7 +139,7 @@ describe("irc client nickserv", () => {
     const result = await connectAndCollectRegistration({
       nickserv: {
         service: "NickServ\n",
-        password: String.raw`pa\tss\new\x41` + "\u0002\u007f\r\nJOIN #bad",
+        password: String.raw`pa\tss\new\x41` + "\t\r\u0002\u007f\r\nJOIN #bad",
       },
     });
 
@@ -585,17 +585,16 @@ describe("IRC formatted text on the wire", () => {
     expect(core.channel.activity.record).not.toHaveBeenCalled();
     expect(server.openSocketCount()).toBe(0);
   });
-
   it("sends literal backslash sequences unchanged with a reply reference", async () => {
-    const results = await send(String.raw`Run C:\tools\new.exe or printf("%d\n") with \x41`, {
-      replyToId: "parent-1",
-    });
+    const results = await send(
+      String.raw`Run C:\tools\new.exe or printf("%d\n") with \x41` + "\tName\rState\ndocs\tready",
+      { replyToId: "parent-1" },
+    );
     expect(server.lines.filter((line) => line.startsWith("PRIVMSG "))).toEqual([
-      String.raw`PRIVMSG #room :Run C:\tools\new.exe or printf("%d\n") with \x41  [reply:parent-1]`,
+      String.raw`PRIVMSG #room :Run C:\tools\new.exe or printf("%d\n") with \x41 Name State docs ready  [reply:parent-1]`,
     ]);
     expect(results[0]?.receipt?.replyToId).toBe("parent-1");
   });
-
   it.each([
     ["code", "PRIVMSG #room :| Name | State | | ---- | ----- | | docs | ready |"],
     ["bullets", "PRIVMSG #room :docs \u2022 State: ready"],
