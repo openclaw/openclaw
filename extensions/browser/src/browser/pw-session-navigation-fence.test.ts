@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { setImmediate as nextTick } from "node:timers/promises";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as navigationGuard from "./navigation-guard.js";
@@ -192,6 +193,60 @@ describe("navigation authority fence lifecycle", () => {
     );
     expect(send).not.toHaveBeenCalledWith("Fetch.failRequest", expect.anything());
     expect(detach).not.toHaveBeenCalled();
+  });
+
+  it("starts the next invocation's interception after the last release is acknowledged", async () => {
+    // As the extension relay does: Fetch.enable is refused until Fetch.disable is answered.
+    const disabled = Promise.withResolvers<void>();
+    let releasing = false;
+    let intercepting = false;
+    const { page, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Fetch.enable") {
+          if (releasing) {
+            throw new Error("Fetch interception is being released");
+          }
+          intercepting = true;
+        }
+        if (method === "Fetch.disable") {
+          releasing = true;
+          await disabled.promise;
+          releasing = false;
+          intercepting = false;
+        }
+      },
+    });
+    let returned = false;
+    const released = dispose().finally(() => {
+      returned = true;
+    });
+    await vi.waitFor(() => expect(releasing).toBe(true));
+    const next = installNavigationAuthorityFence(page as unknown as Page, {}, () => {});
+    await nextTick();
+    const returnedBeforeAcknowledged = returned;
+    disabled.resolve();
+    expect(await released).toBeUndefined();
+    await next;
+    expect({ returnedBeforeAcknowledged, intercepting }).toEqual({
+      returnedBeforeAcknowledged: false,
+      intercepting: true,
+    });
+  });
+
+  it("fails an invocation whose interception does not start", async () => {
+    let refused = false;
+    const { page, dispose } = await fence({
+      send: async (method) => {
+        if (refused && method === "Fetch.enable") {
+          throw new Error("interception refused");
+        }
+      },
+    });
+    expect(await dispose()).toBeUndefined();
+    refused = true;
+    await expect(
+      installNavigationAuthorityFence(page as unknown as Page, {}, () => {}),
+    ).rejects.toThrow("interception refused");
   });
 
   it("retains interception until target close when revoked loading cannot be stopped", async () => {
