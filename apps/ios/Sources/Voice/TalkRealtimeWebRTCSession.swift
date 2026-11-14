@@ -195,6 +195,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var transcriptHoldTask: Task<Void, Never>?
     private var transcriptHoldTurn: Int?
     private let transcriptHoldTimeoutSeconds: Double
+    private let transcriptHoldSleep: @MainActor (UInt64) async throws -> Void
     private var session: TalkRealtimeClientSession?
     private var toolBuffers: [String: ToolBuffer] = [:]
     private var activeToolTasks: [String: Task<Void, Never>] = [:]
@@ -231,8 +232,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         voiceSessionId: String? = nil,
         transcriptStore: TalkRealtimeTranscriptStore,
         transcriptHoldTimeoutSeconds: Double = 5,
+        transcriptHoldSleep: @escaping @MainActor (UInt64) async throws -> Void = {
+            try await Task.sleep(nanoseconds: $0)
+        },
         delegate: TalkRealtimeWebRTCSessionDelegate)
     {
+        self.transcriptHoldSleep = transcriptHoldSleep
         self.transcriptHoldTimeoutSeconds = transcriptHoldTimeoutSeconds
         self.gateway = gateway
         self.gatewayRoute = gatewayRoute
@@ -1244,8 +1249,9 @@ extension TalkRealtimeWebRTCSession {
         self.transcriptHoldTurn = holdingTurn
         guard holdingTurn != nil else { return }
         let timeout = UInt64(self.transcriptHoldTimeoutSeconds * 1_000_000_000)
+        let sleep = self.transcriptHoldSleep
         self.transcriptHoldTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: timeout)
+            try? await sleep(timeout)
             guard let self, !Task.isCancelled else { return }
             self.transcriptHoldTask = nil
             self.transcriptHoldTurn = nil

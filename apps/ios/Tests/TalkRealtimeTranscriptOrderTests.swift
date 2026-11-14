@@ -49,6 +49,7 @@ final class TalkRealtimeTranscriptOrderTests: XCTestCase {
         after events: [String],
         expecting count: Int,
         timeoutSeconds: Double = 5,
+        onTranscript: ((String) -> Void)? = nil,
         makeSession: ((GatewayNodeSession, TalkRealtimeWebRTCSessionDelegate) -> TalkRealtimeWebRTCSession)? = nil,
         afterEvents: ((TalkRealtimeWebRTCSession, RTCDataChannel) async throws -> Void)? = nil)
         async throws -> [SavedTalkTranscript]
@@ -74,6 +75,7 @@ final class TalkRealtimeTranscriptOrderTests: XCTestCase {
         })
         let gateway = GatewayNodeSession()
         let delegate = TranscriptOrderDelegate()
+        delegate.onTranscript = onTranscript
         let talk = makeSession?(gateway, delegate) ?? TalkRealtimeWebRTCSession(
             gateway: gateway,
             sessionKey: "main",
@@ -145,11 +147,14 @@ private actor TranscriptRequestCapture {
 
 @MainActor
 private final class TranscriptOrderDelegate: TalkRealtimeWebRTCSessionDelegate {
+    var onTranscript: ((String) -> Void)?
     func realtimeSession(_: TalkRealtimeWebRTCSession, didChangeStatus _: String) {}
     func realtimeSession(_: TalkRealtimeWebRTCSession, didDetectInputSpeech _: Bool) {}
     func realtimeSession(_: TalkRealtimeWebRTCSession, didUpdateAudioLevels _: Double?, output _: Double?) {}
     func realtimeSession(_: TalkRealtimeWebRTCSession, didReceiveUserTranscript _: String) {}
-    func realtimeSession(_: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript _: String) {}
+    func realtimeSession(_: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript text: String) {
+        self.onTranscript?(text)
+    }
     func realtimeSession(
         _: TalkRealtimeWebRTCSession,
         didFailTranscriptPersistenceForEntry _: String,

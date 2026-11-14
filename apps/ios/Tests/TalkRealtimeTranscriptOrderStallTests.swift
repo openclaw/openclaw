@@ -99,6 +99,9 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
     }
 
     func testNewerBlockerSurvivesTheOlderTimeout() async throws {
+        let clock = TranscriptHoldClock()
+        defer { clock.resumeAll() }
+        let newerReply = expectation(description: "newer reply processed")
         let saved = try await TalkRealtimeTranscriptOrderTests.persistedTranscripts(
             after: [
                 #"{"type":"input_audio_buffer.committed","item_id":"u1"}"#,
@@ -106,14 +109,16 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
                 #"{"type":"response.output_audio_transcript.done","item_id":"a1","transcript":"A1."}"#,
             ],
             expecting: 3,
+            onTranscript: { if $0 == "A2." { newerReply.fulfill() } },
             makeSession: { gateway, delegate in
                 TalkRealtimeWebRTCSession(
                     gateway: gateway, sessionKey: "main", voiceSessionId: "voice-1",
                     transcriptStore: TalkRealtimeTranscriptStore(retryDelaysNanoseconds: []),
-                    transcriptHoldTimeoutSeconds: 1, delegate: delegate)
+                    transcriptHoldTimeoutSeconds: 1,
+                    transcriptHoldSleep: { await clock.sleep($0) }, delegate: delegate)
             },
             afterEvents: { talk, channel in
-                try await Task.sleep(nanoseconds: 600_000_000)
+                await self.fulfillment(of: [clock.firstScheduled], timeout: 5)
                 for json in [
                     #"{"type":"input_audio_buffer.committed","item_id":"u2"}"#,
                     #"{"type":"conversation.item.added","item":{"id":"a2","type":"message","role":"assistant"}}"#,
@@ -121,7 +126,9 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
                 ] {
                     talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(json.utf8), isBinary: false))
                 }
-                try await Task.sleep(nanoseconds: 700_000_000)
+                await self.fulfillment(of: [newerReply], timeout: 5)
+                clock.resumeOldest()
+                await self.fulfillment(of: [clock.secondScheduled], timeout: 5)
                 let final = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"u2","transcript":"U2."}"#
                 talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(final.utf8), isBinary: false))
             })
@@ -213,5 +220,34 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
                 talk.stop()
             })
         XCTAssertEqual(saved.map(\.text), ["Reply."])
+    }
+}
+
+/// A timeout fires only when the test releases it, independent of simulator load.
+@MainActor
+private final class TranscriptHoldClock {
+    let firstScheduled = XCTestExpectation(description: "older timeout scheduled")
+    let secondScheduled = XCTestExpectation(description: "newer timeout scheduled")
+    private var pending: [CheckedContinuation<Void, Never>] = []
+    private var scheduled = 0
+
+    func sleep(_ nanoseconds: UInt64) async {
+        XCTAssertEqual(nanoseconds, 1_000_000_000)
+        await withCheckedContinuation { continuation in
+            self.pending.append(continuation)
+            self.scheduled += 1
+            if self.scheduled == 1 { self.firstScheduled.fulfill() }
+            if self.scheduled == 2 { self.secondScheduled.fulfill() }
+        }
+    }
+
+    func resumeOldest() {
+        self.pending.removeFirst().resume()
+    }
+
+    func resumeAll() {
+        let pending = self.pending
+        self.pending.removeAll()
+        for continuation in pending { continuation.resume() }
     }
 }
