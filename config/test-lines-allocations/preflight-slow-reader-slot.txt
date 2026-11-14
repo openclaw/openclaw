@@ -1,0 +1,2 @@
+# Scheduler regression for duplicate sealed targets behind two slow readers, the worker proof that a clean-close cache read proceeds while that reader is busy, and the fallback-snapshot cap after startup slots are released.
+262

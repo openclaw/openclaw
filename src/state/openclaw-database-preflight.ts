@@ -10,7 +10,6 @@ import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
-import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
@@ -33,8 +32,15 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
-import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
-import { cleanupOpenClawStatePreflight } from "./openclaw-database-preflight-cleanup.js";
+import {
+  acquireAgentDatabaseSnapshotSlot,
+  openClawDatabasePreflightClaimKey,
+  preflightAgentDatabasesBounded,
+} from "./openclaw-database-preflight-agent-scheduler.js";
+import {
+  cleanupAgentPreflightSnapshot,
+  cleanupOpenClawStatePreflight,
+} from "./openclaw-database-preflight-cleanup.js";
 import {
   collectAgentDatabasePreflightTargets,
   inspectDatabaseCandidatePresence,
@@ -482,6 +488,7 @@ export async function preflightOpenClawDatabaseSchemas(
         return undefined;
       }
       let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
+      let releaseSnapshotSlot: (() => void) | undefined;
       let readSucceeded = false;
       try {
         // Preserve SQLite's filesystem traversal through symlink/.. locators.
@@ -528,6 +535,9 @@ export async function preflightOpenClawDatabaseSchemas(
         }
         if (!schemaInspection) {
           // The parent retains cleanup ownership for the isolated snapshot worker.
+          // Startup may release the inspection slot before this returns; the snapshot
+          // slot stays held through cleanup so at most two copies exist.
+          releaseSnapshotSlot = await acquireAgentDatabaseSnapshotSlot(options.signal);
           agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
             preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
             allowLiveOwner: options.preserveSourceArtifacts !== false,
@@ -644,42 +654,28 @@ export async function preflightOpenClawDatabaseSchemas(
         indeterminateCauses.set(failure, error);
         inspection.indeterminate.push(failure);
       } finally {
-        if (agentSnapshot) {
-          let failure: { error: unknown } | undefined;
-          try {
-            if (!(await agentSnapshot.cleanupAsync())) {
-              failure = {
-                error: new Error(
-                  `SQLite read-only worker snapshot cleanup failed: ${agentSnapshot.location}`,
-                ),
-              };
-            }
-          } catch (error) {
-            if (
-              !readSucceeded ||
-              !deferSqliteSnapshotCleanupAfterRead(error, agentSnapshot.cleanupRoot)
-            ) {
-              failure = { error };
-            }
-          }
-          if (failure && !recordInspectionFailure(row, inspection, failure.error)) {
-            if (row.holdForDeletionRecovery) {
-              recordRecoveryFailure(agentPath, formatErrorMessage(failure.error));
-            } else {
-              inspection.indeterminate.push({
-                kind: "agent",
-                path: agentPath,
-                reason: formatErrorMessage(failure.error),
-              });
-            }
+        const snapshotFailure = await cleanupAgentPreflightSnapshot(agentSnapshot, readSucceeded);
+        if (
+          snapshotFailure !== undefined &&
+          !recordInspectionFailure(row, inspection, snapshotFailure)
+        ) {
+          if (row.holdForDeletionRecovery) {
+            recordRecoveryFailure(agentPath, formatErrorMessage(snapshotFailure));
+          } else {
+            inspection.indeterminate.push({
+              kind: "agent",
+              path: agentPath,
+              reason: formatErrorMessage(snapshotFailure),
+            });
           }
         }
+        releaseSnapshotSlot?.();
       }
       return undefined;
     },
     result,
     options.signal,
-    scheduling,
+    scheduling && { ...scheduling, claimKey: openClawDatabasePreflightClaimKey },
     readerCustody.take,
   );
   if (preparedDiscovery) {

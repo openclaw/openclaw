@@ -54,3 +54,23 @@ export async function cleanupOpenClawStatePreflight(options: {
     );
   }
 }
+
+/** Cleans one agent fallback snapshot. A returned error still consumed the copy. */
+export async function cleanupAgentPreflightSnapshot(
+  snapshot: PreparedSqliteReadOnlyLocation | undefined,
+  readSucceeded: boolean,
+): Promise<unknown> {
+  if (!snapshot) {
+    return undefined;
+  }
+  try {
+    if (!(await snapshot.cleanupAsync())) {
+      return new Error(`SQLite read-only worker snapshot cleanup failed: ${snapshot.location}`);
+    }
+  } catch (error) {
+    if (!readSucceeded || !deferSqliteSnapshotCleanupAfterRead(error, snapshot.cleanupRoot)) {
+      return error;
+    }
+  }
+  return undefined;
+}

@@ -38,6 +38,7 @@ function fixture<T>(targets: readonly T[], timed = false) {
       inspect: Parameters<typeof preflightAgentDatabasesBounded<T>>[1],
       canDefer?: (target: T) => boolean,
       cleanClose?: (target: T) => boolean,
+      claimKey?: (target: T) => string | undefined,
     ) {
       const run = preflightAgentDatabasesBounded(
         targets,
@@ -52,6 +53,7 @@ function fixture<T>(targets: readonly T[], timed = false) {
               signal: gateway.signal,
               canDefer,
               cleanClose,
+              ...(claimKey ? { claimKey } : {}),
               defer,
               track: (work) => tracked.push(work),
             }
@@ -101,7 +103,7 @@ it("shares one foreground wait across active and queued agent inspections", asyn
   expect(f.defer).toHaveBeenCalledOnce();
   const pending = f.defer.mock.calls[0]![0];
   expect(pending.map(({ target }) => target)).toEqual([1, 2, 3]);
-  expect(f.started).toEqual([0, 1, 2]);
+  expect(f.started).toEqual([0, 1, 2, 3]);
   f.releaseAll();
   await Promise.all(f.tracked);
   const completed = await Promise.all(pending.map((entry) => entry.result));
@@ -133,6 +135,37 @@ it("inspects clean-closed stores before unsealed ones so only unsealed stores de
     "agent-4",
     "agent-5",
   ]);
+});
+
+it("defers only slow stores when later targets repeat an already inspected agent", async () => {
+  const targets = [
+    { name: "a", path: "/agents/a.sqlite", agentId: "a" },
+    { name: "slow1", path: "/agents/slow1.sqlite", agentId: "slow1", slow: true },
+    { name: "slow2", path: "/agents/slow2.sqlite", agentId: "slow2", slow: true },
+    { name: "b", path: "/agents/b.sqlite", agentId: "b" },
+    { name: "a2", path: "/agents/a.sqlite", agentId: "a" },
+    { name: "b2", path: "/agents/b.sqlite", agentId: "b" },
+  ];
+  await using f = fixture(targets, true);
+  void f.run(
+    async (target, inspection, claim) => {
+      if (!claim(target.path, target.agentId)) {
+        return;
+      }
+      if (target.slow) {
+        await f.pending[targets.findIndex((row) => row.name === target.name)]!.promise;
+      }
+      inspection.indeterminate.push({ kind: "agent", path: target.name, reason: "fixture" });
+    },
+    () => true,
+    () => true,
+    (target) => `${target.path}\0${target.agentId}`,
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(f.settled).toBe(true);
+  expect(f.defer).toHaveBeenCalledOnce();
+  expect(f.defer.mock.calls[0]![0].map(({ target }) => target.name)).toEqual(["slow1", "slow2"]);
+  expect(f.result.indeterminate.map((entry) => entry.path)).toEqual(["a", "b"]);
 });
 
 it("keeps unowned custom stores in strict foreground admission", async () => {
