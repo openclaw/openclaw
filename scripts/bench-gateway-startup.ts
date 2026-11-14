@@ -94,6 +94,7 @@ type GatewayBenchCase = {
   bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
   config: Record<string, unknown>;
+  configSource?: string;
   env?: Record<string, string>;
   id: string;
   incidentFixture?: "combined" | "database" | "null-metadata" | "packaged-plugins" | "workspace";
@@ -229,6 +230,7 @@ const BOOLEAN_FLAGS = new Set([
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
+  "--config",
   "--cpu-prof-dir",
   "--entry",
   "--gateway-runtime",
@@ -476,6 +478,72 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   });
 }
 
+// A caller-provided config replaces one case's synthetic config. Flags that seed or
+// rewrite config-owned state are rejected so the measured file stays the only source.
+const MAX_BENCH_CONFIG_BYTES = 16 * 1024 * 1024;
+const CONFIG_OVERRIDE_CONFLICT_FLAGS = [
+  "--agent-database-mib",
+  "--agent-gate-delay-ms",
+  "--bundled-plugin-fixture",
+  "--fixture-root",
+  "--plugin-migration-fixture",
+  "--publication-api-delay-ms",
+  "--publication-git-delay-ms",
+  "--restart-sessions",
+  "--seed-only",
+  "--team-scale",
+] as const;
+
+function readBenchConfig(configPath: string): {
+  config: Record<string, unknown>;
+  resolvedPath: string;
+} {
+  const resolvedPath = path.resolve(configPath);
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(resolvedPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new CliArgumentError(
+        `--config could not be inspected (${resolvedPath}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    throw new CliArgumentError(`--config file not found: ${resolvedPath}`);
+  }
+  if (!stats.isFile()) {
+    throw new CliArgumentError(`--config must be a file: ${resolvedPath}`);
+  }
+  if (stats.size > MAX_BENCH_CONFIG_BYTES) {
+    throw new CliArgumentError("--config must not exceed 16 MiB");
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(resolvedPath, "utf8");
+  } catch (error) {
+    throw new CliArgumentError(
+      `--config could not be read (${resolvedPath}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    // PowerShell 5.1 writes a UTF-8 BOM by default; Windows configs commonly have one.
+    parsed = JSON.parse(raw.replace(/^\uFEFF/u, ""));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new CliArgumentError(`--config is not valid JSON (${resolvedPath}): ${detail}`);
+  }
+  if (!isRecord(parsed)) {
+    throw new CliArgumentError(`--config must contain a JSON object: ${resolvedPath}`);
+  }
+  const validated = validateConfigObjectRaw(parsed);
+  if (!validated.ok) {
+    throw new CliArgumentError(
+      `--config is invalid (${resolvedPath}): ${validated.issues.map((issue) => issue.path).join(", ")}`,
+    );
+  }
+  return { config: validated.config as unknown as Record<string, unknown>, resolvedPath };
+}
+
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   const flags = parseCliArgs(argv, {
     booleanFlags: BOOLEAN_FLAGS,
@@ -494,6 +562,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   if (installedCohort) {
     for (const flag of [
       "--case",
+      "--config",
       "--entry",
       "--gateway-runtime",
       "--gateway-cpus",
@@ -658,6 +727,26 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   ) {
     throw new CliArgumentError("--plugin-migration-fixture requires a synthetic plugin slot");
   }
+  const configPath = flags.get("--config")?.[0];
+  if (configPath !== undefined) {
+    if (cases.length !== 1) {
+      throw new CliArgumentError("--config requires exactly one --case");
+    }
+    for (const flag of CONFIG_OVERRIDE_CONFLICT_FLAGS) {
+      if (flags.has(flag)) {
+        throw new CliArgumentError(`${flag} is not supported with --config`);
+      }
+    }
+    const loaded = readBenchConfig(configPath);
+    cases = [
+      {
+        id: "customConfig",
+        name: `gateway with config ${path.basename(loaded.resolvedPath)}`,
+        config: loaded.config,
+        configSource: loaded.resolvedPath,
+      },
+    ];
+  }
   return {
     ...parseGatewayBenchRuntimeOptions(flags),
     cases,
@@ -703,6 +792,7 @@ Usage:
 
 Options:
   --case <id>          Specific case id to run; repeatable
+  --config <path>      Measure one caller-provided config JSON instead of a case config
   --entry <path>       Gateway CLI entry file (default: ${DEFAULT_ENTRY})
   --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
   --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
@@ -748,6 +838,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   return {
     id: benchCase.id,
     name: benchCase.name,
+    ...(benchCase.configSource ? { configSource: benchCase.configSource } : {}),
     ...(benchCase.id === "teamBoot"
       ? {
           expectedPluginCount: benchCase.pluginCount ?? 44,
