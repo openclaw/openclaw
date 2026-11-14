@@ -546,6 +546,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
   },
   {
+    commandPath: ["update", "backup-cli"],
+    // The installed control CLI owns candidate artifacts without reading live config or state.
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      hideBanner: true,
+    },
+  },
+  {
     commandPath: ["update"],
     policy: { configGuard: "skip", hideBanner: true },
   },
