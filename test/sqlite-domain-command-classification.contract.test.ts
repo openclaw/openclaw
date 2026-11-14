@@ -21,9 +21,7 @@ const domains = {
     record: true,
     reserve: true,
   } satisfies DomainCommands<
-    ReturnType<
-      typeof import("../extensions/memory-core/src/memory-entry-origins.worker.js").bindSqliteWorkerBackend
-    >
+    ReturnType<typeof import("../extensions/memory-core/test-api.js").bindMemoryEntryOriginsBackend>
   >,
   "extensions/memory-core/src/memory/manager-publication.worker.ts": {
     "cache.clear": true,
@@ -57,9 +55,7 @@ const domains = {
     "vector.ensure": true,
     "vector.prepare": true,
   } satisfies DomainCommands<
-    ReturnType<
-      typeof import("../extensions/memory-core/src/memory/manager-publication.worker.js").bindSqliteWorkerBackend
-    >
+    ReturnType<typeof import("../extensions/memory-core/test-api.js").bindMemoryPublicationBackend>
   >,
   "extensions/memory-core/src/standing-intents.worker.ts": {
     cancel: true,
@@ -68,9 +64,7 @@ const domains = {
     match: true,
     sweep: true,
   } satisfies DomainCommands<
-    ReturnType<
-      typeof import("../extensions/memory-core/src/standing-intents.worker.js").bindSqliteWorkerBackend
-    >
+    ReturnType<typeof import("../extensions/memory-core/test-api.js").bindStandingIntentsBackend>
   >,
   "src/agents/auth-profiles/inline-usage.worker.ts": {
     "authProfiles.enrollAuthorization": true,
