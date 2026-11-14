@@ -1,0 +1,2 @@
+# Exercise provider-requested delay selection when outer error metadata is invalid.
+76
