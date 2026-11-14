@@ -135,14 +135,16 @@ function fixture() {
     if(mode.startsWith("retained") || mode === "unregistered") {
       const {withRetainedUpdateRuntime} = await import(${JSON.stringify(new URL("../../src/infra/update-retained-runtime.ts", import.meta.url).href)});
       const {captureRuntimeWorkerSource} = await import(${JSON.stringify(new URL("../../src/infra/runtime-worker-generation.ts", import.meta.url).href)});
-      process.env.NODE_OPTIONS = ${JSON.stringify(`--import=${observer}`)};
-      process.env.OPENCLAW_INSTALLED_TERMINAL_OBSERVER = ${JSON.stringify(specPath)};
-      await import(${JSON.stringify(observer)});
       let projected;
       await withRetainedUpdateRuntime(import.meta.url, async (retain) => {
         await retain({mutationRoots:[root], timeoutMs:10000, assertCurrent(){}});
          projected = fileURLToPath(captureRuntimeWorkerSource(new URL(import.meta.url)).moduleUrl);
         assert.notEqual(projected, fileURLToPath(import.meta.url));
+        // Observe prepared-runtime custody while its real registration is active.
+        // Source compiler setup is outside this helper-lifetime fixture.
+        process.env.NODE_OPTIONS = ${JSON.stringify(`--import=${observer}`)};
+        process.env.OPENCLAW_INSTALLED_TERMINAL_OBSERVER = ${JSON.stringify(specPath)};
+        await import(${JSON.stringify(observer)});
          if(mode.startsWith("retained")) {
            const key = Symbol.for("openclaw.retainedUpdateRuntimes");
            const descriptor = Object.getOwnPropertyDescriptor(globalThis,key);
@@ -459,39 +461,18 @@ it("does not turn a real live helper observation into an absence proof", () => {
   ).toThrow("strict kernel absence");
 });
 
-it("joins a real retained-runtime producer before admitting its copied helper", () => {
+it("admits the copied helper's lifetime under prepared retained-runtime custody", () => {
   const f = fixture();
   const result = run(f, "retained");
   expect(result.status, result.stderr).toBe(0);
   const observed = records(f);
-  const owner = observed.find(
-    (row) => row.event === "startup" && row.thread === 0 && row.entry === f.entry,
-  );
-  assert(owner && typeof owner.pid === "number");
-  const ownerFile = path.join(f.directory, `${owner.pid}-0.jsonl`);
-  const ownerRows = readJsonLines<Row>(ownerFile);
-  const terminal = ownerRows.at(-1);
-  assert(terminal?.event === "exit" && typeof terminal.time === "string");
-  // Like the observer's native-teardown fixture, place already-joined setup
-  // before a synthetic reader window. No worker exit or runtime handoff is claimed.
-  const scope = { time: String(BigInt(terminal.time) - 1n), child: -1, databases: [] };
-  const lastEvent = ownerRows.at(-2);
-  assert(lastEvent && typeof lastEvent.time === "string");
-  assert(BigInt(lastEvent.time) < BigInt(scope.time));
-  writeJson(path.join(f.directory, "handoff.json"), scope);
-  rewrite(ownerFile, [
-    ...ownerRows.slice(0, -1),
-    { ...terminal, event: "handoff", ...scope },
-    terminal,
-  ]);
   let rows: Row[];
   try {
     rows = readInstalledTerminalEvents(f.directory, f.spec);
   } catch (error) {
-    // Preserve original native ancestry before fixture cleanup. The synthetic
-    // reader scope is separate; diagnostic output grants no admission.
+    // Preserve original native ancestry before fixture cleanup; diagnostic
+    // output grants no admission.
     const lifecycle = JSON.stringify({
-      scope,
       rows: observed.filter((row) =>
         [
           "startup",
