@@ -158,8 +158,9 @@ suite.define(() => {
         await search.press("Escape");
         await polledAttribute(picker, "open").toBeNull();
         await trigger.click();
-        await polledVisible(alpha).toBe(false);
-        expect(await openai.getAttribute("aria-selected")).toBe("false");
+        // A browsed provider without the selected model never survives closing.
+        await polledVisible(alpha).toBe(true);
+        expect(await openai.getAttribute("aria-selected")).toBe("true");
         expect(await search.inputValue()).toBe("");
         await search.fill("shared");
         if (width === 1280) {

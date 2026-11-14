@@ -146,9 +146,8 @@ export function prepareChatModelPickerPanel(
   },
   favorites?: {
     keys: readonly string[];
-    opening: { keys: readonly string[]; selected: string };
-    /** The user last chose Favorites; it opens only while it holds the selected model. */
-    preferFavorites?: boolean;
+    /** A remembered Favorites tab opens only while it holds the selected model. */
+    opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
   },
 ) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
@@ -216,7 +215,7 @@ export function prepareChatModelPickerPanel(
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
     // Opening keys keep the tab steady while stars change; an emptied group falls back.
     if (
-      favorites?.preferFavorites &&
+      favorites?.opening.favoritesTab &&
       activeModelOption &&
       openingFavorites.includes(activeModelOption)
     ) {

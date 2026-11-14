@@ -204,7 +204,7 @@ it("reopens on Favorites only when it was chosen last and holds the selected mod
   };
   await waitForSolid(() => expect(activeTab()).toBe("openai"));
   await selectProvider(view.container, "$favorites");
-  expect(localStorage.getItem(favoritesTabKey)).toBe("true");
+  expect(localStorage.getItem(favoritesTabKey)).toBe("1");
   await reopenWith(model);
   await waitForSolid(() => expect(activeTab()).toBe("$favorites"));
   // An unstarred selection opens its own provider; the Favorites preference remains.
@@ -213,7 +213,7 @@ it("reopens on Favorites only when it was chosen last and holds the selected mod
   await reopenWith(model);
   await waitForSolid(() => expect(activeTab()).toBe("$favorites"));
   await selectProvider(view.container, "openai");
-  expect(localStorage.getItem(favoritesTabKey)).toBe("false");
+  expect(localStorage.getItem(favoritesTabKey)).toBe("0");
   await reopenWith(model);
   await waitForSolid(() => expect(activeTab()).toBe("openai"));
   // Another provider never reopens when it lacks the selected model.

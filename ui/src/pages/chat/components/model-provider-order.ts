@@ -16,16 +16,12 @@ export function loadModelProviderOrder(): string[] {
 
 /** Whether the last tab the user chose in the model picker was Favorites. */
 export function loadModelPickerFavoritesTab(): boolean {
-  try {
-    return getSafeLocalStorage()?.getItem(FAVORITES_TAB_KEY) === "true";
-  } catch {
-    return false;
-  }
+  return getSafeLocalStorage()?.getItem(FAVORITES_TAB_KEY) === "1";
 }
 
 export function saveModelPickerFavoritesTab(favorites: boolean): void {
   try {
-    getSafeLocalStorage()?.setItem(FAVORITES_TAB_KEY, String(favorites));
+    getSafeLocalStorage()?.setItem(FAVORITES_TAB_KEY, favorites ? "1" : "0");
   } catch {
     // Storage restrictions only lose the remembered tab.
   }
