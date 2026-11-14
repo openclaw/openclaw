@@ -1,6 +1,9 @@
+import { statSync } from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveConfigDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexOrphanedSessionBindingMigration } from "./src/migration/session-binding-orphans.js";
 
 type LegacyConfigRule = {
@@ -8,6 +11,34 @@ type LegacyConfigRule = {
   message: string;
   match: (value: unknown) => boolean;
 };
+
+function isStaleManagedCodexGenerationCommand(command: unknown): boolean {
+  if (typeof command !== "string") {
+    return false;
+  }
+  const trimmed = command.trim();
+  if (!path.isAbsolute(trimmed) && !/^~[/\\]/u.test(trimmed)) {
+    return false;
+  }
+  try {
+    const projectsDir = path.join(resolveConfigDir(process.env), "npm", "projects");
+    const [name, child] = path.relative(projectsDir, resolveUserPath(trimmed)).split(path.sep);
+    // Recovery for the historical layout from src/plugins/install-paths.ts, not
+    // a parser for future installs. Cleanup now preserves configured generations.
+    if (
+      !name ||
+      !child ||
+      !/^openclaw-codex-8902d781d4__openclaw-generation__g-[a-f0-9]{16}$/u.test(name)
+    ) {
+      return false;
+    }
+    statSync(path.join(projectsDir, name));
+  } catch (error) {
+    const code = asNullableRecord(error)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+  return false;
+}
 
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
   return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
@@ -112,6 +143,10 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const rawPluginConfig = asNullableRecord(rawEntry?.config);
   const rawCodexPlugins = asNullableRecord(rawPluginConfig?.codexPlugins);
   const rawAppServer = asNullableRecord(rawPluginConfig?.appServer);
+  const hasStaleManagedCodexGenerationCommand = isStaleManagedCodexGenerationCommand(
+    rawAppServer?.command,
+  );
+
   if (
     !rawPluginConfig ||
     (!hasRetiredDynamicToolsProfile(rawPluginConfig) &&
@@ -119,7 +154,8 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       !hasRetiredApprovalPolicy(rawAppServer) &&
       !hasRetiredTurnIdleTimeout(rawAppServer) &&
       !hasRetiredCyberFailoverModel(rawAppServer?.cyberFailover) &&
-      !hasBlankNetworkProxyOptionalFields(rawAppServer))
+      !hasBlankNetworkProxyOptionalFields(rawAppServer) &&
+      !hasStaleManagedCodexGenerationCommand)
   ) {
     return { config: cfg, changes: [] };
   }
@@ -153,6 +189,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
+  if (nextAppServer && hasStaleManagedCodexGenerationCommand) {
+    delete nextAppServer.command;
+    changes.push(
+      "Removed plugins.entries.codex.config.appServer.command; it pointed into an OpenClaw-managed Codex plugin generation that no longer exists. Without it, stdio Codex app-server starts use managed binary selection (or OPENCLAW_CODEX_APP_SERVER_BIN when set).",
+    );
+  }
+
   const nextCyberFailover = asNullableRecord(nextAppServer?.cyberFailover);
   if (nextCyberFailover && hasRetiredCyberFailoverModel(nextCyberFailover)) {
     delete nextCyberFailover.model;
