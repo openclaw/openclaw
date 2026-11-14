@@ -22,9 +22,11 @@ function group(creator: SessionUsageCreator, totalTokens = 0, totalCost = 0, ses
 }
 
 function mountCreators(creator: SessionUsageCreator, onSelect = (_key: string | null) => {}) {
+  // The table only appears with a second identity; this one sorts after the creator under test.
+  const companion = group({ key: "unattributed:companion" });
   return mountView(() =>
     UsageCreators({
-      groups: [group(creator)],
+      groups: [group(creator), companion],
       selectedKey: null,
       mode: "cost",
       onSelect,
@@ -65,6 +67,15 @@ const rankedCreators = () =>
   Array.from({ length: 12 }, (_, index) =>
     group(human(String(index), `Creator ${index}`), (12 - index) * 100, 12 - index),
   );
+
+it("hides a single unselected identity, which only repeats the header totals", () => {
+  for (const groups of [[], [group(human("solo", "Solo"))], [group({ key: "unattributed:old" })]]) {
+    const { container } = mountView(() =>
+      UsageCreators({ groups, selectedKey: null, mode: "cost", onSelect: vi.fn() }),
+    );
+    expect(container.querySelector(".usage-creators")).toBeNull();
+  }
+});
 
 it("retains creator tables, rows, focus and the expanded disclosure when the metric changes", () => {
   const { container, update } = mountLiveCreators(rankedCreators());

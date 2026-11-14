@@ -107,7 +107,6 @@ const enUsage = {
       channelGroup: "{channel} group",
       channelTopic: "{channel} group · topic {topic}",
       system: "System",
-      empty: "No usage for these dates and filters.",
       more: "Show {count} more identities",
     },
     empty: {
