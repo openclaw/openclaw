@@ -291,33 +291,46 @@ it("consumes bounded transcript context once and in event order", async () => {
   );
 });
 
-it("consumes aborted ownership before starting the pending replacement", async () => {
-  const firstResult = deferred<{ text: string }>();
-  const runAgentConsult = vi
-    .fn<ConsultRunner>()
-    .mockImplementationOnce(async () => await firstResult.promise)
-    .mockResolvedValue({ text: "latest result" });
-  const claimAppend = vi.fn(() => true);
-  const { controller, socket } = createDelegationHarness({
-    claimAppend,
-    runAgentConsult,
-  });
+it.each(["absent", "unsupported"] as const)(
+  "joins the aborted consult before replacement when steering is %s",
+  async (steering) => {
+    const firstResult = deferred<{ text: string }>();
+    const runAgentConsult = vi
+      .fn<ConsultRunner>()
+      .mockImplementationOnce(async () => await firstResult.promise)
+      .mockResolvedValue({ text: "latest result" });
+    const claimAppend = vi.fn(() => true);
+    const { controller, socket } = createDelegationHarness({
+      claimAppend,
+      runAgentConsult,
+      ...(steering === "unsupported"
+        ? {
+            steerAgentConsult: vi
+              .fn<NonNullable<ConsultRunner["steer"]>>()
+              .mockRejectedValue(
+                Object.assign(new Error("CLI requires replacement"), { name: "NotSupportedError" }),
+              ),
+          }
+        : {}),
+    });
 
-  delegate(controller, "delegation-first", "first task");
-  await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-  delegate(controller, "delegation-latest", "latest task");
-  expect(runAgentConsult.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+    delegate(controller, "delegation-first", "first task");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+    delegate(controller, "delegation-latest", "latest task");
+    await vi.waitFor(() => expect(runAgentConsult.mock.calls[0]?.[0].signal?.aborted).toBe(true));
+    expect(runAgentConsult).toHaveBeenCalledOnce();
 
-  firstResult.resolve({ text: "stale result" });
-  await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
-  await waitForAppend(socket, "delegation-latest", "latest result");
+    firstResult.resolve({ text: "stale result" });
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
+    await waitForAppend(socket, "delegation-latest", "latest result");
 
-  expect(claimAppend).toHaveBeenCalledTimes(2);
-  expect(claimAppend.mock.invocationCallOrder[0]).toBeLessThan(
-    runAgentConsult.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
-  );
-  expect(readAppends(socket)).toHaveLength(1);
-});
+    expect(claimAppend).toHaveBeenCalledTimes(2);
+    expect(claimAppend.mock.invocationCallOrder[0]).toBeLessThan(
+      runAgentConsult.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(readAppends(socket)).toHaveLength(1);
+  },
+);
 
 it("steers one accepted run and appends its final result only to the latest delegation", async () => {
   const steerAgentConsult = vi

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -19,12 +20,12 @@ import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
-  const [embeddedAgent, admission] = await Promise.all([
-    import("../../agents/embedded-agent.js"),
+  const [talkAgent, admission] = await Promise.all([
+    import("./agent-consult-execution.js"),
     import("../../agents/admitted-run-context.js"),
   ]);
   return {
-    runEmbeddedAgent: embeddedAgent.runEmbeddedAgent,
+    runAgentTurn: talkAgent.runTalkAgentTurn,
     createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
     prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
   };
@@ -38,7 +39,10 @@ export function createTalkClientAgentRuntime(params: {
   getRegisteredSource?: () => RpcSourceRef | undefined;
   runAuthority?: TalkClientRunAuthority;
   assertCurrent?: () => void;
-  bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
+  bindOperationalRunInstance?: (
+    instance: OperationalRunInstanceRef,
+    operation: ReplyOperation | undefined,
+  ) => void;
 }) {
   const agentRuntime = createPluginRuntime().agent;
   if (params.assertCurrent) {
@@ -77,7 +81,7 @@ export function createTalkClientAgentRuntime(params: {
       throw new Error("Talk consultation source registration is unavailable");
     }
     const lifecycleGeneration = source && getRpcSourceLifecycleGeneration(source);
-    const assertSourceCurrent = () => {
+    const assertSourceCurrent = (operation?: ReplyOperation) => {
       if (!source) {
         return;
       }
@@ -88,11 +92,14 @@ export function createTalkClientAgentRuntime(params: {
         getRpcSourceForGateway(requestedParams.runId, params.resolveGatewayContext) !== source ||
         source.input.target?.storeScope !== storePath ||
         identity.agentId !== agentId ||
+        (operation !== undefined &&
+          (source.input.claim?.operation !== operation ||
+            !operation.hasOwnedSessionId(sessionId))) ||
         !params.rawSourceRef ||
         !isTalkConsultSourceCurrent({
           entry: source,
           connectionId: params.rawSourceRef,
-          sessionId,
+          sessionId: operation?.sessionId ?? sessionId,
           sessionKey,
           lifecycleGeneration,
           phase: "active",
@@ -115,22 +122,22 @@ export function createTalkClientAgentRuntime(params: {
         controllerInput: source?.input,
         abortSignal: requestedParams.abortSignal,
       },
-      async (_operation, abortSignal) => {
+      async (operation, abortSignal) => {
         const runParams = { ...requestedParams, abortSignal };
         runParams.abortSignal?.throwIfAborted();
         const config = runParams.config ?? params.config;
         params.assertCurrent?.();
-        assertSourceCurrent();
+        assertSourceCurrent(operation);
         const retained = await params.runAuthority?.retainRun(runParams.runId);
         try {
           runParams.abortSignal?.throwIfAborted();
           const execution = await loadTalkAgentExecution();
           runParams.abortSignal?.throwIfAborted();
           // Accepted work outlives audio transport; the source and retained run authority govern it.
-          assertSourceCurrent();
+          assertSourceCurrent(operation);
           const operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
           retained?.assertSourceCurrent();
-          params.bindOperationalRunInstance?.(operationalRunInstance);
+          params.bindOperationalRunInstance?.(operationalRunInstance, operation);
           const preparedRunAdmission = execution.prepareAgentRunAdmission({
             cfg: config,
             operationalRunInstance,
@@ -162,8 +169,16 @@ export function createTalkClientAgentRuntime(params: {
             // Provider-owned work can outlive or replace its audio transport. Unlike
             // chat-backed Talk, it has no independent Chat terminal delivery; hiding
             // its final transcript would lose the answer when no spoken replacement arrives.
-            return await execution.runEmbeddedAgent({
+            return await execution.runAgentTurn({
               ...runParams,
+              config,
+              sessionTarget: {
+                ...runParams.sessionTarget,
+                agentId,
+                sessionId,
+                sessionKey,
+                storePath,
+              },
               preparedRunAdmission,
               // Speech is mirrored separately. Keep generated input in current-turn custody,
               // but never display it or replay it as a later user request.

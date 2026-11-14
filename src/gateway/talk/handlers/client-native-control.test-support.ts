@@ -65,7 +65,7 @@ const nativeUpstream = await vi.hoisted(async () => {
     sockets,
     events,
     fetch: vi.fn<typeof fetch>(),
-    runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
+    runEmbeddedAgent: vi.fn<typeof import("../agent-consult-execution.js").runTalkAgentTurn>(),
     authConfigured: vi.fn(
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
@@ -76,8 +76,9 @@ const nativeUpstream = await vi.hoisted(async () => {
   };
 });
 
-vi.mock("../../../agents/embedded-agent.js", () => ({
-  runEmbeddedAgent: nativeUpstream.runEmbeddedAgent,
+// mock-isolation: Controlled backends retain real Talk admission, tool authority and native effects.
+vi.mock("../agent-consult-execution.js", () => ({
+  runTalkAgentTurn: nativeUpstream.runEmbeddedAgent,
 }));
 vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
