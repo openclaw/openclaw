@@ -142,8 +142,25 @@ export function resolveWebFetchDefinition(
     return null;
   }
   const configuredProviderId = normalizeLowercaseStringOrEmpty(fetch?.provider);
+  // An explicit --provider flag pins selection: resolve the requested id back to its
+  // registered spelling (exact match first, then case-insensitive) instead of
+  // lowercasing the request, because registrations keep their original casing. A
+  // supplied-but-blank or unknown explicit id stays an unavailable selection and must
+  // not fall through to configured/runtime/auto chains.
+  const requestedProviderId = options?.providerId?.trim();
+  const explicitProviderId =
+    options?.providerId === undefined
+      ? undefined
+      : (providers.find((entry) => entry.id === requestedProviderId)?.id ??
+        (requestedProviderId
+          ? providers.find((entry) => entry.id.toLowerCase() === requestedProviderId.toLowerCase())
+              ?.id
+          : undefined));
+  if (options?.providerId !== undefined && !explicitProviderId) {
+    return null;
+  }
   const providerId =
-    options?.providerId ??
+    explicitProviderId ??
     (configuredProviderId
       ? providers.find((entry) => entry.id === configuredProviderId)?.id
       : undefined) ??
