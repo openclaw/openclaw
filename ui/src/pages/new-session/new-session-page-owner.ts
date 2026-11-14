@@ -144,6 +144,8 @@ export class NewSessionPageOwner {
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
   readonly dictation: DirectDictationControl;
+  // Shown in the composer, apart from page-level start errors; the next dictation clears it.
+  dictationError: string | null = null;
   titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
@@ -215,11 +217,22 @@ export class NewSessionPageOwner {
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
-      onError: (message) => this.submission.setError(message),
+      onError: (message) => {
+        this.dictationError = message;
+        this.changed();
+      },
       onSubmit: () => void this.submit(),
     });
     // Dictation receipts reconcile draft availability before the page projection reads it.
-    this.dictation.subscribe(this.changed);
+    // A failed start reports its error before it stops, so only a new start clears it.
+    let dictationActive = false;
+    this.dictation.subscribe(() => {
+      if (this.dictation.active && !dictationActive) {
+        this.dictationError = null;
+      }
+      dictationActive = this.dictation.active;
+      this.changed();
+    });
   }
 
   focusComposer(): void {
@@ -428,6 +441,7 @@ export class NewSessionPageOwner {
         return dictation.active;
       },
       dictationPreview: dictation.previewDraft(),
+      dictationError: this.dictationError,
 
       context,
       isCatalogTarget,

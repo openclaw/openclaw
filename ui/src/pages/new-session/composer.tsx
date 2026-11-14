@@ -17,6 +17,7 @@ import {
 } from "../../components/lobster-pet-contract.ts";
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { createSidebarRendererLoader } from "../../components/sidebar-renderer-loader.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -529,6 +530,17 @@ export function NewSessionComposer(props: {
       onDragLeave={(event) => frame().attachmentDropHandlers.onDragleave(event)}
       onDragOver={(event) => frame().attachmentDropHandlers.onDragover(event)}
     >
+      <Show when={options().dictationError}>
+        {(error) => (
+          <InlineAlert
+            tone="danger"
+            role="alert"
+            class="new-session-page__error new-session-page__alert"
+          >
+            {error()}
+          </InlineAlert>
+        )}
+      </Show>
       <div
         ref={(element) => {
           composer = element;
