@@ -396,6 +396,11 @@ export class PaletteSessionDraft {
     if (!this.read().open || this.coldSubmit || this.submitting || !this.hasPrompt || !slot) {
       return;
     }
+    const blocked = this.disabledReason;
+    if (blocked) {
+      this.setSubmissionError(blocked);
+      return;
+    }
     const submission = slot.draft.submission.submit(undefined, true);
     // Local admission is synchronous. Once past it, the start owns its draft and the
     // launcher is free for the next prompt; acceptance or failure arrives as a notice.
