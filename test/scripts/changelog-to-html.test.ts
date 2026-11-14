@@ -59,6 +59,10 @@ it("preserves markup ordering, literal HTML, links, backslashes and list boundar
     ],
     ["\n#### Details\n<p>Existing &amp; HTML</p>", "<h4>Details</h4>\n<p>Existing &amp; HTML</p>"],
     ["##### More\n- Plain <tag>", "<h5>More</h5>\n<ul>\n<li>Plain <tag></li>\n</ul>"],
+    [
+      "\n- Run `openclaw cron enable <job-id>`; keep `a&b > c` and literal `&lt;`.",
+      "<ul>\n<li>Run <code>openclaw cron enable &lt;job-id&gt;</code>; keep <code>a&amp;b &gt; c</code> and literal <code>&amp;lt;</code>.</li>\n</ul>",
+    ],
   ];
   const markdown = fragments.map(([source]) => source).join("\n");
   const result = render(
