@@ -27,7 +27,6 @@ import {
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
-import { verifyReceiptRecoveryAuthority } from "./full-release-receipt-recovery.mjs";
 import {
   classifyReleaseGhTransportError,
   evidenceReadRetryDelay,
@@ -78,6 +77,7 @@ import {
   resolveTrustedWorkflowIdentity,
   resolveVerifierIdentity,
   validateTrustedProducerIdentity,
+  verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {

@@ -1198,9 +1198,10 @@ extension OpenClawChatViewModel {
                             let payload = try await routeLease.requestHistory(
                                 sessionKey: target.deliverySessionKey,
                                 agentID: target.agentID)
-                            let incoming = Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                            let incoming = await Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                            try Task.checkCancellation()
                             await self.confirmOutboxCommandsNow(in: incoming)
-                            return payload
+                            return (payload, incoming)
                         })
                     if result.cancelled {
                         self.applyTransportHealth(false)
@@ -1210,7 +1211,8 @@ extension OpenClawChatViewModel {
                     let payload = try await routeLease.requestHistory(
                         sessionKey: target.deliverySessionKey,
                         agentID: target.agentID)
-                    let incoming = Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                    let incoming = await Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                    try Task.checkCancellation()
                     await confirmOutboxCommandsNow(in: incoming)
                 }
             } catch is CancellationError {

@@ -235,7 +235,7 @@ const enSettings = {
       editFile: "Edit file",
       closePreview: "Close preview",
       coreFilesTitle: "Core files",
-      coreFilesSubtitle: "Bootstrap persona, identity, and tool guidance.",
+      coreFilesSubtitle: "Instructions for this agent’s behavior, identity, and tools.",
       workspace: "Workspace",
       loadHint: "Load the agent workspace files to edit core instructions.",
       empty: "No files yet.",
@@ -262,7 +262,7 @@ const enSettings = {
     lastError: "Last error",
     refreshingStaleSnapshot: "Refreshing channel status… Showing the last available status.",
     hub: {
-      connectedTitle: "Connected channels",
+      connectedTitle: "Your channels",
       addTitle: "Add a channel",
       addSubtitle: "Choose a messaging app to set up.",
       updatedAgo: "Updated {ago}",
@@ -587,7 +587,7 @@ const enSettings = {
       },
       bindings: {
         label: "Bindings",
-        description: "Key bindings and shortcuts",
+        description: "Route conversations to agents and bind persistent ACP sessions.",
       },
       broadcast: {
         label: "Broadcast",
@@ -631,7 +631,7 @@ const enSettings = {
       },
       acp: {
         label: "ACP",
-        description: "Agent Communication Protocol runtime and streaming settings",
+        description: "Agent Client Protocol (ACP) runtime and streaming settings",
       },
       mcp: {
         label: "MCP",
@@ -1667,7 +1667,9 @@ const enSettings = {
       locationHint: "Allow agents to use device location when a tool asks for it.",
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
-      preciseLocationHint: "Always may require System Settings to approve background location.",
+      locationAlwaysHint: "Always may require System Settings to approve background location.",
+      preciseLocationHint:
+        "Allow the Gateway to request this Mac’s precise location when location access is enabled.",
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",

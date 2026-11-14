@@ -45,7 +45,8 @@ import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
+  const mocked = { ...actual, spawn: vi.fn(actual.spawn) };
+  return { ...mocked, default: mocked };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
