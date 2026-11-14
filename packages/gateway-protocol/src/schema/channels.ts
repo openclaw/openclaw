@@ -325,10 +325,25 @@ const TalkCatalogProviderSchema = closedObject({
   supportsSessionResumption: Type.Optional(Type.Boolean()),
 });
 
-const TalkCatalogProviderGroupSchema = closedObject({
+const TalkCatalogProviderGroupProperties = {
   ready: Type.Optional(Type.Boolean()),
   activeProvider: Type.Optional(Type.String()),
   providers: Type.Array(TalkCatalogProviderSchema),
+};
+
+const TalkCatalogProviderGroupSchema = closedObject(TalkCatalogProviderGroupProperties);
+
+const TalkCatalogTranscriptionGroupSchema = closedObject({
+  ...TalkCatalogProviderGroupProperties,
+  // Which path Talk transcription uses: a streaming transcription provider
+  // (Voice Call streaming config or automatic pick), the
+  // `agents.defaults.voiceModel` default, or the media-understanding audio
+  // models (`tools.media`). Optional: older Gateways and the projection for
+  // callers without operator.read omit it.
+  source: Type.Optional(stringLiteralUnion(["streaming", "voice-model", "media-understanding"])),
+  // Readiness of the media-understanding audio providers (voice notes) when
+  // Talk uses another path; on that path they are `providers` already.
+  mediaProviders: Type.Optional(Type.Array(TalkCatalogProviderSchema)),
 });
 
 export const TalkCatalogResultSchema = closedObject({
@@ -336,7 +351,7 @@ export const TalkCatalogResultSchema = closedObject({
   transports: Type.Array(TalkTransportSchema),
   brains: Type.Array(TalkBrainSchema),
   speech: TalkCatalogProviderGroupSchema,
-  transcription: TalkCatalogProviderGroupSchema,
+  transcription: TalkCatalogTranscriptionGroupSchema,
   realtime: TalkCatalogProviderGroupSchema,
 });
 

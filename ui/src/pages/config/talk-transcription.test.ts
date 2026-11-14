@@ -21,6 +21,7 @@ it("reports the chosen speech-to-text provider as not ready and links to Models"
     catalogRequest: (_index, catalog) => ({
       ...catalog,
       transcription: {
+        source: "media-understanding",
         ready: true,
         activeProvider: "openai",
         providers: [
@@ -64,6 +65,7 @@ it("keeps Talk speech-to-text status on the active route when the preferred mode
     catalogRequest: (_index, catalog) => ({
       ...catalog,
       transcription: {
+        source: "media-understanding",
         ready: true,
         activeProvider: "openai",
         providers: [
@@ -95,7 +97,7 @@ it("keeps Talk speech-to-text status on the active route when the preferred mode
       ?.querySelector<HTMLElement>(".settings-row");
   await waitForSolid(() =>
     expect(statusRow()?.textContent).toContain(
-      t("talkPage.status.activeProvider", { provider: "openai" }),
+      t("talkPage.transcription.sourceMediaUnderstanding", { provider: "openai" }),
     ),
   );
   expect(statusRow()?.textContent).toContain(t("talkPage.status.ready"));
@@ -104,12 +106,98 @@ it("keeps Talk speech-to-text status on the active route when the preferred mode
   );
 });
 
+it.each([
+  { mediaReady: false, warns: true },
+  { mediaReady: true, warns: false },
+])(
+  "checks the picked model against voice-note readiness when Talk streams (media ready: $mediaReady)",
+  async ({ mediaReady, warns }) => {
+    const { page } = createTalkMutationHarness({
+      navigate: vi.fn(),
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        transcription: {
+          source: "streaming",
+          ready: true,
+          activeProvider: "openai",
+          // The streaming Deepgram entry's readiness is the opposite of the
+          // voice-note one, so only a check against mediaProviders passes.
+          providers: [
+            { id: "openai", label: "OpenAI", configured: true },
+            { id: "deepgram", label: "Deepgram Streaming", configured: !mediaReady },
+          ],
+          mediaProviders: [{ id: "deepgram", label: "deepgram", configured: mediaReady }],
+        },
+      }),
+    });
+    page.configObject = {
+      ...page.configObject,
+      tools: {
+        media: {
+          models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+          audio: { preferredModel: "deepgram/nova-3" },
+        },
+      },
+    };
+    await waitForSolid(() =>
+      expect(page.textContent).toContain("Talk uses openai, a streaming transcription provider."),
+    );
+    // One row carries the picker, its readiness and the key hint.
+    const modelRow = [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
+      row.textContent?.includes(t("talkPage.transcription.modelDescriptionVoiceNotes")),
+    );
+    expect(modelRow?.textContent).toContain(
+      t(warns ? "talkPage.transcription.providerNotReady" : "talkPage.status.ready"),
+    );
+    expect(
+      modelRow?.textContent?.includes(
+        t("talkPage.transcription.providerNotReadyDescription", { provider: "deepgram" }),
+      ),
+    ).toBe(warns);
+    expect(
+      [...(modelRow?.querySelectorAll("button") ?? [])].some(
+        (button) => button.textContent === t("talkPage.transcription.openModels"),
+      ),
+    ).toBe(warns);
+    expect(page.textContent).not.toContain("Preferred model");
+  },
+);
+
+it("does not check the picked model against providers of an unreported path", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      // No `source`: the catalog does not say these providers serve voice notes.
+      transcription: {
+        ready: true,
+        activeProvider: "openai",
+        providers: [{ id: "deepgram", label: "Deepgram Streaming", configured: false }],
+      },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+        audio: { preferredModel: "deepgram/nova-3" },
+      },
+    },
+  };
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(t("talkPage.transcription.modelDescriptionVoiceNotes")),
+  );
+  expect(page.textContent).not.toContain(t("talkPage.transcription.providerNotReady"));
+});
+
 it("does not call an unavailable speech-to-text provider a missing key", async () => {
   const { page } = createTalkMutationHarness({
     navigate: vi.fn(),
     catalogRequest: (_index, catalog) => ({
       ...catalog,
       transcription: {
+        source: "media-understanding",
         ready: false,
         providers: [{ id: "anthropic", label: "Anthropic", configured: false }],
       },
@@ -165,7 +253,7 @@ it("does not report a ready provider-less transcription route as unconfigured", 
   const { page } = createTalkMutationHarness({
     catalogRequest: (_index, catalog) => ({
       ...catalog,
-      transcription: { ready: true, providers: [] },
+      transcription: { source: "media-understanding", ready: true, providers: [] },
     }),
   });
   page.configObject = {

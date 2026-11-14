@@ -23,6 +23,18 @@ const AUTOMATIC = "";
 
 type TalkTranscriptionCatalog = TalkCatalogResult["transcription"];
 
+// Status copy for the path the Gateway reports Talk uses (talk.catalog `source`).
+const SOURCE_STATUS_KEYS = {
+  streaming: "talkPage.transcription.sourceStreaming",
+  "voice-model": "talkPage.transcription.sourceVoiceModel",
+  "media-understanding": "talkPage.transcription.sourceMediaUnderstanding",
+} as const;
+
+/** The picked model drives Talk only on the media-understanding path. */
+function talkUsesPickedModel(source: TalkTranscriptionCatalog["source"]) {
+  return source === "media-understanding";
+}
+
 type AudioModelEntry = { provider: string; model: string };
 
 /** Audio-tagged `tools.media.models` entries plus the preferred pick, from the config draft. */
@@ -121,13 +133,14 @@ function TranscriptionStatusRow(props: { catalog: TranscriptionProps["catalog"] 
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
       // A ready route without a provider id is a local CLI model, not a missing one.
-      description: catalog.activeProvider
-        ? t("talkPage.status.activeProvider", { provider: catalog.activeProvider })
-        : t(
-            catalog.ready
-              ? "talkPage.transcription.readyWithoutProvider"
-              : "talkPage.transcription.noProvider",
-          ),
+      description:
+        catalog.activeProvider && catalog.source
+          ? t(SOURCE_STATUS_KEYS[catalog.source], { provider: catalog.activeProvider })
+          : t(
+              catalog.ready
+                ? "talkPage.transcription.readyWithoutProvider"
+                : "talkPage.transcription.noProvider",
+            ),
     };
   };
   return (
@@ -140,31 +153,49 @@ function TranscriptionStatusRow(props: { catalog: TranscriptionProps["catalog"] 
 }
 
 /**
- * The preferred model's provider when the catalog lists it as not ready.
- * `configured: false` covers a missing credential and a provider with no
- * transcription support alike, so the warning names both causes. With a
- * streaming override the catalog lists streaming providers instead; a
- * preferred provider that shares an id with one of them is reported against
- * that entry, which is an accepted, visible imprecision.
+ * The catalog entry for the preferred model's provider, whose `configured`
+ * flag is the picked model's readiness. `configured: false` covers a missing
+ * credential and a provider with no transcription support alike, so the hint
+ * names both causes. When Talk uses another path, the picked model still
+ * serves voice notes, so it is looked up in `mediaProviders` rather than that
+ * path's providers.
  */
-function preferredProviderNotReady(
+function preferredProviderEntry(
   catalog: TranscriptionProps["catalog"],
   preferredModel: string | null,
 ) {
   if (typeof catalog === "string" || "failed" in catalog || !preferredModel) {
     return undefined;
   }
+  const providers = talkUsesPickedModel(catalog.source)
+    ? catalog.providers
+    : (catalog.mediaProviders ?? []);
   const id = splitModelRef(preferredModel)?.provider;
-  const provider = id
-    ? catalog.providers.find((entry) => entry.id === id || entry.aliases?.includes(id))
-    : undefined;
-  return provider && !provider.configured ? provider : undefined;
+  return id ? providers.find((entry) => entry.id === id || entry.aliases?.includes(id)) : undefined;
 }
 
 export function TalkTranscriptionSection(props: TranscriptionProps) {
   const context = useApplication();
   const [rejectedModel, setRejectedModel] = createSignal<string | null>(null);
   const selection = createMemo(() => resolveTalkTranscriptionSelection(props.configObject));
+  const preferredProvider = createMemo(() =>
+    preferredProviderEntry(props.catalog, selection().preferredModel),
+  );
+  const modelDescription = () => {
+    const catalog = props.catalog;
+    // Until the catalog answers, the page states the precedence rule instead
+    // of a path it does not know yet.
+    const usage =
+      typeof catalog !== "object" || "failed" in catalog
+        ? t("talkPage.transcription.modelDescription")
+        : talkUsesPickedModel(catalog.source)
+          ? t("talkPage.transcription.modelDescriptionTalk")
+          : t("talkPage.transcription.modelDescriptionVoiceNotes");
+    const provider = preferredProvider();
+    return provider && !provider.configured
+      ? `${t("talkPage.transcription.providerNotReadyDescription", { provider: provider.label })} ${usage}`
+      : usage;
+  };
   const options = createMemo(() => {
     const { entries, preferredModel } = selection();
     const values = [
@@ -190,42 +221,45 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
         title={t("talkPage.transcription.modelTitle")}
         description={
           rejectedModel() === null
-            ? t("talkPage.transcription.modelDescription")
+            ? modelDescription()
             : t("talkPage.transcription.invalidModel", { value: rejectedModel()! })
         }
         role={rejectedModel() === null ? undefined : "alert"}
         control={
-          <ModelPicker
-            label={t("talkPage.transcription.modelTitle")}
-            value={selection().preferredModel ?? AUTOMATIC}
-            options={options()}
-            disabled={props.configBusy}
-            custom={{
-              label: t("talkPage.transcription.custom"),
-              placeholder: "openrouter/openai/whisper-large-v3-turbo",
-              commit: "change",
-              invalid: rejectedModel() !== null,
-            }}
-            onChange={(value) =>
-              setRejectedModel(
-                changeTranscriptionModel(context.runtimeConfig, props.configObject, value)
-                  ? null
-                  : value.trim(),
-              )
-            }
-          />
-        }
-      />
-      <Show when={preferredProviderNotReady(props.catalog, selection().preferredModel)}>
-        {(provider) => (
-          <SettingsRow
-            title={t("talkPage.transcription.preferredNotReadyTitle")}
-            description={t("talkPage.transcription.providerNotReadyDescription", {
-              provider: provider().label,
-            })}
-            control={
-              <>
-                <SettingsStatus kind="warn" label={t("talkPage.transcription.providerNotReady")} />
+          <>
+            <Show when={preferredProvider()}>
+              {(provider) => (
+                <SettingsStatus
+                  kind={provider().configured ? "ok" : "warn"}
+                  label={t(
+                    provider().configured
+                      ? "talkPage.status.ready"
+                      : "talkPage.transcription.providerNotReady",
+                  )}
+                />
+              )}
+            </Show>
+            <ModelPicker
+              label={t("talkPage.transcription.modelTitle")}
+              value={selection().preferredModel ?? AUTOMATIC}
+              options={options()}
+              disabled={props.configBusy}
+              custom={{
+                label: t("talkPage.transcription.custom"),
+                placeholder: "openrouter/openai/whisper-large-v3-turbo",
+                commit: "change",
+                invalid: rejectedModel() !== null,
+              }}
+              onChange={(value) =>
+                setRejectedModel(
+                  changeTranscriptionModel(context.runtimeConfig, props.configObject, value)
+                    ? null
+                    : value.trim(),
+                )
+              }
+            />
+            <Show when={preferredProvider()?.configured === false && preferredProvider()}>
+              {(provider) => (
                 <button
                   type="button"
                   class="btn"
@@ -235,11 +269,11 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
                 >
                   {t("talkPage.transcription.openModels")}
                 </button>
-              </>
-            }
-          />
-        )}
-      </Show>
+              )}
+            </Show>
+          </>
+        }
+      />
     </SettingsSection>
   );
 }

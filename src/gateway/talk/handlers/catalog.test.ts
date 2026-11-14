@@ -279,6 +279,7 @@ describe("talk.catalog handler", () => {
             ],
           },
           transcription: {
+            source: "streaming",
             ready: true,
             activeProvider: "openai",
             providers: [
@@ -567,6 +568,7 @@ describe("talk.catalog handler", () => {
 
       expect(mockCallArg(respond, 0, 1)).toMatchObject({
         transcription: {
+          source: "voice-model",
           ready: true,
           activeProvider: "transcription-fast",
           providers: [
@@ -678,7 +680,7 @@ describe("talk.catalog handler", () => {
     });
 
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      transcription: { ready: true, activeProvider: "transcription-alias" },
+      transcription: { source: "streaming", ready: true, activeProvider: "transcription-alias" },
       realtime: { ready: true, activeProvider: "realtime-alias" },
     });
   });

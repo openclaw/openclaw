@@ -383,7 +383,12 @@ describe("configured file transcription through Talk RPCs", () => {
         };
         const { call } = fileRpc(config, talkHandlers);
         expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
-          transcription: { ready: true, activeProvider: "streaming-stt" },
+          transcription: {
+            source: "voice-model",
+            ready: true,
+            activeProvider: "streaming-stt",
+            mediaProviders: [expect.objectContaining({ id: "local-stt", configured: true })],
+          },
         });
         expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
           provider: "streaming-stt",
@@ -461,7 +466,9 @@ describe("configured file transcription through Talk RPCs", () => {
           release.resolve();
           await catalog.completed;
           const result = expectRespondOk(catalog.respond);
-          expect(result).toMatchObject({ transcription: { ready: false } });
+          expect(result).toMatchObject({
+            transcription: { source: "media-understanding", ready: false },
+          });
           expect(result).not.toHaveProperty("transcription.activeProvider");
           if (reason === "unknown provider" || reason === "missing credentials") {
             expect(result).toMatchObject({
