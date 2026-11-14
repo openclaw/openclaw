@@ -367,7 +367,10 @@ for request authentication.
 
 `MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
 `remove_node { peer_key }`; both require R or a current owner with `manage_members`.
-`deny_invite` and peer-key revocations cover nodes too. `MembershipSnapshotBody` requires
+`deny_invite` and peer-key revocations cover nodes too. `add_owner_device` takes an optional
+`node { peer_key, label, description }`: an app approved as an owner device brings its node in
+the same decision (see [enrollment.md](enrollment.md#owner-device-node)). The member is optional
+(absent, not null), so changes without it are byte-for-byte unchanged. `MembershipSnapshotBody` requires
 `node_peer_keys: IrohEndpointKey[]` (empty when none), separate from `owner_peer_keys` and
 `members`. Existing snapshots must be re-signed by K_gw when consumers update this draft;
 never insert a field into an already signed envelope.

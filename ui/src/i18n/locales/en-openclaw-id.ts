@@ -69,7 +69,11 @@ const enOpenClawId = {
     error_open: "Could not open this. Try again.",
     menuTitle: "OpenClaw ID",
     approveNewDevice: "Approve a new device",
-    approvalNotice: "A new browser is asking for owner access",
+    approvalNotice: "A new device is asking for owner access",
+    kitUsedNotice: "Your recovery kit was used to add {device}",
+    kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
+    kitUsedNoticeBody:
+      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, relink this claw as a new claw on the computer that runs it.",
     signIn: "Sign in with OpenClaw ID",
     signInLocalOnly:
       "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",

@@ -53,7 +53,7 @@ type ModelSearchState = {
   summary?: HTMLElement;
   input?: HTMLInputElement;
   focusRow?: string;
-  rows: Map<string, HTMLButtonElement>;
+  rows: Map<string, HTMLElement>;
   query(): string;
   setQuery(value: string): void;
   view?: ChatModelSearchView;
@@ -103,7 +103,7 @@ export function createChatModelSearch() {
       });
     },
     rowRef(readKey: () => string) {
-      let element: HTMLButtonElement;
+      let element: HTMLElement;
       onSettled(() => {
         // The keyed row keeps this identity for its mounted lifetime.
         const initialKey = readKey();
@@ -120,7 +120,7 @@ export function createChatModelSearch() {
           }
         };
       });
-      return (node: HTMLButtonElement) => (element = node);
+      return (node: HTMLElement) => (element = node);
     },
     row(key: string) {
       return state.view?.row(key);

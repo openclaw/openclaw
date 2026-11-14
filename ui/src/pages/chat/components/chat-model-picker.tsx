@@ -185,7 +185,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
-          title={params.disabledReason?.trim() || undefined}
         >
           {!params.triggerLoading &&
           !params.triggerStatusLabel &&
@@ -226,9 +225,12 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           <Show when={choicesMounted()}>
             <Errored
               fallback={(_error, reset) => (
-                <div class="chat-controls__model-catalog-state" role="alert">
+                <div
+                  class="chat-controls__model-menu chat-controls__model-catalog-state chat-controls__model-catalog-state--empty"
+                  role="alert"
+                >
                   {t("chat.modelControls.modelsUnavailable")}
-                  <button class="btn btn--sm" type="button" onClick={reset}>
+                  <button class="chat-controls__model-catalog-action" type="button" onClick={reset}>
                     {t("common.retry")}
                   </button>
                 </div>
@@ -236,7 +238,10 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             >
               <Loading
                 fallback={
-                  <div class="chat-controls__model-catalog-state" role="status">
+                  <div
+                    class="chat-controls__model-menu chat-controls__model-catalog-state chat-controls__model-catalog-state--empty"
+                    role="status"
+                  >
                     {t("chat.modelControls.loadingModels")}
                   </div>
                 }

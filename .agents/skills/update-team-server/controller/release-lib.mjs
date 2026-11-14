@@ -4922,7 +4922,8 @@ async function startupProfileCommand(command, input) {
     );
     assert.equal(environment.get("SYSTEMD_EXEC_PID"), String(pid));
     assert.equal(statSync(`/proc/${pid}`).uid, intent.uid);
-    assert.equal(readFileSync(`/proc/${pid}/cgroup`, "utf8"), `0::${intent.cgroup}\n`);
+    assert.equal(intent.cgroup, repairNativeGroup);
+    repairNativeProcessCgroup(`/proc/${pid}/cgroup`);
     assert.equal(realpathSync(`/proc/${pid}/exe`), realpathSync(process.execPath));
     // process.title overwrites Linux cmdline; systemd owns the launched argv.
     // The preload also validates its intact process.argv at capture admission.
@@ -5865,6 +5866,7 @@ async function startupProfileCommand(command, input) {
 
 const repairNativeUnit = "openclaw-gateway.service";
 const repairNativeGroup = "/system.slice/openclaw-gateway.service";
+const repairNativeProcessGroups = [repairNativeGroup, repairNativeGroup + "/gateway"];
 const repairNativeLibrary = "/usr/local/lib/openclaw-team/release-lib.mjs";
 const repairNativeNode = "/usr/bin/node";
 const repairGuardPrefix = "zzzz-openclaw-retained-repair-";
@@ -5971,14 +5973,17 @@ function repairNativeManagerStopped(uid, boundary) {
   assertUnpopulatedCgroup(current, "repair user manager");
   return manager;
 }
-function repairNativeStoppedGroup(boundary) {
+function repairNativeStoppedGroup(boundary, uid) {
   const root = join(boundary, "sys/fs/cgroup");
   migrationAncestors(root, migrationOwner(), boundary);
   let current = root;
   for (const part of repairNativeGroup.slice(1).split("/")) {
     current = join(current, part);
-    if (!lstatSync(current, { throwIfNoEntry: false })) return;
-    exactDirectory(current, migrationOwner(), "repair system cgroup");
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (!entry) return;
+    const delegated = part === repairNativeUnit && entry.uid === uid;
+    exactDirectory(current, delegated ? uid : migrationOwner(), "repair system cgroup",
+      { group: delegated ? entry.gid : rootGroup() });
   }
   assertUnpopulatedCgroup(current, "repair system Gateway");
 }
@@ -6011,16 +6016,23 @@ function repairNativeBinding(root, binding) {
       realpathSync(binding.release) !== binding.release) reject("repair process release is not canonical");
   return binding;
 }
+function repairNativeProcessCgroup(pathname) {
+  const contents = readFileSync(pathname, "utf8");
+  // DelegateSubgroup=gateway places the main process here, never in a nested subgroup.
+  const group = repairNativeProcessGroups.find(group => contents === "0::" + group + "\n");
+  if (!group) reject("repair process cgroup is not the system Gateway root or gateway leaf");
+  return group;
+}
 function repairNativeProcess(root, binding) {
   repairNativeBinding(root, binding);
   const { proc } = repairNativeRoots(), directory = join(proc, String(binding.pid));
   const stat = readFileSync(join(directory, "stat"), "utf8"), separator = stat.lastIndexOf(") ");
   const fields = stat.slice(separator + 2).trim().split(/\s+/);
+  const cgroup = repairNativeProcessCgroup(join(directory, "cgroup"));
   if (!stat.startsWith(binding.pid + " (") || separator < 0 || fields[19] !== binding.generation ||
       ["Z", "X", "x", "T", "t"].includes(fields[0]) || statSync(directory).uid !== binding.uid ||
       realpathSync(join(directory, "cwd")) !== binding.release ||
-      realpathSync(join(directory, "exe")) !== realpathSync(binding.runtime) ||
-      readFileSync(join(directory, "cgroup"), "utf8") !== "0::" + repairNativeGroup + "\n")
+      realpathSync(join(directory, "exe")) !== realpathSync(binding.runtime))
     reject("repair process generation, owner, runtime, release, or cgroup changed");
   // process.title rewrites Linux cmdline; systemd retains the launched command.
   const command = repairNativeBusProperty("ExecStart"), row = command?.data?.[0], argv = row?.[1];
@@ -6031,7 +6043,7 @@ function repairNativeProcess(root, binding) {
       argv[2] !== "gateway" || argv[3] !== "--port" || argv[4] !== String(binding.port)) reject("repair native launch command changed");
   const bootId = readFileSync(join(proc, "sys/kernel/random/boot_id"), "utf8").trim();
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(bootId)) reject("repair boot identity is unavailable");
-  return { ...binding, bootId, cgroup: repairNativeGroup };
+  return { ...binding, bootId, cgroup };
 }
 function retainedRepairObserveLive(root, binding) {
   migrationNamespace(root);
@@ -6056,7 +6068,7 @@ function retainedRepairObserveLive(root, binding) {
 function retainedRepairObserveStopped(root, owner, targets) {
   const { bootId: expectedBootId, cgroup: expectedCgroup, ...binding } = owner.process;
   repairNativeBinding(root, binding);
-  if (expectedCgroup !== repairNativeGroup) reject("repair stopped cgroup binding changed");
+  if (!repairNativeProcessGroups.includes(expectedCgroup)) reject("repair stopped cgroup binding changed");
   if (!/^[a-f0-9]{32}$/.test(owner.invocationId) || !/^[1-9]\d*$/.test(owner.startedAtMonotonic))
     reject("repair stopped custody lacks the exact previous native owner");
   if (!Array.isArray(targets) || !targets.length || new Set(targets).size !== targets.length)
@@ -6075,7 +6087,7 @@ function retainedRepairObserveStopped(root, owner, targets) {
         unit.ExecMainStartTimestampMonotonic !== owner.startedAtMonotonic || !["", repairNativeGroup].includes(unit.ControlGroup))
       reject("repair system owner, control, history, or job has not settled");
     repairNativeNoJobs(owner.process.uid);
-    repairNativeStoppedGroup(boundary);
+    repairNativeStoppedGroup(boundary, owner.process.uid);
     repairNativeListeners(owner.process.port);
     assertDatabaseWritersStopped(new Set(targets), proc);
     return { unit, userManager: manager, bootId, oldPid: owner.process.pid, uid: owner.process.uid, port: owner.process.port, targets: [...targets] };
@@ -6252,7 +6264,7 @@ function retainedRepairStartClaim(root, operation) {
   if (unit.ActiveState !== "activating" || unit.SubState !== "condition" || unit.MainPID !== "0" ||
       unit.ControlPID !== String(process.pid) || unit.ControlGroup !== repairNativeGroup ||
       !/^[a-f0-9]{32}$/.test(unit.InvocationID) || process.env.INVOCATION_ID !== unit.InvocationID ||
-      readFileSync("/proc/self/cgroup", "utf8") !== "0::" + repairNativeGroup + "\n")
+      !["0::" + repairNativeGroup + "\n", "0::" + repairNativeGroup + "/.control\n"].includes(readFileSync("/proc/self/cgroup", "utf8")))
     reject("repair claim is not this service's native condition process");
   return repairNativeClaimCore(root, operation);
 }
@@ -6636,20 +6648,48 @@ function retainedAdoptionReadClosure(paths) {
     privateOnly: false, mode: index === 0 ? 0o755 : 0o644, limit: migrationJournalLimit,
   }));
 }
-function retainedAdoptionLegacy(paths, expected) {
+function retainedAdoptionLegacy(paths, expected, nativeRecovery) {
   validMigrationDescriptor(expected, "path", "controller adoption original journal");
   if (expected.path !== paths.pathname) reject("controller adoption source journal is not canonical");
   const file = migrationFile(paths.pathname, paths.owner, { mode: 0o600, limit: migrationJournalLimit });
   if (!isDeepStrictEqual(file.descriptor, expected)) reject("controller adoption source journal changed");
   const record = validJournal(migrationJson(file.bytes));
-  const allowed = ["version", "phase", "topology", "predecessor", "candidate", "process", "pointerTopology", "services", "suspension", "protectedPaths", "originalWitness", "gatewayRuntime", "createdAt"];
+  const allowed = ["version", "phase", "topology", "predecessor", "candidate", "process", "pointerTopology", "services", "suspension", "protectedPaths", "originalWitness", "gatewayRuntime", "createdAt", ...(nativeRecovery ? ["nativeUpdate"] : [])];
   if (record.version !== 1 || record.phase !== "ROLLBACK_FAILED" || record.topology !== "system" ||
       !record.originalWitness || record.predecessor.sha === record.candidate.sha ||
       [record.predecessor, record.candidate].some(info => ["state", "agent"].some(key =>
         !Number.isSafeInteger(info.schemaVersions?.[key]) || info.schemaVersions[key] < 0)) ||
-      !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions) ||
+      (!nativeRecovery && !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions)) ||
       Object.keys(record).some(key => !allowed.includes(key)))
     reject("controller adoption requires the exact retained legacy failed system incident");
+  if (nativeRecovery) {
+    suspensionObject(nativeRecovery, ["process", "receipt", "backup"], "native recovery adoption");
+    suspensionObject(nativeRecovery.backup, ["path", "device", "inode"], "native recovery backup identity");
+    validMigrationDescriptor(nativeRecovery.receipt, "path", "native recovery receipt");
+    if (!record.nativeUpdate || !["state", "agent"].some(key => record.candidate.schemaVersions[key] > record.predecessor.schemaVersions[key]) ||
+        ["state", "agent"].some(key => record.candidate.schemaVersions[key] < record.predecessor.schemaVersions[key]))
+      reject("native recovery adoption requires a migrated schema-crossing candidate");
+    const root = dirname(paths.directory), backupPath = record.nativeUpdate.backupRoot + ".databases";
+    selectedConfigProcess(root, record, nativeRecovery.process);
+    if (nativeRecovery.process.release !== join(root, "releases", record.candidate.sha) ||
+        (nativeRecovery.process.pid === record.process.pid && nativeRecovery.process.generation === record.process.generation))
+      reject("native recovery adoption process is not the selected candidate");
+    retainedRepairObserveLive(root, nativeRecovery.process);
+    if (nativeUpdateReceipt(record, true).status !== "migrated")
+      reject("native recovery adoption requires the completed migration receipt");
+    const owner = lstatSync(record.protectedPaths[0].path);
+    const receipt = migrationFile(record.nativeUpdate.backupRoot + ".receipt.json", owner.uid, { mode: 0o600, group: owner.gid });
+    if (!isDeepStrictEqual(receipt.descriptor, nativeRecovery.receipt) ||
+        migrationJson(receipt.bytes).backup?.directory !== backupPath)
+      reject("native recovery adoption backup receipt changed");
+    const backup = lstatSync(backupPath);
+    if (!backup.isDirectory() || backup.uid !== owner.uid || backup.gid !== owner.gid || (backup.mode & 0o077) !== 0 ||
+        realpathSync(backupPath) !== backupPath ||
+        !isDeepStrictEqual(nativeRecovery.backup, { path: backupPath, device: backup.dev, inode: backup.ino }))
+      reject("native recovery adoption backup identity changed");
+    // Read the bound witness through its owner; never rewrite it or copy native snapshots.
+    originalWitness(paths.pathname, record);
+  }
   return file;
 }
 function retainedAdoptionProtocolCheck(files) {
@@ -6665,7 +6705,7 @@ function retainedAdoptionProtocolCheck(files) {
 // This is evidence for the same retired source, not permission to retire another
 // journal or to interrupt the incumbent. Every publication rechecks live custody.
 function retainedAdoptionSource(paths, request) {
-  if (!request.retirement) return retainedAdoptionLegacy(paths, request.source);
+  if (!request.retirement) return retainedAdoptionLegacy(paths, request.source, request.nativeRecovery);
   validMigrationDescriptor(request.retirement, "path", "accepted retirement completion");
   const completionFile = retainedAdoptionChecked(request.retirement.path, request.retirement);
   const completion = migrationJson(completionFile.bytes);
@@ -6752,7 +6792,7 @@ function retainedAdoptionSource(paths, request) {
 }
 
 function retainedAdoptionRequest(root, input, historical = false) {
-  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : [])], "controller adoption request");
+  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : []), ...(Object.hasOwn(input, "nativeRecovery") && !input.retirement ? ["nativeRecovery"] : [])], "controller adoption request");
   if (input.version !== 1 || !Array.isArray(input.oldClosure) || input.oldClosure.length !== 4 ||
       !Array.isArray(input.replacement) || input.replacement.length !== 4)
     reject("controller adoption request must bind all four old and approved new files");
