@@ -46,9 +46,23 @@ describe("parseIdentityMarkdown", () => {
     ["- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`", null],
     ["- **Avatar:** *(not set yet)*", null],
     ["- Name: Café 🤖 �\n", { name: "Café 🤖 �" }],
-  ] as const)("parses decorated values and ignores placeholders: %s", async (content, expected) => {
-    expect(await parseIdentityFromContent(content)).toEqual(expected);
-  });
+    [
+      "- Name: Atlas\n```markdown\n- Name: Example\n- Emoji: ❌\n```\n- Creature: Turtle\n",
+      { name: "Atlas", creature: "Turtle" },
+    ],
+    ["- Name: Atlas\n\n## Example\n\n   ~~~markdown\n- Name: Example\n   ~~~\n", { name: "Atlas" }],
+    ["- Name: Atlas\n````markdown\n```\n- Name: Example\n````\n", { name: "Atlas" }],
+    ["- Name: Atlas\n```markdown\n- Name: Example", { name: "Atlas" }],
+    ["- Name: Atlas\r\n```markdown\r\n- Name: Example\r\n```\r\n", { name: "Atlas" }],
+    ["```markdown\n- Name: Example\n```\n", null],
+    ["Name: First\nName: Atlas\n", { name: "Atlas" }],
+    ["    - Name: Atlas\n", { name: "Atlas" }],
+  ] as const)(
+    "reads identity fields outside examples and ignores placeholders: %s",
+    async (content, expected) => {
+      expect(await parseIdentityFromContent(content)).toEqual(expected);
+    },
+  );
 });
 
 it.each([
@@ -63,12 +77,131 @@ it.each([
     "\n- Name: New Name\n- Emoji: 🦀\n",
   ],
   ["- **`Name`**: Old Name\n", { name: "New Name" }, "- Name: New Name\n"],
+  [
+    "- Name: Old\n- Name: Older\n```markdown\n- Name: Example\n- Emoji: ❌\n```\n",
+    { name: "New", emoji: "🦀" },
+    "- Name: New\n- Emoji: 🦀\n```markdown\n- Name: Example\n- Emoji: ❌\n```\n",
+  ],
+  [
+    "# Identity\n\n~~~markdown\n- Name: Example\n~~~\n",
+    { name: "New" },
+    "# Identity\n\n- Name: New\n~~~markdown\n- Name: Example\n~~~\n",
+  ],
+  [
+    "```markdown\n# Example\n\nExample prose.\n```\n",
+    { name: "New", emoji: "🦀" },
+    "- Name: New\n- Emoji: 🦀\n```markdown\n# Example\n\nExample prose.\n```\n",
+  ],
+  [
+    "```markdown\n# Example\n- Name: Example",
+    { name: "New" },
+    "- Name: New\n```markdown\n# Example\n- Name: Example\n",
+  ],
+  ["    - Name: Old\n", { name: "New" }, "- Name: New\n"],
 ] as const)(
   "normalizes writable fields and preserves rich content: %s",
   (content, identity, expected) => {
     expect(mergeIdentityMarkdownContent(content, identity)).toBe(expected);
   },
 );
+it.each([
+  [
+    "- Name: Atlas\n\n1. Example:\n\n    ```markdown\n    - Name: Example\n    ```\n",
+    "- Name: Nova\n- Emoji: X\n\n1. Example:\n\n    ```markdown\n    - Name: Example\n    ```\n",
+  ],
+  [
+    "- Example:\n  ```markdown\n  - Name: Example\n- Name: Atlas\n",
+    "- Example:\n  ```markdown\n  - Name: Example\n- Name: Nova\n- Emoji: X\n",
+  ],
+])(
+  "keeps list-fenced examples out of identity reads and updates: %s",
+  async (content, expected) => {
+    expect(await parseIdentityFromContent(content)).toEqual({ name: "Atlas" });
+    const merged = mergeIdentityMarkdownContent(content, { name: "Nova", emoji: "X" });
+    expect(merged).toBe(expected);
+    expect(await parseIdentityFromContent(merged)).toEqual({ name: "Nova", emoji: "X" });
+  },
+);
+
+it.each([
+  [
+    "  ```md\n- Name: Example\n  ```\n",
+    "- Name: Nova\n- Emoji: X\n\n<!-- -->\n\n  ```md\n- Name: Example\n  ```\n",
+  ],
+  [
+    "  ```md\n- Name: Example",
+    "- Name: Nova\n- Emoji: X\n\n<!-- -->\n\n  ```md\n- Name: Example\n",
+  ],
+  [
+    "# Identity\n\n  ```md\n- Name: Example\n  ```\n",
+    "- Name: Nova\n- Emoji: X\n\n<!-- -->\n\n# Identity\n\n  ```md\n- Name: Example\n  ```\n",
+  ],
+  [
+    "-   Name: Old\n   ```md\n- Name: Example\n   ```\n",
+    "- Emoji: X\n\n<!-- -->\n\n-   Name: Nova\n   ```md\n- Name: Example\n   ```\n",
+  ],
+  [
+    "-\tName: Old\n   ```md\n- Name: Example\n   ```\n",
+    "- Emoji: X\n\n<!-- -->\n\n-\tName: Nova\n   ```md\n- Name: Example\n   ```\n",
+  ],
+  [
+    "- Name: Old\n  - Name: Again\n    - Name: Third\n      ```md\n      - Name: Example\n      ```\n",
+    "- Emoji: X\n\n<!-- -->\n\n- Name: Nova\n  - Name: Nova\n    - Name: Nova\n      ```md\n      - Name: Example\n      ```\n",
+  ],
+  [
+    "- Name: Old\n  ```md\n  sample\n- Name: Again\n  prose\n",
+    "- Emoji: X\n\n<!-- -->\n\n- Name: Nova\n  ```md\n  sample\n- Name: Nova\n  prose\n",
+  ],
+  [
+    "Name: Old\n\n  ```md\n- Name: Example\n  ```\n",
+    "- Emoji: X\n\n<!-- -->\n\nName: Nova\n\n  ```md\n- Name: Example\n  ```\n",
+  ],
+  [
+    "- Name: Old\n- Name: Again\n-   Creature: Turtle\n   ```md\n- Name: Example\n   ```\n",
+    "- Emoji: X\n\n<!-- -->\n\n- Name: Nova\n-   Creature: Turtle\n   ```md\n- Name: Example\n   ```\n",
+  ],
+])("preserves fence context across repeated identity writes: %s", async (content, expected) => {
+  const merged = mergeIdentityMarkdownContent(content, { name: "Nova", emoji: "X" });
+  expect(merged).toBe(expected);
+  expect(await parseIdentityFromContent(merged)).toMatchObject({ name: "Nova", emoji: "X" });
+  expect(mergeIdentityMarkdownContent(merged, { name: "Nova", emoji: "X" })).toBe(merged);
+  const changed = mergeIdentityMarkdownContent(merged, { name: "Orion", emoji: "Y" });
+  expect(changed).toBe(expected.replaceAll("Nova", "Orion").replace("- Emoji: X", "- Emoji: Y"));
+  expect(await parseIdentityFromContent(changed)).toMatchObject({ name: "Orion", emoji: "Y" });
+});
+
+it.each([
+  ["**Nova**", { name: "Nova" }],
+  ["`_Nova_`", { name: "_Nova_" }],
+  ["*(not set yet)*", null],
+] as const)(
+  "retains decorated value semantics when preserving fence context: %s",
+  async (name, expected) => {
+    const content = "-   Name: Old\n   ```md\n- Name: Example\n   ```\n";
+    const merged = mergeIdentityMarkdownContent(content, { name });
+    expect(merged).toBe(content.replace("Old", name));
+    expect(await parseIdentityFromContent(merged)).toEqual(expected);
+    expect(mergeIdentityMarkdownContent(merged, { name })).toBe(merged);
+    const changed = mergeIdentityMarkdownContent(merged, { name: "**Orion**" });
+    expect(changed).toBe(content.replace("Old", "**Orion**"));
+    expect(await parseIdentityFromContent(changed)).toEqual({ name: "Orion" });
+  },
+);
+
+it("refuses an update that introduces a fence before writing the existing example", () => {
+  const content = "```md\n- Name: Example\n```\n";
+  expect(() => mergeIdentityMarkdownContent(content, { theme: "steady\n```" })).toThrow(
+    "Identity update would change fenced Markdown content or field values",
+  );
+});
+
+it("keeps existing multiline value parsing when fence boundaries remain intact", async () => {
+  const content = "```md\n- Name: Example\n```\n";
+  const merged = mergeIdentityMarkdownContent(content, { theme: "steady\nordinary prose" });
+  expect(merged).toBe("- Theme: steady\nordinary prose\n" + content);
+  expect(await parseIdentityFromContent(merged)).toEqual({ theme: "steady" });
+});
+
 describe("loadAgentIdentityFromWorkspace", () => {
   let tempDir: string;
   const load = () => loadAgentIdentityFromWorkspaceAsync(tempDir);
