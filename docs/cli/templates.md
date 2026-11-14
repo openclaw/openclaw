@@ -206,7 +206,8 @@ per folder, 4,096 selected bundled files in total, and 16 directory levels. `.gi
 excluded regardless of case. Links, nonregular files, unsafe portable paths,
 overlapping bundled directories, and conflicting skill identities or workspace
 destinations are rejected. Build and Add reject changed source bytes or folder
-membership after review. File modes follow ordinary Template packaging.
+membership after review. A bundled file that is executable stays executable.
+Other permission bits, including setuid, are not copied.
 
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.

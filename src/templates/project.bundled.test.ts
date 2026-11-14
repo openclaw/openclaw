@@ -1,8 +1,12 @@
-import { link, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
+import {
+  materializeTemplateDependencyDirectory,
+  snapshotTemplateDependencyDirectory,
+} from "./dependency-directory.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./package-preflight.js";
 import { buildTemplateProject, extractBuiltTemplateArtifact } from "./project-build.js";
@@ -116,6 +120,50 @@ describe("bundled Template project sources", () => {
         join(extracted.packageRoot, "bundles", "checked", "references", "checklist.bin"),
       ),
     ).toEqual(binary);
+  });
+
+  it("keeps a bundled script executable without copying setuid", async () => {
+    const root = await project();
+    const skill = join(root, "bundles", "checked");
+    const script = join(skill, "check.sh");
+    await writeFile(script, "#!/bin/sh\necho ok\n", { mode: 0o755 });
+    await writeFile(join(skill, "note.txt"), "plain\n", { mode: 0o644 });
+    const setuid = join(skill, "setuid.sh");
+    await writeFile(setuid, "#!/bin/sh\necho no\n");
+    await chmod(setuid, 0o4755);
+
+    const reviewed = await snapshotTemplateDependencyDirectory({
+      rootDir: root,
+      path: "bundles/checked",
+    });
+    await chmod(script, 0o644);
+    const cleared = await snapshotTemplateDependencyDirectory({
+      rootDir: root,
+      path: "bundles/checked",
+    });
+    expect(cleared.digest).toBe(reviewed.digest);
+    await chmod(script, 0o755);
+
+    const built = await buildTemplateProject(root, `${root}.tgz`);
+    await using extracted = await extractBuiltTemplateArtifact(built.artifact);
+    const modeOf = async (relativePath: string) =>
+      (await stat(join(extracted.packageRoot, relativePath))).mode & 0o7777;
+    expect(await modeOf("bundles/checked/check.sh")).toBe(0o755);
+    expect(await modeOf("bundles/checked/setuid.sh")).toBe(0o755);
+    expect((await modeOf("bundles/checked/note.txt")) & 0o111).toBe(0);
+
+    const validated = await validateTemplateProject(root);
+    assert(validated.ok, JSON.stringify(validated.diagnostics));
+    const bundled = validated.template.snapshot?.bundledSources?.[0];
+    assert(bundled);
+    await using prepared = await materializeTemplateDependencyDirectory({
+      rootDir: root,
+      path: bundled.path,
+      snapshot: bundled.snapshot,
+    });
+    expect((await stat(join(prepared.directory, "check.sh"))).mode & 0o7777).toBe(0o755);
+    expect((await stat(join(prepared.directory, "setuid.sh"))).mode & 0o7777).toBe(0o755);
+    expect((await stat(join(prepared.directory, "note.txt"))).mode & 0o111).toBe(0);
   });
 
   it.each([

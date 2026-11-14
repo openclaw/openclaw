@@ -14,8 +14,18 @@ import {
   MAX_TEMPLATE_DIRECTORY_ENTRIES,
 } from "./source-limits.js";
 
+export const TEMPLATE_BUNDLED_EXECUTABLE_FILE_MODE = 0o755;
+
+export type TemplateDirectoryFileSnapshot = {
+  path: string;
+  byteLength: number;
+  digest: string;
+  /** Present when the reviewed file had any execute bit. Setuid, setgid, and sticky bits are not kept. */
+  executable?: true;
+};
+
 export type TemplateDirectorySnapshot = {
-  files: Array<{ path: string; byteLength: number; digest: string }>;
+  files: TemplateDirectoryFileSnapshot[];
   byteLength: number;
   digest: string;
 };
@@ -64,6 +74,8 @@ export async function snapshotTemplateDependencyDirectory(params: {
   }
   const root = await fsSafeRoot(directory);
   const files: TemplateDirectorySnapshot["files"] = [];
+  const contentFiles: Array<Pick<TemplateDirectoryFileSnapshot, "path" | "byteLength" | "digest">> =
+    [];
   const portablePaths = new Set<string>();
   let byteLength = 0;
   for (const entry of walked.entries.toSorted((a, b) =>
@@ -84,6 +96,7 @@ export async function snapshotTemplateDependencyDirectory(params: {
     if (entry.kind !== "file") {
       throw new Error(`Bundled dependency contains a link or nonregular file: ${path}.`);
     }
+    const fileStat = await lstat(join(directory, ...path.split("/")));
     const read = await root.read(path, {
       symlinks: "reject",
       hardlinks: "reject",
@@ -93,13 +106,16 @@ export async function snapshotTemplateDependencyDirectory(params: {
     if (byteLength > MAX_TEMPLATE_DIRECTORY_BYTES) {
       throw new Error("Bundled dependency exceeds its total byte limit.");
     }
-    files.push({
+    const content = {
       path,
       byteLength: read.buffer.byteLength,
       digest: digestTemplateBytes(read.buffer),
-    });
+    };
+    contentFiles.push(content);
+    // The content digest stays byte-only so an already installed copy still matches.
+    files.push((fileStat.mode & 0o111) !== 0 ? { ...content, executable: true as const } : content);
   }
-  return { files, byteLength, digest: digestTemplateValue(files) };
+  return { files, byteLength, digest: digestTemplateValue(contentFiles) };
 }
 
 /** Installers consume an immutable copy of exactly the reviewed eligible bytes. */
@@ -134,7 +150,11 @@ export async function materializeTemplateDependencyDirectory(params: {
         throw new Error("Bundled dependency changed while preparing installation.");
       }
       await mkdir(join(directory, dirname(file.path)), { recursive: true });
-      await target.create(file.path, read.buffer);
+      await target.create(
+        file.path,
+        read.buffer,
+        file.executable ? { mode: TEMPLATE_BUNDLED_EXECUTABLE_FILE_MODE } : undefined,
+      );
     }
     const afterCopy = await snapshotTemplateDependencyDirectory(params);
     if (afterCopy.digest !== params.snapshot.digest) {
