@@ -61,7 +61,7 @@ it("prepares foreign input exclusion before a session database is created", asyn
       sessionId: "first-turn",
       storePath,
     });
-    expect(read()).toEqual(new Map());
+    expect(await read()).toEqual(new Map());
     expect(fs.existsSync(storePath)).toBe(false);
   });
 });

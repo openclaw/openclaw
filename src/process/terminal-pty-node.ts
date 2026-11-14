@@ -21,6 +21,7 @@ export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
   initiateSpawn?: SpawnInitiation,
+  prepareCurrent?: () => Promise<void>,
 ): Promise<TerminalPtyHandle> {
   const node = resolveNodeRuntimeExecutable();
   if (!node) {
@@ -66,6 +67,7 @@ export async function spawnNodeTerminalPty(
   let helperExit: typeof exited;
   let outputEnded = false;
   let ipcClosed = false;
+  let preparation: Promise<void> | undefined;
 
   const fail = (error: Error) => {
     if (exited) {
@@ -125,7 +127,7 @@ export async function spawnNodeTerminalPty(
     STARTUP_TIMEOUT_MS,
   );
   const finish = () => {
-    if (exited || !helperExit || !outputEnded || !ipcClosed) {
+    if (exited || preparation || !helperExit || !outputEnded || !ipcClosed) {
       return;
     }
     ready.reject(
@@ -185,18 +187,29 @@ export async function spawnNodeTerminalPty(
     if (message.type === "boot" || message.type === "prepared") {
       try {
         if (message.type === "boot") {
-          if (initiateSpawn) {
+          if (initiateSpawn || prepareCurrent) {
             beforeSpawn?.();
             send({ type: "prepare", params });
           } else {
             send({ type: "start", params }, authorizeLaunch);
           }
         } else {
-          if (!initiateSpawn) {
+          if (!initiateSpawn && !prepareCurrent) {
             throw new Error("Terminal launch authority is unavailable");
           }
-          // Rejection already joins helper exit, IPC close, and output EOF in finish().
-          send({ type: "launch" }, authorizeLaunch);
+          // Accepted preparation retains caller resources even if the helper closes first.
+          const launch = async () => {
+            await prepareCurrent?.();
+            if (!startupError) {
+              send({ type: "launch" }, authorizeLaunch);
+            }
+          };
+          preparation = launch()
+            .catch((error: unknown) => fail(toErrorObject(error, "PTY launch denied")))
+            .finally(() => {
+              preparation = undefined;
+              finish();
+            });
         }
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));

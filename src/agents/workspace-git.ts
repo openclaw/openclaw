@@ -1,17 +1,19 @@
-import { existsSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
+import { runWorkspaceFilesystemOperation } from "./workspace-filesystem.js";
+import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 
 /** Find the nearest Git metadata, including damaged linked-worktree pointers. */
-export function findGitCheckoutRoot(start: string): string | null {
+export async function findGitCheckoutRoot(start: string): Promise<string | null> {
   let current = path.resolve(start);
   for (;;) {
     const metadata = path.join(current, ".git");
-    if (existsSync(metadata)) {
+    if (await fs.stat(metadata).catch(() => undefined)) {
       try {
-        if (readdirSync(metadata).length > 0) {
+        if ((await fs.readdir(metadata)).length > 0) {
           return current;
         }
       } catch {
@@ -27,28 +29,69 @@ export function findGitCheckoutRoot(start: string): string | null {
   }
 }
 
-export function insideGitCheckout(start: string): boolean {
-  return findGitCheckoutRoot(start) !== null;
+export async function insideGitCheckout(start: string): Promise<boolean> {
+  return (await findGitCheckoutRoot(start)) !== null;
 }
 
-const WORKSPACE_GIT_CACHE_MS = 30_000;
-const workspaceCheckouts = new Map<string, { value: boolean; checkedAt: number }>();
+type WorkspaceCheckout = {
+  value?: Promise<boolean>;
+  watches: ReturnType<typeof observeOwnedDirectory>[];
+};
+const workspaceCheckouts = resolveGlobalMap<string, WorkspaceCheckout>(
+  Symbol.for("openclaw.workspaceCheckouts"),
+  (entries) => {
+    for (const entry of entries.values()) {
+      entry.watches.forEach((watch) => watch.close());
+    }
+    entries.clear();
+  },
+  "shared-state",
+);
 
 /** Display projection only; action admission keeps using current Git discovery. */
-export function hasWorkspaceGitCheckout(start: string): boolean {
+export function hasWorkspaceGitCheckout(start: string): Promise<boolean> {
   const key = path.resolve(start);
-  const cached = workspaceCheckouts.get(key);
-  const now = Date.now();
-  if (cached && now - cached.checkedAt < WORKSPACE_GIT_CACHE_MS) {
-    return cached.value;
+  let entry = workspaceCheckouts.get(key);
+  if (!entry) {
+    entry = { watches: [] };
+    workspaceCheckouts.set(key, entry);
+    const selected = entry;
+    const invalidate = (_filename?: string, event?: string) => {
+      // Recovery ticks preserve the recorded fact while native observation is healthy.
+      if (event || selected.watches.some((watch) => !watch.isWatching())) {
+        selected.value = undefined;
+      }
+    };
+    // Ancestor metadata and replaced lexical aliases can both change checkout membership.
+    for (
+      let current = key, child: string | undefined;
+      ;
+      child = current, current = path.dirname(current)
+    ) {
+      const childName = child && path.basename(child);
+      selected.watches.push(
+        observeOwnedDirectory(current, (filename, event) => {
+          if (!filename || filename === ".git" || filename === childName) {
+            invalidate(filename, event);
+          }
+        }),
+        observeOwnedDirectory(path.join(current, ".git"), (filename, event) => {
+          if (!filename || event !== "change") {
+            invalidate(filename, event);
+          }
+        }),
+      );
+      if (path.dirname(current) === current) {
+        break;
+      }
+    }
+    if (workspaceCheckouts.size > 128) {
+      const oldest = workspaceCheckouts.entries().next().value!;
+      oldest[1].watches.forEach((watch) => watch.close());
+      workspaceCheckouts.delete(oldest[0]);
+    }
   }
-  const entry = {
-    value: insideGitCheckout(key),
-    checkedAt: now,
-  };
-  workspaceCheckouts.set(key, entry);
-  pruneMapToMaxSize(workspaceCheckouts, 128);
-  return entry.value;
+  return (entry.value ??= insideGitCheckout(key));
 }
 
 // Git availability is process-stable; cache the probe result, including failure, until restart.
@@ -65,29 +108,24 @@ const isGitAvailable = createLazyPromise(async () => {
 export async function ensureGitRepo(
   dir: string,
   isBrandNewWorkspace: boolean,
-  beforePersistentApply?: () => void,
+  guard?: WorkspaceStateGuard,
 ) {
   if (!isBrandNewWorkspace) {
     return;
   }
-  beforePersistentApply?.();
+  guard?.assertHost?.();
   if (await fs.stat(path.join(dir, ".git")).catch(() => undefined)) {
     return;
   }
   if (!(await isGitAvailable())) {
     return;
   }
-  const { runCommandWithTimeout } = await import("../process/exec.js");
-  beforePersistentApply?.();
-  try {
-    await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
-  } catch {
-    // Ignore git init failures; workspace creation should still succeed.
-  }
+  guard?.assertHost?.();
+  await runWorkspaceFilesystemOperation({ kind: "git-init", dir }, guard);
   const root = path.resolve(dir);
-  for (const workspace of workspaceCheckouts.keys()) {
+  for (const [workspace, entry] of workspaceCheckouts) {
     if (workspace === root || workspace.startsWith(root + path.sep)) {
-      workspaceCheckouts.delete(workspace);
+      entry.value = undefined;
     }
   }
 }

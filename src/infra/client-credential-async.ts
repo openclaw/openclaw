@@ -20,6 +20,7 @@ import type {
   ClientCredentialWorkerOperation,
   ClientCredentialWorkerResult,
 } from "./client-credential.worker.js";
+import { settleWithCleanup } from "./error-graph-internal.js";
 import {
   acquireStateDatabaseSchemaLease,
   captureStateDatabaseAccess,
@@ -177,31 +178,40 @@ async function runClientCredentialTaskAsync(
         const releaseService = retainSqliteWriteAdmissionService([databasePath], () =>
           admission.service(),
         );
-        try {
-          runtime.pool ??= new WorkerTaskPool({
-            workerUrl: resolveRuntimeProcessEntrypointUrl("clientCredentials"),
-            workerClass: "singleton",
-          });
-          const result = await runtime.pool.run(
-            { root, operation, admission: admission.port },
-            {
-              signal: options.signal,
-              transferList: (input) => [input.admission],
-            },
-          );
-          assertAccess();
-          if (result.kind === "error") {
-            const error = new Error("Client credential operation failed");
-            retainOpenClawStateWorkerErrorPayload(error, result.error);
-            throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
-          }
-          return result;
-        } catch (error) {
-          throw admission.failure ?? error;
-        } finally {
-          releaseService();
-          admission.finish();
-        }
+        return settleWithCleanup(
+          (async () => {
+            try {
+              runtime.pool ??= new WorkerTaskPool({
+                workerUrl: resolveRuntimeProcessEntrypointUrl("clientCredentials"),
+                workerClass: "singleton",
+              });
+              const result = await runtime.pool.run(
+                { root, operation, admission: admission.port },
+                {
+                  signal: options.signal,
+                  transferList: (input) => [input.admission],
+                },
+              );
+              assertAccess();
+              if (result.kind === "error") {
+                const error = new Error("Client credential operation failed");
+                retainOpenClawStateWorkerErrorPayload(error, result.error);
+                throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+              }
+              return result;
+            } catch (error) {
+              throw admission.failure ?? error;
+            }
+          })(),
+          async () => {
+            try {
+              await admission.finish();
+            } finally {
+              releaseService();
+            }
+          },
+          "Client credential operation and admission cleanup failed",
+        );
       };
       const maintenance = getOpenClawDatabaseMaintenanceScope();
       if (maintenance?.ownsSchemaMaintenance) {

@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -12,6 +14,11 @@ import {
   detachActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  prepareQuestionCallerAuthority,
+  prepareReplyToolAuthorityCallerRead,
+  readQuestionDispatchCapability,
+} from "../../agents/harness/host-private-capabilities.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import * as capabilityReads from "../../agents/subagents/spawn/subagent-session-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -22,6 +29,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { SESSION_ENTRY_MAINTENANCE_INTERVAL_MS } from "../../config/sessions/session-accessor.sqlite-maintenance-age.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
+import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
+import { observeNextPeriodicMaintenance } from "../../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   projectionLane,
   targetDiscoveryLane,
@@ -79,6 +91,160 @@ function makeRun(overrides: Partial<ReturnType<typeof createQueueTestRun>["run"]
   Object.assign(run.run, { agentId: "main" }, overrides);
   return run;
 }
+
+it("evaluates retained reply authority without main-thread filesystem polling", async ({
+  signal,
+}) => {
+  await withState(async (state, config) => {
+    setRuntimeConfigSnapshot(config);
+    const database = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    let seedMaintenanceCompleted = false;
+    const completed = observeSessionMaintenanceCompletion(database, {
+      accept: () => (seedMaintenanceCompleted = true),
+    });
+    const settled = createDeferred();
+    const release = maintenance.releaseSessionEntryMaintenanceExecution;
+    const releaseObserver = vi
+      .spyOn(maintenance, "releaseSessionEntryMaintenanceExecution")
+      .mockImplementation((databasePath, owner) => {
+        release(databasePath, owner);
+        if (databasePath === database && seedMaintenanceCompleted && owner.release) {
+          // The scheduler finishes synchronously after release, before idle-timer continuations.
+          const scheduled = observeNextPeriodicMaintenance(
+            (delay) =>
+              delay > SESSION_ENTRY_MAINTENANCE_INTERVAL_MS / 2 &&
+              delay <= SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+          );
+          void Promise.all([scheduled(signal), owner.release]).then(
+            () => settled.resolve(),
+            settled.reject,
+          );
+        }
+      });
+    try {
+      await seed(executionKey, { sessionId: "execution", sandboxMode: "off" });
+      await withinTest(completed, signal);
+      await withinTest(settled.promise, signal);
+    } finally {
+      releaseObserver.mockRestore();
+    }
+    const run = makeRun({ sessionKey: executionKey, config, workspaceDir: state.workspaceDir });
+    const snapshot = prepareReplyToolAuthority(run);
+    try {
+      const fingerprint = await snapshot.fingerprintAsync(run.run);
+      expect(snapshot.fingerprint(run.run)).toBe(fingerprint);
+      const caller = await prepareReplyToolAuthorityCallerRead(
+        snapshot.projectAsync,
+        undefined,
+        fingerprint,
+        run.run,
+        () => {},
+      );
+      expect(caller).toBeDefined();
+      const retained = caller!.retainCurrent();
+      const question = await prepareQuestionCallerAuthority(
+        {
+          sessionKey: executionKey,
+          assertActive: () => {},
+          assertCaller: () => {},
+          prepareCaller: async () => caller,
+        },
+        toolAuthorityOverlay(run),
+        () => {},
+      );
+      const compatibility = readQuestionDispatchCapability(question.assertCurrent)!;
+      const stat = vi.spyOn(fs, "statSync");
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      syncBuiltinESMExports();
+      try {
+        for (let index = 0; index < 20; index++) {
+          expect(await snapshot.fingerprintAsync(run.run)).toBe(fingerprint);
+          retained.assertCurrent();
+        }
+        expect({ stat: stat.mock.calls.length, realpath: realpath.mock.calls.length }).toEqual({
+          stat: 0,
+          realpath: 0,
+        });
+      } finally {
+        stat.mockRestore();
+        realpath.mockRestore();
+        syncBuiltinESMExports();
+      }
+      const moved = `${database}.original`;
+      const replacement = path.join(state.stateDir, "replacement.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: executionKey, storePath: replacement },
+        { sessionId: "execution", sandboxMode: "off", updatedAt: 1 },
+      );
+      fs.renameSync(database, moved);
+      fs.symlinkSync(replacement, database);
+      try {
+        expect(() => snapshot.fingerprint(run.run)).toThrow();
+        expect(() => compatibility.assertCompatibilityCurrent()).toThrow();
+        await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
+      } finally {
+        fs.unlinkSync(database);
+        fs.renameSync(moved, database);
+      }
+      snapshot.close();
+      expect(() => snapshot.fingerprint(run.run)).toThrow();
+      expect(() => retained.assertCurrent()).toThrow();
+      retained.release();
+    } finally {
+      snapshot.close();
+    }
+  });
+});
+
+it.each([false, true])(
+  "refuses a new lookup candidate before a prepared effect (ordered=%s)",
+  async (ordered) => {
+    await withState(async (state) => {
+      setRuntimeConfigSnapshot({});
+      await seed(executionKey, { sessionId: "execution" });
+      const config = {
+        session: { store: path.join(state.root, "alternate", "{agentId}", "sessions.json") },
+      };
+      setRuntimeConfigSnapshot(config);
+      const { loaded, readPlan } = await sessionReaders.prepareGatewaySessionEntryReadOnlyInWorker({
+        cfg: config,
+        key: executionKey,
+        env: state.env,
+      });
+      expect(loaded.entry?.sessionId).toBe("execution");
+      expect(readPlan).toBeDefined();
+      const plan = readPlan!;
+      const missing = plan.reads
+        .flatMap((read) => read.readCustody ?? [])
+        .flatMap((fact) => fact.candidates)
+        .find((candidate) => candidate.identity && !candidate.identity.key.startsWith("file:"));
+      expect(missing).toBeDefined();
+      await withSessionEntriesFromStoresInWorker(
+        plan.reads,
+        (reads) => plan.selectPrepared(reads),
+        { ordered },
+      );
+      const effect = vi.fn();
+      await expect(
+        withSessionEntriesFromStoresInWorker(
+          plan.reads,
+          (reads) => {
+            plan.selectPrepared(reads);
+            effect();
+          },
+          {
+            ordered,
+            prepareConsume: async () => {
+              fs.mkdirSync(path.dirname(missing!.path), { recursive: true });
+              fs.writeFileSync(missing!.path, "appeared after preparation");
+            },
+          },
+        ),
+      ).rejects.toThrow();
+      expect(effect).not.toHaveBeenCalled();
+    });
+  },
+);
 
 async function prepareEmbedded(
   state: OpenClawTestState,

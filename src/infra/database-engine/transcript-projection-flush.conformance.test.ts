@@ -195,7 +195,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           indexState(2, 0, 2, "thinking"),
         );
       } finally {
-        f.close();
+        await f.close();
       }
     });
 
@@ -362,7 +362,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           expect(readPersisted()).toEqual(stable);
         }
       } finally {
-        f.close();
+        await f.close();
       }
     });
 

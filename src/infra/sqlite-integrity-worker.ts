@@ -12,7 +12,10 @@ import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
-import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
+import {
+  readSqliteIntegrityFileIdentity,
+  readSqliteIntegrityFileIdentityAsync,
+} from "./sqlite-file-generation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import type {
   SqliteIntegrityCheck,
@@ -27,6 +30,7 @@ import {
   resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "./sqlite-readonly-worker.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export type SqliteIntegrityWorkerInput = {
   pathname: string;
@@ -212,7 +216,11 @@ export function assertSqliteIntegrityInWorker(
   databaseLabel = pathname,
   timing?: SqliteIntegrityCheckTiming,
   integrity?: SqliteIntegrityCheckOptions,
-  scheduling?: { priority: "background" },
+  scheduling?: {
+    priority?: "background";
+    expectedIdentity?: DatabaseFileIdentity;
+    preparedIdentity?: FileIdentityStat & { size: bigint };
+  },
 ): Promise<void> {
   const scope = integrityScope.getStore();
   const run = async (heldScope?: IntegrityScope) => {
@@ -225,7 +233,15 @@ export function assertSqliteIntegrityInWorker(
     heldScope?.assertCurrent();
     // The caller retains its owning lease through native close. This witness
     // detects observed path swaps; it is not native descriptor authority.
-    const identity = readSqliteIntegrityFileIdentity(pathname);
+    const identity =
+      scheduling?.preparedIdentity ??
+      (await readSqliteIntegrityFileIdentityAsync(
+        pathname,
+        undefined,
+        scheduling?.expectedIdentity,
+      ));
+    signal.throwIfAborted();
+    heldScope?.assertCurrent();
     const { timeoutMs, size } = readSqliteInspectionBudget(
       "integrity check",
       databaseLabel,
@@ -344,7 +360,13 @@ export function assertSqliteIntegrityInWorker(
               `SQLite integrity worker exited ${code} without a completed check (lastObservedPhase=${lastObservedPhase})`,
             );
           }
-          readSqliteIntegrityFileIdentity(pathname, identity);
+          await readSqliteIntegrityFileIdentityAsync(
+            pathname,
+            identity,
+            scheduling?.expectedIdentity,
+          );
+          signal.throwIfAborted();
+          heldScope?.assertCurrent();
           if (!result.ok) {
             const error = restoreNativeErrorResponse(result.error);
             if (error.name === "SqliteIntegrityError") {

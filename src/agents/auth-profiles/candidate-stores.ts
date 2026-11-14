@@ -331,6 +331,7 @@ async function runCandidateAuthProfileUpdate(
       agentId: candidate.agentId,
       path: candidate.databasePath,
       env: candidate.env,
+      identity: candidate.databaseIdentity,
     },
     envOnly: false,
     peerGeneration,

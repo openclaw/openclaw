@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -34,6 +36,7 @@ import {
   runOpenClawAgentWorkerWrite as workerWrite,
   runOpenClawAgentBoardReadAdmission as boardRead,
   runOpenClawAgentPathWriteAdmission as pathWrite,
+  runOpenClawAgentPreparedWriteAdmission as preparedWrite,
   runOpenClawAgentWriteAdmission as write,
   runOpenClawAgentWriteAdmissions as writeMany,
 } from "./openclaw-agent-write-admission.js";
@@ -60,6 +63,212 @@ function makeFixture(agentId = "usage", filename = "agent.sqlite") {
   };
   return { root, options, entered, release, order, hold, record };
 }
+
+it("reserves a cold worker write without synchronous filesystem calls", async () => {
+  const { options } = makeFixture();
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  syncBuiltinESMExports();
+  try {
+    await workerWrite(options, async () => {});
+    expect(stat.mock.calls.length + realpath.mock.calls.length).toBe(0);
+  } finally {
+    stat.mockRestore();
+    realpath.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("refuses a replaced file when a captured worker reservation enters its queue", async () => {
+  const { root, options, entered, release, hold } = makeFixture();
+  fs.writeFileSync(options.path, "original");
+  const held = workerWrite(options, hold);
+  await entered.promise;
+  const captured = createDeferred();
+  const stat = fsPromises.stat;
+  let observations = 0;
+  const lookup = vi.spyOn(fsPromises, "stat").mockImplementation(async (...args) => {
+    const result = await Reflect.apply(stat, fsPromises, args);
+    if (args[0] === options.path && ++observations === 2) {
+      captured.resolve();
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  const run = vi.fn(async () => {});
+  const queued = workerWrite(options, run);
+  const refused = expect(queued).rejects.toThrow("database target changed");
+  try {
+    await awaitGateBeforeSettlement(captured.promise, queued, "Identity was not captured");
+    const replacement = path.join(root, "replacement.sqlite");
+    fs.writeFileSync(replacement, "replacement");
+    fs.renameSync(replacement, options.path);
+    release.resolve();
+    await Promise.all([held, refused]);
+    expect(run).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([held, queued]);
+    lookup.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("preserves a worker callback's admitted completion after its path is replaced", async () => {
+  const { root, options } = makeFixture();
+  fs.writeFileSync(options.path, "original");
+  await expect(
+    workerWrite(options, async () => {
+      await Promise.resolve();
+      const replacement = path.join(root, "replacement.sqlite");
+      fs.writeFileSync(replacement, "replacement");
+      fs.renameSync(replacement, options.path);
+      return "completed";
+    }),
+  ).resolves.toBe("completed");
+});
+
+it("orders unresolved aliases without holding unrelated writers behind their operation", async ({
+  signal,
+}) => {
+  const { root, options, entered, release, order, hold, record } = makeFixture();
+  const alias = path.join(root, "alias.sqlite");
+  fs.writeFileSync(options.path, "original");
+  fs.symlinkSync(options.path, alias);
+  const independent = { ...options, path: path.join(root, "other", "agent.sqlite") };
+  const lookupEntered = createDeferred();
+  const releaseLookup = createDeferred();
+  const stat = fsPromises.stat;
+  let waiting = false;
+  const lookup = vi.spyOn(fsPromises, "stat").mockImplementation(async (...args) => {
+    if (!waiting && args[0] === alias) {
+      waiting = true;
+      lookupEntered.resolve();
+      await releaseLookup.promise;
+    }
+    return Reflect.apply(stat, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  const first = workerWrite({ ...options, path: alias }, async () => {
+    order.push("first");
+    await hold();
+  });
+  const second = workerWrite(options, record("second"));
+  const other = workerWrite(independent, record("independent"));
+  try {
+    await awaitGateBeforeSettlement(lookupEntered.promise, first, "Lookup did not yield");
+    expect(order).toEqual([]);
+    releaseLookup.resolve();
+    await withinTest(entered.promise, signal);
+    await withinTest(other, signal);
+    expect(order).toHaveLength(2);
+    expect(order).toEqual(expect.arrayContaining(["first", "independent"]));
+    release.resolve();
+    await Promise.all([first, second]);
+    expect(order.at(-1)).toBe("second");
+  } finally {
+    releaseLookup.resolve();
+    release.resolve();
+    await Promise.allSettled([first, second, other]);
+    lookup.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("reserves selected physical writers in invocation order through selector discovery", async ({
+  signal,
+}) => {
+  const { root, options, entered, release, order, hold, record } = makeFixture();
+  const identity = readDatabasePathIdentitySync(options.path);
+  const selected = { options, identity, selected: true };
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  syncBuiltinESMExports();
+  const discovered = createDeferred();
+  const first = preparedWrite(
+    async () => {
+      await discovered.promise;
+      return selected;
+    },
+    async (source) => {
+      expect(source).toBe(selected);
+      order.push("first");
+      await hold();
+    },
+  );
+  const second = workerWrite(options, record("second"));
+  const independent = workerWrite(
+    { ...options, path: path.join(root, "independent.sqlite") },
+    record("independent"),
+  );
+  try {
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    discovered.resolve();
+    await withinTest(entered.promise, signal);
+    await withinTest(independent, signal);
+    expect(order).toEqual(expect.arrayContaining(["first", "independent"]));
+    release.resolve();
+    await Promise.all([first, second]);
+    expect(order.at(-1)).toBe("second");
+    expect(stat.mock.calls.length + realpath.mock.calls.length).toBe(0);
+  } finally {
+    discovered.resolve();
+    release.resolve();
+    await Promise.allSettled([first, second, independent]);
+    stat.mockRestore();
+    realpath.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it.each(["failed", "cancelled"] as const)(
+  "advances a %s discovery without letting its follower overtake the predecessor",
+  async (outcome) => {
+    const { options, order, record } = makeFixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const stat = fsPromises.stat;
+    const failure = new Error("discovery refused");
+    let waiting = false;
+    const lookup = vi.spyOn(fsPromises, "stat").mockImplementation(async (...args) => {
+      if (!waiting && args[0] === options.path) {
+        waiting = true;
+        entered.resolve();
+        await release.promise;
+        if (outcome === "failed") {
+          throw failure;
+        }
+      }
+      return Reflect.apply(stat, fsPromises, args);
+    });
+    syncBuiltinESMExports();
+    const controller = new AbortController();
+    const first = workerWrite(options, record("first"));
+    const firstResult = first.catch((error: unknown) => error);
+    const middle = workerWrite(options, record("middle"), undefined, controller.signal);
+    const middleResult = middle.catch((error: unknown) => error);
+    const last = workerWrite(options, record("last"));
+    try {
+      await awaitGateBeforeSettlement(entered.promise, first, "Lookup did not yield");
+      if (outcome === "cancelled") {
+        controller.abort(failure);
+      }
+      await Promise.resolve();
+      expect(order).toEqual([]);
+      release.resolve();
+      expect(await firstResult).toBe(outcome === "failed" ? failure : undefined);
+      expect(await middleResult).toBe(outcome === "cancelled" ? failure : undefined);
+      await last;
+      expect(order).toEqual(outcome === "failed" ? ["middle", "last"] : ["first", "last"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, middle, last]);
+      lookup.mockRestore();
+      syncBuiltinESMExports();
+    }
+  },
+);
 
 it("overlaps Board reads with transcript writes while retaining exclusive mutation order", async ({
   signal,
@@ -228,7 +437,7 @@ it("reserves an admitted database without filesystem probes and refuses a replac
     import { openNodeSqliteDatabase } from ${JSON.stringify(new URL("../infra/node-sqlite.ts", import.meta.url).href)};
     import { admitSqliteSchema } from ${JSON.stringify(new URL("../infra/sqlite-schema-facts.ts", import.meta.url).href)};
     import { readDatabasePathIdentitySync } from ${JSON.stringify(new URL("../infra/sqlite-worker-identity.ts", import.meta.url).href)};
-    import { runOpenClawAgentPathWriteAdmission } from ${JSON.stringify(new URL("./openclaw-agent-write-admission.ts", import.meta.url).href)};
+    import { runOpenClawAgentPathWriteAdmission, runOpenClawAgentWriteAdmissions, runOpenClawAgentPreparedWriteAdmission } from ${JSON.stringify(new URL("./openclaw-agent-write-admission.ts", import.meta.url).href)};
     const pathname = ${JSON.stringify(options.path)};
     using database = openNodeSqliteDatabase(pathname);
     database.exec("CREATE TABLE proof(value INTEGER)");
@@ -244,11 +453,24 @@ it("reserves an admitted database without filesystem probes and refuses a replac
       assert.deepEqual(identity, expected);
       await Promise.resolve();
       assertCurrent();
+      await runOpenClawAgentWriteAdmissions([{ agentId: "usage", path: pathname }], () => {
+        assert.equal(calls, 0, "warm batch must reuse its admitted identity");
+      });
       assert.equal(calls, 0, "warm reservation must not probe the filesystem");
       database.close();
       fs.renameSync(pathname, pathname + ".retired");
       using replacement = openNodeSqliteDatabase(pathname);
       assert.throws(assertCurrent, /database target changed/);
+      replacement.exec("CREATE TABLE successor(value INTEGER)");
+      admitSqliteSchema(replacement);
+      let entered = false;
+      await assert.rejects(runOpenClawAgentPreparedWriteAdmission(
+        async () => ({ options: { agentId: "usage", path: pathname }, identity: expected }),
+        () => { entered = true; replacement.exec("INSERT INTO successor VALUES (1)"); },
+        true,
+      ), /Agent database target changed before write admission/);
+      assert.equal(entered, false, "prepared original file must not adopt the admitted successor");
+      assert.equal(replacement.prepare("SELECT COUNT(*) AS count FROM successor").get().count, 0);
     });
   `,
       { imports: [import.meta.resolve("tsx/esm")] },

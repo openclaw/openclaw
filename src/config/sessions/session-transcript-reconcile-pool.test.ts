@@ -170,7 +170,7 @@ it("closes a queued admission without dispatching it after shutdown", async () =
     .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
     .mockImplementationOnce((_paths, run) => {
       queued.resolve();
-      const completion = resume.promise.then(run);
+      const completion = resume.promise.then(() => run());
       admissionCompletion = completion;
       return completion;
     });

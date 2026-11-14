@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { writeHostFile } from "../../agents/host-file-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -116,13 +117,58 @@ it("checks retained delivery and source authority without polling and refuses da
   const delivery = await prepareSessionDeliveryGeneration({ ...scope, ...original });
   const source = await generation.assertCurrent.prepareSessionSource!();
   onTestFinished(async () => {
-    delivery.release();
-    await source.release?.();
-    vi.restoreAllMocks();
+    try {
+      delivery.release();
+      await source.release?.();
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    }
   });
   const identity = vi.spyOn(databaseIdentity, "assertDatabasePathIdentity");
   const existing = vi.spyOn(databaseIdentity, "assertExistingDatabaseIdentity");
   const candidates = vi.spyOn(storeCandidates, "isSessionStoreReadCandidateCurrent");
+  const filesystemMethods = [
+    "accessSync",
+    "existsSync",
+    "statSync",
+    "lstatSync",
+    "fstatSync",
+    "realpathSync",
+    "openSync",
+    "readFileSync",
+    "readdirSync",
+    "readlinkSync",
+  ] as const;
+  const nativeRealpath = fs.realpathSync.native;
+  const filesystemFunctions = filesystemMethods.map((method) => vi.spyOn(fs, method));
+  Object.assign(fs.realpathSync, { native: nativeRealpath });
+  const nativeRealpathProbe = vi.spyOn(fs.realpathSync, "native");
+  const filesystem = [...filesystemFunctions, nativeRealpathProbe];
+  syncBuiltinESMExports();
+  // Exercise the identity owner's named imports before resetting the measured counters.
+  databaseIdentity.inspectDatabasePathIdentitySync(database.path);
+  expect(nativeRealpathProbe).toHaveBeenCalled();
+  expect(filesystem[filesystemMethods.indexOf("statSync")]).toHaveBeenCalled();
+  const nativeReads = vi.spyOn(nativeEntries, "readSessionEntryGenerationInDatabase");
+  const sql = vi.spyOn(database.db, "prepare");
+  const count = (assertCurrent: () => void) => {
+    for (const probe of [...filesystem, nativeReads, sql]) {
+      probe.mockClear();
+    }
+    for (let check = 0; check < 10; check++) {
+      assertCurrent();
+    }
+    return {
+      filesystem: filesystem.map((probe) => probe.mock.calls.length),
+      nativeReads: nativeReads.mock.calls.length,
+      sql: sql.mock.calls.length,
+    };
+  };
+  const ordinary = count(generation.assertCurrent);
+  expect(ordinary.filesystem).toEqual(Array(filesystem.length).fill(0));
+  expect(count(generation.assertCurrent)).toEqual(ordinary);
+  expect(count(generation.assertNativeTransactionCurrent)).toEqual(ordinary);
   for (let check = 0; check < 10; check++) {
     generation.assertCurrent();
     delivery.assertCurrent();
@@ -134,8 +180,10 @@ it("checks retained delivery and source authority without polling and refuses da
     candidates.mock.calls.length,
   ]).toEqual([0, 0, 0]);
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
   expect(generation.assertCurrent).toThrow(generationError());
+  expect(generation.assertNativeTransactionCurrent).toThrow(generationError());
   expect(delivery.assertCurrent).toThrow(generationError());
   expect(source.assertCurrent).toThrow();
 });
@@ -291,9 +339,11 @@ it.each([
       JSON.stringify(field === "current_session_id" ? metadata : { ...metadata, [field]: value }),
       scope.sessionKey,
     );
+    expect(generation.assertNativeTransactionCurrent).toThrow(generationError(code));
     expect(generation.assertCurrent).toThrow(generationError(code));
 
     write.run(original.sessionId, JSON.stringify(metadata), scope.sessionKey);
+    expect(generation.assertNativeTransactionCurrent).toThrow(generationError(code));
     expect(generation.assertCurrent).toThrow(generationError(code));
   },
 );
@@ -308,10 +358,12 @@ it("retains unchanged generation authority inside a native transaction and after
           scope.sessionKey,
         );
         generation.assertCurrent();
+        generation.assertNativeTransactionCurrent();
         db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
           JSON.stringify({ ...original, lifecycleRevision: "tentative-lifecycle" }),
           scope.sessionKey,
         );
+        expect(generation.assertNativeTransactionCurrent).toThrow(generationError());
         expect(generation.assertCurrent).toThrow(generationError());
         throw rollback;
       },
@@ -319,6 +371,10 @@ it("retains unchanged generation authority inside a native transaction and after
     ),
   ).toThrow(rollback);
   generation.assertCurrent();
+  generation.assertNativeTransactionCurrent();
+  generation.release();
+  expect(generation.assertNativeTransactionCurrent).toThrow(generationError());
+  expect(generation.assertCurrent).toThrow(generationError());
 });
 
 it("refuses reentrant delivery during raw execution and unfinished RETURNING cursors", async () => {

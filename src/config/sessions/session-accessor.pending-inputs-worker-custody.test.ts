@@ -12,6 +12,8 @@ import {
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { withSessionTranscriptWriteLock as withTranscriptLock } from "../../plugin-sdk/session-transcript-runtime.js";
 import { controllerSource } from "../../sessions/controller-core.test-support.js";
 import {
@@ -23,13 +25,16 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -104,51 +109,147 @@ describe("accepted input worker custody", () => {
   it("appends, consumes, and finishes worker custody across a state-directory alias", async () => {
     setRuntimeConfigSnapshot({});
     const fixtureRoot = path.resolve(fixture.sessionsDir(), "../../..");
-    const aliasRoot = path.join(fixtureRoot, "state-alias");
-    fs.symlinkSync(fixtureRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
-    const scope = {
-      agentId: "alias-agent",
-      env: { OPENCLAW_STATE_DIR: aliasRoot },
-      sessionId: "alias-session",
-      sessionKey: "agent:alias-agent:pending-inputs",
-    };
-    await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const input = message("worker-alias", "Continue through worker custody");
-    receipt = await stageInput(scope, {
-      runId: "worker-alias",
-      message: input,
-      assertCurrent: () => {},
+    const gateway = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: fixtureRoot }),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(fixtureRoot, "openclaw.json"),
+        role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
     });
-    assert(receipt, "Expected aliased pending input custody");
+    try {
+      const aliasRoot = path.join(fixtureRoot, "state-alias");
+      fs.symlinkSync(fixtureRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+      const scope = {
+        agentId: "alias-agent",
+        env: { OPENCLAW_STATE_DIR: aliasRoot },
+        sessionId: "alias-session",
+        sessionKey: "agent:alias-agent:pending-inputs",
+      };
+      await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const input = message("worker-alias", "Continue through worker custody");
+      receipt = await stageInput(scope, {
+        runId: "worker-alias",
+        message: input,
+        assertCurrent: () => {},
+      });
+      assert(receipt, "Expected aliased pending input custody");
 
-    const custody = receipt.run(() => captureCustody());
-    assert(custody, "Expected captured worker custody");
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-    expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
+      const custody = receipt.run(() => captureCustody());
+      assert(custody, "Expected captured worker custody");
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+      expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
-    const workerScope = { ...scope, storePath: custody.facts.databasePath };
-    const readAlias = await prepareForeignLiveSessionPendingInputEntries(scope);
-    const readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
-    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
-    expect(readCanonical()).toEqual(readAlias());
-    expect(
-      await receipt.run(async () => (await prepareForeignLiveSessionPendingInputEntries(scope))()),
-    ).toEqual(new Map());
-    const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
-      appendSync(workerScope, { message: receipt!.message }),
-    );
-    expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
-    custody.publish(result.receipt);
-    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
-    receipt.finish("cancelled");
-    expect(readAlias()).toEqual(new Map());
-    await receipt.settled?.();
-    receipt = undefined;
+      const workerScope = { ...scope, storePath: custody.facts.databasePath };
+      let readAlias: Awaited<ReturnType<typeof prepareForeignLiveSessionPendingInputEntries>>;
+      let readCanonical: typeof readAlias;
+      const filesystem = observeMainThreadFs();
+      try {
+        const aliasRequest = { ...scope };
+        const preparingAlias = prepareForeignLiveSessionPendingInputEntries(aliasRequest);
+        aliasRequest.sessionId = "different-session-after-capture";
+        readAlias = await preparingAlias;
+        readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
+        expect(await readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+        expect(await readCanonical()).toEqual(await readAlias());
+      } finally {
+        filesystem[Symbol.dispose]();
+      }
+      await receipt.run(async () => {
+        using ownFilesystem = observeMainThreadFs();
+        const readOwn = await prepareForeignLiveSessionPendingInputEntries(scope);
+        expect(await readOwn()).toEqual(new Map());
+        expect(ownFilesystem.stacks()).toEqual([]);
+      });
+      expect(filesystem.stacks()).toEqual([]);
+      const heldAlias = path.join(fixtureRoot, "held-state-alias");
+      const replacementRoot = path.join(fixtureRoot, "replacement-state");
+      await fs.promises.mkdir(replacementRoot);
+      await fs.promises.rename(aliasRoot, heldAlias);
+      try {
+        await fs.promises.symlink(
+          replacementRoot,
+          aliasRoot,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        expect(() => receipt!.run(() => {})).toThrow(
+          "Session database target changed outside captured discovery custody",
+        );
+        expect(await readCanonical()).toEqual(new Map());
+      } finally {
+        await fs.promises.rm(aliasRoot, { force: true });
+        await fs.promises.rename(heldAlias, aliasRoot);
+      }
+      expect(await readCanonical()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
 
-    expect(await readTranscript(scope)).toContainEqual(
-      expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
-    );
-    expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
+      const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
+        appendSync(workerScope, { message: receipt!.message }),
+      );
+      expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
+      custody.publish(result.receipt);
+      expect(await readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+
+      const physicalPath = custody.facts.databasePath;
+      const retainedPath = `${physicalPath}.retained`;
+      const readerRoot = path.join(fixtureRoot, "replacement-reader");
+      const originalIdentity = await fs.promises.stat(physicalPath, { bigint: true });
+      await fs.promises.rename(physicalPath, retainedPath);
+      try {
+        await fs.promises.copyFile(retainedPath, physicalPath);
+        expect((await fs.promises.stat(physicalPath, { bigint: true })).ino).not.toBe(
+          originalIdentity.ino,
+        );
+        await fs.promises.symlink(
+          fixtureRoot,
+          readerRoot,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        const readReplacement = await prepareForeignLiveSessionPendingInputEntries({
+          ...workerScope,
+          storePath: path.join(
+            readerRoot,
+            "agents",
+            scope.agentId,
+            "agent",
+            "openclaw-agent.sqlite",
+          ),
+        });
+        expect(() => receipt!.run(() => {})).toThrow(
+          "SQLite database file identity changed before existing-only open",
+        );
+        expect(await readReplacement()).toEqual(new Map());
+      } finally {
+        await fs.promises.rm(readerRoot, { force: true });
+        await fs.promises.rm(physicalPath, { force: true });
+        await fs.promises.rename(retainedPath, physicalPath);
+      }
+      expect((await fs.promises.stat(physicalPath, { bigint: true })).ino).toBe(
+        originalIdentity.ino,
+      );
+
+      receipt.finish("cancelled");
+      expect(await readAlias()).toEqual(new Map());
+      await receipt.settled?.();
+      receipt = undefined;
+
+      expect(await readTranscript(scope)).toContainEqual(
+        expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
+      );
+      expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
+    } finally {
+      try {
+        await finish(receipt);
+        receipt = undefined;
+      } finally {
+        try {
+          await closeOpenClawAgentDatabasesAsync();
+        } finally {
+          gateway.release();
+        }
+      }
+    }
   });
 
   it("appends and finishes pending input through the memory session actor", async () => {
@@ -173,7 +274,7 @@ describe("accepted input worker custody", () => {
           const admitted = receipt;
           assert(admitted?.runAsync, "Expected incognito pending input custody");
           const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
-          expect(readForeign()).toEqual(
+          expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
           await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
@@ -184,7 +285,7 @@ describe("accepted input worker custody", () => {
               return appendMessage(scope, { message: admitted.message });
             }),
           ).resolves.toMatchObject({ appended: true });
-          expect(readForeign()).toEqual(
+          expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
           client.connect.scopes = ["operator.read", "operator.write"];
@@ -195,11 +296,11 @@ describe("accepted input worker custody", () => {
           ).rejects.toThrow("was not found");
           expect(effects).toBe(1);
           // Revoked execution does not let another turn take still-held input.
-          expect(readForeign()).toEqual(
+          expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
           admitted.finish("cancelled");
-          expect(readForeign()).toEqual(new Map());
+          expect(await readForeign()).toEqual(new Map());
           await admitted.settled?.();
           receipt = undefined;
 

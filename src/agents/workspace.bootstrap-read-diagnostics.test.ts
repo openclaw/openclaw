@@ -1,8 +1,8 @@
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fsSafeFilesystem from "../infra/fs-safe-filesystem-worker.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
@@ -238,10 +238,7 @@ it("joins in-flight bootstrap reads before rejecting revoked workspace access", 
 it("does not split surrogate pairs when bounding unreadable reasons", async () => {
   const tempDir = await workspace({ "AGENTS.md": "# AGENTS.md\n" });
   const reason = `${"x".repeat(299)}😀tail`;
-  vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
-    const callback = args.at(-1) as (error: Error) => void;
-    callback(new Error(reason));
-  }) as typeof syncFs.read);
+  vi.spyOn(fsSafeFilesystem, "runFsSafeFilesystemTask").mockRejectedValue(new Error(reason));
   const files = await loadBootstrap(tempDir);
   expect(files.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.content).toBe(
     `[UNREADABLE: ${"x".repeat(299)}]`,

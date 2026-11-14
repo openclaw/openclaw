@@ -16,6 +16,7 @@ export function startCloseWorkerPoolResources<Input, Output>(
   slots: ReadonlySet<Slot<Input, Output>>,
   resourceClosures: WeakMap<WorkerLifecycle, WorkerResourceClosures>,
   retire: (slot: Slot<Input, Output>) => RetainedOperation<void>,
+  runInPoolContext: <T>(operation: () => T) => T,
   key?: string,
   options?: WorkerTaskPoolOwnerOptions,
   observeReply?: () => void,
@@ -37,7 +38,16 @@ export function startCloseWorkerPoolResources<Input, Output>(
     closure.pending++;
     resourceClosures.set(worker, closure);
     worker.ref();
-    return startCloseWorkerTaskResources(slot, worker, closure, key, options, retire, observeReply);
+    return startCloseWorkerTaskResources(
+      slot,
+      worker,
+      closure,
+      key,
+      options,
+      retire,
+      runInPoolContext,
+      observeReply,
+    );
   });
   const completion = createRetainedOperation<void>(() => {
     for (const operation of operations) {
@@ -105,10 +115,11 @@ function startCloseWorkerTaskResources<Input, Output>(
   key: string | undefined,
   options: WorkerTaskPoolOwnerOptions | undefined,
   retire: (slot: Slot<Input, Output>) => RetainedOperation<void>,
+  runInPoolContext: <T>(operation: () => T) => T,
   observeReply?: () => void,
 ): RetainedOperation<void> {
-  const { port1, port2 } = new MessageChannel();
-  const runInContext = AsyncLocalStorage.snapshot();
+  const { port1, port2 } = runInPoolContext(() => new MessageChannel());
+  let runInContext: typeof runInPoolContext = AsyncLocalStorage.snapshot();
   let settled = false;
   let awaitingRetirement = false;
   let selectedRetirement: RetainedOperation<void> | undefined;
@@ -157,27 +168,30 @@ function startCloseWorkerTaskResources<Input, Output>(
       } else {
         completion.resolve();
       }
+      // Native port close can outlive its receipt; settled cleanup no longer owns caller context.
+      runInContext = runInPoolContext;
     });
-  const receive = (reply: unknown) => {
-    observeReply?.();
-    try {
-      if (isRecord(reply) && reply.ok === true) {
-        finish();
-        return;
+  const receive = (reply: unknown) =>
+    runInContext(() => {
+      observeReply?.();
+      try {
+        if (isRecord(reply) && reply.ok === true) {
+          finish();
+          return;
+        }
+        const error =
+          isRecord(reply) && reply.detail !== undefined && options?.decodeResourceError
+            ? options.decodeResourceError(reply.detail)
+            : new Error(
+                isRecord(reply) && typeof reply.error === "string"
+                  ? reply.error
+                  : "Invalid worker resource cleanup receipt",
+              );
+        finish(error);
+      } catch (error) {
+        finish(toErrorObject(error, "Worker resource cleanup receipt could not be decoded"));
       }
-      const error =
-        isRecord(reply) && reply.detail !== undefined && options?.decodeResourceError
-          ? options.decodeResourceError(reply.detail)
-          : new Error(
-              isRecord(reply) && typeof reply.error === "string"
-                ? reply.error
-                : "Invalid worker resource cleanup receipt",
-            );
-      finish(error);
-    } catch (error) {
-      finish(toErrorObject(error, "Worker resource cleanup receipt could not be decoded"));
-    }
-  };
+    });
   const stopObservingExit = observeResourceWorkerExit(worker, closures, () => finish());
   port1.once("message", receive);
   port1.once("messageerror", (error) =>

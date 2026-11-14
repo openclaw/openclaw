@@ -428,14 +428,14 @@ it.each(["executor", "discovery"] as const)(
     };
     const cleanupError = new Error(`synthetic fork ${cleanupFailure} cleanup failure`);
     let cleanupFailures = 0;
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
     const discover = storeTargetRuntime.withSessionStoreTarget;
     const cleanupSpy =
       cleanupFailure === "executor"
         ? vi
-            .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-            .mockImplementation((...args): ReturnType<typeof capture> => {
-              const owner = capture(...args);
+            .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+            .mockImplementation(async (...args): ReturnType<typeof capture> => {
+              const owner = await capture(...args);
               const release = owner.release.bind(owner);
               owner.release = async () => {
                 await release();

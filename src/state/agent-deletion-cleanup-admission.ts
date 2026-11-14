@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
@@ -46,7 +47,15 @@ export function captureAgentDeletionCleanupAdmission(
           recordWorkerMessage("admission", "to_worker");
           void operation.settled.then(() => leased.admission.finish());
         } catch (error) {
-          leased.admission.finish();
+          try {
+            leased.admission.abortConstruction();
+          } catch (cleanupError) {
+            throw createSqliteLifecycleAggregateError(
+              [error, cleanupError],
+              "Agent deletion lease handoff and cleanup failed",
+              error,
+            );
+          }
           throw error;
         } finally {
           facts.port.close();

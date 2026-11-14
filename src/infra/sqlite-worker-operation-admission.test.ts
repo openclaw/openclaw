@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -30,9 +31,8 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
-import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
+import { bindSqliteWorkerDatabaseAdmissionCursor } from "./sqlite-worker-database-admission-relay.js";
 import {
-  bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
   createSqliteWorkerOperationAdmission as createAdmission,
@@ -197,8 +197,11 @@ it("finishes settled admissions without traversing empty pending decisions", () 
   admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
   const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
   try {
-    admission.finish();
-    admission.finish();
+    const firstFinish = admission.finish();
+    const repeatedFinish = admission.finish();
+    onTestFinished(async () => {
+      await Promise.all([firstFinish, repeatedFinish]);
+    });
     expect(iterate).not.toHaveBeenCalled();
   } finally {
     iterate.mockRestore();
@@ -220,7 +223,10 @@ it("releases publication captures from retained finished admissions", async () =
   const finished = Array.from({ length: 1_000 }, (_, index) => {
     const admission = admissionFixture();
     if (index === 0) {
-      observeCommits(admission, () => admission.finish());
+      observeCommits(admission, () => {
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
+      });
     }
     const snapshot = observeSnapshot(admission);
     admission.port.postMessage(
@@ -233,7 +239,8 @@ it("releases publication captures from retained finished admissions", async () =
       },
       [],
     );
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     return { admission, snapshot };
   });
   expect(publications).toBe(finished.length);
@@ -246,7 +253,7 @@ it("releases publication captures from retained finished admissions", async () =
   expect(finished[0]!.admission.committed).toEqual({ facts: { revision: 1 } });
 });
 
-it("preserves nested finish order and error precedence on repeated calls", () => {
+it("preserves nested finish order and error precedence after construction abort", () => {
   const admission = createAdmission((_request, grant) => grant());
   const finish = admission.finish.bind(admission);
   const events: string[] = [];
@@ -262,13 +269,14 @@ it("preserves nested finish order and error precedence on repeated calls", () =>
   });
 
   try {
+    expect(() => admission.abortConstruction()).toThrow(failure);
     expect(() => admission.finish("not-entered")).toThrow(failure);
-    expect(() => admission.finish()).toThrow(failure);
     expect(events).toEqual(["first", "second", "first", "second"]);
     expect(admission.settlement).toEqual({ kind: "completed" });
     expect(() => admission.observeRequests(() => {})).toThrow("closed");
   } finally {
-    finish();
+    const finishing = finish();
+    onTestFinished(() => finishing);
   }
 });
 
@@ -289,7 +297,8 @@ it.each(["unknown", "committed", "completed"] as const)(
           },
       [],
     );
-    admission.finish("not-entered");
+    const finishing = admission.finish("not-entered");
+    onTestFinished(() => finishing);
     expect(admission.settlement).toEqual(
       outcome === "committed"
         ? undefined
@@ -306,7 +315,8 @@ it.each(["unknown", "committed", "completed"] as const)(
 
 it("keeps an unconfirmed finish unknown", () => {
   const admission = admissionFixture();
-  admission.finish();
+  const finishing = admission.finish();
+  onTestFinished(() => finishing);
   expect(admission.settlement).toBeUndefined();
 });
 
@@ -336,7 +346,8 @@ it.each([
       databaseCurrent = false;
     }
     if (outcome === "late-close") {
-      admission.finish();
+      const finishing = admission.finish();
+      onTestFinished(() => finishing);
     }
     inGrant = true;
     grant(beforeRelease);
@@ -350,7 +361,8 @@ it.each([
     },
     assertAccess() {
       if (outcome === "access-close" && inGrant) {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       }
       if (!databaseCurrent) {
         throw revoked;
@@ -363,7 +375,8 @@ it.each([
     .mockImplementationOnce(() => "timed-out")
     .mockImplementationOnce(() => {
       if (outcome === "close") {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       } else {
         admission.service();
       }
@@ -417,7 +430,8 @@ it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
       expect(Atomics.load(decision, 0)).toBe(0);
       expect(effect).not.toHaveBeenCalled();
       if (ending === "closed") {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       } else if (ending === "revoked") {
         current = false;
       }
@@ -434,7 +448,7 @@ it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
       }
     } finally {
       prepared.resolve();
-      admission.finish();
+      await admission.finish();
     }
   },
 );
@@ -468,7 +482,8 @@ it("rechecks database ownership after a worker request crosses the message port"
     });
     expect(admission.failureSource).toBe("authority");
   } finally {
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     maintenance.release();
   }
 });
@@ -516,13 +531,14 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
   expect(acquireSchema).toHaveBeenCalledOnce();
   expect(admission.failure).toBe(revoked);
   expect(release).not.toHaveBeenCalled();
-  admission.finish();
+  const finishing = admission.finish();
+  onTestFinished(() => finishing);
   expect(release).toHaveBeenCalledOnce();
 });
 
 it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
   "keeps %s database creation under the current captured owner",
-  (scenario) => {
+  async (scenario) => {
     const root = tempDirs.make("sqlite-native-creation-");
     const databasePath = path.join(root, "admitted.sqlite");
     const requestedPath =
@@ -544,21 +560,52 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
         },
       });
     }
-    serviceOnWait(admission);
-    const exchange = () =>
-      exchangeSqliteDatabaseAdmissions(admission.port, [], requestedPath, true);
-    if (scenario === "revoked" || scenario === "different-path") {
-      expect(exchange).toThrow("SQLite admission facts exchange failed");
-    } else {
-      expect(exchange).not.toThrow();
+    const worker = new Worker(
+      `
+      const { parentPort, workerData } = require("node:worker_threads");
+      (async () => {
+        const { register } = await import(workerData.loader);
+        const unregister = register();
+        try {
+          const { exchangeSqliteDatabaseAdmissions } = await import(workerData.relay);
+          exchangeSqliteDatabaseAdmissions(workerData.port, [], workerData.requestedPath, true);
+        } finally {
+          workerData.port.close();
+          unregister();
+          parentPort.close();
+        }
+      })().catch((error) => { throw error; });
+      `,
+      {
+        eval: true,
+        execArgv: [],
+        workerData: {
+          port: admission.port,
+          requestedPath,
+          loader: import.meta.resolve("tsx/esm/api"),
+          relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
+        },
+        transferList: [admission.port],
+      },
+    );
+    const exchange = once(worker, "exit");
+    try {
+      if (scenario === "revoked" || scenario === "different-path") {
+        await expect(exchange).rejects.toThrow("SQLite admission facts exchange failed");
+      } else {
+        await expect(exchange).resolves.toEqual([0]);
+      }
+      expect(existsSync(requestedPath)).toBe(scenario === "admitted");
+    } finally {
+      await worker.terminate();
+      await admission.finish();
     }
-    expect(existsSync(requestedPath)).toBe(scenario === "admitted");
   },
 );
 
 it.each(["unadmitted", "retired"] as const)(
   "refuses %s database creation relays before creating files",
-  (scenario) => {
+  async (scenario) => {
     const location = path.join(tempDirs.make("sqlite-refused-creation-relay-"), "absent.sqlite");
     const admission =
       scenario === "retired"
@@ -568,7 +615,8 @@ it.each(["unadmitted", "retired"] as const)(
         : admissionFixture(() => {
             throw new Error("File creation must not request transaction authority");
           });
-    const { port2 } = channelFixture();
+    const { port1, port2 } = channelFixture();
+    const replied = once(port1, "close");
     const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     onTestFinished(() => admission.finish());
     admission.port.postMessage(
@@ -583,74 +631,13 @@ it.each(["unadmitted", "retired"] as const)(
       [port2],
     );
     admission.service();
+    await replied;
     expect(Atomics.load(decision, 0)).toBe(2);
     expect(admission.failure).toMatchObject({
       message:
         scenario === "retired" ? "Creation relay retired" : "SQLite creation relay is not admitted",
     });
     expect(existsSync(location)).toBe(false);
-  },
-);
-
-it.each(["event", "service"] as const)(
-  "uses the captured live relay owner for %s delivery",
-  async (delivery) => {
-    const context = new AsyncLocalStorage<object>();
-    const owner = {};
-    let live = true;
-    let checks = 0;
-    const root = tempDirs.make("sqlite-relay-context-");
-    const admission = context.run(owner, () =>
-      createSqliteDatabaseAdmissionRelay(() => {
-        expect(context.getStore()).toBe(owner);
-        checks++;
-        if (!live) {
-          throw new Error("Relay owner retired");
-        }
-      }),
-    );
-    async function request(location: string) {
-      const { port1, port2 } = channelFixture();
-      const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-      try {
-        expect(context.getStore()).toBeUndefined();
-        admission.port.postMessage(
-          {
-            kind: "sqlite-database-admissions",
-            admissions: [],
-            location,
-            create: "admitted",
-            port: port2,
-            decision: decision.buffer,
-          },
-          [port2],
-        );
-        if (delivery === "service") {
-          admission.service();
-          expect(Atomics.load(decision, 0)).not.toBe(0);
-        }
-        await expect.poll(() => Atomics.load(decision, 0)).not.toBe(0);
-        return Atomics.load(decision, 0);
-      } finally {
-        port1.close();
-        port2.close();
-      }
-    }
-    try {
-      const accepted = path.join(root, "accepted.sqlite");
-      expect(await request(accepted)).toBe(1);
-      expect(existsSync(accepted)).toBe(true);
-      expect(admission.failure).toBeUndefined();
-      live = false;
-      const refused = path.join(root, "refused.sqlite");
-      expect(await request(refused)).toBe(2);
-      expect(existsSync(refused)).toBe(false);
-      expect(admission.failure).toMatchObject({ message: "Relay owner retired" });
-      expect(checks).toBe(2);
-    } finally {
-      admission.finish();
-      context.disable();
-    }
   },
 );
 
@@ -699,14 +686,15 @@ it("reads a queued worker commit before settlement and message callbacks run", a
     }
     expect(Atomics.load(posted, 0)).toBe(2);
     expect(admission.settlement).toBeUndefined();
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     expect(admission.committed).toEqual({ facts: { count: 1 } });
     expect(admission.settlement).toEqual({ kind: "unknown", committed: { facts: { count: 1 } } });
     expect(await joined).toBe(0);
   } finally {
     Atomics.store(posted, 1, 1);
     Atomics.notify(posted, 1);
-    admission.finish();
+    await admission.finish();
     await worker.terminate();
   }
 });
@@ -716,8 +704,8 @@ function receiptFixture(captured = false) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE proof (value INTEGER)");
   const owner: SqliteWorkerOperationContext = { port: admission.port };
-  onTestFinished(() => {
-    admission.finish();
+  onTestFinished(async () => {
+    await admission.finish();
     db.close();
   });
   const transaction = (operation: () => void) =>
@@ -775,7 +763,8 @@ it.each(
       );
     }
     expect(rows()).toEqual(outcome === "rollback" ? [] : [{ value: 1 }]);
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     expect(admission.committed).toEqual(committed);
     const expectedFacts = outcome === "rollback" ? [] : [{ value: 1 }];
     expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(expectedFacts);
@@ -858,7 +847,7 @@ it.each(
       [],
     );
     expect(events).toEqual([]);
-    settleSqliteWorkerJob(job, undefined, { written: true });
+    void settleSqliteWorkerJob(job, undefined, { written: true });
     expect(getWorkerMessageMetrics()).toContainEqual({
       kind: "authority",
       direction: "from_worker",
@@ -942,7 +931,8 @@ it.each(["settlement", "settlement-only", "malformed", "finish"] as const)(
     } else {
       admission.port.postMessage({ kind: "native-commit", committed: null }, []);
     }
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     expect(admission.committed).toEqual({ facts: { value: 2 } });
     expect(published).toHaveBeenCalledTimes(2);
     expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual([

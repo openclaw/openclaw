@@ -8,6 +8,7 @@ import {
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { prepareSessionMetaPatch } from "./metadata.js";
 import type {
@@ -41,7 +42,7 @@ import { withPreparedSqliteWriteScope } from "./session-accessor.sqlite-write-sc
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { patchSessionActorEntryInScope } from "./session-actor-entry-adapter.js";
 import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import {
   mergeSessionEntryPatch,
@@ -403,7 +404,7 @@ async function patchSqliteSessionEntrySnapshot(
       ? withOpenClawAgentDatabaseRuntime(databaseOptions, operation, assertCurrent)
       : operation();
   };
-  let wrote = false;
+  let writtenSource: AgentDatabaseExecutionFileIdentity | undefined;
   // A background owner can retain the same absent store before its first write.
   const creatingExecution =
     useWorker && !options.retainedExecution && targetIdentity.key.startsWith("path:")
@@ -455,7 +456,7 @@ async function patchSqliteSessionEntrySnapshot(
       onCommitted: options.onCommitted,
       onCommittedSource: options.onCommittedSource,
     }).then((result) => {
-      wrote = result.wrote;
+      writtenSource = result.writtenSource;
       return result.entry;
     });
   const sourceAssertion = options.workerGuard?.source;
@@ -543,8 +544,14 @@ async function patchSqliteSessionEntrySnapshot(
                 if (!mutation.identity) {
                   return undefined;
                 }
+                const identity = readOpenClawAgentDatabaseIdentity(writeDatabase);
+                writtenSource = {
+                  kind: "file",
+                  physicalIdentity: identity.identity,
+                  birthtime: identity.birthtime,
+                  nativeLocation: identity.canonicalPath,
+                };
                 if (options.onCommittedSource) {
-                  const identity = readOpenClawAgentDatabaseIdentity(writeDatabase);
                   committedSource = {
                     agentId: writeDatabase.agentId,
                     path: writeDatabase.path,
@@ -552,7 +559,6 @@ async function patchSqliteSessionEntrySnapshot(
                     databaseBirthtime: identity.birthtime,
                   };
                 }
-                wrote = true;
                 return prepareSessionIdentityPublication(
                   writeDatabase,
                   resolved.agentId,
@@ -598,8 +604,9 @@ async function patchSqliteSessionEntrySnapshot(
   } finally {
     await creatingExecution?.release();
   }
-  if (wrote) {
+  if (writtenSource) {
     kickSessionEntryMaintenanceAfterWrite({
+      source: writtenSource,
       activeSessionKey: sessionKey,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       maintenanceConfig: options.maintenanceConfig,

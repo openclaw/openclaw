@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
+import * as databaseIdentity from "../../infra/sqlite-worker-identity.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -19,6 +20,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
+import { prunePublishedSessionArchivesByRetention } from "./session-accessor.sqlite-archive-store.js";
 import {
   readSqliteSessionArchivePruning,
   withSqliteSessionPageReclamation,
@@ -87,6 +89,115 @@ const prune = (
     highWaterBytes: 0,
     storePath: databaseOptions.path,
   });
+
+it("qualifies archive pruning on its worker without polling file identity on the host", async () => {
+  await withBindingState(async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const archiveDirectory = state.sessionsDir();
+    seedArchive(database, archiveDirectory);
+    const assertPhysical = vi.spyOn(databaseIdentity, "assertExistingDatabaseIdentity");
+    await expect(
+      prune({ agentId: "main", env: state.env, path: database.path }, archiveDirectory),
+    ).resolves.toMatchObject({ removedFiles: 1 });
+    expect(assertPhysical).not.toHaveBeenCalled();
+  });
+});
+
+it.runIf(process.platform !== "win32")(
+  "keeps retention bound to the inventory receipt when its alias changes before the page pass",
+  async () => {
+    await withBindingState(async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const original = openOpenClawAgentDatabase(options);
+      const replacement = openOpenClawAgentDatabase({
+        ...options,
+        path: path.join(state.root, "replacement.sqlite"),
+      });
+      const originalArchive = seedArchive(original, path.join(state.root, "original-archives"));
+      const replacementArchive = seedArchive(
+        replacement,
+        path.join(state.root, "replacement-archives"),
+      );
+      const alias = path.join(state.root, "alias.sqlite");
+      fs.symlinkSync(original.path, alias);
+      const readIdentity = databaseIdentity.readDatabasePathIdentitySync(alias);
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacement.path, alias);
+      await expect(
+        prunePublishedSessionArchivesByRetention({
+          scope: { ...options, path: alias },
+          source: { readIdentity },
+          nowMs: 100,
+          rules: [{ reason: "deleted", olderThanMs: 0 }],
+        }),
+      ).rejects.toThrow();
+      originalArchive.assertRetained();
+      replacementArchive.assertRetained();
+    });
+  },
+);
+
+it.runIf(process.platform !== "win32").each(["alias", "canonical"])(
+  "refuses %s replacement after the archive row reply and before unlink",
+  async (kind) => {
+    await withBindingState(async (state) => {
+      const options = { agentId: "main", env: state.env };
+      const original = openOpenClawAgentDatabase(options);
+      const replacement = openOpenClawAgentDatabase({
+        ...options,
+        path: path.join(state.root, "replacement.sqlite"),
+      });
+      const archiveDirectory = path.join(state.root, "original-archives");
+      const originalArchive = seedArchive(original, archiveDirectory);
+      const replacementArchive = seedArchive(
+        replacement,
+        path.join(state.root, "replacement-archives"),
+      );
+      const alias = kind === "alias" ? path.join(state.root, "alias.sqlite") : original.path;
+      const detached = path.join(state.root, "detached.sqlite");
+      if (kind === "alias") {
+        fs.symlinkSync(original.path, alias);
+      }
+      const withPages = pageReclamation.withSqliteSessionPageReclamation;
+      let retargeted = false;
+      vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
+        <T>(...args: Parameters<typeof withPages<T>>) =>
+          withPages(
+            args[0],
+            (reclaim, assertCurrent, prepared, archives) =>
+              args[1](reclaim, assertCurrent, prepared, {
+                ...archives,
+                async read() {
+                  const row = await archives.read();
+                  expect(row).not.toBeNull();
+                  if (kind === "canonical") {
+                    fs.renameSync(original.path, detached);
+                  } else {
+                    fs.unlinkSync(alias);
+                  }
+                  fs.symlinkSync(replacement.path, alias);
+                  retargeted = true;
+                  return row;
+                },
+              }),
+            args[2],
+            args[3],
+          ),
+      );
+      try {
+        await expect(prune({ ...options, path: alias }, archiveDirectory)).rejects.toThrow();
+      } finally {
+        if (kind === "canonical" && retargeted) {
+          fs.unlinkSync(original.path);
+          fs.renameSync(detached, original.path);
+        }
+      }
+      expect(retargeted).toBe(true);
+      originalArchive.assertRetained();
+      replacementArchive.assertRetained();
+    });
+  },
+);
 
 it.each([
   { operation: "prune", retirement: "path" },
@@ -164,7 +275,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
       );
       const pending = prune(aliasOptions, archiveDirectory);
       if (retarget) {
-        await expect(pending).rejects.toThrow("file identity changed");
+        await expect(pending).rejects.toThrow("outside captured discovery custody");
       } else {
         await expect(pending).resolves.toMatchObject({ removedFiles: 1 });
       }
@@ -261,7 +372,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
         },
       );
       if (retarget) {
-        await expect(pending).rejects.toThrow("file identity changed");
+        await expect(pending).rejects.toThrow("outside captured discovery custody");
       } else {
         await expect(pending).resolves.toMatchObject({
           checkpointCompleted: true,

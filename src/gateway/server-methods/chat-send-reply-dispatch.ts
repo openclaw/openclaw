@@ -18,10 +18,7 @@ import {
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  resolveSessionTranscriptDatabasePath,
-  waitForSessionTranscriptProjection,
-} from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { retainSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -185,12 +182,7 @@ export function createChatSendReplyDispatch(params: {
           isRunCurrent() &&
           current.entry?.sessionId === admission.sessionId &&
           current.entry.lifecycleRevision === lifecycleRevision &&
-          resolveSessionTranscriptDatabasePath({
-            agentId: session.agentId,
-            sessionId: admission.sessionId,
-            sessionKey: session.sessionKey,
-            storePath: current.storePath,
-          }) === admission.storePath
+          current.readSource?.path === admission.storePath
         );
       };
       if (

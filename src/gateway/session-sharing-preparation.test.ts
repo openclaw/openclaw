@@ -343,31 +343,64 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
-it.for(["main", "other"])(
-  "keeps an acquiring session's facts scoped to its physical owner when %s becomes ready",
-  async (agentId, { harness }) => {
-    const { cfg, sessionKey } = harness;
-    harness.write(restrictedEntry("acquiring-topology", "original"));
-    const read = entryReads.readSessionEntriesFromStoreInWorker;
-    let published = false;
+it.for([
+  ["per-agent", "main"],
+  ["per-agent", "other"],
+  ["shared", "main"],
+  ["shared", "ops"],
+  ["shared", "other"],
+] as const)(
+  "qualifies %s acquisition when %s becomes ready",
+  async ([kind, readyAgentId], { state, signal }) => {
+    const storePath =
+      kind === "per-agent"
+        ? resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+        : state.statePath("shared-acquisition.sqlite");
+    const agentId = kind === "shared" ? "ops" : "main";
+    if (kind === "shared") {
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
+    }
+    const cfg = {
+      agents: { entries: { main: {}, ops: {}, other: {} } },
+      ...(kind === "shared" ? { session: { store: storePath } } : {}),
+    };
+    const harness = sharingHarness(cfg, `agent:${agentId}:acquiring`, storePath, agentId);
+    harness.write(restrictedEntry("acquiring", "first"));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
     vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
       async (...args) => {
-        const result = await read(...args);
-        if (!published && result.entries.some((row) => row.sessionKey === sessionKey)) {
-          published = true;
-          sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        const result = await readEntries(...args);
+        if (args[0].projection === "full" && args[0].includeAuthorization) {
+          entered.resolve();
+          await release.promise;
         }
         return result;
       },
     );
     const pending = harness.prepare();
-    if (agentId === "main") {
-      await expect(pending).rejects.toThrow(unavailableMessage);
-    } else {
-      using prepared = releasing(await pending);
-      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring-topology");
+    void pending.catch(() => {});
+    try {
+      await withinTest(entered.promise, signal);
+      sessionChanges.emit({ all: true, scope: { agentId: readyAgentId, topology: true } });
+      release.resolve();
+      if (readyAgentId === "other") {
+        using prepared = releasing(await pending);
+        const facts = prepared.readCurrent(cfg);
+        expect(facts.target.entry.sessionId).toBe("acquiring");
+        expect(facts.target.agentId).toBe(agentId);
+        expect(facts.sourceAgentId).toBe("main");
+      } else {
+        await expect(pending).rejects.toThrow(unavailableMessage);
+      }
+    } finally {
+      release.resolve();
+      await pending.then(
+        (prepared) => prepared.release(),
+        () => {},
+      );
     }
-    expect(published).toBe(true);
   },
 );
 

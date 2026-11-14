@@ -116,7 +116,7 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
       let completedPlans = 0;
       let failedPlans = 0;
       let overlaps = 0;
-      let usage: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
+      let usage: Awaited<ReturnType<typeof prepareSessionCostUsageRefreshLock>> | undefined;
       try {
         runOpenClawAgentWriteTransaction((database) => {
           for (const key of [sessionKey, lockedKey]) {
@@ -141,7 +141,7 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
           ).toBe(true);
         }
         if (overlap === "usage rollup") {
-          usage = prepareSessionCostUsageRefreshLock("main", storePath);
+          usage = await prepareSessionCostUsageRefreshLock("main", storePath);
           expect(await usage.acquire()).toBe(true);
         }
         observeSessionMaintenancePlanningWorker({

@@ -1,7 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
-import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
+import { readSqliteInspectionBudgetAsync } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -10,8 +10,9 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-ag
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
+  OpenClawAgentDatabaseExecution,
 } from "../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -62,7 +63,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     controller.abort();
     await state.pending;
   };
-  let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+  let execution: OpenClawAgentDatabaseExecution | undefined;
   let reader: ReturnType<typeof retainSessionHistoryWorkerDatabase> | undefined;
   const cleanup = async () => {
     Atomics.store(lease, 0, 0);
@@ -84,10 +85,9 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     log.warn(`Trajectory retention cleanup failed: ${String(error)}`);
   };
   try {
-    execution = captureOpenClawAgentDatabaseExecution(options, { expectedIdentity: identity });
     unregister = registerOpenClawAgentDatabaseAsyncResource({
-      agentId: execution.agentId,
-      path: execution.path,
+      agentId: options.agentId,
+      path: identity.nativeLocation,
       revoke: () => controller.abort(),
       close,
     });
@@ -103,51 +103,59 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     void state.pending.catch(observeFailure);
     return state.pending;
   }
-  const retained = execution;
-  const assertCurrent = () => {
-    controller.signal.throwIfAborted();
-    retained.assertCurrent();
-    assertSourceCurrent?.();
-  };
   const retainedReader = reader;
-  const execute = async <T>(operation: (worker: AgentDatabaseExecutionScope) => Promise<T>) => {
-    assertCurrent();
-    const result = await runOpenClawAgentWorkerWrite(
-      options,
-      () =>
-        retained.runExisting(
-          {
-            assertCurrent,
-            createAdmission: (binding) => () => ({
-              nativeLocations: binding.nativeLocations,
-              admission: createSqliteWorkerOperationAdmission(
-                (request, grant) => {
-                  binding.authorize(request);
-                  assertCurrent();
-                  if (!grant()) {
-                    throw new Error("Trajectory retention authority expired");
-                  }
-                },
-                { ...binding.attachment, trajectoryRetentionLease: lease.buffer },
-              ),
-            }),
-          },
-          operation,
-        ),
-      undefined,
-      controller.signal,
-    );
-    if (result === undefined) {
-      throw new Error("Trajectory retention database disappeared before deletion");
-    }
-    return result;
-  };
   state.pending = runInDetachedAsyncContext(async () => {
     try {
+      const retained = await captureOpenClawAgentDatabaseExecutionAsync(options, {
+        expectedIdentity: identity,
+      });
+      execution = retained;
+      const assertCurrent = () => {
+        controller.signal.throwIfAborted();
+        retained.assertCurrent();
+        assertSourceCurrent?.();
+      };
+      const execute = async <T>(operation: (worker: AgentDatabaseExecutionScope) => Promise<T>) => {
+        assertCurrent();
+        const result = await runOpenClawAgentWorkerWrite(
+          options,
+          () =>
+            retained.runExisting(
+              {
+                assertCurrent,
+                createAdmission: (binding) => () => ({
+                  nativeLocations: binding.nativeLocations,
+                  admission: createSqliteWorkerOperationAdmission(
+                    (request, grant) => {
+                      binding.authorize(request);
+                      assertCurrent();
+                      if (!grant()) {
+                        throw new Error("Trajectory retention authority expired");
+                      }
+                    },
+                    { ...binding.attachment, trajectoryRetentionLease: lease.buffer },
+                  ),
+                }),
+              },
+              operation,
+            ),
+          undefined,
+          controller.signal,
+        );
+        if (result === undefined) {
+          throw new Error("Trajectory retention database disappeared before deletion");
+        }
+        return result;
+      };
       await nextTurn(undefined, { signal: controller.signal });
       const sweepId = await execute((worker) =>
         worker.execute({ type: "trajectory.retention.begin", input: undefined }),
       );
+      const { timeoutMs } = await readSqliteInspectionBudgetAsync(
+        "read-only snapshot",
+        retained.path,
+      );
+      assertCurrent();
       let snapshot: TrajectoryRuntimeRetentionPlan | undefined =
         await retainedReader.owner.readTrajectoryRetention(
           {
@@ -158,7 +166,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
           },
           {
             signal: controller.signal,
-            timeoutMs: readSqliteInspectionBudget("read-only snapshot", retained.path).timeoutMs,
+            timeoutMs,
           },
         );
       for (;;) {

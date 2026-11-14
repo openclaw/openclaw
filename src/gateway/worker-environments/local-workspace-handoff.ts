@@ -17,6 +17,8 @@ export async function finishLocalWorkspaceHandoff(
   ) {
     throw new Error("Local workspace handoff belongs to a different session incarnation");
   }
+  const projectionPath = await localWorkspaceProjectionPath(owner);
+  owner.assertCurrent();
   await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
     const row = store.get();
     if (!row) {
@@ -25,13 +27,13 @@ export async function finishLocalWorkspaceHandoff(
       );
     }
     if (row.session_id === owner.sessionId) {
-      assertLocalWorkspaceProjectionOwner(row, owner, localWorkspaceProjectionPath(owner));
+      assertLocalWorkspaceProjectionOwner(row, owner, projectionPath);
       return;
     }
     assertLocalWorkspaceProjectionOwner(
       row,
       { ...owner, sessionId: handoff.fromSessionId },
-      localWorkspaceProjectionPath(owner),
+      projectionPath,
     );
     if (
       row.revision !== handoff.projectionRevision ||

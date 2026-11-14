@@ -126,7 +126,7 @@ import {
   buildLocalAuthProfileStoreForSave,
   type SaveAuthProfileStoreOptions,
 } from "./store-save.js";
-import { createAuthProfileStoreUpdater } from "./store-update.js";
+import { createAuthProfileStoreUpdater } from "./store-updater.js";
 import type {
   AuthProfileCredentialSource,
   AuthProfileStore,
@@ -716,7 +716,7 @@ export function restoreAuthProfileStorePersistenceSnapshot(
         () => (stateOwned ? snapshot.stateRaw : existingState),
       );
       deferSqlitePostCommitPublication(database.db, () => {
-        noteAuthProfileFileWrite(owner.databasePath);
+        noteAuthProfileFileWrite(owner.databasePath, owner.databaseIdentity);
         recordRuntimeAuthProfilePersistedStore(owner.databasePath, persisted);
       });
       const publication: RuntimeSnapshotPublication = {

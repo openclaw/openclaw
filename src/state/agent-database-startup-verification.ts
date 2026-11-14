@@ -1,7 +1,9 @@
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readSqliteIntegrityFileIdentityAsync } from "../infra/sqlite-file-generation.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -12,7 +14,8 @@ import {
 } from "./agent-database-admission.js";
 import type { AgentDatabaseStartupVerifier } from "./agent-database-startup-integrity.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import { toAgentExecutionConstraints } from "./openclaw-agent-execution-scope.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "./openclaw-agent-execution.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -27,13 +30,18 @@ const log = createSubsystemLogger("state/agent-admission");
 export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier = async ({
   agentId,
   paths,
+  identity,
+  integrityWitness,
   env,
   signal,
   assertCurrent,
 }) => {
   for (const pathname of paths) {
     assertCurrent();
-    const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(
+      { agentId, path: pathname, env },
+      toAgentExecutionConstraints(identity),
+    );
     const controller = new AbortController();
     const unobserve = execution.onTerminal((reason) => controller.abort(reason));
     const checkSignal = AbortSignal.any([signal, controller.signal]);
@@ -43,6 +51,7 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
     };
     const startedAt = Date.now();
     try {
+      assertVerificationCurrent();
       try {
         await assertSqliteIntegrityInWorker(
           pathname,
@@ -51,13 +60,19 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
           undefined,
           undefined,
           undefined,
-          { priority: "background" },
+          {
+            priority: "background",
+            expectedIdentity: identity,
+            preparedIdentity: integrityWitness,
+          },
         );
       } catch (error) {
         assertVerificationCurrent();
         if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
           throw error;
         }
+        await readSqliteIntegrityFileIdentityAsync(pathname, undefined, identity);
+        assertVerificationCurrent();
         // Publish refusal before yielding to persistence. Worker grants consume the
         // same revocation, so already-open handles cannot continue accepting writes.
         recordAgentDatabaseAdmissions(
@@ -89,6 +104,7 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
           env,
           signal,
           assertCurrent,
+          identity,
         });
         log.error(
           "agent database background integrity check found corruption; run openclaw doctor --fix",
@@ -129,14 +145,22 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
 async function recordOpenClawDatabaseQuarantineAsync(
   pathname: string,
   reason: string,
-  options: { env?: NodeJS.ProcessEnv; assertCurrent: () => void; signal?: AbortSignal },
+  options: {
+    env?: NodeJS.ProcessEnv;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    identity: DatabasePathIdentity;
+  },
 ): Promise<void> {
   options.assertCurrent();
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const recorded = await runOpenClawStateWorkerOperation(
     context,
     async (scope) => {
-      await scope.execute({ type: "quarantine.record", input: { pathname, reason } });
+      await scope.execute({
+        type: "quarantine.record",
+        input: { pathname, reason, expectedIdentity: options.identity },
+      });
       return true;
     },
     {

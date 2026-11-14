@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
+import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { enqueueGitRefMutation, gitCommandArgv } from "../../infra/git-exec.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
@@ -85,9 +92,43 @@ export function workspaceResultGitCommand(cwd: string, args: string[]): string[]
 export async function requireWorkspaceResultGit(
   cwd: string,
   args: string[],
-  options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv; beforeInput?: () => void } = {},
+  options: {
+    input?: Uint8Array;
+    baseEnv?: NodeJS.ProcessEnv;
+    beforeInput?: SessionSourceAssertion;
+    beforeRun?: SessionSourceAssertion;
+    workerAuthority?: WorktreeWorkerAuthority;
+  } = {},
 ): Promise<string> {
   const { runCommandWithTimeout } = await import("../../process/exec.js");
+  const assertion = options.beforeInput ?? options.beforeRun;
+  const source =
+    assertion || options.workerAuthority
+      ? await prepareSessionSourceEffect(
+          composeSessionSourceAssertion([assertion, options.workerAuthority?.assertCurrent]),
+        )
+      : undefined;
+  await using _ = { [Symbol.asyncDispose]: async () => await source?.release?.() };
+  const prepare = source
+    ? () =>
+        prepareWorktreeFilesystemMutation(
+          {
+            commitGuard: source.assertCurrent,
+            workerAuthority: options.workerAuthority,
+            signal: options.workerAuthority?.signal,
+          },
+          source,
+        )
+    : undefined;
+  const guardedInput =
+    options.beforeInput !== undefined ||
+    (options.beforeRun === undefined &&
+      options.input !== undefined &&
+      options.workerAuthority !== undefined);
+  if (source && !guardedInput) {
+    await prepare?.();
+    source.assertCurrent();
+  }
   const result = await withGitProcessOperation(
     "workspace.result",
     () =>
@@ -96,7 +137,8 @@ export async function requireWorkspaceResultGit(
         maxOutputBytes: 1024 * 1024,
         baseEnv: options.baseEnv,
         input: options.input,
-        beforeInput: options.beforeInput,
+        prepareInput: guardedInput ? prepare : undefined,
+        beforeInput: guardedInput ? source?.assertCurrent : undefined,
       }),
     "default",
   );
@@ -137,7 +179,8 @@ export async function updateWorkspaceResultRefs(
   updates:
     | readonly WorkspaceResultRefUpdate[]
     | (() => readonly WorkspaceResultRefUpdate[] | Promise<readonly WorkspaceResultRefUpdate[]>),
-  assertCurrent?: () => void,
+  assertCurrent?: SessionSourceAssertion,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<void> {
   await withWorkspaceResultRefMutation(root, async (baseEnv) => {
     assertCurrent?.();
@@ -155,6 +198,7 @@ export async function updateWorkspaceResultRefs(
       input: Buffer.from(input),
       baseEnv,
       beforeInput: assertCurrent,
+      workerAuthority,
     });
   });
 }
@@ -184,7 +228,8 @@ export async function readWorkspaceResultRefObjects(
 export async function publishImmutableWorkspaceResultRefs(
   root: string,
   targets: readonly (readonly [string, string | undefined])[],
-  assertCurrent: () => void,
+  assertCurrent: SessionSourceAssertion,
+  workerAuthority?: WorktreeWorkerAuthority,
 ): Promise<void> {
   await withWorkspaceResultRefMutation(root, async (baseEnv) => {
     const updates: string[] = [];
@@ -208,6 +253,7 @@ export async function publishImmutableWorkspaceResultRefs(
         input: Buffer.from(updates.join("")),
         baseEnv,
         beforeInput: assertCurrent,
+        workerAuthority,
       });
     }
   });

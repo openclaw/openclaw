@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +10,10 @@ import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -175,11 +180,10 @@ describe("transcript turn physical identity", () => {
     ).toHaveLength(2);
   });
 
-  it("reuses a selected target until an owning registry write reassigns it", async () => {
+  it("selects current targets without main-thread stats across registry reassignment", async () => {
     const storePath = `${fixture.storePath()}.custom.json`;
     const databasePath = `${fixture.storePath()}.custom.sqlite`;
     openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
     const select = (agentId = "main") =>
       withSessionStoreTarget(
         {
@@ -195,51 +199,50 @@ describe("transcript turn physical identity", () => {
       );
     const selected = await select();
     expect(selected.database.path).toBe(databasePath);
-    const initialReads = reads.mock.calls.length;
-    expect(initialReads).toBeGreaterThan(0);
-    expect(await select()).toBe(selected);
-    expect(reads).toHaveBeenCalledTimes(initialReads);
-    expect(Reflect.set(selected.database, "path", "changed")).toBe(false);
+    const stat = vi.spyOn(fs, "statSync");
+    syncBuiltinESMExports();
+    try {
+      expect(await select()).toEqual(selected);
+      expect(stat.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(0);
+    } finally {
+      stat.mockRestore();
+      syncBuiltinESMExports();
+    }
     expect((await select("other")).database.path).toBe(
       `${fixture.storePath()}.custom.other.sqlite`,
     );
-    expect(await select()).toBe(selected);
+    expect(await select()).toEqual(selected);
 
     unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     registerOpenClawAgentDatabase({ agentId: "other", path: databasePath });
     const reassigned = await select();
     expect(reassigned.database.path).toBe(`${fixture.storePath()}.custom.main.sqlite`);
-    expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
   });
 
-  it("reuses inventory until an in-process session write changes fixed-store visibility", async () => {
+  it("observes fixed-store visibility after its database owner closes", async () => {
     const storePath = `${fixture.storePath()}.shared.sqlite`;
     replaceSessionEntrySync(
       { agentId: "main", storePath, sessionKey: "agent:main:global" },
       { sessionId, updatedAt: 1 },
     );
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    await closeOpenClawAgentDatabasesAsync();
     const select = inventoryReader({ agents, session: { store: storePath } }, ["other"]);
     const selected = await select();
     expect(selected).toEqual({ available: true, targets: [] });
-    const initialReads = reads.mock.calls.length;
-    expect(initialReads).toBeGreaterThan(0);
-    expect(await select()).toBe(selected);
-    expect(reads).toHaveBeenCalledTimes(initialReads);
-    expect(selected?.available && Reflect.set(selected.targets, "0", {})).toBe(false);
+    expect(await select()).toEqual(selected);
 
     replaceSessionEntrySync(
       { agentId: "other", storePath, sessionKey: "agent:other:global" },
       { sessionId: "other-window", updatedAt: 2 },
     );
+    await closeOpenClawAgentDatabasesAsync();
     expect(await select()).toEqual({
       available: true,
       targets: [{ agentId: "other", storePath }],
     });
-    expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
   });
 
-  it("reuses per-agent inventory and cleanup after ordinary session writes", async () => {
+  it("preserves per-agent inventory across ordinary session writes", async () => {
     const storePath = fixture.storePath();
     const env = {
       ...process.env,
@@ -247,19 +250,12 @@ describe("transcript turn physical identity", () => {
     };
     const session = { agentId: "main", storePath, sessionKey: "agent:main:global", env };
     replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
-    const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
     const select = inventoryReader({ agents: { entries: { main: {} } } }, ["main"], env);
     const expected = { available: true, targets: [{ agentId: "main", storePath }] };
     expect(await select()).toEqual(expected);
-    const initialReads = reads.mock.calls.length;
-    const initialCloses = closes.mock.calls.length;
-    expect(initialReads).toBeGreaterThan(0);
 
     replaceSessionEntrySync(session, { sessionId, updatedAt: 2 });
     expect(await select()).toEqual(expected);
-    expect(reads).toHaveBeenCalledTimes(initialReads);
-    expect(closes).toHaveBeenCalledTimes(initialCloses);
   });
 
   it("refreshes family inventory after writing an already registered sibling", async () => {

@@ -99,6 +99,17 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
       | undefined;
     let sourceSessionKey: string | undefined;
     let recordOutcome: ((text: string, replyId: string) => Promise<void>) | undefined;
+    const assertHostAuthority = captureExternalSessionCommitGuard(() => {
+      if (!open || getLoadedChannelPluginForRead(conversation.channel) !== plugin) {
+        throw new Error("The fork command or channel owner changed; send a new request.");
+      }
+      assertCommandAuthorized?.();
+      params.commandInvocationSignal?.throwIfAborted();
+      params.opts?.abortSignal?.throwIfAborted();
+      if (params.command.senderIsOwner) {
+        params.command.assertOwnerCurrent?.();
+      }
+    });
     const assertHostCurrent = composeSessionSourceAssertion([
       createDynamicSessionSourceAssertion(
         () => source?.assertCurrent,
@@ -106,17 +117,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           throw new Error("The fork source changed; send a new request.");
         },
       ),
-      captureExternalSessionCommitGuard(() => {
-        if (!open || getLoadedChannelPluginForRead(conversation.channel) !== plugin) {
-          throw new Error("The fork command or channel owner changed; send a new request.");
-        }
-        assertCommandAuthorized?.();
-        params.commandInvocationSignal?.throwIfAborted();
-        params.opts?.abortSignal?.throwIfAborted();
-        if (params.command.senderIsOwner) {
-          params.command.assertOwnerCurrent?.();
-        }
-      }),
+      assertHostAuthority,
     ]);
     const assertCurrent = composeSessionSourceAssertion([
       assertHostCurrent,
@@ -233,6 +234,10 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           conversationId: conversation.conversationId,
         },
       );
+      const assertRecordingCurrent = composeSessionSourceAssertion([
+        source.assertNativeTransactionCurrent,
+        assertHostAuthority,
+      ]);
       recordOutcome = async (replyText, replyId) => {
         const inputAdmission = params.opts?.userTurnTranscriptRecorder?.getAdmissionReceipt();
         const result = await recordCommittedCommandExchange({
@@ -243,7 +248,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           expectedSessionId: parent.sessionId,
           expectedLifecycleRevision: parent.lifecycleRevision ?? null,
           // Local recovery recording needs the source owner, not permission to send a recap.
-          assertCurrent: assertHostCurrent,
+          assertCurrent: assertRecordingCurrent,
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
           commandText: params.command.commandBodyNormalized,
           commandId,

@@ -6,6 +6,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
@@ -351,6 +352,7 @@ export async function commitReplySessionInitialization(params: {
   }
   let staleCommit: SessionEntry | null | undefined;
   let usedMemoryBackend = false;
+  let writtenSource: AgentDatabaseExecutionFileIdentity | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
   const descriptor: ReplySessionInitializationUpsertDescriptor = {
@@ -417,6 +419,9 @@ export async function commitReplySessionInitialization(params: {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
       skipMaintenance: true,
+      onLifecycleCommitted: (committedSource?: AgentDatabaseExecutionFileIdentity) => {
+        writtenSource = committedSource;
+      },
       storePath,
       upserts,
       commitGuard: () => {
@@ -586,6 +591,7 @@ export async function commitReplySessionInitialization(params: {
   if (!usedMemoryBackend) {
     // Reply preparation shares ordinary writes' maintenance owner, never forced cleanup.
     kickSessionEntryMaintenanceAfterWrite({
+      source: writtenSource,
       activeSessionKey: params.activeSessionKey,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(captured),
       maintenanceConfig: params.maintenanceConfig,

@@ -7,6 +7,8 @@ import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readInstalledSkill } from "../../agents/installed-skill-catalog.js";
+import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -495,6 +497,34 @@ it("keeps watch=false passive state fixed while explicit refresh remains immedia
   expect(await descriptions(request(), false)).toEqual([]);
   await refreshSkillsDiscovery({ workspaceDir: workspace });
   expect(await descriptions(request(), false)).toEqual(["Explicit only"]);
+});
+
+it("refreshes companion authority after byte-identical skill directory replacement", async () => {
+  const directory = path.join(workspace, "skills", "guide");
+  await write("Unchanged instructions");
+  await fs.writeFile(path.join(directory, "reference.md"), "Original companion");
+  const { ready } = observeWatchAdmission();
+  const original = await prepareLocalSkillSources(request());
+  await ready;
+  await completePassiveScan(50);
+  const project = (sources: typeof original) =>
+    projectSkillSnapshot({ workspaceDir: workspace, eligible: sources.entries });
+  const bind = (snapshot: Awaited<ReturnType<typeof project>>) =>
+    prepareInstalledSkillCatalog({ snapshot, workspaceDir: workspace });
+  const snapshot = await project(original);
+  const catalog = bind(snapshot);
+  const version = getSkillsSnapshotVersion(workspace);
+  await fs.rename(directory, path.join(temporary.make("retired-skill-"), "guide"));
+  await write("Unchanged instructions");
+  await fs.writeFile(path.join(directory, "reference.md"), "Replacement companion");
+  await expect(readInstalledSkill(catalog, "guide", undefined, "reference.md")).rejects.toThrow();
+  await completePassiveScan();
+  expect(getSkillsSnapshotVersion(workspace)).toBeGreaterThan(version);
+  const refreshed = await project(await prepareLocalSkillSources(request()));
+  expect(refreshed.prompt).toBe(snapshot.prompt);
+  await expect(
+    readInstalledSkill(bind(refreshed), "guide", undefined, "reference.md"),
+  ).resolves.toMatchObject({ content: "Replacement companion" });
 });
 
 it("rediscovers replaced workspaces and roots that disappear and return", async () => {

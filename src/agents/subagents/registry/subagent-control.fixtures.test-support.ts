@@ -182,7 +182,7 @@ export function holdControlSessionPublication<Consumer>(options: {
     options.afterReleased?.();
     return value;
   };
-  const wrap = (execution: OpenClawAgentDatabaseExecution) => {
+  const wrap = <Execution extends OpenClawAgentDatabaseExecution>(execution: Execution) => {
     if (!producerScope.getStore()) {
       return execution;
     }
@@ -222,9 +222,9 @@ export function holdControlSessionPublication<Consumer>(options: {
   vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation((...args) =>
     wrap(capture(...args)),
   );
-  const prepare = executionOwner.captureOpenClawAgentDatabasePreparationExecution;
-  vi.spyOn(executionOwner, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
-    (...args) => wrap(prepare(...args)),
+  const captureAsync = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
+  vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+    async (...args) => wrap(await captureAsync(...args)),
   );
   return {
     producerScope,

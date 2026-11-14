@@ -94,6 +94,7 @@ async function prepareSessionGenerationLease(
   initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
 ): Promise<{
   assertCurrent: SessionSourceAssertion;
+  assertNativeTransactionCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
   readSessionSettings: () =>
     | Readonly<Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">>
@@ -617,6 +618,8 @@ async function prepareSessionGenerationLease(
     };
     return {
       assertCurrent: assertGenerationCurrent,
+      // Opaque host guards retain native atomicity and the same tentative-row checks.
+      assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
       assertDeliveryCurrent: () => assertCurrent(true),
       readSessionSettings: () => {
         assertGenerationCurrent();

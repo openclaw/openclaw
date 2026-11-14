@@ -6,7 +6,11 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForDead } from "../../test/helpers/process-wait.js";
-import { nextEventLoopTurn, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -60,6 +64,42 @@ afterEach(() => {
 const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
+  it("refuses the real PTY after retirement during final asynchronous preparation", async ({
+    signal,
+  }) => {
+    const directory = tempDirs.make("openclaw-pty-preparation-");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let current = true;
+    const broker = supportsSpawnBrokerCommandTransport() ? await createBroker() : undefined;
+    const starting = runWithSpawnBroker(broker, () =>
+      spawnNodeTerminalPty(
+        { ...defaults, cwd: directory, args: ["-c", "touch started"] },
+        () => {
+          if (!current) {
+            throw new Error("PTY owner retired");
+          }
+        },
+        undefined,
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      ),
+    );
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, starting, "final PTY preparation"),
+        signal,
+      );
+      current = false;
+    } finally {
+      release.resolve();
+    }
+    await expect(starting).rejects.toThrow("PTY owner retired");
+    expect(fs.existsSync(path.join(directory, "started"))).toBe(false);
+  });
+
   it.skipIf(!supportsSpawnBrokerCommandTransport()).for(["startup", "running"] as const)(
     "settles terminal %s after losing the real spawn broker",
     async (phase, { signal }) => {

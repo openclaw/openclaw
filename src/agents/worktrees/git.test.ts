@@ -531,17 +531,17 @@ describe("Git checkout discovery", () => {
   it("returns the nearest checkout root for nested paths", async () => {
     const root = tempDirs.make("openclaw-git-root-");
     const nested = path.join(root, "packages", "nested");
-    expect(findGitCheckoutRoot(root)).toBeNull();
-    expect(insideGitCheckout(root)).toBe(false);
+    expect(await findGitCheckoutRoot(root)).toBeNull();
+    expect(await insideGitCheckout(root)).toBe(false);
     await fs.mkdir(path.join(root, ".git"));
     await fs.mkdir(nested, { recursive: true });
 
-    expect(findGitCheckoutRoot(nested)).toBeNull();
-    expect(insideGitCheckout(nested)).toBe(false);
+    expect(await findGitCheckoutRoot(nested)).toBeNull();
+    expect(await insideGitCheckout(nested)).toBe(false);
     await fs.writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
 
-    expect(findGitCheckoutRoot(nested)).toBe(root);
-    expect(insideGitCheckout(nested)).toBe(true);
+    expect(await findGitCheckoutRoot(nested)).toBe(root);
+    expect(await insideGitCheckout(nested)).toBe(true);
   });
 
   it("distinguishes contained metadata from linked checkout pointers", async () => {

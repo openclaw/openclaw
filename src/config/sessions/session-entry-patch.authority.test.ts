@@ -1,15 +1,25 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
@@ -332,3 +342,96 @@ it.each([true, false])(
     });
   },
 );
+
+it("keeps updater context, FIFO and publication ordering while the host executes no session SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const gateway = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(state.env),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    try {
+      const f = fixture();
+      await readSessionEntryInWorker(f.scope);
+      const context = new AsyncLocalStorage<string>();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const events: string[] = [];
+      const stopRows = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === f.scope.sessionKey) {
+          events.push("row");
+        }
+      });
+      const stopIdentity = onSessionIdentityMutation((change) => {
+        if (change.kind !== "delete" && change.current.sessionKeys.includes(f.scope.sessionKey)) {
+          events.push(`identity:${change.current.sessionId}`);
+        }
+      });
+      const sql = observeHostDataSql();
+      using filesystem = observeMainThreadFs();
+      const first = context.run("first", () =>
+        patchInternalSessionEntry(
+          f.scope,
+          async () => {
+            events.push(`update:${context.getStore()}`);
+            entered.resolve();
+            await release.promise;
+            return { sessionId: "first" };
+          },
+          { workerGuard: {}, onCommitted: () => events.push(`commit:${context.getStore()}`) },
+        ),
+      );
+      let second: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(entered.promise, first, "Patch ended before its updater");
+        second = context.run("second", () =>
+          patchInternalSessionEntry(
+            f.scope,
+            (entry) => {
+              events.push(`update:${context.getStore()}:${entry.sessionId}`);
+              return { sessionId: "second" };
+            },
+            { workerGuard: {}, onCommitted: () => events.push(`commit:${context.getStore()}`) },
+          ),
+        );
+        expect(events).toEqual(["update:first"]);
+        release.resolve();
+        await Promise.all([first, second]);
+        expect(filesystem.stacks()).toEqual([]);
+        expect(events).toEqual([
+          "update:first",
+          "row",
+          "commit:first",
+          "identity:first",
+          "update:second:first",
+          "row",
+          "commit:second",
+          "identity:second",
+        ]);
+        expect(
+          sql.queries.filter((query) =>
+            /session_nodes|session_entry_snapshots|\bCOMMIT\b|\bBEGIN IMMEDIATE\b/i.test(query),
+          ),
+        ).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second]);
+        sql.restore();
+        stopRows();
+        stopIdentity();
+      }
+      expect(f.read()?.sessionId).toBe("second");
+    } finally {
+      try {
+        await closeOpenClawAgentDatabasesAsync();
+      } finally {
+        gateway.release();
+      }
+    }
+  });
+});

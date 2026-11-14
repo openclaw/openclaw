@@ -55,12 +55,13 @@ function context(policy: typeof installation | undefined): OpenClawStateWorkerCo
   return {
     gatewayServiceInstallation: policy,
     admission: {
-      identity: { key: "file:fixture" },
+      identity: { key: "file:fixture", canonicalPath: "/fixture.db" },
       databasePath: "/fixture.db",
+      coordinationKey: "fixture",
       assertCurrent: () => {},
     },
-    environment: {},
-  } as OpenClawStateWorkerContext;
+    environment: { OPENCLAW_STATE_DIR: "/fixture" },
+  };
 }
 describe("worker policy owner comparisons", () => {
   beforeEach(() => {

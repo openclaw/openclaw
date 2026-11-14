@@ -149,7 +149,7 @@ try {
     owner.service();
   } finally {
     Atomics.wait = wait;
-    owner.finish();
+    await owner.finish();
   }
 } finally {
   await state.closeOpenClawStateDatabaseAsync();

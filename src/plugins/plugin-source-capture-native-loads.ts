@@ -1,12 +1,59 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type {
+  FsSafeCopyReply,
+  FsSafeCopyWrite,
+  PluginCaptureReclaimCandidate,
+} from "../infra/fs-safe-copy-worker-contract.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
 } from "../infra/sqlite-staging-token.js";
+
+export async function reclaimLegacyPluginCapture(candidate: PluginCaptureReclaimCandidate) {
+  const current = fs.lstatSync(candidate.directory);
+  if (
+    current.isDirectory() &&
+    current.dev === candidate.identity.dev &&
+    current.ino === candidate.identity.ino &&
+    current.uid === candidate.identity.uid &&
+    (!process.getuid || current.uid === process.getuid())
+  ) {
+    // Legacy producers surviving the grace period remain best effort.
+    await fsPromises.rm(candidate.directory, { recursive: true, force: true });
+  }
+}
+
+/** Standalone process only: creator connections remain in the Gateway. */
+export async function reclaimPluginCaptureBatch(
+  candidates: readonly PluginCaptureReclaimCandidate[],
+) {
+  const custody = createPluginNativeCaptureCustody(new Set());
+  let failures = 0;
+  let firstFailure: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      if (candidate.kind === "legacy") {
+        await reclaimLegacyPluginCapture(candidate);
+      } else {
+        await custody.reclaimInstance(candidate.directory, candidate.identity);
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !isSqliteLockError(error)) {
+        if (failures++ === 0) {
+          firstFailure = formatErrorMessage(error);
+        }
+      }
+    }
+  }
+  return { failures, firstFailure };
+}
 
 export type NativeCaptureMaintenance = {
   retainedPaths: ReadonlySet<string>;
@@ -62,7 +109,7 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
   /** Reclamation owns an existing native token until its captured payload is gone. */
   async function reclaimInstance(
     directory: string,
-    originalDirectory: fs.Stats,
+    originalDirectory: Pick<fs.Stats, "dev" | "ino" | "uid">,
     nativeMaintenance?: NativeCaptureMaintenance,
   ): Promise<void> {
     const ownerPath = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
@@ -172,8 +219,121 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
     }
   }
 
+  /** Existing custody excludes new readers of bytes the child will delete. */
+  function claimPluginCaptureReclaim(
+    candidate: PluginCaptureReclaimCandidate,
+  ): (() => void) | undefined {
+    const { directory } = candidate;
+    const deleted = candidate.kind === "managed" ? path.join(directory, "captures") : directory;
+    if (
+      ownedRoots.has(directory) ||
+      [...nativeLoadPaths].some((file) => isPathInside(directory, file)) ||
+      [...nativeReferences.keys()].some((file) => isPathInside(deleted, file))
+    ) {
+      return undefined;
+    }
+    ownedRoots.add(directory);
+    retiringNativeRoots.add(deleted);
+    return () => {
+      retiringNativeRoots.delete(deleted);
+      ownedRoots.delete(directory);
+    };
+  }
+
+  /** The caller owns these retirement claims until the command owner confirms exit. */
+  async function reclaimPluginCaptureSweep(
+    candidates: readonly PluginCaptureReclaimCandidate[],
+  ): Promise<{ failures: number; firstFailure?: string }> {
+    if (candidates.length === 0) {
+      return { failures: 0 };
+    }
+    const [
+      { deserialize },
+      { runtimeProcessEntrypoints },
+      { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl },
+      { runCommandBuffersWithTimeout },
+      { hasCommandProcessCleanupError },
+      { withCommandProcessScope },
+      { withChildProcessOperation },
+    ] = await Promise.all([
+      import("node:v8"),
+      import("../infra/runtime-process-entrypoints.js"),
+      import("../infra/runtime-worker-url.js"),
+      import("../process/exec-runner.js"),
+      import("../process/exec-result.js"),
+      import("../process/exec-spawn.js"),
+      import("../process/spawn-diagnostics.js"),
+    ]);
+    const admitted: PluginCaptureReclaimCandidate[] = [];
+    const releases: (() => void)[] = [];
+    for (const candidate of candidates) {
+      const release = claimPluginCaptureReclaim(candidate);
+      if (release) {
+        admitted.push(candidate);
+        releases.push(release);
+      }
+    }
+    if (admitted.length === 0) {
+      return { failures: 0 };
+    }
+    let releaseClaims = true;
+    try {
+      const command: FsSafeCopyWrite = { type: "reclaim-plugin-captures", candidates: admitted };
+      const result = await withCommandProcessScope(() =>
+        withChildProcessOperation("plugin.capture-reclamation", () =>
+          runCommandBuffersWithTimeout(
+            [
+              process.execPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy),
+              ),
+            ],
+            {
+              input: JSON.stringify(command),
+              beforeInput: () => {
+                if (
+                  admitted.some((candidate) =>
+                    [...nativeLoadPaths].some((file) => isPathInside(candidate.directory, file)),
+                  )
+                ) {
+                  throw new Error("Plugin capture became loaded before reclamation");
+                }
+              },
+              killProcessTree: true,
+              requireProcessTreeExtinction: true,
+              maxOutputBytes: 64 * 1024,
+            },
+          ),
+        ),
+      );
+      if (result.code !== 0 || result.termination !== "exit") {
+        throw new Error(`Plugin capture reclamation failed: ${result.termination}`);
+      }
+      // Its reply is consumed only after process exit and native cleanup join.
+      // SAFETY: The bundled fs-safe worker serializes its typed FsSafeCopyReply.
+      const reply = deserialize(result.stdout) as FsSafeCopyReply;
+      if (reply.type === "failed") {
+        throw new Error(reply.message);
+      }
+      if (reply.type !== "captures-reclaimed") {
+        throw new Error("Plugin capture reclamation returned no completion receipt");
+      }
+      return reply;
+    } catch (error) {
+      releaseClaims = !hasCommandProcessCleanupError(error);
+      throw error;
+    } finally {
+      if (releaseClaims) {
+        for (const release of releases) {
+          release();
+        }
+      }
+    }
+  }
+
   return {
     reclaimInstance,
+    reclaimPluginCaptureSweep,
     /** Independent inventories and loaded modules can retain the same native namespace. */
     isPluginSourceCaptureRetained(this: void, directory: string): boolean {
       return (

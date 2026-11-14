@@ -34,7 +34,7 @@ import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycl
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -215,7 +215,7 @@ async function appendUnboundSdkTranscriptMessage(
     undefined,
     prepared.persistedMessage,
   );
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   const publication = createSessionManagerPublicationHooks({
     agentId: input.target.agentId,
     storePath: execution.path,

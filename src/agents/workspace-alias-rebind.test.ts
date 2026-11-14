@@ -150,7 +150,7 @@ it("keeps verified sibling aliases but removes old paths from the moved owner's 
   repoint(second, moved);
   expect(await rebindMove(first, detectMove(first)!, {}, [first, second])).toBe("rebound");
   const snapshot = await readState(second);
-  await deleteWorkspaceState(prepareWorkspaceStateDeletion(original));
+  await deleteWorkspaceState(await prepareWorkspaceStateDeletion(original));
   await clearExpiredState(original, 24 * 60 * 60 * 1000 + 2000);
   expect(await readState(first)).toEqual(snapshot);
   fs.mkdirSync(original);

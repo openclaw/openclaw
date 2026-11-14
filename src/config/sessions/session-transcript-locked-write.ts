@@ -1,10 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  assertDatabasePathIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
-import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type {
   SessionTranscriptWriteScope,
@@ -66,11 +62,12 @@ export async function withWorkerTranscriptWriteLock<T>(
   const assertOwned = captureOwnedTranscriptWriteAssertion(ownerScope);
   const custody = captureSessionPendingInputWorkerCustody();
   const database = { ...toDatabaseOptions(scope), path: scope.path };
-  const identity = readDatabasePathIdentitySync(scope.path);
-  const execution = captureOpenClawAgentDatabaseExecution(
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(
     database,
-    toAgentExecutionConstraints(identity),
+    {},
+    "observed-absence",
   );
+  const identity = execution.capturedIdentity;
   const resolved: ResolvedTranscriptScope = {
     agentId: scope.agentId,
     databaseAgentId: scope.databaseAgentId,
@@ -140,14 +137,14 @@ export async function withWorkerTranscriptWriteLock<T>(
                     writer.runExisting(source, (worker) =>
                       executeSessionMessageRewriteOperation(worker, database.agentId, {
                         type: "session.transcript.lock.cold",
-                        input: { scope: resolved },
+                        input: { scope: resolved, readCustody: source.readCustody },
                       }),
                     ),
                   );
                   if (!metadata) {
                     throw new Error("Locked transcript lost its admitted database");
                   }
-                  return metadata.archive;
+                  return metadata;
                 },
               },
               {

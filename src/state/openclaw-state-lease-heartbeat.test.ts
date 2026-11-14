@@ -440,7 +440,6 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     env: {},
   });
   trackSqliteDatabaseAdmissionWorker(worker);
-  worker.once("exit", () => databaseAdmission.finish());
   const prepared = createDeferredCore();
   const processed = createDeferredCore();
   const ready = createDeferredCore();
@@ -537,7 +536,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     } finally {
       Atomics.store(loadGate, 0, 2);
       Atomics.notify(loadGate, 0);
-      registrationAdmission.finish();
+      await registrationAdmission.finish();
       registrationPort.port1.close();
       registrationPort.port2.close();
       registrationLoss.port1.close();
@@ -549,6 +548,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     }
     writer.close();
     await worker.terminate();
+    await databaseAdmission.finish();
     loss.port1.close();
     loss.port2.close();
   }

@@ -13,7 +13,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   executeExistingOpenClawStateRead,
@@ -82,6 +82,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   source?: "runtime" | "canonical";
 }): {
   identity: string | undefined;
+  readonly databaseIdentity: DatabasePathIdentity | undefined;
   source: AuthProfileReadSource;
   captureCredentialAuthority: (
     profileId: string | undefined,
@@ -254,6 +255,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
   let source: AuthProfileReadSource | undefined;
   return {
     identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    databaseIdentity: identity,
     get source() {
       return (source ??= {
         kind: "agent",
@@ -291,7 +293,7 @@ async function readAgentAuthProfileRows(
   assertCurrent: () => void,
   signal: AbortSignal,
 ): Promise<AuthProfileRowRead> {
-  const execution = captureOpenClawAgentDatabaseExecution({
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync({
     agentId: options.agentId,
     path: options.databasePath,
     env: options.env,

@@ -8,12 +8,28 @@ import {
   captureSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent as isCurrent,
 } from "./session-store-read-candidates.js";
-import { captureSessionStoreWriteCandidates as captureWrites } from "./session-store-target-inventory.js";
+import { prepareSessionStoreTargetCandidates as prepare } from "./session-store-target-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const capturedAlias = "/tmp/RUNNER~1/openclaw-agent.sqlite";
 const canonicalAlias = "/tmp/runneradmin/openclaw-agent.sqlite";
 const redirectedAlias = "/tmp/replacement/openclaw-agent.sqlite";
+
+function captureWrites(storePath: string) {
+  const result = prepare({ write: { storePath } });
+  if (!("write" in result) || !result.write) {
+    throw new Error("Expected captured write candidates");
+  }
+  return structuredClone(result.write);
+}
+
+function resolveWrite(captured: ReturnType<typeof captureWrites>, pathname: string) {
+  const result = prepare({ resolveWrite: { pathname, captured } });
+  if (!("identity" in result) || !result.identity) {
+    throw new Error("Expected a qualified write target");
+  }
+  return result.identity;
+}
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -111,12 +127,10 @@ test.each([false, true])("keeps sibling absence until creation (%s)", async (app
   await Promise.resolve();
   if (appeared) {
     fs.writeFileSync(selected, "later database");
-    expect(() => captured.resolveIdentity(selected)).toThrow(
-      "appeared after its initial inventory",
-    );
+    expect(() => resolveWrite(captured, selected)).toThrow("appeared after its initial inventory");
   } else {
     const canonicalPath = path.join(fs.realpathSync(root), "custom.main.4.sqlite");
-    expect(captured.resolveIdentity(selected)).toEqual({
+    expect(resolveWrite(captured, selected)).toEqual({
       key: `path:${canonicalPath}`,
       canonicalPath,
     });
@@ -134,8 +148,8 @@ test("does not certify sibling absence when the initial directory listing failed
   );
   const captured = captureWrites(path.join(root, "custom.json"));
   await Promise.resolve();
-  expect(captured.resolveIdentity(known).key).toMatch(/^file:/);
-  expect(() => captured.resolveIdentity(path.join(root, "custom.main.sqlite"))).toThrow(
+  expect(resolveWrite(captured, known).key).toMatch(/^file:/);
+  expect(() => resolveWrite(captured, path.join(root, "custom.main.sqlite"))).toThrow(
     "absence was not captured",
   );
 });
@@ -152,7 +166,7 @@ test.runIf(process.platform !== "win32")(
     await Promise.resolve();
     fs.unlinkSync(alias);
     fs.symlinkSync(replacement, alias, "junction");
-    expect(() => captured.resolveIdentity(path.join(alias, "custom.main.sqlite"))).toThrow(
+    expect(() => resolveWrite(captured, path.join(alias, "custom.main.sqlite"))).toThrow(
       "selector changed during discovery",
     );
     expect(fs.readdirSync(replacement)).toEqual([]);
@@ -172,7 +186,7 @@ test.each(process.platform === "win32" ? ["file"] : ["file", "symlink"])(
     const captured = captureWrites(path.join(root, "custom.json"));
     await Promise.resolve();
     fs.unlinkSync(selected);
-    expect(() => captured.resolveIdentity(selected)).toThrow();
+    expect(() => resolveWrite(captured, selected)).toThrow();
     expect(fs.existsSync(selected)).toBe(false);
   },
 );

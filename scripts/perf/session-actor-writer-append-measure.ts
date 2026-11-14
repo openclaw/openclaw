@@ -460,7 +460,7 @@ try {
   console.log(JSON.stringify(result));
 } finally {
   actor.close();
-  admission.finish();
+  await admission.finish();
   port1.close();
   port2.close();
   inspector.disconnect();

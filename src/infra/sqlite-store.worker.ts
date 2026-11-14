@@ -142,11 +142,17 @@ async function closeInActorContext(
   try {
     await runWithActorFacts(actor, () =>
       admission
-        ? withSqliteDatabaseAdmissionExchange((facts, location, create) => {
+        ? withSqliteDatabaseAdmissionExchange((facts, location, create, observedLocation) => {
             if (!active) {
               throw new SqliteWorkerError("SQLite close facts outlived native cleanup", "closed");
             }
-            return exchangeSqliteDatabaseAdmissions(admission.port, facts, location, create);
+            return exchangeSqliteDatabaseAdmissions(
+              admission.port,
+              facts,
+              location,
+              create,
+              observedLocation,
+            );
           }, close)
         : close(),
     );

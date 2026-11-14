@@ -4,7 +4,11 @@ import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
@@ -14,6 +18,7 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import * as agentWorkerStore from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
@@ -316,10 +321,8 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           .mockRejectedValueOnce(new Error("projection writer unavailable")),
       () =>
         vi
-          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-          .mockImplementationOnce(() => {
-            throw new Error("projection writer admission unavailable");
-          }),
+          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+          .mockRejectedValueOnce(new Error("projection writer admission unavailable")),
     ]) {
       const unavailableStatus = makeUnavailable();
       try {
@@ -327,6 +330,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           ...golden,
           indexing: true,
         });
+        expect(unavailableStatus).toHaveBeenCalledOnce();
         expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
           false,
         );
@@ -561,4 +565,73 @@ describe("search reader concurrency", () => {
         }),
       ),
   );
+});
+
+it("releases a projection status execution when canceled during async capture", async (test) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = await searchFixture(
+      state,
+      "capture-cancel",
+      "retained-message",
+      "Retained needle",
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.storePath, "main");
+    const database = {
+      ...fixture.database,
+      path: state.statePath("capture-cancel-unadmitted.sqlite"),
+    };
+    await fs.promises.copyFile(fixture.storePath, database.path);
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
+    const entered = createDeferred();
+    const continueCapture = createDeferred();
+    let execution: Awaited<ReturnType<typeof capture>> | undefined;
+    const held = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+      .mockImplementationOnce(async (...args) => {
+        execution = await capture(...args);
+        entered.resolve();
+        await continueCapture.promise;
+        return execution;
+      });
+    const openStore = vi.spyOn(agentWorkerStore, "openOpenClawAgentSqliteWorkerStore");
+    const controller = new AbortController();
+    const refusal = new Error("Synthetic status capture canceled");
+    const pending = projectionWriter.readSessionTranscriptIndexStatus(
+      database,
+      undefined,
+      controller.signal,
+    );
+    const settled = Promise.allSettled([pending]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Projection status bypassed asynchronous capture",
+        ),
+        test.signal,
+      );
+      expect(openStore).not.toHaveBeenCalled();
+      controller.abort(refusal);
+      continueCapture.resolve();
+      await expect(pending).rejects.toBe(refusal);
+      expect(openStore).not.toHaveBeenCalled();
+      expect(execution).toBeDefined();
+      expect(() => execution!.assertCurrent()).toThrow(
+        "Agent database execution reference is released",
+      );
+    } finally {
+      controller.abort(refusal);
+      continueCapture.resolve();
+      await settled;
+      held.mockRestore();
+      openStore.mockRestore();
+      await execution?.release();
+    }
+    const result = await searchSessionTranscripts(
+      { ...fixture.request, storePath: database.path },
+      database,
+    );
+    expect(result.hits).toMatchObject([{ messageId: "retained-message" }]);
+  });
 });

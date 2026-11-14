@@ -12,8 +12,13 @@ import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
-import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import {
+  isChildProcessTreeAlive,
+  isChildProcessTreeAliveAsync,
+  isProcessGroupGoneByKernel,
+} from "./child-process-tree.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
+import { readCommandProcessStartTime } from "./command-process-identity.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -185,28 +190,29 @@ export const COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS = 10_000;
 /** The single owner for confirming that a force-killed command group is gone. */
 export async function waitForCommandProcessGroupExit(
   pid: number,
-  isOriginalProcess: () => boolean,
+  isOriginalProcess: () => boolean | Promise<boolean>,
 ): Promise<"exited" | "replaced" | "alive"> {
   const deadline = performance.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
-  while (isChildProcessTreeAlive({ pid })) {
-    if (!isOriginalProcess()) {
+  while (await isChildProcessTreeAliveAsync({ pid })) {
+    if (!(await isOriginalProcess())) {
       return "replaced";
     }
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      return isChildProcessTreeAlive({ pid }) ? "alive" : "exited";
+      return (await isChildProcessTreeAliveAsync({ pid })) ? "alive" : "exited";
     }
     await sleep(Math.min(25, remaining));
   }
   return "exited";
 }
 
-const commandAdmissions = new WeakMap<ChildProcess, Promise<void>>();
+const commandAdmissions = new WeakMap<ChildProcess, Promise<number | null>>();
 
 /** Remote PID and pipes arrive together before admission or stream subscription. */
 export async function waitForCommandSpawn(
   child: { nodeChildProcess: ChildProcess } & PromiseLike<unknown>,
-): Promise<void> {
+  captureStartTime = false,
+): Promise<number | null | void> {
   if (child.nodeChildProcess instanceof BrokerChild) {
     try {
       await child.nodeChildProcess.ready();
@@ -215,7 +221,14 @@ export async function waitForCommandSpawn(
       await child;
     }
   }
-  await commandAdmissions.get(child.nodeChildProcess);
+  const admission = commandAdmissions.get(child.nodeChildProcess);
+  if (admission) {
+    return await admission;
+  }
+  const nativeChild = child.nodeChildProcess;
+  if (captureStartTime && nativeChild.pid !== undefined && process.platform !== "win32") {
+    return await readCommandProcessStartTime(nativeChild.pid, { child: nativeChild });
+  }
 }
 
 type ScopedCommand = {
@@ -375,6 +388,7 @@ function retainCommandProcess(
   let pid: number | undefined;
   let startedAt: number | null = null;
   let stopped = false;
+  let stopping: Promise<void> | undefined;
   let groupExtinct = false;
   let settlementFailed = false;
   let custodySettled = false;
@@ -402,48 +416,81 @@ function retainCommandProcess(
       return;
     }
     stopped = true;
-    // A live direct child holds PID custody even when its optional timestamp probe failed.
-    if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
-      // Descendants can exit after pipe closure retained this command. An absent
-      // group has settled even if another process now owns the retired root PID.
-      if (!isChildProcessTreeAlive({ pid })) {
-        groupExtinct = true;
-        return;
-      }
-      const currentStart = getFileLockProcessStartTime(pid);
+    const childPid = pid;
+    const signalOwnedGroup = () => {
+      killProcessTree(childPid, { detached: true, force: true });
+      scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
+    };
+    // A live direct child retains PID custody even while optional birth preparation waits.
+    if (nativeChild.exitCode === null && nativeChild.signalCode === null) {
+      signalOwnedGroup();
+      return;
+    }
+    const verifyAndSignal = (currentStart: number | null) => {
       if (currentStart !== null && currentStart !== startedAt) {
         throw new CommandProcessCleanupError();
       }
-    }
-    killProcessTree(pid, { detached: true, force: true });
-    scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
-  };
-  const initialize = () => {
-    pid = child.pid;
-    if (pid !== undefined) {
-      try {
-        if (process.platform !== "win32") {
-          startedAt = getFileLockProcessStartTime(pid);
-        }
-        reservation?.spawned({ pid, startedAt: getProcessInstanceStartTime(pid) });
-        if (scope.signal.aborted) {
-          stop();
-        }
-      } catch (error) {
-        scope.failure ??= { error };
-        stop();
-        throw error;
+      // A completed identity read does not retain authority over an already retired group.
+      if (isProcessGroupGoneByKernel(childPid)) {
+        groupExtinct = true;
+        return;
       }
+      signalOwnedGroup();
+    };
+    if (process.platform === "linux" || process.platform === "android") {
+      stopping = readiness
+        .catch(() => null)
+        .then(async () => {
+          if (!(await isChildProcessTreeAliveAsync({ pid: childPid }))) {
+            groupExtinct = true;
+            return;
+          }
+          verifyAndSignal(await readCommandProcessStartTime(childPid));
+        })
+        .catch((error: unknown) => {
+          scope.failure ??= { error };
+        });
+    } else {
+      if (!isChildProcessTreeAlive({ pid: childPid })) {
+        groupExtinct = true;
+        return;
+      }
+      verifyAndSignal(getFileLockProcessStartTime(childPid));
     }
+  };
+  const initialize = (): number | null | Promise<number | null> => {
+    pid = child.pid;
+    if (pid === undefined) {
+      return null;
+    }
+    const childPid = pid;
+    const bind = (observed: number | null) => {
+      startedAt = observed;
+      reservation?.spawned({
+        pid: childPid,
+        startedAt:
+          process.platform === "linux" || process.platform === "android"
+            ? startedAt
+            : getProcessInstanceStartTime(childPid),
+      });
+      if (scope.signal.aborted) {
+        stop();
+      }
+      return startedAt;
+    };
+    const observed =
+      process.platform === "win32"
+        ? null
+        : readCommandProcessStartTime(childPid, { child: nativeChild });
+    return observed instanceof Promise ? observed.then(bind) : bind(observed);
   };
   let bindingError: { error: unknown } | undefined;
-  let readiness: Promise<void>;
+  let readiness: Promise<number | null>;
   if (nativeChild instanceof BrokerChild && child.pid === undefined) {
     readiness = nativeChild.ready().then(initialize);
   } else {
     try {
-      initialize();
-      readiness = Promise.resolve();
+      readiness = Promise.resolve(initialize());
     } catch (error) {
       bindingError = { error };
       readiness = Promise.reject(toErrorObject(error, "Command process custody admission failed"));
@@ -463,6 +510,11 @@ function retainCommandProcess(
   const initialized = readiness.catch((error: unknown) => {
     if (!(nativeChild instanceof BrokerChild && nativeChild.notStarted)) {
       scope.failure ??= { error };
+      try {
+        stop();
+      } catch (stopError) {
+        scope.failure ??= { error: stopError };
+      }
     }
   });
   const owned: ScopedCommand = {
@@ -470,45 +522,42 @@ function retainCommandProcess(
     async settle() {
       await initialized;
       await completed;
-      if (groupExtinct) {
-        settleCustody();
-        return;
-      }
+      await stopping;
       if (pid === undefined) {
         if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
           throw new CommandProcessCleanupError();
         }
-        settleCustody();
-        return;
-      }
-      // Windows executable finalizers retain a Job until process exit. POSIX
-      // pipe closure is not extinction: observe this exact group after its stop.
-      if (process.platform === "win32") {
+      } else if (process.platform === "win32") {
+        // Windows executable finalizers retain a Job until process exit.
         if (!observedExit) {
           throw new CommandProcessCleanupError();
         }
-        settleCustody();
-        return;
-      }
-      const groupPid = pid;
-      const exit = await waitForCommandProcessGroupExit(groupPid, () => {
-        const current = getFileLockProcessStartTime(groupPid);
-        return current === null || current === startedAt;
-      });
-      if (exit !== "exited") {
-        throw new CommandProcessCleanupError();
+      } else if (!groupExtinct) {
+        // POSIX pipe closure is not extinction: observe this exact group after its stop.
+        const groupPid = pid;
+        const exit = await waitForCommandProcessGroupExit(groupPid, async () => {
+          const current = await readCommandProcessStartTime(groupPid);
+          return current === null || current === startedAt;
+        });
+        if (exit !== "exited") {
+          throw new CommandProcessCleanupError();
+        }
       }
       settleCustody();
     },
   };
   scope.children.add(owned);
-  void completed.then(() => {
+  void completed.then(async () => {
+    await initialized;
+    await stopping;
     // Failed launches must retire before a later command can strand the enclosing scope.
     const neverStarted =
       pid === undefined && (!(nativeChild instanceof BrokerChild) || nativeChild.notStarted);
     if (
       neverStarted ||
-      (pid !== undefined && process.platform !== "win32" && !isChildProcessTreeAlive({ pid }))
+      (pid !== undefined &&
+        process.platform !== "win32" &&
+        !(await isChildProcessTreeAliveAsync({ pid })))
     ) {
       try {
         settleCustody();

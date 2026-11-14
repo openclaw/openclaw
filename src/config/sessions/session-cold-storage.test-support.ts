@@ -3,6 +3,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
@@ -123,4 +124,20 @@ export function maintenanceConfig(storePath: string, enabled = true, afterDays =
     agents,
     session: { store: storePath, maintenance: { coldStorage: { enabled, afterDays } } },
   };
+}
+
+export function setTranscriptActivity(
+  options: OpenClawAgentDatabaseOptions,
+  sessionId: string,
+  updatedAt = 1,
+) {
+  runOpenClawAgentWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .updateTable("session_windows")
+        .set({ updated_at: updatedAt, transcript_updated_at: updatedAt })
+        .where("session_id", "=", sessionId),
+    );
+  }, options);
 }

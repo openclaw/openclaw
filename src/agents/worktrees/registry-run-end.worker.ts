@@ -12,6 +12,8 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationContext } from "../../state/worker-operation-registry.js";
+import { assertSandboxStateOwnerPathCurrent } from "../sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
 import {
   SessionWorktreeLifecycleError,
   SessionWorktreeSourceChangedError,
@@ -41,6 +43,7 @@ import type {
   ManagedWorktreeRecord,
   ProvisionedFileState,
   WorktreeRegistryPredicate,
+  WorktreeWorkerAuthority,
 } from "./types.js";
 
 const query = (db: EngineConnection) =>
@@ -176,7 +179,10 @@ export function updateRegistryWorktreeInDatabase(
   worktreeRegistryPublication.rows(db, executeSqliteQuerySync(db, update.returningAll()).rows);
 }
 
-export type WorktreeRunEndInput<T> = {
+export type WorktreeRunEndInput<T> = Pick<
+  WorktreeWorkerAuthority,
+  "workspaceEvidence" | "stateOwnerPath"
+> & {
   value: T;
   receipt: string;
   leases?: readonly OpenClawStateLeaseIdentity[];
@@ -424,11 +430,17 @@ export function worktreeRunEndMutation<Input>(
     leases?: readonly OpenClawStateLeaseIdentity[],
   ) => void,
 ) {
-  return (input: WorktreeRunEndInput<Input>, context: WorkerOperationContext): void => {
+  return (input: WorktreeRunEndInput<Input>, context: WorkerOperationContext) => {
     const database = context.open();
-    runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const admit = (stage: "transaction" | "commit") => {
+          for (const evidence of input.workspaceEvidence ?? []) {
+            assertWorkspaceFilesystemEvidence(evidence);
+          }
+          if (input.stateOwnerPath) {
+            assertSandboxStateOwnerPathCurrent(input.stateOwnerPath);
+          }
           if (input.leases) {
             assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, stage);
           } else {
@@ -437,11 +449,12 @@ export function worktreeRunEndMutation<Input>(
         };
         admit("transaction");
         assertWorktreeRegistryPredicates(db, input.predicates);
-        withWorktreeRegistryWorkerReceipt(
+        return withWorktreeRegistryWorkerReceipt(
           db,
           () => {
             mutate(db, input.value, input.leases);
             admit("commit");
+            return input.workspaceEvidence;
           },
           input.receipt,
         );

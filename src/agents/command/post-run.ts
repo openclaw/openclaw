@@ -30,7 +30,10 @@ import {
   type PendingFinalDeliverySource,
 } from "../pending-final-delivery-marker.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
-import type { SessionMaintenanceRequest } from "../session-maintenance/run.js";
+import {
+  prepareSessionMaintenanceRequest,
+  type SessionMaintenanceRequest,
+} from "../session-maintenance/run.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import {
@@ -344,7 +347,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       !sessionReboundDuringRun &&
       cfg.agents?.defaults?.compaction?.enabled !== false &&
       embeddedMaintenance
-        ? {
+        ? await prepareSessionMaintenanceRequest({
             prepared: { cfg, sessionKey, storePath, timeoutMs },
             followupRun: createCommandMaintenanceFollowup({
               prepared: params.prepared,
@@ -364,7 +367,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
             oneShotCliRun: params.opts.oneShotCliRun,
             agentHarnessId: agentMeta?.agentHarnessId,
             compactionRequestBudget: params.attempt.compactionRequestBudget,
-          }
+          })
         : undefined;
 
     // Generic CLI backends may rely on this sole host-compaction path. Keep its

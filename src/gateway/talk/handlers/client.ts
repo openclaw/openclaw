@@ -207,6 +207,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             },
             assertPreparationCurrent,
             request.signal,
+            (change) =>
+              request.sessionMutationAuthorization?.followRegistration?.(
+                { agentId, sessionKey: target.canonicalKey },
+                change,
+              ),
           );
           if (preparedRequester.opaqueCommitGuard) {
             requester.assertCurrent();

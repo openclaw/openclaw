@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import { readLocalWorkspaceFileWithGuards } from "./workspace-file-read.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_MEMORY_FILENAME,
@@ -26,6 +27,15 @@ async function expectAgents(dir: string, content: string, exact = false) {
     missing: false,
     content: exact ? content : expect.stringContaining(content),
   });
+}
+
+async function expectLocalAgents(dir: string, content: string) {
+  await expect(
+    readLocalWorkspaceFileWithGuards({
+      filePath: path.join(dir, DEFAULT_AGENTS_FILENAME),
+      workspaceDir: dir,
+    }),
+  ).resolves.toMatchObject({ ok: true, content: expect.stringContaining(content) });
 }
 
 export function registerWorkspaceBootstrapTests() {
@@ -94,7 +104,7 @@ export function registerWorkspaceBootstrapTests() {
         (originalRead as (...forwarded: unknown[]) => void)(...args);
       }) as typeof syncFs.read);
 
-      await expectAgents(tempDir, "keep me");
+      await expectLocalAgents(tempDir, "keep me");
       expect(threwTransient).toBe(true);
       // The retry re-opens and reads again, so the failed first read is followed
       // by at least one more successful read.
@@ -109,7 +119,16 @@ export function registerWorkspaceBootstrapTests() {
         callback(eagain("read"));
       }) as typeof syncFs.read);
 
-      await expectAgents(tempDir, "[UNREADABLE: Unknown system error -11: read]", true);
+      await expect(
+        readLocalWorkspaceFileWithGuards({
+          filePath: path.join(tempDir, DEFAULT_AGENTS_FILENAME),
+          workspaceDir: tempDir,
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: "io",
+        error: expect.objectContaining({ code: "EAGAIN" }),
+      });
     });
 
     it("retries a transient boundary-resolution failure before dropping a bootstrap file", async () => {
@@ -125,7 +144,7 @@ export function registerWorkspaceBootstrapTests() {
         return originalLstat(target as never, options as never);
       }) as typeof syncFs.lstatSync);
 
-      await expectAgents(tempDir, "boundary retry");
+      await expectLocalAgents(tempDir, "boundary retry");
       expect(agentsLstatAttempts).toBeGreaterThanOrEqual(2);
     });
 
@@ -146,7 +165,7 @@ export function registerWorkspaceBootstrapTests() {
         return originalOpenSync(...args);
       }) as typeof syncFs.openSync);
 
-      await expectAgents(tempDir, "open retry");
+      await expectLocalAgents(tempDir, "open retry");
       expect(threwTransientOpen).toBe(true);
     });
   });

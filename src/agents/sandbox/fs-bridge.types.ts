@@ -1,5 +1,25 @@
 import type { DirectoryEntry } from "../../infra/directory-entries.js";
 
+/** Managed skill directory projected read-only into the sandbox workspace. */
+export type ReadOnlyWorkspaceSkillMount = {
+  hostPath: string;
+  containerPath: string;
+};
+
+export type SandboxFsMount = {
+  hostRoot: string;
+  canonicalHostRoot?: string;
+  containerRoot: string;
+  writable: boolean;
+  source: "workspace" | "agent" | "bind" | "protectedSkill";
+};
+
+export type SandboxFsPreparation = {
+  mounts: SandboxFsMount[];
+  readOnlyWorkspaceSkillMounts: ReadOnlyWorkspaceSkillMount[];
+  protectedSkills: Array<{ name: string; sourceFile: string; containerRoot: string }>;
+};
+
 export type SandboxResolvedPath = {
   hostPath?: string;
   relativePath: string;

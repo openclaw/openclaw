@@ -1,4 +1,4 @@
-import {
+import fs, {
   mkdirSync,
   realpathSync,
   renameSync,
@@ -7,11 +7,16 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { backup, type DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as admissionReceipts from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { NativeWorker } from "../../infra/worker-native-handle.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
@@ -23,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
@@ -31,6 +37,7 @@ import {
   loadSessionEntryReadOnlyInScope,
   loadSessionEntryReadOnlyResultInScope,
   replaceSessionEntrySync,
+  patchSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
@@ -39,11 +46,13 @@ import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js"
 import { readSessionEntryList } from "./session-entry-list.worker.js";
 import {
   readSessionEntryReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
 import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import * as historyWorker from "./session-transcript-worker-runtime.js";
 
 const sqliteError = (message: string, errcode = 26) =>
   Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
@@ -413,11 +422,12 @@ it("returns unavailable registry facts as locator data without catching candidat
   }));
 
 it.runIf(process.platform !== "win32").each([
-  { retarget: true, logicalAgentId: "main" },
-  { retarget: false, logicalAgentId: "ops" },
+  { retarget: true, logicalAgentId: "main", canonical: false },
+  { retarget: false, logicalAgentId: "ops", canonical: false },
+  { retarget: true, logicalAgentId: "main", canonical: true },
 ])(
-  "retains logical $logicalAgentId through its alias consumer (retargeted: $retarget)",
-  async ({ retarget, logicalAgentId }) => {
+  "retains logical $logicalAgentId through its consumer (retargeted: $retarget, canonical: $canonical)",
+  async ({ retarget, logicalAgentId, canonical }) => {
     await withOpenClawTestState({ label: "readonly-store-alias" }, async ({ env, path }) => {
       const original = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = `agent:${logicalAgentId}:alias`;
@@ -428,14 +438,21 @@ it.runIf(process.platform !== "win32").each([
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })
         : undefined;
-      const alias = path("custom.sqlite");
-      symlinkSync(original.path, alias);
+      const alias = canonical ? original.path : path("custom.sqlite");
+      if (!canonical) {
+        symlinkSync(original.path, alias);
+      }
+      const moved = path("original.sqlite");
       let consumed = false;
       const pending = withSessionEntryReadOnlyInWorker(
         {
           agentId: logicalAgentId,
           sessionKey,
-          storePath: logicalAgentId === "main" ? path("custom.json") : alias,
+          storePath: canonical
+            ? original.path
+            : logicalAgentId === "main"
+              ? path("custom.json")
+              : alias,
           env,
         },
         () => {},
@@ -452,7 +469,11 @@ it.runIf(process.platform !== "win32").each([
           consumed = true;
           await Promise.resolve();
           if (replacement) {
-            unlinkSync(alias);
+            if (canonical) {
+              renameSync(alias, moved);
+            } else {
+              unlinkSync(alias);
+            }
             symlinkSync(replacement.path, alias);
           }
           return read.value;
@@ -465,12 +486,16 @@ it.runIf(process.platform !== "win32").each([
       } else {
         await expect(pending).resolves.toMatchObject({ sessionId: "original" });
       }
+      if (canonical) {
+        unlinkSync(alias);
+        renameSync(moved, alias);
+      }
       expect(consumed).toBe(true);
     });
   },
 );
 
-it.each(["logical", "omitted", "empty"] as const)(
+it.each(["logical", "omitted", "empty", "handoff"] as const)(
   "fences the selected SQLite alias after a %s store read releases its initial owner",
   (locator) =>
     withOpenClawTestState({ label: "currency-selected-store-alias" }, async (state) => {
@@ -517,7 +542,20 @@ it.each(["logical", "omitted", "empty"] as const)(
             throw read.error;
           }
           expect(read.value?.sessionId).toBe(entry.sessionId);
-          return captureSessionEntryCurrentRead(scope, owner);
+          const stat = vi.spyOn(fs, "statSync");
+          const realpath = vi.spyOn(fs.realpathSync, "native");
+          syncBuiltinESMExports();
+          try {
+            const captured = captureSessionEntryCurrentRead(scope, owner);
+            captured.assertSourceCurrent();
+            expect(stat).not.toHaveBeenCalled();
+            expect(realpath).not.toHaveBeenCalled();
+            return captured;
+          } finally {
+            stat.mockRestore();
+            realpath.mockRestore();
+            syncBuiltinESMExports();
+          }
         },
       );
       if (current.kind !== "file") {
@@ -531,10 +569,24 @@ it.each(["logical", "omitted", "empty"] as const)(
         sessionId: entry.sessionId,
         lifecycleRunId: entry.lifecycleRunId,
       });
-      rmSync(alias, { recursive: true, force: true });
-      symlinkSync(dirname(replacement.path), alias, linkType);
-      expect(realpathSync(state.sessionsDir())).toBe(logicalParent);
-      expect(realpathSync(selectedSqlite)).toBe(realpathSync(replacement.path));
+      const retarget = () => {
+        rmSync(alias, { recursive: true, force: true });
+        symlinkSync(dirname(replacement.path), alias, linkType);
+        expect(realpathSync(state.sessionsDir())).toBe(logicalParent);
+        expect(realpathSync(selectedSqlite)).toBe(realpathSync(replacement.path));
+      };
+      if (locator === "handoff") {
+        const readHistory = historyWorker.withSessionHistoryWorkerDatabase;
+        vi.spyOn(historyWorker, "withSessionHistoryWorkerDatabase").mockImplementationOnce(
+          async (...args) => {
+            const value = await readHistory(...args);
+            retarget();
+            return value;
+          },
+        );
+      } else {
+        retarget();
+      }
       expect(entryReads.readSessionEntryRow(original, sessionKey)?.entry.sessionId).toBe(
         entry.sessionId,
       );
@@ -555,5 +607,66 @@ it.each(["logical", "omitted", "empty"] as const)(
           nativeCheck,
         ),
       ).toThrow("Session currency logical source changed");
+      rmSync(alias, { recursive: true, force: true });
+      symlinkSync(dirname(original.path), alias, linkType);
+      await expect(current.readCurrent()).resolves.toMatchObject({ sessionId: entry.sessionId });
+      expect(() => current.assertSourceCurrent()).not.toThrow();
+    }),
+);
+
+it.each(["single", "batch"] as const)(
+  "admits cold %s reads through their worker before retaining invalidation facts",
+  (kind) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { database, scope } = createEntryFixture(state.env);
+      const coldPath = state.path("cold-rows.sqlite");
+      await backup(requireNativeSqliteDatabase(database.db), coldPath);
+      const cold = { ...scope, storePath: coldPath };
+      expect(admissionReceipts.getSqliteDatabaseAdmissionIdentityForPath(coldPath)).toBeUndefined();
+      using filesystem = observeMainThreadFs();
+      const token = admissionReceipts.readSqliteDatabaseWriteTokenForPath;
+      let tokenLookups = 0;
+      using observation = vi
+        .spyOn(admissionReceipts, "readSqliteDatabaseWriteTokenForPath")
+        .mockImplementation((...args) => {
+          const before = filesystem.count();
+          try {
+            return token(...args);
+          } finally {
+            tokenLookups += filesystem.count() - before;
+          }
+        });
+      using messages = vi.spyOn(NativeWorker.prototype, "postMessage");
+      using workerMessages = vi.spyOn(Worker.prototype, "postMessage");
+      const requests = () =>
+        [...messages.mock.calls, ...workerMessages.mock.calls].filter(
+          ([message]) =>
+            isRecord(message) &&
+            isRecord(message.input) &&
+            (message.input.kind === "session-entry-read" ||
+              message.input.kind === "session-exact-entries"),
+        ).length;
+      const read = async () =>
+        kind === "single"
+          ? readSessionEntryReadOnlyInWorker(cold)
+          : (
+              await readSessionEntriesFromStoreInWorker({
+                ...cold,
+                sessionKeys: [scope.sessionKey],
+              })
+            ).entries[0]?.entry;
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      const first = requests();
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      const second = requests();
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      expect(requests()).toBe(second);
+      expect(observation).toHaveBeenCalled();
+      expect(tokenLookups).toBe(0);
+      expect(first).toBe(1);
+      expect(second).toBe(2);
+      await patchSessionEntryCore(cold, () => ({ label: "worker-committed" }));
+      expect(await read()).toMatchObject({ label: "worker-committed" });
+      expect(tokenLookups).toBe(0);
     }),
 );

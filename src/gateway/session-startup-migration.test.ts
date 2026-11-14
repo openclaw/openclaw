@@ -1,5 +1,6 @@
 /** SQLite startup maintenance without the unrelated full-Gateway fixture lifecycle. */
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,10 @@ import * as transcriptReconcile from "../config/sessions/session-transcript-reco
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -71,6 +76,7 @@ async function closeAgentDatabases(root?: string) {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   await closeAgentDatabases();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -170,6 +176,13 @@ describe("runStartupSessionMaintenanceForTest", () => {
       for (const databases of [normal, deferred]) {
         expect(databases.filter(({ database }) => database.path === sharedPath)).toHaveLength(1);
       }
+      const preparedPaths = new Set([...normal, ...deferred].map(({ database }) => database.path));
+      const identity = readDatabasePathIdentitySync(sharedPath);
+      const stat = vi.spyOn(fs, "statSync");
+      syncBuiltinESMExports();
+      assertExistingDatabaseIdentity(sharedPath, identity.key, identity.birthtime);
+      expect(stat).toHaveBeenCalledWith(sharedPath, { bigint: true });
+      stat.mockClear();
       const start = vi
         .spyOn(factsBackfill, "createSessionTranscriptFactsBackfill")
         .mockImplementation(({ database }) => ({
@@ -202,6 +215,11 @@ describe("runStartupSessionMaintenanceForTest", () => {
       await clock.advanceBy(250);
       expect(sharedStarts()).toHaveLength(1);
       expect(log.warn).not.toHaveBeenCalled();
+      expect(
+        stat.mock.calls.filter(
+          ([pathname]) => typeof pathname === "string" && preparedPaths.has(pathname),
+        ),
+      ).toEqual([]);
     } finally {
       release.resolve();
       await Promise.all(ticks);
@@ -284,6 +302,21 @@ describe("runStartupSessionMaintenanceForTest", () => {
       env,
       log: makeLog(),
     });
+    const target = databases.find(({ database }) => database.path === original.path)!;
+    const createBackfill = () =>
+      factsBackfill.createSessionTranscriptFactsBackfill({
+        database: target.database,
+        ...target.backfillSource,
+        signal: new AbortController().signal,
+        log: makeLog(),
+      });
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    const sameFile = createBackfill();
+    try {
+      expect(await sameFile.runBatch()).toMatchObject({ complete: true });
+    } finally {
+      await sameFile.close();
+    }
     await closeOpenClawAgentDatabasesAsync(stateDir);
     fs.renameSync(original.path, `${original.path}.retired`);
     const successor = openOpenClawAgentDatabase(options);
@@ -294,6 +327,20 @@ describe("runStartupSessionMaintenanceForTest", () => {
       runGatewaySessionStartupMaintenance({ databases, log: makeLog() }),
     ).rejects.toThrow("identity changed");
     expect(reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
+    expect(successor.db.isOpen).toBe(true);
+    const fileBytes = () =>
+      ["", "-wal", "-shm", "-journal"].map((suffix) => {
+        const filename = successor.path + suffix;
+        return fs.existsSync(filename) ? fs.readFileSync(filename) : null;
+      });
+    const before = fileBytes();
+    const replacedFile = createBackfill();
+    try {
+      await expect(replacedFile.runBatch()).rejects.toThrow("identity changed");
+    } finally {
+      await replacedFile.close();
+    }
+    expect(fileBytes()).toEqual(before);
     expect(successor.db.isOpen).toBe(true);
   });
 

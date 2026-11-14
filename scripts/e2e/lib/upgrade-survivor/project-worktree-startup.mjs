@@ -182,6 +182,8 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   try {
     for (const [role, prefix, symbol] of [
       ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["backup", "doctor-migration-backup", "captureFreshDoctorMigrationTables"],
+      ["withBackup", "update-doctor-migration-attribution", "runWithDoctorMigrationBackup"],
       ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
       ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
       ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
@@ -206,10 +208,12 @@ async function prepareSchema(ctx, packageRoot, bindings) {
       env: process.env,
       operation: "project worktree fixture schema preparation",
       run: () =>
-        doctor.api.migrate({
-          env: process.env,
-          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
-        }),
+        doctor.api.withBackup(doctor.api.backup, () =>
+          doctor.api.migrate({
+            env: process.env,
+            configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+          }),
+        ),
     });
   } catch (error) {
     errors.push(error);
@@ -543,7 +547,12 @@ export function assertProjectWorktreeStartupLog(log, start) {
 }
 
 export function assertProjectWorktreeStartupPreservation(actual, original, expectedWorkspace) {
-  assert.deepEqual(actual.shared, original.shared);
+  const withWorktreeDefaults = (shared) => ({
+    ...shared,
+    // The published baseline predates the nullable worktree GC protection column.
+    worktrees: shared.worktrees.map((row) => Object.assign({ gc_protection_json: null }, row)),
+  });
+  assert.deepEqual(withWorktreeDefaults(actual.shared), withWorktreeDefaults(original.shared));
   assert.deepEqual(actual.agent.transcript, original.agent.transcript);
   assert.equal(actual.agent.sessions.length, original.agent.sessions.length);
   for (const row of actual.agent.sessions) {

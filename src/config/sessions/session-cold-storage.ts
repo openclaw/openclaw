@@ -1,8 +1,7 @@
-import { statSync } from "node:fs";
 import path from "node:path";
 import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -12,9 +11,9 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import {
@@ -54,6 +53,7 @@ import type {
   SessionColdBatchResult,
   SessionColdMaintenanceResult,
   SessionColdMutationResult,
+  SessionColdSource,
 } from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
@@ -93,6 +93,7 @@ function workerDatabaseOptions(options: OpenClawAgentDatabaseOptions) {
 
 async function runColdMutation(
   plan: SessionColdMutationPlan,
+  source: SessionColdSource,
   assertCurrent?: () => void,
   callerSignal?: AbortSignal,
   acceptSourceValidation?: SessionColdReadPreparation["acceptSourceValidation"],
@@ -105,7 +106,10 @@ async function runColdMutation(
     plan.databaseOptions,
     async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
       const execution = supportsOpenClawAgentDatabaseExecution(plan.databaseOptions)
-        ? captureOpenClawAgentDatabaseExecution(plan.databaseOptions)
+        ? await captureOpenClawAgentDatabaseExecutionAsync(
+            plan.databaseOptions,
+            toAgentExecutionConstraints(source.readIdentity),
+          )
         : undefined;
       let retained: ReturnType<typeof retainOpenClawAgentDatabaseReadOnly> | undefined;
       try {
@@ -131,15 +135,15 @@ async function runColdMutation(
               plan.databaseOptions,
               undefined,
               assertOpeningCurrent,
-              (owner, source) =>
-                owner.runExisting(source, async () => owner.captureGenerationClaim()),
+              (owner, admitted) =>
+                owner.runExisting(admitted, async () => owner.captureGenerationClaim()),
               undefined,
               execution,
               signal,
             )
           : undefined;
         const claim = executionClaim ?? (retained?.found ? retained.claim : undefined);
-        if (!claim) {
+        if (!claim || `file:${claim.identity}` !== source.readIdentity.key) {
           throw new Error("Cold transcript operation lost its owning database");
         }
         const assertAllowed = () => {
@@ -190,9 +194,16 @@ async function runColdMutation(
             }>({
               diagnostics,
               signal,
+              assertCurrent: assertAllowed,
               expectedMessageType: "reclaimed",
               validationOwner: executionClaim
-                ? { source: plan.databaseOptions, claim: executionClaim }
+                ? {
+                    source: {
+                      ...plan.databaseOptions,
+                      canonicalPath: source.readIdentity.canonicalPath,
+                    },
+                    claim: executionClaim,
+                  }
                 : retained?.found
                   ? { database: retained.database, isCurrent: retained.claim.isCurrent }
                   : undefined,
@@ -216,6 +227,8 @@ async function runColdMutation(
                 ),
               workerData: {
                 plan,
+                source,
+                executionAuthority: executionClaim?.authority,
                 commitGate,
                 sourceMatches,
               } satisfies SessionColdWorkerData,
@@ -228,12 +241,16 @@ async function runColdMutation(
         }
         publishUnchangedSessionTranscriptReceipts(completed.result.transcriptPublication);
         if (plan.kind !== "cold-restore") {
-          await withSqliteSessionPageReclamation(plan.databaseOptions, (reclaimPages) =>
-            reclaimSqliteFreePages(plan.databaseOptions, undefined, {
-              reclaimPages,
-              maxPages: 64 * 512,
-              assertCurrent: assertAllowed,
-            }),
+          await withSqliteSessionPageReclamation(
+            plan.databaseOptions,
+            (reclaimPages) =>
+              reclaimSqliteFreePages(plan.databaseOptions, undefined, {
+                reclaimPages,
+                maxPages: 64 * 512,
+                assertCurrent: assertAllowed,
+              }),
+            assertAllowed,
+            source,
           );
         } else if (
           completed.result.restored &&
@@ -265,14 +282,8 @@ async function archiveSessionColdBatch(
   options: SessionColdBatchOptions,
 ): Promise<SessionColdBatchResult> {
   const storePath = resolveOpenClawAgentSqlitePath(options.databaseOptions);
-  const source = createOpenClawAgentDatabasePathMatcher();
-  source(storePath, storePath);
-  const assertCurrent = () => {
-    options.assertCurrent?.();
-    if (!source.isCurrent()) {
-      throw new Error("Cold transcript database changed during maintenance");
-    }
-  };
+  const source = { readIdentity: options.readIdentity, readCustody: options.readCustody };
+  const assertCurrent = () => options.assertCurrent?.();
   return runQueuedStoreWrite({
     queues: operations,
     storePath,
@@ -290,7 +301,8 @@ async function archiveSessionColdBatch(
           }
         }
       }
-      const input: SessionColdBatchInput = {
+      const input: SessionColdBatchInput & { source: SessionColdSource } = {
+        source,
         databaseOptions: workerDatabaseOptions(options.databaseOptions),
         admissionIdentities: [
           ...(collectSessionControllerTargets(undefined, options.ownerStorePath).get(
@@ -347,6 +359,7 @@ async function archiveSessionColdBatch(
                 protectionKeys: batch.protectionKeys,
                 liveSessionKeys: input.liveSessionKeys,
               },
+              source,
               () => {
                 assertCurrent();
                 const admissions = collectSessionControllerTargets(
@@ -373,6 +386,7 @@ async function archiveSessionColdBatch(
           : batch.freePages > 0
             ? await runColdMutation(
                 { kind: "cold-maintain", databaseOptions: input.databaseOptions },
+                source,
                 assertCurrent,
               )
             : { archivedTranscripts: 0, externalizedTranscripts: 0 };
@@ -438,31 +452,30 @@ export async function restoreSessionColdTranscript(
     };
     const target = await prepareSqliteTranscriptReadScope(captured, signal);
     assertPreparedCurrent();
-    target.path = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
+    const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
+    target.path = databasePath;
     const options = toDatabaseOptions(target);
-    // Synchronous inspection stays within the admission check above.
-    try {
-      statSync(target.path);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+    const identity = await readDatabasePathIdentity(databasePath);
+    assertPreparedCurrent();
+    if (!identity.key.startsWith("file:")) {
       // First writers may create this store; there is no cold transcript to restore yet.
       return;
     }
-    const source = createOpenClawAgentDatabasePathMatcher();
-    source(target.path, target.path);
     return await withSessionHistoryWorkerDatabase(
-      options,
+      {
+        ...options,
+        readIdentity: identity,
+        readCustody: [
+          {
+            sourcePath: databasePath,
+            candidates: [{ path: databasePath, physicalPath: identity.canonicalPath, identity }],
+          },
+        ],
+      },
       async (owner) => {
         const assertAllowed = () => {
           assertPreparedCurrent();
           owner.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while preparing its metadata. Retry the request.",
-            );
-          }
         };
         return await restoreSessionColdTranscript(
           captured,
@@ -477,7 +490,18 @@ export async function restoreSessionColdTranscript(
                 },
                 signal,
               );
-              return metadata.archive;
+              const current = await readDatabasePathIdentity(databasePath);
+              assertAllowed();
+              if (
+                current.key !== identity.key ||
+                current.canonicalPath !== identity.canonicalPath ||
+                current.birthtime !== identity.birthtime
+              ) {
+                throw new Error(
+                  "Session store changed while preparing its metadata. Retry the request.",
+                );
+              }
+              return metadata;
             },
           },
           guard,
@@ -494,7 +518,7 @@ export async function restoreSessionColdTranscript(
   const initial = await preparation.readMetadata("initial");
   signal?.throwIfAborted();
   assertCurrent?.();
-  if (!initial) {
+  if (!initial.archive) {
     return;
   }
   await runQueuedStoreWrite({
@@ -504,20 +528,28 @@ export async function restoreSessionColdTranscript(
     signal,
     fn: async () => {
       assertCurrent?.();
-      const archive = await preparation.readMetadata("queued");
+      const metadata = await preparation.readMetadata("queued");
       signal?.throwIfAborted();
       assertCurrent?.();
-      if (!archive) {
+      if (!metadata.archive) {
         return;
+      }
+      if (
+        metadata.source.readIdentity.key !== initial.source.readIdentity.key ||
+        metadata.source.readIdentity.birthtime !== initial.source.readIdentity.birthtime ||
+        metadata.source.readIdentity.canonicalPath !== initial.source.readIdentity.canonicalPath
+      ) {
+        throw new Error("Cold transcript metadata changed its owning database while queued");
       }
       const result = await runColdMutation(
         {
           kind: "cold-restore",
           databaseOptions: workerDatabaseOptions(options),
           sessionId: resolved.sessionId,
-          archive,
+          archive: metadata.archive,
           guard,
         },
+        initial.source,
         assertCurrent,
         signal,
         preparation.acceptSourceValidation,
@@ -575,7 +607,7 @@ export async function runSessionColdStorageMaintenance(params: {
   nextStore = start + 1;
   let remainingTranscripts = MAX_TRANSCRIPTS_PER_PASS;
   let remainingBytes = MAX_BATCH_BYTES;
-  for (const { databaseOptions, ownerStorePath } of [
+  for (const { databaseOptions, ownerStorePath, readIdentity, readCustody } of [
     ...stores.slice(start),
     ...stores.slice(0, start),
   ]) {
@@ -584,6 +616,7 @@ export async function runSessionColdStorageMaintenance(params: {
         await import("./session-accessor.sqlite-archive-store.js");
       await prunePublishedSessionArchivesByRetention({
         scope: databaseOptions,
+        source: { readIdentity, readCustody },
         rules: [
           { reason: "deleted", olderThanMs: retentionMs },
           { reason: "reset", olderThanMs: retentionMs },
@@ -598,6 +631,8 @@ export async function runSessionColdStorageMaintenance(params: {
     assertCurrent();
     const batch = await archiveSessionColdBatch({
       databaseOptions,
+      readIdentity,
+      readCustody,
       ownerStorePath,
       beforeMs,
       maxTranscripts: remainingTranscripts,

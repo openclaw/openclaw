@@ -147,7 +147,9 @@ describe("chat delivery watermark preparation", () => {
             await withoutSql(
               /\bfrom\s+"?(?:transcript_events|session_nodes|session_participants)\b/i,
               async () => {
+                using realpath = vi.spyOn(fs.realpathSync, "native");
                 expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+                expect(realpath).not.toHaveBeenCalled();
               },
             );
           });

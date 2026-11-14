@@ -15,6 +15,8 @@ import { WORKTREE_SETUP_HEADROOM_BYTES } from "../../agents/worktrees/capacity.j
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "../../agents/worktrees/errors.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
+import type { WorktreeFilesystemOptions } from "../../agents/worktrees/filesystem-backend.types.js";
+import { prepareWorktreeFilesystemMutation } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
@@ -23,6 +25,7 @@ import {
   prepareTemplateManifest,
 } from "../../agents/worktrees/template-registry-async.js";
 import type { WorktreeTemplateRecord } from "../../agents/worktrees/template-registry.js";
+import { prepareSessionSourceEffect } from "../../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -32,6 +35,15 @@ import { buildCacheInputPaths, WORKSPACE_PATH_EXCLUSIONS_JS } from "./workspace-
 
 const log = createSubsystemLogger("agents/worktrees");
 const TEMPLATE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template";
+
+async function removeTemplatePath(directory: string, guard: WorktreeFilesystemOptions) {
+  const source = await prepareSessionSourceEffect(guard.commitGuard);
+  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+  await prepareWorktreeFilesystemMutation(guard, source);
+  guard.signal?.throwIfAborted();
+  source.assertCurrent();
+  await fs.rm(directory, { recursive: true, force: true });
+}
 
 async function hasContainedVirtualStore(directory: string, workdir: string): Promise<boolean> {
   try {
@@ -60,13 +72,17 @@ async function hasContainedVirtualStore(directory: string, workdir: string): Pro
 async function validateTemplate(
   directory: string,
   commit: string,
-  guard: Pick<WorktreeAllocationGuard, "signal" | "commitGuard">,
+  guard: WorktreeFilesystemOptions,
   mode: "dependencies" | "source-only",
 ) {
   return await withWorktreeGitConfig(
     directory,
     true,
-    { signal: guard.signal, beforeRun: guard.commitGuard },
+    {
+      signal: guard.signal,
+      beforeRun: guard.commitGuard,
+      stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
+    },
     async (git) => {
       const result = await git.run(
         directory,
@@ -82,6 +98,7 @@ async function validateTemplate(
         {
           signal: guard.signal,
           beforeRun: guard.commitGuard,
+          stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
           killProcessTree: true,
         },
       );
@@ -125,8 +142,7 @@ async function validateTemplate(
           }
           continue;
         }
-        guard.commitGuard();
-        await fs.rm(target, { recursive: true, force: true });
+        await removeTemplatePath(target, guard);
       }
       return true;
     },
@@ -144,9 +160,10 @@ type LocalWorkspaceTemplateParams = {
   identity?: SandboxDependencyTemplateIdentity;
   backgroundUsedAt?: number;
   buildCacheInputs?: string[];
-  guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
-    signal: AbortSignal;
-  };
+  guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> &
+    Pick<WorktreeFilesystemOptions, "workerAuthority"> & {
+      signal: AbortSignal;
+    };
 };
 
 export function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
@@ -200,7 +217,12 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   if (!backend) {
     return undefined;
   }
-  const gitOptions = { signal: guard.signal, beforeRun: guard.commitGuard, killProcessTree: true };
+  const gitOptions = {
+    signal: guard.signal,
+    beforeRun: guard.commitGuard,
+    stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
+    killProcessTree: true,
+  };
   const lockfile = await runGit(
     params.source,
     ["show", `${params.baseCommit}:pnpm-lock.yaml`],
@@ -248,6 +270,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         branch: "openclaw-template",
         signal: templateGuard.signal,
         assertCurrent: templateGuard.commitGuard,
+        workerAuthority: templateGuard.workerAuthority,
       }),
     );
   };
@@ -300,9 +323,8 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     if (valid) {
       return;
     }
-    templateGuard.commitGuard();
     phases.mark(`${TEMPLATE_PHASE}.rebuild`);
-    await fs.rm(directory, { recursive: true, force: true });
+    await removeTemplatePath(directory, templateGuard);
     await prepareSource(directory, templateGuard);
   };
   const record = await prepareWorktreeTemplate({
@@ -423,8 +445,7 @@ export async function cloneLocalWorkspaceTemplate(
       if (hasWorktreeUnknownOutcome(error)) {
         throw error;
       }
-      guard.commitGuard();
-      await fs.rm(params.destination, { recursive: true, force: true });
+      await removeTemplatePath(params.destination, guard);
       log.warn("sandbox dependency snapshot unavailable; using source-only checkout");
       return false;
     }
@@ -433,6 +454,7 @@ export async function cloneLocalWorkspaceTemplate(
     await requireGit(params.destination, ["branch", "-m", params.branch], {
       signal: guard.signal,
       beforeRun: guard.commitGuard,
+      stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
       killProcessTree: true,
     });
     return prepared.manifest!;

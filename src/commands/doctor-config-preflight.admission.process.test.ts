@@ -39,18 +39,13 @@ const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 
 function manifest(root: string): Record<string, string> {
-  // Refusals may log diagnostics; config and durable state must stay byte-identical.
+  // Ignore lifecycle scratch and SQLite reader noise; persisted state stays byte-identical.
   return Object.fromEntries(
     listDirectoryTreeStrictSync(root)
       .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
       .filter((relative) => relative.split(path.sep)[0] !== "tmp" && !relative.endsWith("-shm"))
-      .filter(
-        (relative) =>
-          path.dirname(relative) !== "logs" ||
-          !/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u.test(path.basename(relative)),
-      )
       .toSorted()
       .map((relative) => [
         relative,
@@ -370,6 +365,44 @@ it.each<[string, AdmissionCase]>([
         if (!(wal in before) && wal in after) {
           expect(fs.statSync(`${databasePath}-wal`).size).toBe(0);
           delete after[wal];
+        }
+        if ((workspace || selectedSession || identityFile) && process.platform !== "win32") {
+          // Default diagnostics are state-local; only the verified new refusal log is exempt.
+          const added = Object.keys(after).filter((file) => !(file in before));
+          expect(added).toHaveLength(1);
+          const logFile = added[0]!;
+          expect(path.dirname(logFile)).toBe("logs");
+          expect(path.basename(logFile)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u);
+          const records = fs
+            .readFileSync(path.join(stateDir, logFile), "utf8")
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          const migration = workspace
+            ? "workspace setup state migration"
+            : selectedSession
+              ? "session store migration"
+              : "state migration";
+          const refusal =
+            `gateway requires ${migration}. Stop the service with openclaw gateway stop ` +
+            "(or its service owner), then run openclaw doctor --fix, then start it again with openclaw gateway start.";
+          const unavailableLaunchd =
+            "failed to park the managed LaunchAgent: Native Gateway service membership could not be verified. " +
+            "From an interactive external shell not started by the service, run openclaw gateway stop && openclaw update --yes && openclaw gateway start. " +
+            "If the update fails, follow its recovery guidance before starting the Gateway. No service teardown was attempted. " +
+            "With native helper support (systemd-run on Linux), use openclaw gateway call update.run --params '{}' for a managed handoff.";
+          const messages =
+            records[0]?.message === unavailableLaunchd ? [unavailableLaunchd, refusal] : [refusal];
+          expect(records).toEqual(
+            messages.map((message) =>
+              expect.objectContaining({
+                "0": '{"subsystem":"gateway"}',
+                message,
+                _meta: expect.objectContaining({ logLevelName: "ERROR" }),
+              }),
+            ),
+          );
+          delete after[logFile];
         }
         expect(after).toEqual(before);
         expect(schemaMetadata(databasePath)).toEqual(schemaBefore);

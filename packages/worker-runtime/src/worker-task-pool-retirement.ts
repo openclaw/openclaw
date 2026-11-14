@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  type RetainedOperation,
+} from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import {
   serviceNativeWorkerPass,
@@ -60,7 +64,10 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   onRotationComplete: () => void;
   serviceDeadlines: () => void;
   markWorkerRetirement: WorkerTaskHost["workerRetiring"];
-  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers" | "flushWorkerDiagnostics">;
+  serviceHost: Pick<
+    WorkerTaskHost,
+    "serviceNativeWorkers" | "flushWorkerDiagnostics" | "workerStopped"
+  >;
 }) {
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
@@ -254,6 +261,19 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
               void Promise.resolve()
                 .then(() => slot.worker!.terminate())
                 .then(() => stopped.resolve(), stopped.reject);
+            }
+            if (serviceHost.workerStopped) {
+              const worker = slot.worker;
+              nativeStop = flatMapRetainedOperation(nativeStop, () => {
+                const settled = createRetainedOperation<void>(() => {});
+                const finishing = serviceHost.workerStopped?.(worker);
+                if (finishing) {
+                  void finishing.then(() => settled.resolve(), settled.reject);
+                } else {
+                  settled.resolve();
+                }
+                return settled.operation;
+              });
             }
             void nativeStop.result.then(advance, advance);
           }

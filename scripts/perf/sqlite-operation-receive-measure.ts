@@ -85,5 +85,5 @@ try {
 } finally {
   inspector.disconnect();
   gc.disconnect();
-  admission.finish();
+  await admission.finish();
 }

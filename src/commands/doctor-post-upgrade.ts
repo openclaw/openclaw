@@ -5,7 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { resolveInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { isOptionalPluginManifestFile } from "../plugins/installed-plugin-index-manifest.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
@@ -132,7 +132,7 @@ export async function runPostUpgradeProbes(updateChannel?: UpdateChannel) {
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         const message = `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${reason}`;
-        process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+        writeConsoleDiagnosticWarning(message);
         // A declared package is required to validate its runtime entry; logging
         // alone otherwise makes a broken enabled plugin exit as healthy.
         addError(

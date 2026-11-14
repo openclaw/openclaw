@@ -66,10 +66,62 @@ function canonicalizeWorkspacePath(
   return fallback;
 }
 
+async function canonicalizeWorkspacePathAsync(
+  workspaceDir: string,
+  normalizePath: (value: string) => string,
+): Promise<string> {
+  let candidate = path.resolve(resolveUserPath(workspaceDir));
+  const fallback = normalizePath(candidate);
+  const followedSymlinks = new Set<string>();
+
+  for (let redirectCount = 0; redirectCount < MAX_WORKSPACE_IDENTITY_SYMLINKS; redirectCount += 1) {
+    const missingSegments: string[] = [];
+    let current = candidate;
+    while (true) {
+      try {
+        return normalizePath(
+          path.join(await fs.promises.realpath(current), ...missingSegments.toReversed()),
+        );
+      } catch {
+        // A dangling symlink still carries the stable target identity. Resolve
+        // it lexically so vanished-workspace protection cannot be bypassed.
+      }
+      try {
+        if ((await fs.promises.lstat(current)).isSymbolicLink()) {
+          const normalizedLink = path.normalize(current);
+          if (followedSymlinks.has(normalizedLink)) {
+            return fallback;
+          }
+          followedSymlinks.add(normalizedLink);
+          candidate = path.resolve(
+            path.dirname(current),
+            await fs.promises.readlink(current),
+            ...missingSegments.toReversed(),
+          );
+          break;
+        }
+      } catch {
+        // Keep walking to a real existing ancestor.
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return fallback;
+      }
+      missingSegments.push(path.basename(current));
+      current = parent;
+    }
+  }
+  return fallback;
+}
+
 // Filesystem ownership preserves path bytes; NFC state keys are a separate stored
 // contract and can identify distinct directories as equal on Linux.
 export function resolveCanonicalWorkspacePath(workspaceDir: string): string {
   return canonicalizeWorkspacePath(workspaceDir, path.normalize);
+}
+
+export async function resolveCanonicalWorkspacePathAsync(workspaceDir: string): Promise<string> {
+  return canonicalizeWorkspacePathAsync(workspaceDir, path.normalize);
 }
 
 export function createWorkspaceStateIdentity(workspacePath: string): WorkspaceStateIdentity {
@@ -80,9 +132,17 @@ export function createWorkspaceStateIdentity(workspacePath: string): WorkspaceSt
 }
 
 export function resolveWorkspaceStateAliases(workspaceDir: string): WorkspaceStateIdentity[] {
+  return createWorkspaceStateAliases(workspaceDir, resolveCanonicalWorkspacePath(workspaceDir));
+}
+
+export function createWorkspaceStateAliases(
+  workspaceDir: string,
+  canonicalPath: string,
+): WorkspaceStateIdentity[] {
   const lexicalPath = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
-  const canonicalPath = canonicalizeWorkspacePath(workspaceDir, normalizeWorkspaceIdentityPath);
-  return [...new Set([lexicalPath, canonicalPath])].map(createWorkspaceStateIdentity);
+  return [...new Set([lexicalPath, normalizeWorkspaceIdentityPath(canonicalPath)])].map(
+    createWorkspaceStateIdentity,
+  );
 }
 
 export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceStateIdentity {

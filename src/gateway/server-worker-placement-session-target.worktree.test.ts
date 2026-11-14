@@ -59,7 +59,7 @@ function targetFixture(sessionKey: string) {
           ...identity,
           storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
         },
-        { sessionId: identity.sessionId, updatedAt: 1, ...entry },
+        { sessionId: identity.sessionId, updatedAt: Date.now(), ...entry },
       ),
     select: (runtime: WorkerPlacementSessionRuntime) =>
       resolveWorkerPlacementSessionTarget({

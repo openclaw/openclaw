@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs, { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,7 @@ const { values } = parseArgs({
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
     "fs-counts": { type: "boolean", default: false },
+    "sandbox-capture": { type: "boolean", default: false },
     output: { type: "string" },
     revision: { type: "string" },
   },
@@ -100,6 +102,7 @@ const ownerFiles = [
   "src/infra/gateway-lock.ts",
   "src/infra/gateway-lock-payload.ts",
   "src/gateway/worker-environments/local-workspace-projection.ts",
+  ...(values["sandbox-capture"] ? ["src/agents/sandbox/state-owner.ts"] : []),
 ];
 const ownerSources = new Map(
   ownerFiles.map((file) => {
@@ -154,13 +157,19 @@ try {
   for (const file of ownerFiles.slice(0, 3)) {
     assert(loadedOwners.has(file), `Owner overlay did not load: ${file}`);
   }
-  const batch = () => {
+  const captureSandbox = values["sandbox-capture"]
+    ? (await import("../../src/agents/sandbox/state-owner.js")).captureSandboxStateOwner
+    : undefined;
+  const batch = async () => {
+    const captured = captureSandbox ? await captureSandbox() : owner;
+    // The baseline sandbox API returned its assertion directly.
+    const assertCurrent = typeof captured === "function" ? captured : captured.assertCurrent;
     for (let index = 0; index < assertionsPerOperation; index++) {
-      owner.assertCurrent();
+      assertCurrent();
     }
   };
   for (let index = 0; index < warmupOperations; index++) {
-    batch();
+    await batch();
     await delay(intervalMs);
   }
   if (values.allocations) {
@@ -231,6 +240,7 @@ try {
     });
     syncBuiltinESMExports();
   }
+  const loadBefore = loadavg();
   const beforeCpu = process.cpuUsage();
   const beforeThreadCpu = process.threadCpuUsage();
   marker("diagnostics-start");
@@ -238,7 +248,7 @@ try {
   try {
     for (let index = 0; index < operations; index++) {
       const began = performance.now();
-      batch();
+      await batch();
       latency[index] = performance.now() - began;
       await delay(Math.max(0, startedAt + (index + 1) * intervalMs - performance.now()));
     }
@@ -276,7 +286,9 @@ try {
   const mainThreadCpuMs = (threadCpu.user + threadCpu.system) / 1000;
   latency.sort();
   const result = {
-    scope: "retained Gateway ownership assertion; no serving Gateway or workspace operations",
+    scope: values["sandbox-capture"]
+      ? "sandbox custody capture followed by retained assertions; no serving Gateway or workspace effects"
+      : "retained Gateway ownership assertion; no serving Gateway or workspace operations",
     mode: values["fs-counts"]
       ? "filesystem-counts"
       : values.allocations
@@ -300,6 +312,7 @@ try {
         }
       : undefined,
     revision: values.revision,
+    hostLoad: { before: loadBefore, after: loadavg() },
     fixture,
     ownerSources: [...ownerSources.values()].map(({ file, sha256 }) => ({
       file,

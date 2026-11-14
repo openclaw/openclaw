@@ -32,11 +32,7 @@ import {
 } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import {
-  normalizeAgentId,
-  normalizeMainKey,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   hasOpenClawAgentCanonicalValidationReceiptColumn,
@@ -47,6 +43,7 @@ import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "../../state/opencla
 import {
   findOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
+  isOpenClawAgentDatabasePathCurrentAsync,
 } from "../../state/openclaw-agent-db-identity.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
@@ -62,13 +59,12 @@ import {
   projectSqliteSessionOwner,
 } from "./session-accessor.sqlite-owner-projection.js";
 import {
-  canonicalSessionKeyMigrationRequiredError,
+  assertCanonicalSessionKeyWrite,
   validateCanonicalSessionRowEntry,
 } from "./session-canonical-row.js";
 import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 export { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
@@ -246,7 +242,7 @@ function isReaderContinuationLive(receipt: CanonicalSessionReaderContinuation): 
   );
 }
 
-function matchesReaderContinuationDatabase(
+function matchesReaderContinuationIdentity(
   database: { agentId: string; db: EngineConnection; path?: string },
   receipt: CanonicalSessionReaderContinuation,
 ): boolean {
@@ -256,22 +252,36 @@ function matchesReaderContinuationDatabase(
     database.agentId === receipt.agentId &&
     identity?.identity === receipt.identity &&
     identity.birthtime === receipt.birthtime &&
-    isOpenClawAgentDatabasePathCurrent({
-      db: database.db,
-      path: database.path ?? identity.filename,
-    }) &&
     receipt.validation.agentId === receipt.agentId &&
     receipt.validation.identity === receipt.identity &&
     isReaderContinuationLive(receipt)
   );
 }
 
+function matchesReaderContinuationDatabase(
+  database: { agentId: string; db: EngineConnection; path?: string },
+  receipt: CanonicalSessionReaderContinuation,
+): boolean {
+  const identity = findOpenClawAgentDatabaseIdentity(database);
+  return (
+    identity !== undefined &&
+    matchesReaderContinuationIdentity(database, receipt) &&
+    isOpenClawAgentDatabasePathCurrent({
+      db: database.db,
+      path: database.path ?? identity.filename,
+    })
+  );
+}
+
 /** Borrow only existing committed admission; capture never opens or queries SQLite. */
-export function captureCanonicalSessionReaderContinuation(database: {
-  agentId: string;
-  db: EngineConnection;
-  path: string;
-}):
+function captureCanonicalSessionReaderAdmission(
+  database: {
+    agentId: string;
+    db: EngineConnection;
+    path: string;
+  },
+  pathCheck: "sync" | "async",
+):
   | { receipt: CanonicalSessionReaderContinuation; assertCurrent: () => void; release: () => void }
   | undefined {
   const cell = readerAdmissions.get(database.db);
@@ -305,7 +315,8 @@ export function captureCanonicalSessionReaderContinuation(database: {
     cell.proof === proof &&
     cell.committed &&
     getOpenClawAgentDatabaseValidation(database) === validation &&
-    matchesReaderContinuationDatabase(database, receipt);
+    matchesReaderContinuationIdentity(database, receipt) &&
+    (pathCheck === "async" || isOpenClawAgentDatabasePathCurrent(database));
   if (!isCurrent()) {
     return undefined;
   }
@@ -322,6 +333,41 @@ export function captureCanonicalSessionReaderContinuation(database: {
       cell.continuations.delete(receipt.live);
     },
   };
+}
+
+/** Synchronous native consumers keep the physical comparison at their immediate boundary. */
+export function captureCanonicalSessionReaderContinuation(
+  database: Parameters<typeof captureCanonicalSessionReaderAdmission>[0],
+) {
+  return captureCanonicalSessionReaderAdmission(database, "sync");
+}
+
+/** Capture admission before yielding; recheck the same logical owner after each physical lookup. */
+export async function prepareCanonicalSessionReaderContinuation(
+  database: Parameters<typeof captureCanonicalSessionReaderAdmission>[0],
+) {
+  const owner = captureCanonicalSessionReaderAdmission(database, "async");
+  if (!owner) {
+    return undefined;
+  }
+  const prepareCurrent = async () => {
+    owner.assertCurrent();
+    if (!(await isOpenClawAgentDatabasePathCurrentAsync(database))) {
+      throw new Error("Canonical session reader continuation is no longer current");
+    }
+    owner.assertCurrent();
+  };
+  try {
+    if (!(await isOpenClawAgentDatabasePathCurrentAsync(database))) {
+      owner.release();
+      return undefined;
+    }
+    owner.assertCurrent();
+    return { ...owner, prepareCurrent };
+  } catch (error) {
+    owner.release();
+    throw error;
+  }
 }
 
 /** Continue one retained reader without admitting unrelated reads on a pooled handle. */
@@ -374,34 +420,6 @@ type CanonicalSessionMetadata = {
 export type ValidatedSessionMetadata = CanonicalSessionMetadata & {
   writeRevision: number | undefined;
 };
-
-function isCanonicalSessionKey(sessionKey: string): boolean {
-  const trimmed = sessionKey.trim();
-  if (!trimmed || sessionKey !== trimmed) {
-    return false;
-  }
-  if (normalizeStoreSessionKey(sessionKey) !== sessionKey) {
-    return false;
-  }
-  const parsed = parseAgentSessionKey(trimmed);
-  return (
-    trimmed === "global" ||
-    trimmed === "unknown" ||
-    (parsed !== null && trimmed.startsWith(`agent:${parsed.agentId}:`))
-  );
-}
-
-export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgentId?: string): void {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (
-    !isCanonicalSessionKey(sessionKey) ||
-    (expectedAgentId && parsed && parsed.agentId !== normalizeAgentId(expectedAgentId))
-  ) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `refusing non-canonical session key write ${sessionKey}`,
-    );
-  }
-}
 
 export function readCanonicalSessionMainKey(database: { db: EngineConnection }): string {
   return normalizeMainKey(readStoredCanonicalSessionMainKey(database) ?? undefined);
@@ -462,17 +480,6 @@ export function readStoredCanonicalSessionMainKey(
         : undefined;
   }
   return stored;
-}
-
-export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {
-  const sessionKeys = [
-    entry.parentSessionKey,
-    entry.spawnedBy,
-    entry.forkSource?.sessionKey,
-  ].filter((sessionKey): sessionKey is string => sessionKey !== undefined);
-  for (const sessionKey of sessionKeys) {
-    assertCanonicalSessionKeyWrite(sessionKey);
-  }
 }
 
 /** Query shape shared by complete inventories and bounded canonical validation. */

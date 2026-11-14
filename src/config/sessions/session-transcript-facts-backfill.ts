@@ -6,6 +6,7 @@ import {
   openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStoreV2,
 } from "../../state/openclaw-agent-worker-store.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   TranscriptActiveFactsBackfillOperations,
   TranscriptActiveFactsBackfillSession,
@@ -28,6 +29,7 @@ export type SessionTranscriptFactsBackfill = {
 export function createSessionTranscriptFactsBackfill(params: {
   database: OpenClawAgentDatabaseOptions;
   assertCurrent: () => void;
+  readCustody?: readonly SessionStoreReadCustody[];
   signal: AbortSignal;
   log: { info: (message: string) => void; warn: (message: string) => void };
 }): SessionTranscriptFactsBackfill {
@@ -79,6 +81,7 @@ export function createSessionTranscriptFactsBackfill(params: {
             runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
           ),
           input: undefined,
+          readCustody: params.readCustody,
           priority: "background",
           observeWriteExecution: (elapsedMs) => {
             writeExecutionMs = elapsedMs;

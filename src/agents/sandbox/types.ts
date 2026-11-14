@@ -3,7 +3,26 @@ import type { AgentSandboxConfig } from "../../config/types.agents-shared.js";
 import type { SandboxDockerSettings } from "../../config/types.sandbox.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
-import type { SandboxFsBridge } from "./fs-bridge.types.js";
+import type { SandboxFsBridge, SandboxFsPreparation } from "./fs-bridge.types.js";
+
+export type LocalWorkspacePausePhase =
+  | "pause"
+  | "operation"
+  | "recovery"
+  | "capture"
+  | "scan"
+  | "staging"
+  | "materialization"
+  | "preflight"
+  | "patch"
+  | "apply"
+  | "acceptance"
+  | "verification"
+  | "cleanup"
+  | "resume"
+  | "resumeInspect"
+  | "resumeAuthority"
+  | "unpause";
 
 type RequiredDockerConfigKeys =
   | "image"
@@ -97,6 +116,8 @@ export type SandboxBrowserContext = {
 };
 
 export type SandboxContext = {
+  /** Run-owned filesystem projection prepared before synchronous tool assembly. */
+  fsPreparation?: SandboxFsPreparation;
   /** Creators release retained authority after last use; supplied contexts remain caller-owned. */
   [Symbol.dispose]?: () => void;
   enabled: boolean;

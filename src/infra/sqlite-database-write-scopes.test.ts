@@ -2,6 +2,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabasePendingWriteToken as pendingToken,
+  readSqliteDatabaseWriteTokenForPath as pathToken,
+  retireSqliteDatabaseAdmissionForPath as retireAdmission,
   readSqliteDatabasePendingScopedWriteToken,
   withSqliteDatabaseWriteScope,
   prepareSqliteDatabaseScopedWriteRevisionForPath,
@@ -45,6 +48,56 @@ describe("scoped SQLite write receipts", () => {
     });
     expect(readSqliteDatabaseScopedWriteToken(database, "entry")).not.toBe(before);
     expect(readSqliteDatabaseScopedWriteToken(database, "sibling")).not.toBe(sibling);
+  });
+
+  it("prepares the actual autocommit receipt before one scoped statement and publishes it after settlement", () => {
+    const location = path.join(tempDirs.make("sqlite-prepared-receipt-"), "proof.sqlite");
+    const database = openDatabase(
+      "CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(42)",
+      true,
+      location,
+    );
+    try {
+      const before = readSqliteDatabaseScopedWriteToken(database, "entry");
+      const statement = database.prepare("INSERT INTO proof VALUES (?)");
+      let pending: string | undefined;
+      let pendingDatabase: string | undefined;
+      let installed: { scoped: string | undefined; database: string | undefined } | undefined;
+      withSqlitePostCommitPublications(database, () =>
+        withSqliteDatabaseWriteScope(database, ["entry"], () =>
+          withSqlitePreparedNativeMutation(
+            database,
+            () => {
+              expect(database.isTransaction).toBe(false);
+              pending = readSqliteDatabasePendingScopedWriteToken(database, "entry");
+              pendingDatabase = pendingToken(database);
+              stageSqliteTransactionState(database, {
+                commit: () => {
+                  installed = {
+                    scoped: readSqliteDatabaseScopedWriteToken(database, "entry"),
+                    database: pathToken(location),
+                  };
+                },
+              });
+            },
+            () => statement.run(43),
+          ),
+        ),
+      );
+      expect(installed).toEqual({ scoped: pending, database: pendingDatabase });
+      expect(pending).not.toBe(before);
+      expect(pendingDatabase).toBeTypeOf("string");
+      expect(pendingToken(database)).toBeUndefined();
+      expect(database.prepare("SELECT value FROM proof").all()).toEqual([
+        { value: 42 },
+        { value: 43 },
+      ]);
+    } finally {
+      if (database.isOpen) {
+        database.close();
+      }
+      retireAdmission(location);
+    }
   });
 
   it("keeps prepared epochs settled, scoped, and bounded by their retained owner", () => {

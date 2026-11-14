@@ -11,7 +11,7 @@ import type {
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import { reduceSessionEntryPatch } from "./session-entry-patch-operation.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
 import type {

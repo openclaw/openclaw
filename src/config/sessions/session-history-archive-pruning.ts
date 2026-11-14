@@ -148,11 +148,12 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
       ) {
         throw new Error(`Invalid canonical session archive name for ${row.session_id}`);
       }
-      params.assertCurrent();
+      await params.archives.revalidateSource();
       try {
-        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
-          fs.promises.rm(archivePath),
-        );
+        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () => {
+          params.assertCurrent();
+          return fs.promises.rm(archivePath);
+        });
         removedFiles += 1;
         if (diagnostics) {
           diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;

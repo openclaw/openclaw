@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { defaultPayload } from "../infra/gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
@@ -18,11 +18,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  readWorkspaceFileCache,
-  retireWorkspaceFileCache,
-  writeWorkspaceFileCache,
-} from "./workspace-file-cache.js";
 import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateIdentity,
@@ -49,7 +44,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  retireWorkspaceFileCache(dir);
   closeOpenClawStateDatabaseForTest();
   await testState.cleanup();
 });
@@ -114,7 +108,7 @@ function attest(nowMs: number, hashes: [string, string][]) {
 }
 
 async function deleteState(targetDir: string): Promise<void> {
-  await deleteWorkspaceState(prepareWorkspaceStateDeletion(targetDir));
+  await deleteWorkspaceState(await prepareWorkspaceStateDeletion(targetDir));
 }
 
 function insertPersistedAttestationHash(filename: string, sha256: string): void {
@@ -212,9 +206,7 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
   await seed();
   await attest(1_000, [["AGENTS.md", "a".repeat(64)]]);
   const before = await read(dir);
-  const filePath = path.join(dir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
-  const pending = deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), captured);
+  const pending = deleteWorkspaceState(await prepareWorkspaceStateDeletion(dir), captured);
   owner.release();
   const successor = acquireGatewayStateOwner({ databasePath, payload });
   onTestFinished(() => successor.release());
@@ -223,13 +215,11 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
     databasePath,
   });
   expect(await read(dir)).toEqual(before);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
   await deleteWorkspaceState(
-    prepareWorkspaceStateDeletion(dir),
+    await prepareWorkspaceStateDeletion(dir),
     captureGatewayStateOwner(databasePath)!,
   );
   expect((await read(dir, { readOnly: true })).setupExists).toBe(false);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("registers and retires aliases in the captured caller-selected state database", async () => {
@@ -248,7 +238,7 @@ it("registers and retires aliases in the captured caller-selected state database
   expect((await read(alias)).setupExists).toBe(false);
 
   const selectedPath = resolveOpenClawStateSqlitePath(env);
-  const deletion = deleteWorkspaceState(prepareWorkspaceStateDeletion(alias), { env });
+  const deletion = deleteWorkspaceState(await prepareWorkspaceStateDeletion(alias), { env });
   env.OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR!;
   await deletion;
   expect((await read(dir, { path: selectedPath })).setupExists).toBe(false);
@@ -268,7 +258,11 @@ it("cleans current state and only the stale association for a repointed alias", 
   fs.unlinkSync(alias);
   fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
 
-  const deletion = prepareWorkspaceStateDeletion(alias);
+  using realpath = vi.spyOn(fs.realpathSync, "native");
+  using stat = vi.spyOn(fs, "lstatSync");
+  const deletion = await prepareWorkspaceStateDeletion(alias);
+  expect(realpath.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
+  expect(stat.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
   fs.unlinkSync(alias);
   await deleteWorkspaceState(deletion);
 
@@ -280,10 +274,8 @@ it("cleans current state and only the stale association for a repointed alias", 
   expect(staleAlias).toBeUndefined();
 });
 
-it.each(["delete", "expire"])("keeps %s cache entries when the commit fails", async (cleanup) => {
+it.each(["delete", "expire"])("keeps %s state when the commit fails", async (cleanup) => {
   await seed();
-  const filePath = path.join(dir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
   const db = openOpenClawStateDatabase().db;
   db.exec(`CREATE TABLE workspace_commit_guard (
         workspace_key TEXT REFERENCES workspace_setup_state(workspace_key)
@@ -299,17 +291,13 @@ it.each(["delete", "expire"])("keeps %s cache entries when the commit fails", as
 
   await expect(remove()).rejects.toThrow(/FOREIGN KEY constraint failed/u);
   expect((await read(dir)).setupExists).toBe(true);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
 
   db.exec("DELETE FROM workspace_commit_guard");
   await remove();
   expect((await read(dir)).setupExists).toBe(false);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("does not recreate a missing database during delete-only cleanup", async () => {
-  const filePath = path.join(dir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
   const databasePath = resolveOpenClawStateSqlitePath();
   closeOpenClawStateDatabaseForTest();
   fs.rmSync(path.dirname(databasePath), { recursive: true, force: true });
@@ -318,7 +306,6 @@ it("does not recreate a missing database during delete-only cleanup", async () =
 
   expect(fs.existsSync(databasePath)).toBe(false);
   expect(fs.existsSync(path.dirname(databasePath))).toBe(false);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("deletes migration receipts owned by the workspace", async () => {

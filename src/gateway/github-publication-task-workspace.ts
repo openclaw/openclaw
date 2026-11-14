@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
-import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+  validateWorkspaceFilesystemEvidence,
+} from "../agents/workspace-state-guard.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
@@ -39,13 +43,13 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     params.assertCurrent();
   };
   assertCurrent();
-  const source = await fs.realpath(params.source);
-  assertCurrent();
-  const assertSource = captureWorkspaceStateFilesystemGuard(source, false);
-  const assertPreparationCurrent = () => {
-    assertCurrent();
-    assertSource();
-  };
+  const filesystem = await captureWorkspaceFilesystemEvidence(params.source);
+  if (!filesystem.root[1]) {
+    throw new Error("The publication source is unavailable; restore the checkout before retrying.");
+  }
+  const source = filesystem.canonical;
+  const assertPreparationCurrent = createWorkspaceFilesystemSource(filesystem, assertCurrent);
+  assertPreparationCurrent();
   const origin = {
     agentId: parent.agentId,
     sessionKey: parent.canonicalKey,
@@ -96,6 +100,8 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     assertPreparationCurrent();
     if (loaded.entry) {
       assertTask(loaded.entry);
+      await validateWorkspaceFilesystemEvidence(filesystem);
+      assertPreparationCurrent();
       return { agentId: parent.agentId, sessionKey: loaded.canonicalKey };
     }
     if (receipt) {

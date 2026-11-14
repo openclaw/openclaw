@@ -349,9 +349,7 @@ it("waits for all overlapping admissions", async ({ credential, readCurrent }) =
   } finally {
     first.resolve({ kind: "completed" });
     second.resolve({ kind: "completed" });
-    for (const admission of admissions) {
-      admission.finish();
-    }
+    await Promise.all(admissions.map((admission) => Promise.resolve(admission.finish())));
   }
 });
 

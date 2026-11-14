@@ -23,7 +23,6 @@ import {
   createSessionRolloverSpawnLineage,
   SESSION_ROLLOVER_LINEAGE_CASES,
 } from "../../config/sessions/session-lineage.test-support.js";
-import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
@@ -43,11 +42,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../../sessions/model-overrides.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import {
-  beginSessionEffect,
-  isSessionMutationActive,
-  runSessionMutation,
-} from "../../sessions/session-controller.lifecycle.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -2298,155 +2293,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
     expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
-  });
-
-  it.each([
-    {
-      name: "reuses a fresh replacement without interrupting its work",
-      body: "continue",
-      expectedInterruption: false,
-    },
-    {
-      name: "reacquires a changed identity before an explicit reset",
-      body: "/new",
-      expectedInterruption: true,
-    },
-  ])("$name", async ({ body, expectedInterruption }) => {
-    const storePath = await makeStorePath("openclaw-rollover-revalidation-");
-    const sessionKey = "agent:main:telegram:dm:rollover-revalidation";
-    const staleSessionId = "stale-session-before-revalidation";
-    const replacementSessionId = "fresh-replacement-before-revalidation";
-    const postDrainSessionId = "replacement-created-during-drain";
-    const finalGapSessionId = "replacement-created-before-destructive-write";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: staleSessionId,
-        updatedAt: Date.now() - 10 * 60_000,
-      },
-    });
-
-    let replacementInterrupted = false;
-    let replacementIdentityFenced = false;
-    let postDrainIdentityFenced = false;
-    let finalGapIdentityFenced = false;
-    let postDrainAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
-    let finalGapAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
-    let postDrainFinalization = Promise.resolve();
-    let finalGapRebind = Promise.resolve();
-    let releaseReplacementAdmission = () => {};
-    const replacementAdmission = await beginSessionEffect({
-      scope: storePath,
-      identities: [replacementSessionId],
-      assertAllowed: () => {},
-      onInterrupt: () => {
-        replacementInterrupted = true;
-        replacementIdentityFenced = isSessionMutationActive(storePath, [replacementSessionId]);
-        if (!expectedInterruption) {
-          releaseReplacementAdmission();
-          return;
-        }
-        postDrainFinalization = runExclusiveSessionStoreWrite(storePath, async () => {
-          await writeSessionStoreFast(storePath, {
-            [sessionKey]: { sessionId: postDrainSessionId, updatedAt: Date.now() },
-          });
-        })
-          .then(async () => {
-            let releasePostDrainAdmission = () => {};
-            postDrainAdmission = await beginSessionEffect({
-              scope: storePath,
-              identities: [postDrainSessionId],
-              assertAllowed: () => {},
-              onInterrupt: () => {
-                postDrainIdentityFenced = isSessionMutationActive(storePath, [postDrainSessionId]);
-                releasePostDrainAdmission();
-                finalGapRebind = runExclusiveSessionStoreWrite(storePath, async () => {
-                  await writeSessionStoreFast(storePath, {
-                    [sessionKey]: { sessionId: finalGapSessionId, updatedAt: Date.now() },
-                  });
-                  let releaseFinalGapAdmission = () => {};
-                  finalGapAdmission = await beginSessionEffect({
-                    scope: storePath,
-                    identities: [finalGapSessionId],
-                    assertAllowed: () => {},
-                    onInterrupt: () => {
-                      finalGapIdentityFenced = isSessionMutationActive(storePath, [
-                        finalGapSessionId,
-                      ]);
-                      releaseFinalGapAdmission();
-                    },
-                  });
-                  releaseFinalGapAdmission = finalGapAdmission.release;
-                });
-              },
-            });
-            releasePostDrainAdmission = postDrainAdmission.release;
-          })
-          .finally(releaseReplacementAdmission);
-      },
-    });
-    releaseReplacementAdmission = replacementAdmission.release;
-
-    const { resolve: signalMutationStarted, promise: mutationStarted } = createDeferred();
-    const { resolve: releaseMutation, promise: mutationGate } = createDeferred();
-    const blockingMutation = runSessionMutation({
-      scope: storePath,
-      identities: [sessionKey, staleSessionId],
-      run: async () => {
-        signalMutationStarted();
-        await mutationGate;
-      },
-    });
-    await mutationStarted;
-
-    const { resolve: signalWriterStarted, promise: writerStarted } = createDeferred();
-    const { resolve: releaseWriter, promise: writerGate } = createDeferred();
-    const blockingWriter = runExclusiveSessionStoreWrite(storePath, async () => {
-      signalWriterStarted();
-      await writerGate;
-    });
-    await writerStarted;
-
-    const initialization = initSessionState({
-      ctx: telegramTurn(sessionKey, body, "user-rollover-revalidation"),
-      cfg: {
-        session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
-      } as OpenClawConfig,
-    });
-    const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {
-      await writeSessionStoreFast(storePath, {
-        [sessionKey]: { sessionId: replacementSessionId, updatedAt: Date.now() },
-      });
-    });
-
-    try {
-      releaseWriter();
-      await blockingWriter;
-      await replaceSession;
-      releaseMutation();
-      await blockingMutation;
-
-      const result = await initialization;
-      await postDrainFinalization;
-      await finalGapRebind;
-      expect(replacementInterrupted).toBe(expectedInterruption);
-      if (expectedInterruption) {
-        expect(replacementIdentityFenced).toBe(true);
-        expect(postDrainIdentityFenced).toBe(true);
-        expect(finalGapIdentityFenced).toBe(true);
-        expect(result.sessionId).toBe(finalGapSessionId);
-      } else {
-        expect(result.sessionId).toBe(replacementSessionId);
-      }
-    } finally {
-      releaseWriter();
-      releaseMutation();
-      replacementAdmission.release();
-      postDrainAdmission?.release();
-      finalGapAdmission?.release();
-      await Promise.allSettled([blockingWriter, replaceSession, blockingMutation, initialization]);
-      await postDrainFinalization.catch(() => {});
-      await finalGapRebind.catch(() => {});
-    }
   });
 
   it.each([

@@ -15,6 +15,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionAccessScope, SessionEntryListScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionColdSource } from "./session-cold-storage.types.js";
 import type {
   MemorySessionSelectors,
   MemorySessionTarget,
@@ -84,10 +85,10 @@ export type SessionColdMetadataWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
-export type SessionColdMetadataWorkerResult = {
-  kind: "cold-metadata";
-  archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
-};
+export type SessionColdMetadataWorkerResult = { kind: "cold-metadata" } & (
+  | { archive: undefined }
+  | { archive: Omit<SessionColdArchive, "archive_blob">; source: SessionColdSource }
+);
 
 export type SessionColdStorageInventoryWorkerInput = {
   kind: "cold-storage-inventory";

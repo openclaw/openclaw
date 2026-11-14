@@ -115,7 +115,7 @@ export async function resolveSessionProjectSkillRoot(params: {
   if (!direct.ok) {
     return undefined;
   }
-  const admitted = prepareSessionCreateFilesystemRoot({
+  const admitted = await prepareSessionCreateFilesystemRoot({
     cfg: params.cfg,
     requestedProjectId: params.projectId,
     targetAgentId: params.targetAgentId,
@@ -123,6 +123,7 @@ export async function resolveSessionProjectSkillRoot(params: {
     enforceSandboxContainment: true,
     sandboxRequired: params.resolveSandboxRequired(),
   });
+  params.assertCurrent();
   const root = admitted.ok ? admitted.value.sessionCwd : undefined;
   return root
     ? {
@@ -154,7 +155,7 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   if (project.source === "cloned") {
     return { current: false, worktree: true };
   }
-  const direct = prepareSessionCreateFilesystemRoot({
+  const direct = await prepareSessionCreateFilesystemRoot({
     cfg: params.cfg,
     requestedProjectId: params.projectId,
     targetAgentId: params.targetAgentId,
@@ -162,6 +163,7 @@ export async function resolveSessionProjectCheckoutOptions(params: {
     enforceSandboxContainment: true,
     sandboxRequired: params.resolveSandboxRequired(),
   });
+  params.assertCurrent();
   const current = direct.ok;
   const root = direct.ok ? direct.value.sessionCwd : undefined;
   // Registered projects already record a committed checkout. Creation validates it

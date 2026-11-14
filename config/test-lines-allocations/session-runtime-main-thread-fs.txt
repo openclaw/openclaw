@@ -1,0 +1,21 @@
+# 12,995 net test LF against main f2c308e4 minus the single 400-line PR allowance.
+# Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
+# auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
+# Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
+# Existing fixtures are reused; these distinct effect boundaries need native workers.
+# Readiness isolation, terminal delivery, and offered-versus-callable tool proof reuse owners.
+# Retained model rows preserve provider identity during pending discovery and auth changes.
+# Async tool-usage capture retains reset/flush invocation order through real writer admission.
+# Includes workspace/discovery, cold-reader, process, and accepted review corrections.
+# Cleanup-lock retention and real scratch deletion protect uncertain successor ownership.
+# Real replacement, confinement, settlement, and main-thread sync-FS regressions.
+# Output-cap settlement, revoked-admission no-effect, and fresh-process schema reuse proof.
+# Startup backfill preserves same-file reopen and worker refusal of physical replacement.
+# CI fixtures preserve assertions, worker/watch admission, protected roots, and shared heartbeat time.
+# Calibrated startup fs counts and real held-commit replacement quarantine regression.
+# Concurrent cold Talk creation must exercise the real discovery/writer wait cycle.
+# Its 81-line regression persists both entries and settles accepted work after failure.
+# Hermes source-IO refusal targets the owned skills root without consuming runtime admission stats.
+# Failed cold Talk discovery aborts its test wait and joins accepted writes and real reads.
+# Concurrent bootstrap publication uses the same workspace FIFO as every production caller.
+12595

@@ -33,7 +33,10 @@ export function watchSqliteWorkerSettlement(settlement: Promise<unknown>, taskTi
 const cleanups = new WeakMap<Worker, Promise<void>>();
 
 /** Paired worker messages are delivered before exit; cleanup never overlaps native I/O. */
-export function trackSqliteArchiveWorkerCleanup(worker: Worker): void {
+export function trackSqliteArchiveWorkerCleanup(
+  worker: Worker,
+  finishAdmission: () => Promise<void>,
+): void {
   const paths = new Set<string>();
   worker.on("message", (message: { type: string; filePath: string; retained: boolean }) => {
     if (message.type === "archive-temporary-file") {
@@ -46,10 +49,23 @@ export function trackSqliteArchiveWorkerCleanup(worker: Worker): void {
   });
   const cleanup = new Promise<void>((resolve, reject) => {
     worker.once("exit", () => {
-      void Promise.all([...paths].map((filePath) => fs.rm(filePath, { force: true }))).then(
-        () => resolve(),
-        reject,
-      );
+      void (async () => {
+        const admission = await Promise.allSettled([Promise.resolve().then(finishAdmission)]);
+        const artifacts = await Promise.allSettled(
+          [...paths].map((filePath) => fs.rm(filePath, { force: true })),
+        );
+        const errors = [...admission, ...artifacts].flatMap((result) =>
+          result.status === "rejected" ? [toStringifiedError(result.reason)] : [],
+        );
+        const firstError = errors[0];
+        if (firstError) {
+          throw errors.length === 1
+            ? firstError
+            : new AggregateError(errors, "SQLite archive worker cleanup failed", {
+                cause: firstError,
+              });
+        }
+      })().then(resolve, reject);
     });
   });
   cleanups.set(worker, cleanup);

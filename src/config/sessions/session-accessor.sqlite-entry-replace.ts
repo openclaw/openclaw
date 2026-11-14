@@ -3,7 +3,7 @@ import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { replaceSessionEntryInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Native transcript commits must not load host actor acquisition and maintenance. */

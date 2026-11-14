@@ -71,6 +71,15 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>()),
   hasSqliteDatabaseSchemaAdmissionForPath: () => observed.preparedDatabase,
+  getSqliteDatabaseAdmissionIdentityForPath: (canonicalPath: string) =>
+    observed.preparedDatabase
+      ? {
+          canonicalPath,
+          key: canonicalPath.replace(/^.*-(\d+)\.sqlite$/u, "file:1:$1"),
+          birthtime: "1",
+        }
+      : undefined,
+  hasSqliteDatabaseSchemaAdmissionForIdentity: () => observed.preparedDatabase,
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({

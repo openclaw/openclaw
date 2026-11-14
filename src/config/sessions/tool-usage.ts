@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { err, ok } from "@openclaw/normalization-core/result";
 import {
   TOOL_USAGE_RETENTION_MS,
   type ToolUsageCatalogEntry,
@@ -10,7 +11,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabasePreparationExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -59,10 +60,18 @@ async function write<Key extends UsageOperation>(
   input: AgentDatabaseOperations[Key]["input"],
 ): Promise<AgentDatabaseOperations[Key]["output"]> {
   assertCurrent();
-  const execution = captureOpenClawAgentDatabasePreparationExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit").then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   const source = createSessionWorkerExecutionSource(assertCurrent, "Tool usage database changed");
   try {
     return await runOpenClawAgentWorkerWrite(options, async () => {
+      const acquired = await captured;
+      if (!acquired.ok) {
+        throw acquired.error;
+      }
+      const execution = acquired.value;
       await execution.prepare(source);
       const result = await execution.runExisting(source, async (worker) => ({
         value: await worker.execute({ type, input }),
@@ -73,7 +82,10 @@ async function write<Key extends UsageOperation>(
       return result.value;
     });
   } finally {
-    await execution.release();
+    const acquired = await captured;
+    if (acquired.ok) {
+      await acquired.value.release();
+    }
   }
 }
 

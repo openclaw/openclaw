@@ -1,10 +1,18 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import * as deletionFacts from "../state/agent-deletion-journal-status.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,3 +82,62 @@ it.each([
     ]);
   },
 );
+
+it("lists cold deletion state without filesystem work in optional receipt lookup", async () => {
+  expect(isMainThread).toBe(true);
+  const cfg = { agents: { entries: { main: {}, retired: {} } } };
+  const original = resolveOpenClawStateSqlitePath();
+  using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const readCount = () =>
+    reads.mock.calls.filter(([, command]) => command.type === "agentDatabaseDeletion.snapshot")
+      .length;
+  const listWithReceipt = async (expectedReads: number) => {
+    const beforeReads = readCount();
+    using filesystem = observeMainThreadFs();
+    const read = deletionFacts.getPreparedAgentDeletionDiscovery;
+    let getterFilesystemCalls = 0;
+    using observed = vi
+      .spyOn(deletionFacts, "getPreparedAgentDeletionDiscovery")
+      .mockImplementation((...args) => {
+        const before = filesystem.count();
+        try {
+          return read(...args);
+        } finally {
+          getterFilesystemCalls += filesystem.count() - before;
+        }
+      });
+    const result = await listGatewayAgentsBasic(cfg);
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(getterFilesystemCalls).toBe(0);
+    expect(readCount() - beforeReads).toBe(expectedReads);
+    return result;
+  };
+  try {
+    expect(getSqliteDatabaseAdmissionIdentityForPath(original)).toBeUndefined();
+    expect((await listWithReceipt(1)).agents.map(({ id }) => id)).toEqual(["main", "retired"]);
+    expect((await listWithReceipt(1)).agents.map(({ id }) => id)).toEqual(["main", "retired"]);
+    expect(fsSync.existsSync(original)).toBe(false);
+
+    beginAgentDeletionJournal({
+      agentId: "retired",
+      operationId: "probe-delete-retired",
+      agentDir: path.join(stateDir, "agents", "retired", "agent"),
+      workspaceDir: path.join(stateDir, "workspace"),
+      sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
+      deleteFiles: false,
+    });
+    expect((await listWithReceipt(0)).agents.map(({ id }) => id)).toEqual(["main"]);
+
+    await closeOpenClawStateDatabaseAsync();
+    const copiedState = tempDirs.make("openclaw-agent-list-cold-copy-");
+    const copied = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: copiedState });
+    await fs.mkdir(path.dirname(copied), { recursive: true });
+    await fs.copyFile(original, copied);
+    vi.stubEnv("OPENCLAW_STATE_DIR", copiedState);
+    expect(getSqliteDatabaseAdmissionIdentityForPath(copied)).toBeUndefined();
+    expect((await listWithReceipt(1)).agents.map(({ id }) => id)).toEqual(["main"]);
+    expect((await listWithReceipt(0)).agents.map(({ id }) => id)).toEqual(["main"]);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+});

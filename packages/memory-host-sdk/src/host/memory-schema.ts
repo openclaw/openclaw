@@ -152,6 +152,7 @@ function memoryIndexSchemaAdmissionKey(
       params.ftsTokenizer ?? "unicode61",
     ])}`,
     schemaDependent: true,
+    lifetime: "process",
     read: readMemoryIndexSchemaAdmission,
   };
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { enqueueGitRefMutation, requireGitCommandOutput } from "../../infra/git-exec.js";
+import type { GitOperationStarter } from "../../infra/git-network-retry.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
@@ -22,8 +23,11 @@ import {
 } from "../../state/config-machine-state-async.js";
 import {
   OpenClawStateLeaseError,
-  withOpenClawStateLease,
+  type OpenClawStateAsyncLeaseContext,
+  withOpenClawStateLeaseAsync,
 } from "../../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -57,6 +61,7 @@ async function repairWorktreeObjects(
   remote: string,
   env: NodeJS.ProcessEnv,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
+  startRun: GitOperationStarter,
 ): Promise<void> {
   const started = performance.now();
   const fetched = new Set<string>();
@@ -77,6 +82,7 @@ async function repairWorktreeObjects(
         params.signal?.throwIfAborted();
         params.commitGuard?.();
       },
+      startRun,
       timeoutMs: Math.ceil(remaining),
       maxOutputBytes: 32 * 1024 * 1024,
       killProcessTree: true,
@@ -182,9 +188,11 @@ async function repairWorktreeObjects(
 async function maintainWorktreePacks(
   repoRoot: string,
   env: NodeJS.ProcessEnv,
+  context: OpenClawStateWorkerContext,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
   report: (before: number, after?: number) => Promise<void>,
   onlyIfBacklogged: boolean,
+  startRun: GitOperationStarter,
 ): Promise<boolean> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -195,6 +203,7 @@ async function maintainWorktreePacks(
     executionIntent: "agent-tool" as const,
     signal: params.signal,
     beforeRun: assertCurrent,
+    startRun,
     timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
     killProcessTree: true,
     lowerPriority: true,
@@ -227,11 +236,12 @@ async function maintainWorktreePacks(
     const before = packs.filter((name) => name.endsWith(".pack")).length;
     await report(before);
     if (!onlyIfBacklogged) {
-      await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+      await startRun(() => cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent));
     }
     const after = await consolidatePacks(
       repoRoot,
       env,
+      context,
       commonDir,
       packDirectory,
       packs,
@@ -304,12 +314,20 @@ async function cleanTemporaryPacks(
 async function consolidatePacks(
   repoRoot: string,
   env: NodeJS.ProcessEnv,
+  context: OpenClawStateWorkerContext,
   commonDir: string,
   directory: string,
   names: string[],
-  options: NonNullable<Parameters<typeof requireGit>[2]>,
+  options: NonNullable<Parameters<typeof requireGit>[2]> & { startRun: GitOperationStarter },
   onlyIfBacklogged: boolean,
 ) {
+  const remove = async (pathname: string, lease: OpenClawStateAsyncLeaseContext) => {
+    await lease.assertOwned();
+    await options.startRun(() => {
+      lease.assertCurrent();
+      return fs.rm(pathname, { force: true });
+    });
+  };
   type PackRetirement = { hash: string; selected: string[] };
   const retirementKey = `worktrees.packRetirement:${repoRoot}`;
   let objectFormat: string | undefined;
@@ -352,7 +370,7 @@ async function consolidatePacks(
       () =>
         withProjectCheckoutLifecycle(
           repoRoot,
-          { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
+          { context, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
           async (lease) => {
             // Leave valid duplicate packs for a later sweep rather than queue foreground
             // preparation behind a large retirement. Finish each pack's sidecars together.
@@ -374,9 +392,7 @@ async function consolidatePacks(
                 continue;
               }
               for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-                options.beforeRun?.();
-                lease.assertCurrent();
-                await fs.rm(`${stem}.${extension}`, { force: true });
+                await remove(`${stem}.${extension}`, lease);
               }
             }
           },
@@ -446,16 +462,13 @@ async function consolidatePacks(
       return null;
     }
   }
-  // MIDX is optional lookup metadata. Invalidate both entry points without
-  // enumerating every object to rebuild the whole repo.
+  // Invalidate optional MIDX lookup metadata without rebuilding the whole repo.
   await withProjectCheckoutLifecycle(
     repoRoot,
-    { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.index" },
+    { context, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.index" },
     async (lease) => {
       for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
-        options.beforeRun?.();
-        lease.assertCurrent();
-        await fs.rm(path.join(directory, name), { force: true });
+        await remove(path.join(directory, name), lease);
       }
     },
   );
@@ -589,19 +602,20 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         continue;
       }
       const state: { stage: "objects" | "packs" | "maintenance" } = { stage: "packs" };
+      const context = captureOpenClawStateWorkerContext({ env });
       try {
         // Serialize pack writers across processes without excluding project preparation.
-        await withOpenClawStateLease(
+        await withOpenClawStateLeaseAsync(
           {
             scope: "projects.git-maintenance",
             key: repoRoot,
-            database: { scope: "shared", options: { env } },
             signal: params.signal,
             leaseMs: 30_000,
             waitMs: 0,
             operationLabel: "worktree.maintenance",
             leaseLabel: "project Git maintenance lease",
           },
+          context,
           async (lease) => {
             const ownedParams = {
               ...params,
@@ -610,6 +624,11 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 assertCurrent();
                 lease.assertCurrent();
               },
+            };
+            const startRun: GitOperationStarter = async <T>(run: () => T): Promise<Awaited<T>> => {
+              await lease.assertOwned();
+              ownedParams.commitGuard();
+              return await run();
             };
             // A busy checkout leaves its hourly slot available for the next sweep.
             const scheduled = nextRunAt.get(repoRoot) ?? { at: 0, retirementPending: false };
@@ -623,6 +642,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             scheduled.retirementPending = await maintainWorktreePacks(
               repoRoot,
               env,
+              context,
               ownedParams,
               async (before, after) => {
                 if (after !== undefined) {
@@ -632,6 +652,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 await report(state.stage, { packsBefore: before, packsAfter: after });
               },
               onlyIfBacklogged && !scheduled.retirementPending,
+              startRun,
             );
             if (onlyIfBacklogged) {
               await report("completed");
@@ -642,6 +663,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               executionIntent: "agent-tool" as const,
               signal: lease.signal,
               beforeRun: ownedParams.commitGuard,
+              startRun,
               timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
               killProcessTree: true,
               lowerPriority: true,
@@ -665,7 +687,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             // Only an explicit repair pass may fetch. Pack progress is already published.
             if (params.retryDeferred && remote) {
               await withContentGitSlot(
-                () => repairWorktreeObjects(repoRoot, remote, env, ownedParams),
+                () => repairWorktreeObjects(repoRoot, remote, env, ownedParams, startRun),
                 params.signal,
               );
             }

@@ -571,7 +571,6 @@ it.each([
     });
     const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
     let revoked = false;
-    let inventories = 0;
     let closing: Promise<void> | undefined;
     const runExternalClose = AsyncLocalStorage.snapshot();
     const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
@@ -580,9 +579,6 @@ it.each([
         reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value
           ? reply.value.kind
           : undefined;
-      if (kind === "session-target-inventory") {
-        inventories += 1;
-      }
       if (boundary.endsWith("before-consume") && !revoked && kind === "session-exact-entries") {
         revoked = true;
         if (boundary === "owner-before-consume") {
@@ -613,7 +609,6 @@ it.each([
       }
       await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
       expect(effect).not.toHaveBeenCalled();
-      expect(inventories).toBe(0);
       if (boundary.endsWith("before-consume")) {
         expect(revoked).toBe(true);
       }

@@ -410,7 +410,8 @@ describe("runCommandBuffered", () => {
         let parent: ChildProcess | undefined;
         let descendantPid: number | undefined;
         let command: ReturnType<typeof runCommandBuffered> | undefined;
-        // Freeze deadlines so startup cannot consume timeout/pipe grace; receipts stay real.
+        // Freeze startup deadlines; receipts stay real. Final joins must also run
+        // timers scheduled after asynchronous filesystem reads complete.
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
         try {
           let settled = false;
@@ -454,6 +455,7 @@ describe("runCommandBuffered", () => {
             await advanceTime(timeoutMs - 101, "next", 100, "next", 100);
             // Give Node/Bun pipe I/O its poll turn before release.
             await vi.advanceTimersByTimeAsync(1);
+            vi.setTimerTickMode("nextTimerAsync");
             await bounded(closed);
             expect(await bounded(command)).toMatchObject({
               code: null,
@@ -484,6 +486,7 @@ describe("runCommandBuffered", () => {
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+          vi.setTimerTickMode("nextTimerAsync");
           expect(await bounded(command)).toMatchObject(
             exitCode === 0
               ? { code: null, termination: "timeout" }

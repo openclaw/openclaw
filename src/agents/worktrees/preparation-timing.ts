@@ -5,7 +5,7 @@ import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-event
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/types.js";
 
 type PreparationPhase =
   | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`

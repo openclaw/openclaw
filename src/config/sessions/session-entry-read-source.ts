@@ -1,5 +1,6 @@
 import {
   assertExistingDatabaseIdentity,
+  readDatabasePathIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -8,7 +9,81 @@ import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
+import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
+import type {
+  PreparedSessionEntryWorkerRead,
+  SessionEntryReadSourcePreparation,
+} from "./session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
+
+/** Qualify once; the retained reader carries its physical witness to native read admission. */
+export async function prepareSessionEntryReadSource(
+  database: PreparedSessionEntryWorkerRead["database"],
+  readCustody: SessionStoreReadCustody,
+  options: {
+    inspection: boolean;
+    capturePhysicalSource: boolean;
+    prepareSource?: SessionEntryReadSourcePreparation;
+  },
+) {
+  const capture = options.prepareSource || options.capturePhysicalSource;
+  let validation =
+    !options.inspection && capture
+      ? await captureOpenClawAgentDatabaseReadValidation(database)
+      : undefined;
+  const validationIdentity = (current: NonNullable<typeof validation>): DatabasePathIdentity => ({
+    key: `file:${current.validation.identity}`,
+    canonicalPath: current.canonicalPath,
+    birthtime: current.validation.birthtime,
+  });
+  let identity =
+    readCustody.candidates.find(
+      (candidate) => candidate.identity && candidate.physicalPath === database.path,
+    )?.identity ??
+    (validation
+      ? validationIdentity(validation)
+      : capture
+        ? await readDatabasePathIdentity(database.path)
+        : undefined);
+  const selected = identity && { path: database.path, physicalPath: database.path, identity };
+  const custody = selected
+    ? [readCustody, { sourcePath: database.path, candidates: [selected] }]
+    : [readCustody];
+  let prepared = false;
+  return {
+    get identity() {
+      return identity;
+    },
+    readCustody: custody,
+    assertCurrent: () => validation?.assertCurrent(),
+    async prepareRead(this: void, current: typeof validation) {
+      if (
+        current &&
+        identity?.key.startsWith("file:") &&
+        (`file:${current.validation.identity}` !== identity.key ||
+          current.validation.birthtime !== identity.birthtime)
+      ) {
+        throw new Error("Session entry read changed its captured physical owner");
+      }
+      validation ??= current;
+      if (prepared || !identity) {
+        return;
+      }
+      // An absent source binds the file created by the writer ahead of its FIFO turn.
+      if (!options.inspection && identity.birthtime === undefined) {
+        identity = validation
+          ? validationIdentity(validation)
+          : await readDatabasePathIdentity(database.path);
+        if (selected) {
+          selected.identity = identity;
+        }
+      }
+      options.prepareSource?.(database, identity);
+      prepared = true;
+    },
+  };
+}
 
 export function captureSessionEntryReadSource(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,

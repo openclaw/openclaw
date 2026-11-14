@@ -417,7 +417,7 @@ ${instrumented}`;
   } else if (file === "sqlite-worker-operation-admission.ts") {
     replace(
       "      admission.requestClass,\n    );",
-      "      admission.requestClass,\n      message,\n    );",
+      "      admission.requestClass,\n      wire,\n    );",
     );
   } else if (file === "worker-cpu.ts") {
     replace(

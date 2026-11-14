@@ -72,28 +72,36 @@ async function inspect(
   const mode = args[0];
   const pathname = args[1];
   const stagingRoot = args[2] || undefined;
-  if (
-    (mode !== "sync" &&
-      mode !== "private-fork" &&
-      mode !== "update-generation" &&
-      mode !== "async" &&
-      mode !== "staged-sync" &&
-      mode !== "staged-async" &&
-      mode !== "metadata" &&
-      mode !== "backup-engine" &&
-      mode !== "backup-engine-preserving" &&
-      mode !== "state-sqlite-populated" &&
-      mode !== "consolidated" &&
-      mode !== "task-delivery-recovery" &&
-      !isSqliteSnapshotStagingMode(mode)) ||
-    !pathname
-  ) {
-    return {
-      ok: false,
-      message: "SQLite read-only worker requires a mode and a database path",
-    };
-  }
   try {
+    if (mode === "staging-sweep") {
+      if (args.length !== 1) {
+        throw new Error("SQLite staging sweep does not accept a database path");
+      }
+      const { reclaimSqliteSnapshotInstallationInProcess } =
+        await import("./sqlite-snapshot-reclamation.js");
+      return { ok: true, reclamation: await reclaimSqliteSnapshotInstallationInProcess() };
+    }
+    if (
+      (mode !== "sync" &&
+        mode !== "private-fork" &&
+        mode !== "update-generation" &&
+        mode !== "async" &&
+        mode !== "staged-sync" &&
+        mode !== "staged-async" &&
+        mode !== "metadata" &&
+        mode !== "backup-engine" &&
+        mode !== "backup-engine-preserving" &&
+        mode !== "state-sqlite-populated" &&
+        mode !== "consolidated" &&
+        mode !== "task-delivery-recovery" &&
+        !isSqliteSnapshotStagingMode(mode)) ||
+      !pathname
+    ) {
+      return {
+        ok: false,
+        message: "SQLite read-only worker requires a mode and a database path",
+      };
+    }
     if (mode === "state-sqlite-populated") {
       const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
         import("./database-engine/physical-store.js"),
@@ -113,10 +121,6 @@ async function inspect(
         ok: true,
         engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),
       };
-    }
-    if (mode === "staging-sweep") {
-      const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
-      return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
     }
     if (mode === "task-delivery-recovery") {
       const recoveryDirectory = args[2];

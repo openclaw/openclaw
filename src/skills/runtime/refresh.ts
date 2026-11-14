@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,6 +28,7 @@ import type {
   WorkspaceSkillSources,
 } from "../loading/workspace-skill-sources.types.js";
 import { SKILLS_DISCOVERY_KEY, type SkillSnapshot } from "../types.js";
+import { createSkillsFilesystemOperations } from "./discovery-filesystem.js";
 import {
   captureSkillsDiscoveryEnvironment,
   type SkillsDiscoveryEnvironment,
@@ -106,6 +108,9 @@ function shareCatalogSkill(skill: Skill): Skill {
   if (skill.discoveryRoot) {
     Object.freeze(skill.discoveryRoot);
   }
+  if (skill.resourceRootIdentity) {
+    Object.freeze(skill.resourceRootIdentity);
+  }
   state.catalog.set(key, Object.freeze(skill));
   // Bound catalogs from retired workspaces and transient resource locations.
   if (state.catalog.size > 4096) {
@@ -123,6 +128,21 @@ function pool() {
       }),
   ));
 }
+
+export const {
+  prepareSkillResourceRoot,
+  prepareSandboxMounts,
+  prepareSandboxMountSources,
+  runSkillLibraryFilesystemTask,
+  syncSkillsFilesystem,
+  prepareSandboxFsContext,
+  prepareSandboxFsPath,
+} = createSkillsFilesystemOperations(async () => {
+  if (state.closing) {
+    await state.closing;
+  }
+  return pool();
+});
 
 function observeSource(source: Source) {
   // A read retains its selection, but passive observation follows the active config.
@@ -197,6 +217,7 @@ function scanDirtySources(): Promise<void> {
         const response = await pool().run(
           {
             kind: "scan",
+            nativeMode: getFsSafeNativeConfig().mode,
             requests: selected.map(([key, source]) => ({
               key,
               environment: source.environment,
@@ -400,17 +421,25 @@ export async function prepareSkillSourcePlan(
 export async function projectSkillSnapshot(
   input: SkillSnapshotProjectionInput,
 ): Promise<SkillSnapshot> {
+  const nativeMode = getFsSafeNativeConfig().mode;
   if (state.closing) {
     await state.closing;
   }
-  const skills = input.eligible.map((entry) => shareCatalogSkill(entry.skill));
   const result = await pool().run(
-    { kind: "project", input, environment: captureSkillsDiscoveryEnvironment() },
+    {
+      kind: "project",
+      input,
+      environment: captureSkillsDiscoveryEnvironment(),
+      nativeMode,
+    },
     { timeoutMs: 120_000 },
   );
   if (result.kind !== "project") {
     throw new Error("Unexpected Skills projection response");
   }
+  const skills = input.eligible.map(({ skill }, index) =>
+    shareCatalogSkill({ ...skill, resourceRootIdentity: result.resourceRoots[index] }),
+  );
   return {
     ...result.snapshot,
     resolvedSkills: result.resolvedIndices.map((index) => skills[index]!),

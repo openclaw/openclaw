@@ -18,7 +18,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import * as stateLease from "../../state/openclaw-state-lease.js";
+import * as allocation from "./allocation.js";
 import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
@@ -111,7 +111,7 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   it("skips allocation leases for registered artifacts and discovers a later orphan", async () => {
     const registered = await materializeDownstreamFixture("retained");
-    const acquire = vi.spyOn(stateLease, "withOpenClawStateLeaseAsync");
+    const acquire = vi.spyOn(allocation, "withWorktreeAllocationLease");
     try {
       expect((await service.gc()).orphansDeleted).toBe(0);
       expect((await service.gc()).orphansDeleted).toBe(0);

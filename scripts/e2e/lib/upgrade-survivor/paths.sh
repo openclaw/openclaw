@@ -5,8 +5,10 @@ resolve_upgrade_survivor_paths() {
   RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
   SUMMARY_JSON="${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-$ARTIFACT_ROOT/summary.json}"
   case "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" in
-    base|legacy-operator-state|missing-load-path|package-publication-recovery|package-verification-recovery|package-stranded-first-hop)
+    base|legacy-operator-state|missing-load-path|package-publication-recovery|package-verification-recovery|package-stranded-first-hop|auth-profile-v2026-7-2-beta-5)
       npm_config_prefix="$RUNTIME_ROOT/npm-prefix" ;;
+    projects-doctor|projects-startup-migration)
+      npm_config_prefix="/tmp/openclaw-upgrade-survivor-package" ;;
     *) npm_config_prefix="$ARTIFACT_ROOT/npm-prefix" ;;
   esac
   BASELINE_PACKAGE_ROOT="$npm_config_prefix/lib/node_modules/openclaw"

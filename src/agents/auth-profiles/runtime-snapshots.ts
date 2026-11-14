@@ -605,7 +605,7 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   persisted?: { store: AuthProfileStore | null; env: NodeJS.ProcessEnv },
 ): number {
   const ownerKey = owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
-  noteAuthProfileFileWrite(ownerKey);
+  noteAuthProfileFileWrite(ownerKey, owner?.databaseIdentity);
   if (!mutation.credentialsChanged && !mutation.profileSetChanged && !mutation.stateChanged) {
     return getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(ownerKey);
   }

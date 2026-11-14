@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
@@ -30,11 +31,22 @@ vi.mock("../shared/pid-alive.js", () => ({
   getFileLockProcessStartTime: () => 1,
   getProcessInstanceStartTime: () => 1,
 }));
+// mock-isolation: Synthetic children have no operating-system birth identity.
+vi.mock("./command-process-identity.js", () => ({ readCommandProcessStartTime: () => 1 }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 // mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
 vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
-vi.mock("./exec-termination.js", () => ({
-  createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
+vi.mock("./exec-termination.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./exec-termination.js")>()),
+  createCommandTerminationController: ({
+    cancelController,
+  }: {
+    cancelController: AbortController;
+  }) => ({
+    terminate: () => false,
+    cancel: () => cancelController.abort(),
+    settle: transport.settle,
+  }),
 }));
 
 const scopes: Promise<unknown>[] = [];
@@ -93,6 +105,7 @@ function commandFixture() {
   transport.settle.mockReturnValue(cleanup.promise);
   const fixture = {
     child,
+    command,
     closed,
     cleanup,
     result,
@@ -228,6 +241,65 @@ it.each([
       expect(result.error?.cause).toBe(failure);
     }
   },
+);
+
+it.for(["uncertain", "rejected"] as const)(
+  "preserves the cleanup owner's %s result after a buffered output cap",
+  (ending, { signal }) =>
+    withMockedPlatform("linux", async () => {
+      const fixture = commandFixture();
+      const stdout = new PassThrough();
+      fixture.child.pid = 424242;
+      fixture.child.stdout = stdout;
+      const command = Object.defineProperty(fixture.command, "stdout", { value: stdout });
+      const entered = createDeferredCore();
+      transport.spawn.mockImplementation(() => {
+        entered.resolve();
+        return command;
+      });
+      const runner = await import("./exec-runner.js");
+      const run = runner.runCommandWithTimeout;
+      const returned = createDeferredCore<Awaited<ReturnType<typeof run>>>();
+      vi.spyOn(runner, "runCommandWithTimeout").mockImplementation(async (...params) => {
+        const result = await run(...params);
+        returned.resolve(result);
+        return result;
+      });
+      const failure = new Error("native cleanup observation failed");
+      const finished = vi.fn();
+      const work = runCommandBuffered(["fixture"], { maxOutputBytes: 1 }).finally(finished);
+      const outcome = work.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await withinTest(entered.promise, signal);
+        stdout.write("overflow");
+        const inner = await withinTest(returned.promise, signal);
+        expect(inner).toMatchObject({ outputLimitExceeded: true, cleanup: "uncertain" });
+        await expectPending(finished);
+        fixture.open();
+        stdout.end();
+        fixture.finish();
+        await expectPending(finished);
+        if (ending === "uncertain") {
+          fixture.cleanup.resolve("uncertain");
+        } else {
+          fixture.cleanup.reject(failure);
+        }
+        const result = await withinTest(work, signal);
+        expect(result).toMatchObject({ termination: "output-limit", code: null });
+        expect(result.stdout.toString()).toBe("o");
+        expect(hasCommandProcessCleanupError(result.error)).toBe(true);
+        expect(result.error?.cause).toBe(ending === "rejected" ? failure : undefined);
+      } finally {
+        fixture.open();
+        stdout.end();
+        fixture.finish();
+        fixture.cleanup.resolve("forced");
+        await outcome;
+      }
+    }),
 );
 
 it.each([false, true])("failed binding withholds input (group live: %s)", async (live) => {

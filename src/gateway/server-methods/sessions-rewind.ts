@@ -171,7 +171,8 @@ async function mutatePreparedSessionAtMessage({
   const reject = (message: string, code: ErrorCode = ErrorCodes.INVALID_REQUEST) =>
     respond(false, undefined, errorShape(code, message));
   const { sessionMutationCommitGuard, sessionMutationAuthorization } = options;
-  const commitGuard = () => {
+  const assertMutationCurrent = () => {
+    assertSourceCurrent();
     sessionMutationCommitGuard?.();
     sessionMutationAuthorization?.assertCurrent();
   };
@@ -181,8 +182,7 @@ async function mutatePreparedSessionAtMessage({
     withGatewaySessionEntryReadOnly(
       { key: sessionKey, cfg, agentId: requestedAgentId, excludeInternalEffects: true },
       async (current) => {
-        assertSourceCurrent();
-        commitGuard();
+        assertMutationCurrent();
         return current;
       },
     );
@@ -211,10 +211,6 @@ async function mutatePreparedSessionAtMessage({
       return;
     }
   }
-  const assertMutationCurrent = () => {
-    assertSourceCurrent();
-    commitGuard();
-  };
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const upstreamContext = captureSessionUpstreamLinkReadSource();
@@ -463,7 +459,7 @@ async function mutatePreparedSessionAtMessage({
       }
       const forkWorkspace =
         action === "fork"
-          ? prepareSessionForkFilesystemRoot({
+          ? await prepareSessionForkFilesystemRoot({
               cfg,
               parent: current.entry,
               targetAgentId: current.agentId,
@@ -471,6 +467,7 @@ async function mutatePreparedSessionAtMessage({
               sandboxRequired: sandbox === "required",
             })
           : undefined;
+      assertMutationCurrent();
       if (forkWorkspace && !forkWorkspace.ok) {
         respond(false, undefined, forkWorkspace.error);
         return;

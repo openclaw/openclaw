@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MAX_HUMAN_MENTIONS } from "../../packages/gateway-protocol/src/index.js";
 import {
-  getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 
@@ -44,9 +44,5 @@ export const mentionStoreHeadAdmission: SqliteDatabaseAdmissionKey<MentionStoreH
 };
 
 export function getMentionStoreHeadAdmission(databasePath: string): MentionStoreHead | undefined {
-  return getOrLoadSqliteDatabaseAdmissionForPath(
-    databasePath,
-    mentionStoreHeadAdmission,
-    () => undefined,
-  );
+  return peekSqliteDatabaseAdmissionForPath(databasePath, mentionStoreHeadAdmission);
 }

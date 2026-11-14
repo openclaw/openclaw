@@ -93,6 +93,8 @@ export type AgentHarnessTtsProvenanceTransfer = <T extends object>(
 export type PreparedQuestionCallerRead = {
   reads: readonly SessionEntryWorkerRead[];
   prepareCurrent: () => Promise<void>;
+  /** Shipped synchronous dispatcher callbacks only; never invoke from a worker grant. */
+  assertLegacyCurrent?: () => void;
   assertPrepared: (reads: readonly PreparedSessionEntryWorkerRead[]) => void;
   /** Retain owner-held policy facts; final checks never acquire a durable reader. */
   retainCurrent: () => { assertCurrent: () => void; release: () => void };
@@ -158,6 +160,7 @@ export function bindQuestionDispatchGuard(
   };
   const capability = readQuestionDispatchCapability(authority?.assertCurrent);
   const callerRead = capability?.callerRead;
+  const assertCallerLegacyCurrent = callerRead?.assertLegacyCurrent;
   bindQuestionDispatchCapability(
     assertCurrent,
     {
@@ -166,6 +169,7 @@ export function bindQuestionDispatchGuard(
       callerRead: callerRead && {
         reads: callerRead.reads,
         prepareCurrent: prepareCurrent!,
+        assertLegacyCurrent: assertCallerLegacyCurrent && (() => guard(assertCallerLegacyCurrent)),
         assertPrepared: (reads: Parameters<PreparedQuestionCallerRead["assertPrepared"]>[0]) =>
           guard(() => callerRead.assertPrepared(reads)),
         retainCurrent: () => {
@@ -361,6 +365,7 @@ function assertQuestionCompatibilityCurrent(
   fallback: () => void,
 ) {
   assertActive();
+  callerRead?.assertLegacyCurrent?.();
   const retained = callerRead?.retainCurrent();
   try {
     if (retained) {
@@ -413,6 +418,7 @@ export async function prepareQuestionInputAuthority(authority: QuestionInputAuth
     ? {
         reads: captured.reads.flatMap((read) => read.reads),
         prepareCurrent,
+        assertLegacyCurrent: assertLegacyReads,
         assertPrepared: (reads) => {
           assertActive();
           let offset = 0;

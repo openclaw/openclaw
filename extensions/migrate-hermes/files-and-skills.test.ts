@@ -119,9 +119,15 @@ describe("Hermes files and skills", () => {
     async (operation) => {
       await h.write("skills/review/SKILL.md", "# Review\n");
       const failure = Object.assign(new Error("source directory unavailable"), { code: "EIO" });
+      const stat = fs.stat;
       const spy =
         operation === "stat"
-          ? vi.spyOn(fs, "stat").mockRejectedValueOnce(failure)
+          ? vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+              if (args[0] === path.join(h.source, "skills")) {
+                throw failure;
+              }
+              return stat(...args);
+            })
           : vi.spyOn(fs, "readdir").mockRejectedValueOnce(failure);
       await expect(h.plan()).rejects.toBe(failure);
       spy.mockRestore();

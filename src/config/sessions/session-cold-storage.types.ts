@@ -1,5 +1,7 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 import type { SqliteExpectedSessionTranscriptTurnResult } from "./session-turn.types.js";
 
@@ -19,7 +21,12 @@ export type SessionColdMaintenanceResult = {
   externalizedTranscripts: number;
 };
 
-export type SessionColdBatchOptions = {
+export type SessionColdSource = {
+  readIdentity: DatabasePathIdentity;
+  readCustody?: readonly SessionStoreReadCustody[];
+};
+
+export type SessionColdBatchOptions = SessionColdSource & {
   databaseOptions: OpenClawAgentDatabaseOptions;
   ownerStorePath: string;
   beforeMs: number;

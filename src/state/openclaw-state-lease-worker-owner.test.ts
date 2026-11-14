@@ -67,7 +67,7 @@ function fixture(uncertain = false) {
         try {
           return await operation(admission);
         } finally {
-          admission.finish();
+          await admission.finish();
         }
       });
     },
@@ -146,8 +146,9 @@ it.each([
       // Acknowledgement remains deliverable after the commit grant.
       current = false;
     } finally {
-      admission.finish();
+      const finishing = admission.finish();
       f.settled.resolve({ kind: "completed" });
+      await finishing;
     }
   }, authority);
 });

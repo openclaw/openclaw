@@ -3,7 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect } from "vitest";
+import { expect, type vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -67,6 +67,17 @@ export async function successfulSessionRequest<T = unknown>(
   const result = await directSessionReq<T>(...args);
   expect(result.ok, JSON.stringify(result.error)).toBe(true);
   return result.payload!;
+}
+
+export function expectChatEvent(
+  broadcast: ReturnType<typeof vi.fn>,
+  fields: Record<string, unknown>,
+) {
+  expect(broadcast).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining(fields),
+    expect.anything(),
+  );
 }
 
 export function expectPreparedProject(

@@ -10,10 +10,11 @@ import {
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import type {
+  SessionStoreTargetPreparationRequest,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
-  SessionStoreTargetInventoryRequest,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
@@ -538,8 +539,26 @@ const readers: Readers & ThisType<ReaderContext> = {
 };
 
 // Discovery uses routing settings; model and plugin config stays with host consumers.
-export function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
+function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
   return { agents, acp, session };
+}
+
+/** Routing projection and byte accounting belong to the discovery request serializer. */
+export function prepareSessionStoreTargetDiscovery(request: SessionStoreTargetPreparationRequest) {
+  const prepared =
+    "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  return {
+    request: prepared,
+    inputBytes:
+      "inventory" in prepared
+        ? measureSessionStoreTargetInventoryInputBytes(prepared)
+        : "observePaths" in prepared && prepared.observePaths.inventory
+          ? measureSessionStoreTargetInventoryInputBytes({
+              ...prepared,
+              paths: prepared.observePaths.inventory.paths,
+            })
+          : JSON.stringify(prepared).length * 2,
+  };
 }
 
 export function createSessionStoreTargetReaders(

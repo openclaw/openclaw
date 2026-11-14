@@ -11,8 +11,9 @@ import type {
   SqliteReadOnlyOperationResult,
 } from "./sqlite-readonly-operation-types.js";
 import { SqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
-import type { SqliteSnapshotReclamation } from "./sqlite-snapshot-reclamation.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+
+export type SqliteSnapshotReclamation = { removed: number; bytes: number; skipped: number };
 
 // Keep the one-shot execFile output limit when inspections use IPC.
 export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
@@ -44,7 +45,6 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
     mode === "staging-create" ||
     mode === "staging-create-legacy" ||
     mode === "staging-reconcile" ||
-    mode === "staging-sweep" ||
     mode === "staging-retire"
   );
 }
@@ -118,6 +118,7 @@ export type SqliteReadOnlyWorkerOptions =
         | "staged-sync"
         | "staged-async"
         | "task-delivery-recovery"
+        | "staging-sweep"
       >;
       stagingRoot?: string;
       signal?: AbortSignal;
@@ -260,6 +261,10 @@ function parseSqliteReadOnlyWorkerResult(
   return message;
 }
 
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "staging-sweep",
+): SqliteSnapshotReclamation;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: "state-sqlite-populated",

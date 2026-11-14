@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import * as admissions from "../infra/sqlite-database-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -13,6 +14,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
@@ -176,6 +179,51 @@ it("lists summary presence by complete session identity", async () => {
   expect(await store.listSessionEntries()).toMatchObject(expected(false));
   await store.writeSummary(summarizeTranscripts({ session: first, utterances: [] }), first);
   expect(await store.listSessionEntries()).toMatchObject(expected(true));
+});
+
+it("admits a cold list through its worker before retaining its write token", async () => {
+  const target = { ...session("cold-list"), title: "Initial title" };
+  await admit(target);
+  const original = openOpenClawStateDatabase(databaseOptions()).path;
+  await closeDatabase();
+  const root = tempDirs.make("openclaw-transcript-cold-list-");
+  const pathname = path.join(root, "state.sqlite");
+  fs.copyFileSync(original, pathname);
+  const cold = new TranscriptsStore(path.join(root, "transcripts"), { path: pathname });
+  expect(admissions.getSqliteDatabaseAdmissionIdentityForPath(pathname)).toBeUndefined();
+  using filesystem = observeMainThreadFs();
+  const token = admissions.readSqliteDatabaseWriteTokenForPath;
+  let tokenFilesystemCalls = 0;
+  using tokens = vi
+    .spyOn(admissions, "readSqliteDatabaseWriteTokenForPath")
+    .mockImplementation((location) => {
+      const before = filesystem.count();
+      try {
+        return token(location);
+      } finally {
+        tokenFilesystemCalls += filesystem.count() - before;
+      }
+    });
+  using reads = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+  const options = { limit: 50, projection: "public" as const };
+  const page = () => cold.listReadEntries(options);
+  expect((await page()).entries).toMatchObject([{ title: "Initial title" }]);
+  expect(reads).toHaveBeenCalledTimes(1);
+  expect(tokenFilesystemCalls).toBe(0);
+  expect((await page()).entries).toMatchObject([{ title: "Initial title" }]);
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect((await page()).entries).toMatchObject([{ title: "Initial title" }]);
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(tokens).toHaveBeenCalled();
+  expect(tokenFilesystemCalls).toBe(0);
+
+  options.limit = 49;
+  await Promise.all([page(), cold.writeSession({ ...target, title: "Worker committed" })]);
+  reads.mockClear();
+  expect((await page()).entries).toMatchObject([{ title: "Worker committed" }]);
+  expect((await page()).entries).toMatchObject([{ title: "Worker committed" }]);
+  expect(reads).toHaveBeenCalledTimes(1);
+  expect(tokenFilesystemCalls).toBe(0);
 });
 
 it("isolates returned list pages and observes another store's writes", async () => {

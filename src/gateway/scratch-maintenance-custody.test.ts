@@ -439,3 +439,95 @@ it.each(["missing", "stale", "unmapped"] as const)(
     }
   },
 );
+
+it("preserves a successor's existing project scratch while its changed binding is unresolved", async () => {
+  const tempDirs = createTrackedTempDirs();
+  const root = await fs.realpath(await tempDirs.make("scratch-successor-custody-"));
+  const previous = path.join(root, "previous");
+  await fs.mkdir(previous);
+  fixtures.projectRoot = path.join(root, "project");
+  const unrelated = path.join(root, "unrelated");
+  fixtures.records = [
+    {
+      id: "unrelated",
+      path: unrelated,
+      createdAt: 0,
+      ownerKind: "session",
+      ownerId: "agent:main:idle",
+    },
+  ];
+  const now = Date.now();
+  const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+  const files = await Promise.all(
+    [fixtures.projectRoot, unrelated].map(async (checkout) => {
+      const file = path.join(checkout, ".openclaw/tmp/proof");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "expired scratch");
+      await fs.utimes(file, expired, expired);
+      return file;
+    }),
+  );
+  const sessionKey = "agent:main:main";
+  const predecessor = claimAgentRunContext(
+    "predecessor",
+    { sessionKey, agentId: "main" },
+    { trackOwner: true },
+  );
+  let successor: string | undefined;
+  let cwd = previous;
+  let invalidate = false;
+  fixtures.read.mockImplementation(async () => {
+    const snapshot = new Map([
+      [
+        sessionKey,
+        {
+          canonicalKey: sessionKey,
+          agentId: "main",
+          entry: { sessionId: sessionKey, updatedAt: now, spawnedCwd: cwd },
+        },
+      ],
+    ]);
+    if (invalidate) {
+      if (!successor) {
+        releaseAgentRunContext("predecessor", predecessor);
+        cwd = fixtures.projectRoot;
+        successor = claimAgentRunContext(
+          "successor",
+          { sessionKey, agentId: "main" },
+          { trackOwner: true },
+        );
+      }
+      // Stored-row publications invalidate the captured reply during both cleanup prepares.
+      sessionChanges.emit({ sessionKey, scope: "session-entry" });
+    }
+    return snapshot;
+  });
+  let prepared: Awaited<ReturnType<typeof prepareScratchMaintenanceTargets>> | undefined;
+  const cursor: ScratchCleanupCursor = {};
+  try {
+    prepared = await prepareScratchMaintenanceTargets({
+      agents: { entries: { main: { workspace: previous } } },
+    });
+    const targets = prepared.targets.filter((target) =>
+      [fixtures.projectRoot, unrelated].includes(target.root),
+    );
+    invalidate = true;
+    sessionChanges.emit({ sessionKey, scope: "session-entry" });
+    const run = () =>
+      cleanScratch({ targets, now, cursor, assertCurrent: () => {}, pause: async () => {} });
+    const result = await run();
+    await expect(fs.stat(files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(files[0]!, "utf8")).toBe("expired scratch");
+    expect(result).toMatchObject({ entriesRemoved: 1, skippedLive: 1, deferred: 0, errors: [] });
+    invalidate = false;
+    releaseAgentRunContext("successor", successor);
+    expect(await run()).toMatchObject({ entriesRemoved: 1, skippedLive: 0, errors: [] });
+    await expect(fs.stat(files[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    releaseAgentRunContext("predecessor", predecessor);
+    releaseAgentRunContext("successor", successor);
+    await closeScratchCleanupCursor(cursor);
+    prepared?.release();
+    await tempDirs.cleanup();
+  }
+});

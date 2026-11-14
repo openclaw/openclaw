@@ -1,10 +1,11 @@
 import type {
-  LocalWorkspacePausePhase,
   LocalWorkspacePauseReason,
   quiesceLocalWorkspace,
 } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
 import {
   prepareLocalWorkspaceCheckpointCapture,
   removeLocalWorkspaceCheckpointCapture,
@@ -58,10 +59,14 @@ export async function runLocalWorkspaceProjection<T>(
       options.reason === "reconcile" ||
       options.reason === "preparation");
   let captured = false;
+  const projectionPath = await localWorkspaceProjectionPath(owner);
+  owner.assertCurrent();
+  store.assertCurrent();
   const operations = projectionOperations(
     owner,
     store,
     previous,
+    projectionPath,
     reconcile
       ? {
           pause: () => pause(),
@@ -87,6 +92,7 @@ export async function runLocalWorkspaceProjection<T>(
     env: owner.env,
     signal: store.signal,
     commitGuard: () => void operations.current(),
+    workerAuthority: owner.workerAuthority,
   };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
   const markPhase = (phase: LocalWorkspacePausePhase) => {

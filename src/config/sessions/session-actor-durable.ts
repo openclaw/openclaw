@@ -1,7 +1,7 @@
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import {
   prepareSessionEntryReplacementDatabase,
   withSessionEntryWorker,
@@ -16,21 +16,27 @@ import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor } from "./session-actor.js";
 
 /** Capture once; every command borrows the existing physical writer admission. */
-export function captureDurableSessionActor(params: {
+export async function captureDurableSessionActor(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   target: SessionActorTarget & {
     database: Extract<SessionActorTarget["database"], { kind: "file" }>;
   };
   lifetime: SessionActorLifetime;
-}): SessionActor {
+}): Promise<SessionActor> {
   const database = {
     ...params.database,
     env: Object.freeze({ ...(params.database.env ?? process.env) }),
   };
-  const execution = captureOpenClawAgentDatabaseExecution(database, {
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(database, {
     expectedIdentity: params.target.database,
   });
-  return bindDurableSessionActor({ ...params, database }, execution);
+  try {
+    params.lifetime.assertCurrent();
+    return bindDurableSessionActor({ ...params, database }, execution);
+  } catch (error) {
+    await execution.release();
+    throw error;
+  }
 }
 
 function bindDurableSessionActor(
@@ -61,7 +67,7 @@ function bindDurableSessionActor(
     }),
     transport: {
       agentId: database.agentId,
-      run: (operation, authorize, concurrentBoardReads) => {
+      run: (operation, authorize, concurrentBoardReads, source) => {
         const prepared = concurrentBoardReads
           ? execution.capturePreparedGenerationClaim()
           : undefined;
@@ -73,16 +79,16 @@ function bindDurableSessionActor(
           database,
           execution.fileIdentity?.physicalIdentity,
           assertCurrent,
-          async (_execution, source) => {
+          async (_execution, preparedSource) => {
             // Cold preparation retains exclusive admission; a qualified append cannot reopen.
             if (prepared) {
               prepared.assertCurrent();
             } else {
-              await execution.prepare(source);
+              await execution.prepare(preparedSource);
             }
             return operation({
               async execute(command) {
-                const result = await execution.runExisting(source, (worker) =>
+                const result = await execution.runExisting(preparedSource, (worker) =>
                   worker.execute(command),
                 );
                 if (result === undefined) {
@@ -105,6 +111,8 @@ function bindDurableSessionActor(
           "write",
           undefined,
           prepared ? concurrentBoardReads : undefined,
+          source?.workspaceEvidence,
+          source?.readCustody,
         );
       },
       release: () => execution.release(),
@@ -145,7 +153,7 @@ export function createSessionActorFactory(
         );
       }
       const sessionKey = requestedTarget.sessionKey;
-      const execution = captureOpenClawAgentDatabaseExecution(captured, {
+      const execution = await captureOpenClawAgentDatabaseExecutionAsync(captured, {
         expectedIdentity:
           "physicalIdentity" in requestedTarget.database ? requestedTarget.database : undefined,
       });

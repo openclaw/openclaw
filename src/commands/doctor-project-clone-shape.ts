@@ -9,6 +9,8 @@ import {
 } from "../projects/project-checkout.js";
 import { ProjectCloneError, unshallowProjectCheckout } from "../projects/project-clone-runtime.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
+import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 
 const CHECK_ID = "core/doctor/project-clone-shape";
 
@@ -45,7 +47,7 @@ export async function collectProjectCloneShapeHealthFindings(
     const label = `Project clone ${project.displayName} (${project.id})`;
     let fetching = false;
     try {
-      const inspect = async (lease?: { signal: AbortSignal; assertCurrent(): void }) => {
+      const inspect = async (lease?: OpenClawStateAsyncLeaseContext) => {
         const gitDir = path.join(project.repoRoot, ".git");
         if (!(await fs.readdir(gitDir)).includes("shallow")) {
           return;
@@ -74,6 +76,11 @@ export async function collectProjectCloneShapeHealthFindings(
               timeoutMs: 30 * 60_000,
               signal: lease.signal,
               assertCurrent: () => lease.assertCurrent(),
+              startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
+                await lease.assertOwned();
+                lease.assertCurrent();
+                return await run();
+              },
             },
           );
           // A shallow origin can make --unshallow exit zero with incomplete history.
@@ -95,7 +102,11 @@ export async function collectProjectCloneShapeHealthFindings(
         }
       };
       if (options.repair) {
-        await withProjectCheckoutLifecycle(project.repoRoot, { env, waitMs: 0 }, inspect);
+        await withProjectCheckoutLifecycle(
+          project.repoRoot,
+          { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
+          inspect,
+        );
       } else {
         await inspect();
       }

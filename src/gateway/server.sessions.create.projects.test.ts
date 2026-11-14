@@ -42,6 +42,7 @@ import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
+  expectChatEvent,
   expectPreparedProject,
   initializeRepository,
   publishRepositoryFixtureCheckpoint,
@@ -112,13 +113,6 @@ function mockDispatch() {
     counts: { block: 0, final: 0, tool: 0 },
   });
 }
-function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining(fields),
-    expect.anything(),
-  );
-}
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
   options: { sandboxed?: boolean; alias?: boolean; recordInput?: boolean } = {},
@@ -139,7 +133,11 @@ async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjec
   const { storePath } = await createSessionStoreDir();
   const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
   const materialization = createDeferredCore<T>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  const materializationStarted = createDeferredCore();
+  projectCloneMocks.materialize.mockImplementationOnce(() => {
+    materializationStarted.resolve();
+    return materialization.promise;
+  });
   if (options.recordInput) {
     projectCloneMocks.prepareIdentity.mockResolvedValue({
       token: "protected-native-token",
@@ -153,7 +151,7 @@ async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjec
   } else {
     mockDispatch();
   }
-  return { storePath, projectRoot, project, materialization };
+  return { storePath, projectRoot, project, materialization, materializationStarted };
 }
 
 type CreatedSession = {
@@ -183,7 +181,7 @@ function createRemoteSession(
   );
 }
 
-test.each([
+test.for([
   { mode: "ready", worktree: true, sandboxed: false, image: true, baseRef: "main" },
   { mode: "ready", worktree: false, sandboxed: true },
   { mode: "abort", worktree: true },
@@ -191,16 +189,18 @@ test.each([
   { mode: "retry", worktree: true },
 ])(
   "remote project $mode (worktree=$worktree, sandboxed=$sandboxed)",
-  async ({ mode, worktree, sandboxed, image, baseRef }) => {
+  async ({ mode, worktree, sandboxed, image, baseRef }, { signal: testSignal }) => {
     const ready = mode === "ready";
     if (ready) {
       vi.stubEnv("GH_TOKEN", "");
       vi.stubEnv("GITHUB_TOKEN", "");
     }
-    const { storePath, projectRoot, project, materialization } = await remoteProjectFixture(
-      `openclaw-remote-${mode}-`,
-      { sandboxed, alias: ready, recordInput: ready },
-    );
+    const { storePath, projectRoot, project, materialization, materializationStarted } =
+      await remoteProjectFixture(`openclaw-remote-${mode}-`, {
+        sandboxed,
+        alias: ready,
+        recordInput: ready,
+      });
     const attachments = image
       ? [
           {
@@ -373,6 +373,7 @@ test.each([
         const entryAfterCreation = readEntry(storePath, key);
         const failureMessage =
           "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
+        await withinTest(materializationStarted.promise, testSignal);
         materialization.reject(new ProjectCloneError("network", failureMessage));
         await settleWorkspaceRuns(context, storePath, key);
         expectChatEvent(broadcast, {

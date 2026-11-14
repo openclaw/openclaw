@@ -7,8 +7,10 @@ import { captureSessionTarget } from "../../../sessions/session-controller.lifec
 import { getRpcSourceForGateway } from "../../../sessions/session-controller.rpc-sources.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-control.js";
-import type { ClientVoiceSessionSource } from "../../../talk/client-voice-session-source.js";
-import type { ClientVoiceSessionWriter } from "../../../talk/client-voice-session-write.js";
+import type {
+  ClientVoiceSessionSource,
+  ClientVoiceSessionWriter,
+} from "../../../talk/client-voice-session-source.js";
 import type { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/provider-internal.js";
 import type {

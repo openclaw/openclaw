@@ -161,6 +161,17 @@ export function findChangedDatabasePaths(
 export async function readDatabasePathIdentity(
   databasePath: string,
 ): Promise<DatabasePathIdentity> {
+  const identity = await inspectDatabasePathIdentity(databasePath);
+  if (!identity) {
+    throw new Error("SQLite worker database path must identify a regular file");
+  }
+  return identity;
+}
+
+/** Async counterpart of native-owner inspection; the eventual opener owns non-file diagnostics. */
+export async function inspectDatabasePathIdentity(
+  databasePath: string,
+): Promise<DatabasePathIdentity | undefined> {
   const file = await stat(databasePath, { bigint: true }).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -168,6 +179,9 @@ export async function readDatabasePathIdentity(
     throw error;
   });
   if (file) {
+    if (!file.isFile()) {
+      return undefined;
+    }
     try {
       const canonicalPath = await realpath(databasePath);
       const canonicalFile = await stat(canonicalPath, { bigint: true });

@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import * as logging from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import * as databaseResources from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -39,6 +40,7 @@ it.for([false, true])(
         { ...options, storePath: database.path, sessionKey: "agent:main:maintenance-stale" },
         { sessionId: "maintenance-stale", updatedAt: 1 },
       );
+      const identity = readOpenClawAgentDatabaseIdentity(database);
       const canonicalPath = fs.realpathSync.native(database.path);
       await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
       let requestedPath = canonicalPath;
@@ -60,9 +62,9 @@ it.for([false, true])(
       const closeEntered = createDeferredCore<{ completion: Promise<void> }>();
       let insideKick = false;
       let maintenanceExecutionCaptured = false;
-      const captureExecution = databaseExecution.captureOpenClawAgentDatabaseExecution;
-      vi.spyOn(databaseExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-        (...args) => {
+      const captureExecution = databaseExecution.captureOpenClawAgentDatabaseExecutionAsync;
+      vi.spyOn(databaseExecution, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+        async (...args) => {
           const [executionOptions, constraints] = args;
           if (
             maintenanceExecutionCaptured ||
@@ -73,7 +75,7 @@ it.for([false, true])(
             return captureExecution(...args);
           }
           maintenanceExecutionCaptured = true;
-          const execution = captureExecution(...args);
+          const execution = await captureExecution(...args);
           const release = execution.release.bind(execution);
           vi.spyOn(execution, "release").mockImplementation(() => {
             releaseStarted.resolve({ completion: release() });
@@ -118,6 +120,12 @@ it.for([false, true])(
         insideKick = true;
         try {
           maintenanceKick.kickSessionEntryMaintenanceAfterWrite({
+            source: {
+              kind: "file",
+              physicalIdentity: identity.identity,
+              birthtime: identity.birthtime,
+              nativeLocation: identity.canonicalPath,
+            },
             activeSessionKey: `agent:${scope.agentId}:maintenance-close`,
             archiveDirectory: state.sessionsDir(),
             maintenanceConfig: resolveMaintenanceConfigFromInput({
@@ -179,7 +187,14 @@ it.for([
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = { agentId: "main", env: state.env };
       const database = openOpenClawAgentDatabase(scope);
+      const identity = readOpenClawAgentDatabaseIdentity(database);
       const request = {
+        source: {
+          kind: "file" as const,
+          physicalIdentity: identity.identity,
+          birthtime: identity.birthtime,
+          nativeLocation: identity.canonicalPath,
+        },
         activeSessionKey: "agent:main:maintenance-close",
         archiveDirectory: state.sessionsDir(),
         maintenanceConfig: resolveMaintenanceConfigFromInput({ mode: "enforce" }),

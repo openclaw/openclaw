@@ -52,6 +52,7 @@ export type RemoteShellSandboxSession = {
 };
 export type RemoteShellSessionOptions = {
   buildCommand(params: { remoteCommand: string; tty?: boolean }): RemoteShellCommandSpec;
+  prepareCurrent?: () => Promise<void>;
   assertCurrent?: () => void;
   dispose?: () => Promise<void>;
   formatFailure?: (stderr: string, exitCode: number) => string;
@@ -68,6 +69,9 @@ export function createRemoteShellSandboxSession(
     const command = options.buildCommand(params);
     if (command.argv.length === 0) {
       throw new Error("Remote shell command argv is empty");
+    }
+    if (checkCurrent && options.prepareCurrent) {
+      await options.prepareCurrent();
     }
     const launch = () => {
       if (checkCurrent) {
@@ -200,6 +204,7 @@ async function uploadDirectoryToRemoteCommand(
     throw new Error("Remote shell command argv is empty");
   }
   const tarEnv = sanitizeEnvVars(process.env).allowed;
+  await options.prepareCurrent?.();
   options.assertCurrent?.();
   params.signal?.throwIfAborted();
   const tar: ChildProcess = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {

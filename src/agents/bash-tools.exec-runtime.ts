@@ -379,6 +379,7 @@ export async function runExecProcess({
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
+  let prepareSandboxCurrent: (() => Promise<void>) | undefined;
   let sandboxPrepared = false;
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
@@ -521,6 +522,7 @@ export async function runExecProcess({
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
       assertSandboxCurrent = backendExecSpec.assertCurrent;
+      prepareSandboxCurrent = backendExecSpec.prepareCurrent;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
       // double-finalize backend failures, while removing it leaks the registered exec session.
       sandboxPrepared = true;
@@ -620,6 +622,7 @@ export async function runExecProcess({
                 grant?.revoke();
               },
               assertCurrent,
+              ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
               beforeSpawn: assertHostPolicyCurrent,
               initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
             }),
@@ -705,6 +708,7 @@ export async function runExecProcess({
     assertSourceActive = undefined;
     operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
+    prepareSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
   recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);

@@ -63,6 +63,8 @@ export async function createChannelThawScenario(
     isNixMode: true,
     activeWorkInspectors: { getChatRuns: () => (state.busy ? 1 : 0) },
   });
+  // Channel recovery must not compete with unrelated media and tool retention.
+  await timers.stopMediaCleanup();
   return {
     manager,
     starts,

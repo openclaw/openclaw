@@ -31,7 +31,7 @@ assert(global.gc, "Run with --expose-gc for retained snapshot measurement");
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations >= 1000, "Use at least 1000 iterations");
 const source = readFileSync(values.source, "utf8");
-const start = source.indexOf("function readHostCpuTimes(");
+const start = source.search(/^(?:async )?function readHostCpuTimes\(/m);
 const end = source.indexOf("function classifyGatewayEventLoopHealthReasons(", start);
 const hostConstants = [...source.matchAll(/^const HOST_CPU_.*;$/gm)]
   .map((match) => match[0])
@@ -44,38 +44,43 @@ const metricSource = readFileSync(
 const code = stripTypeScriptTypes(`${metricSource}\n${hostConstants}\n${source.slice(start, end)}`);
 // Only the named production functions are extracted; no rewritten algorithm or
 // test-only production export substitutes for the source under measurement.
-const ownerModule = `import { cpus } from "node:os";\nimport { openSync, readSync, closeSync, readFileSync } from "node:fs";\n${code}\nexport { readHostCpuTimes, hostCpuUtilization };`;
-const { readHostCpuTimes, hostCpuUtilization } = await import(
+const ownerModule = `import { cpus } from "node:os";\nimport { openSync, readSync, closeSync, readFileSync } from "node:fs";\nimport { open, readFile } from "node:fs/promises";\n${code}\nconst buffer = typeof HOST_CPU_STAT_BUFFER_BYTES === "number" ? Buffer.alloc(HOST_CPU_STAT_BUFFER_BYTES) : undefined;\nexport { readHostCpuTimes, hostCpuUtilization, buffer };`;
+const { readHostCpuTimes, hostCpuUtilization, buffer } = await import(
   `data:text/javascript;base64,${Buffer.from(ownerModule).toString("base64")}`
 );
 const count = (snapshot) => snapshot?.count ?? snapshot?.length;
-let previous = readHostCpuTimes();
+let previous = await readHostCpuTimes(buffer);
 assert(count(previous), "Native host CPU counters unavailable");
 const cpuCount = count(previous);
 let checksum = 0;
-const sample = () => {
-  const current = readHostCpuTimes();
+const sample = async () => {
+  const current = await readHostCpuTimes(buffer);
   assert.equal(count(current), cpuCount, "CPU topology changed during measurement");
   checksum += hostCpuUtilization(current, previous) ?? 0;
   previous = current;
 };
 for (let index = 0; index < 100; index++) {
-  sample();
+  await sample();
 }
 const inspector = values.allocations ? new Session() : undefined;
 let allocatedBytes;
 try {
+  const latencies = new Float64Array(iterations);
+  const hostLoadBefore = loadavg();
   if (inspector) {
     await startCollectedHeapSampling(inspector, 4096);
   }
-  const hostLoadBefore = loadavg();
   const started = performance.now();
   const cpuStarted = process.cpuUsage();
+  const threadStarted = process.threadCpuUsage();
   for (let index = 0; index < iterations; index++) {
-    sample();
+    const began = performance.now();
+    await sample();
+    latencies[index] = performance.now() - began;
   }
-  const used = process.cpuUsage(cpuStarted);
   const elapsedMs = performance.now() - started;
+  const used = process.cpuUsage(cpuStarted);
+  const mainUsed = process.threadCpuUsage(threadStarted);
   if (inspector) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     allocatedBytes = 0;
@@ -85,11 +90,13 @@ try {
       pending.push(...node.children);
     }
   }
+  const hostLoadAfter = loadavg();
+  const sortedLatencies = latencies.toSorted();
   global.gc();
   const retainedBefore = process.memoryUsage().heapUsed;
   const snapshots = [];
   for (let index = 0; index < 256; index++) {
-    snapshots.push(readHostCpuTimes());
+    snapshots.push(await readHostCpuTimes(buffer));
   }
   global.gc();
   const retainedBytesPerSnapshot =
@@ -104,13 +111,17 @@ try {
       iterations,
       allocations: values.allocations,
       cpuMs: (used.user + used.system) / 1000,
+      mainCpuMs: (mainUsed.user + mainUsed.system) / 1000,
+      medianMs: sortedLatencies[Math.floor(iterations / 2)],
+      p95Ms: sortedLatencies[Math.ceil(iterations * 0.95) - 1],
+      maxMs: sortedLatencies.at(-1),
       elapsedMs,
       allocatedBytes,
       allocatedBytesPerSample:
         allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
       retainedBytesPerSnapshot,
       hostLoadBefore,
-      hostLoadAfter: loadavg(),
+      hostLoadAfter,
       checksum,
     }),
   );

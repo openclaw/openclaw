@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
 import * as lookup from "../../gateway/session-utils-store-lookup.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
@@ -16,11 +17,42 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
   withSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
+  withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { readExactSessionEntriesWithLifecycleAsync } from "./session-entry-read.worker.js";
+import * as targetPreparation from "./session-store-target-runtime.js";
 import * as preparation from "./session-transcript-worker-resources.js";
+
+it("keeps admitted source guards in memory after reading through the worker", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:retained-source";
+    replaceSessionEntrySync(
+      { agentId: "main", env, sessionKey },
+      { sessionId: "retained-source", updatedAt: 1 },
+    );
+    await withSessionStoreReaderInWorker(
+      { agentId: "main", storePath: database.path, env },
+      async ({ reader, assertCurrent }) => {
+        const read = await reader.readExactEntries({ sessionKeys: [sessionKey], env });
+        expect(read.entries[0]?.entry.sessionId).toBe("retained-source");
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        try {
+          for (let index = 0; index < 5; index++) {
+            assertCurrent();
+          }
+          expect(stat).not.toHaveBeenCalled();
+        } finally {
+          stat.mockRestore();
+          syncBuiltinESMExports();
+        }
+      },
+      { capturePhysicalSource: true },
+    );
+  }));
 
 it("projects worker discovery config while retaining the host configuration owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -83,6 +115,22 @@ it.each(["title", "retirement"] as const)("retains ordinary list source across %
     const sessionKey = "agent:main:list-source";
     const scope = { agentId: "main", env, sessionKey };
     replaceSessionEntrySync(scope, { sessionId: "list-source", updatedAt: 1, label: "before" });
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    const prepare = targetPreparation.prepareSessionStoreReaderCandidates;
+    const preparationCalls: number[] = [];
+    const capture = vi
+      .spyOn(targetPreparation, "prepareSessionStoreReaderCandidates")
+      .mockImplementation(async (...args) => {
+        const before = realpath.mock.calls.length;
+        try {
+          return await prepare(...args);
+        } finally {
+          preparationCalls.push(
+            realpath.mock.calls.slice(before).filter(([pathname]) => pathname === database.path)
+              .length,
+          );
+        }
+      });
     const source = await withSessionEntriesFromStoreInWorker(
       {
         agentId: "main",
@@ -96,7 +144,11 @@ it.each(["title", "retirement"] as const)("retains ordinary list source across %
         expect(read.result.source).toBeDefined();
         return read.result.source!;
       },
-    );
+    ).finally(() => {
+      capture.mockRestore();
+      realpath.mockRestore();
+    });
+    expect(preparationCalls).toEqual([0]);
     if (change === "title") {
       replaceSessionEntrySync(scope, { sessionId: "list-source", updatedAt: 2, label: "after" });
       expect(() => assertCapturedSessionEntryReadSource(source, database)).not.toThrow();
@@ -185,55 +237,56 @@ it.each([false, true])(
     }),
 );
 
-it("rejects a locator retargeted after worker qualification before the original snapshot read", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { env } = state;
-    const sessionKey = "agent:main:prepared-alias";
-    const original = openOpenClawAgentDatabase({ agentId: "main", env });
-    replaceSessionEntrySync(
-      { agentId: "main", env, sessionKey },
-      { sessionId: "original", updatedAt: 1 },
-    );
-    const replacement = openOpenClawAgentDatabase({ agentId: "other", env });
-    const originalPath = original.path;
-    const replacementPath = replacement.path;
-    await closeOpenClawAgentDatabasesAsync();
-    const alias = state.path("selected.sqlite");
-    fs.symlinkSync(originalPath, alias);
-    const prepare = preparation.prepareSessionStoreCandidatesInWorker;
-    const qualify = vi
-      .spyOn(preparation, "prepareSessionStoreCandidatesInWorker")
-      .mockImplementation(async (request) => {
-        const result = await prepare(request);
-        fs.unlinkSync(alias);
-        fs.symlinkSync(replacementPath, alias);
-        return result;
-      });
-    const consumed = vi.fn(async () => undefined);
-    try {
-      await expect(
-        withArtifactPreservingStateReads(
-          () =>
-            withSessionEntriesFromStoreInWorker(
-              {
-                agentId: "main",
-                storePath: alias,
-                env,
-                sessionKeys: [sessionKey],
-                projection: "full",
-              },
-              consumed,
-            ),
-          { agentDatabases: true },
-        ),
-      ).rejects.toThrow(/changed|captured discovery custody/);
-      expect(consumed).not.toHaveBeenCalled();
-    } finally {
-      qualify.mockRestore();
-    }
-  }));
+it.each([false, true])(
+  "rejects a locator retargeted after qualification (inspection=%s)",
+  (inspection) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { env } = state;
+      const sessionKey = "agent:main:prepared-alias";
+      const original = openOpenClawAgentDatabase({ agentId: "main", env });
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey },
+        { sessionId: "original", updatedAt: 1 },
+      );
+      const replacement = openOpenClawAgentDatabase({ agentId: "other", env });
+      const originalPath = original.path;
+      const replacementPath = replacement.path;
+      await closeOpenClawAgentDatabasesAsync();
+      const alias = state.path("selected.sqlite");
+      fs.symlinkSync(originalPath, alias);
+      const prepare = targetPreparation.prepareSessionStoreReaderCandidates;
+      const qualify = vi
+        .spyOn(targetPreparation, "prepareSessionStoreReaderCandidates")
+        .mockImplementation(async (...args) => {
+          const result = await prepare(...args);
+          fs.unlinkSync(alias);
+          fs.symlinkSync(replacementPath, alias);
+          return result;
+        });
+      const consumed = vi.fn(async () => undefined);
+      try {
+        const read = () =>
+          withSessionEntriesFromStoreInWorker(
+            {
+              agentId: "main",
+              storePath: alias,
+              env,
+              sessionKeys: [sessionKey],
+              projection: "full",
+            },
+            consumed,
+          );
+        await expect(
+          inspection ? withArtifactPreservingStateReads(read, { agentDatabases: true }) : read(),
+        ).rejects.toThrow(/changed|captured discovery custody/);
+        expect(consumed).not.toHaveBeenCalled();
+      } finally {
+        qualify.mockRestore();
+      }
+    }),
+);
 
-it("keeps an inspection alias behind an accepted writer on its canonical physical FIFO", () =>
+it.each([false, true])("keeps an alias behind its physical FIFO (inspection=%s)", (inspection) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { env } = state;
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -262,7 +315,10 @@ it("keeps an inspection alias behind an accepted writer on its canonical physica
     const enqueue = queues.runQueuedStoreWrite;
     const queued = vi.spyOn(queues, "runQueuedStoreWrite").mockImplementation((request) => {
       const pending = enqueue(request);
-      if (request.label === "agent database ordered read admission") {
+      const label = inspection
+        ? "agent database ordered read admission"
+        : "agent database write admission";
+      if (request.label === label) {
         expect(request.storePath).toBe(fs.realpathSync(database.path));
         expect(request.queues.get(request.storePath)?.pending).toHaveLength(1);
         enqueued.resolve();
@@ -273,23 +329,23 @@ it("keeps an inspection alias behind an accepted writer on its canonical physica
       (reads: readonly PreparedSessionEntryWorkerRead[]) =>
         reads[0]?.result.entries[0]?.entry.sessionId,
     );
-    const pending = withArtifactPreservingStateReads(
-      () =>
-        withSessionEntriesFromStoresInWorker(
-          [
-            {
-              agentId: "main",
-              storePath: alias,
-              env,
-              sessionKeys: [sessionKey],
-              projection: "full",
-            },
-          ],
-          consume,
-          { ordered: true },
-        ),
-      { agentDatabases: true },
-    );
+    const read = () =>
+      withSessionEntriesFromStoresInWorker(
+        [
+          {
+            agentId: "main",
+            storePath: alias,
+            env,
+            sessionKeys: [sessionKey],
+            projection: "full",
+          },
+        ],
+        consume,
+        { ordered: true },
+      );
+    const pending = inspection
+      ? withArtifactPreservingStateReads(read, { agentDatabases: true })
+      : read();
     try {
       await Promise.race([
         enqueued.promise,
@@ -307,7 +363,8 @@ it("keeps an inspection alias behind an accepted writer on its canonical physica
       await Promise.allSettled([writer, pending]);
       queued.mockRestore();
     }
-  }));
+  }),
+);
 
 it.each([
   [true, false],

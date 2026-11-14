@@ -1,5 +1,6 @@
+import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -17,8 +18,10 @@ import type {
   SessionReactionWrite,
   SetSessionReactionParams,
 } from "./session-reaction-store.types.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import {
+  prepareSessionStoreReaderCandidates,
+  withSessionStoreTarget,
+} from "./session-store-target-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export { SessionReactionLimitError, SessionReactionMessageMissingError };
@@ -74,35 +77,51 @@ export async function setSessionReactionAsync(
   const logical = resolveSqliteScope({ ...scope, storePath: undefined, env });
   const storePath =
     logical.path ?? scope.storePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const candidates = captureSessionStoreReadCandidates(storePath);
+  const { candidates } = await prepareSessionStoreReaderCandidates(storePath, {
+    inspection: false,
+    allowDirect: false,
+  });
   try {
     return await withSessionStoreTarget(
       { agentId: logical.agentId, storePath, env, candidates },
       async (selected, owner) => {
         const options = { ...selected.database, env };
-        const execution = captureOpenClawAgentDatabaseExecution(options);
-        const assertHeld = () => {
-          execution.assertCurrent();
-          owner.assertCurrent();
-        };
+        const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+          (execution) => ok(execution),
+          (error: unknown) => err<never, unknown>(error),
+        );
         try {
-          assertHeld();
-          const result = await runOpenClawAgentWorkerWrite(options, () =>
-            execution.runExisting(
-              createSessionWorkerExecutionSource(assertHeld, "Reaction authority expired"),
+          const result = await runOpenClawAgentWorkerWrite(options, async () => {
+            const acquired = await captured;
+            if (!acquired.ok) {
+              throw acquired.error;
+            }
+            const execution = acquired.value;
+            const assertHeld = () => {
+              execution.assertCurrent();
+              owner.assertCurrent();
+            };
+            assertHeld();
+            return execution.runExisting(
+              createSessionWorkerExecutionSource(assertHeld, "Reaction authority expired", [
+                owner.readCustody,
+              ]),
               (worker) =>
                 worker.execute({
                   type: "session.reaction.set",
                   input: { sessionKey: logical.sessionKey, params: reaction },
                 }),
-            ),
-          );
+            );
+          });
           if (!result) {
             throw new SessionWorkStartInvalidatedError("session changed before reaction mutation");
           }
           return result;
         } finally {
-          await execution.release();
+          const acquired = await captured;
+          if (acquired.ok) {
+            await acquired.value.release();
+          }
         }
       },
       assertCurrent,

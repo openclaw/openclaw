@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sqliteDatabaseAdmissionState } from "../infra/sqlite-database-admission-context.js";
+import { readSqliteDatabaseAdmissionIdentity } from "../infra/sqlite-database-admission-record.js";
+import { NativeWorker } from "../infra/worker-native-handle.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import {
   preparePluginGenerationArtifact,
@@ -10,10 +15,8 @@ import {
 } from "./plugin-generation-worker.js";
 import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
-import {
-  collectPluginSourceSnapshots,
-  PluginSourceSnapshotValidationError,
-} from "./plugin-source-snapshot-artifact.js";
+import { collectPluginSourceSnapshots } from "./plugin-source-snapshot-artifact.js";
+import { PluginSourceSnapshotValidationError } from "./plugin-source-snapshot-payload.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -104,23 +107,206 @@ it("prepares independent runtime instances from worker-published immutable sourc
   });
 });
 
-it("preserves named snapshot validation failures across the worker boundary", async () => {
+it.each(["manifest", "directory", "token"] as const)(
+  "preserves named snapshot validation failures for a damaged %s",
+  async (damage) => {
+    await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
+      if (damage === "manifest") {
+        fs.writeFileSync(path.join(descriptor.artifact.path, "manifest.json"), "corrupt");
+      } else {
+        fs.rmSync(
+          damage === "directory"
+            ? descriptor.artifact.path
+            : path.join(descriptor.artifact.path, "owner.sqlite"),
+          { recursive: true },
+        );
+      }
+      let failure: unknown;
+      try {
+        await preparePluginGenerationArtifact({
+          rootDir,
+          source: entry,
+          sourceSnapshot: { stateDir, descriptor },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(PluginSourceSnapshotValidationError);
+      expect(failure).toMatchObject({
+        code: "PLUGIN_SOURCE_SNAPSHOT_INVALID",
+        artifactPath: descriptor.artifact.path,
+      });
+    });
+  },
+);
+
+it("keeps the worker available while concurrent snapshot descriptors prepare", async () => {
   await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
-    fs.writeFileSync(path.join(descriptor.artifact.path, "manifest.json"), "corrupt");
-    let failure: unknown;
+    using posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+    const ordinary = await preparePluginGenerationArtifact({ rootDir, source: entry });
+    const location = path.join(descriptor.artifact.path, "owner.sqlite");
+    const identity = readSqliteDatabaseAdmissionIdentity(fs.statSync(location, { bigint: true }));
+    expect(sqliteDatabaseAdmissionState.registry.descriptors.has(identity)).toBe(false);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const open = fs.open;
+    let opens = 0;
+    using opening = vi.spyOn(fs, "open").mockImplementation((...args) => {
+      if (args[0] !== location) {
+        return Reflect.apply(open, fs, args);
+      }
+      opens++;
+      entered.resolve();
+      void release.promise.then(() => Reflect.apply(open, fs, args));
+    });
+    void opening;
+    const preparing = Promise.allSettled(
+      [0, 1].map(() =>
+        preparePluginGenerationArtifact({
+          rootDir,
+          source: entry,
+          sourceSnapshot: { stateDir, descriptor },
+        }),
+      ),
+    );
     try {
-      await preparePluginGenerationArtifact({
+      expect(
+        await Promise.race([entered.promise.then(() => "held"), preparing.then(() => "settled")]),
+      ).toBe("held");
+      // This snapshot must not occupy the sole worker while its host filesystem is held.
+      expect(
+        posts.mock.calls.some(
+          ([message]) =>
+            isRecord(message) &&
+            isRecord(message.input) &&
+            message.input.sourceSnapshot !== undefined,
+        ),
+      ).toBe(false);
+      ordinary.artifact.prepareModule(ordinary.artifact.resolve(entry));
+      release.resolve();
+      const results = await preparing;
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      expect(opens).toBe(1);
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          expect(fs.readFileSync(result.value.artifact.resolve(entry), "utf8")).toContain("42");
+        }
+      }
+      const workers = posts.mock.calls.flatMap(([message], index) =>
+        isRecord(message) && isRecord(message.input) ? [posts.mock.contexts[index]] : [],
+      );
+      expect(new Set(workers).size).toBe(1);
+    } finally {
+      release.resolve();
+      for (const result of await preparing) {
+        if (result.status === "fulfilled") {
+          await result.value.artifact.disposeAsync();
+        }
+      }
+      await ordinary.artifact.disposeAsync();
+    }
+  });
+});
+
+it.each(["open", "fstat", "seal"] as const)(
+  "joins held snapshot %s preparation when its original owner retires",
+  async (phase) => {
+    await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
+      const location = path.join(descriptor.artifact.path, "owner.sqlite");
+      const identity = readSqliteDatabaseAdmissionIdentity(fs.statSync(location, { bigint: true }));
+      const bytes = fs.readFileSync(location);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let opened: number | undefined;
+      const open = fs.open;
+      const fstat = fs.fstat;
+      const lstat = fs.promises.lstat;
+      using opening = vi.spyOn(fs, "open").mockImplementation((...args) => {
+        if (args[0] !== location) {
+          return Reflect.apply(open, fs, args);
+        }
+        const callback = args.at(-1);
+        if (typeof callback !== "function") {
+          throw new Error("Expected the real filesystem open callback");
+        }
+        const run = () =>
+          Reflect.apply(open, fs, [
+            ...args.slice(0, -1),
+            (error: NodeJS.ErrnoException | null, fd: number) => {
+              if (!error) {
+                opened = fd;
+              }
+              Reflect.apply(callback, undefined, [error, fd]);
+            },
+          ]);
+        if (phase === "open") {
+          entered.resolve();
+          void release.promise.then(run);
+        } else {
+          run();
+        }
+      });
+      using checking = vi.spyOn(fs, "fstat").mockImplementation((...args) => {
+        if (phase === "fstat" && args[0] === opened) {
+          entered.resolve();
+          void release.promise.then(() => Reflect.apply(fstat, fs, args));
+          return;
+        }
+        return Reflect.apply(fstat, fs, args);
+      });
+      using reading = vi.spyOn(fs.promises, "lstat").mockImplementation((...args) => {
+        if (phase === "seal" && args[0] === `${location}.seal`) {
+          entered.resolve();
+          return release.promise.then(() => Reflect.apply(lstat, fs.promises, args));
+        }
+        return Reflect.apply(lstat, fs.promises, args);
+      });
+      void opening;
+      void checking;
+      void reading;
+      const preparing = preparePluginGenerationArtifact({
         rootDir,
         source: entry,
         sourceSnapshot: { stateDir, descriptor },
-      });
-    } catch (error) {
-      failure = error;
-    }
-    expect(failure).toBeInstanceOf(PluginSourceSnapshotValidationError);
-    expect(failure).toMatchObject({
-      code: "PLUGIN_SOURCE_SNAPSHOT_INVALID",
-      artifactPath: descriptor.artifact.path,
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let closing: Promise<void> | undefined;
+      try {
+        expect(
+          await Promise.race([entered.promise.then(() => "held"), preparing.then(() => "settled")]),
+        ).toBe("held");
+        closing = closeDefaultRetainedNativeWorkerSource();
+        release.resolve();
+        const result = await preparing;
+        expect("error" in result && result.error).toMatchObject({
+          message: "Plugin preparation worker has closed",
+        });
+        await closing;
+        expect(opened).toBeDefined();
+        if (opened === undefined) {
+          throw new Error("The held open did not complete");
+        }
+        let current: fs.BigIntStats | undefined;
+        try {
+          current = fs.fstatSync(opened, { bigint: true });
+        } catch (error) {
+          expect(error).toMatchObject({ code: "EBADF" });
+        }
+        if (current) {
+          expect(readSqliteDatabaseAdmissionIdentity(current)).not.toBe(identity);
+        }
+        expect(sqliteDatabaseAdmissionState.registry.descriptors.has(identity)).toBe(false);
+        expect(fs.readFileSync(location)).toEqual(bytes);
+      } finally {
+        release.resolve();
+        const result = await preparing;
+        if ("value" in result) {
+          await result.value.artifact.disposeAsync();
+        }
+        await closing;
+      }
     });
-  });
-});
+  },
+);

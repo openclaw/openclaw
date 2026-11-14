@@ -396,7 +396,6 @@ async function runEmbeddedAgentForSession(
               cwd: params.cwd,
               sessionId: params.sessionId,
             });
-            const { activeProjectKeys } = projects;
             const preparedModelRuntime = Object.freeze({
               ...preparedModelRuntimeOwnerSnapshot,
               ...projects,
@@ -405,7 +404,6 @@ async function runEmbeddedAgentForSession(
               params = refresh.withDeliveryCallbacks(params);
               const preparedAgentId = workspaceResolution.agentId;
               const resolvedWorkspace = workspaceResolution.workspaceDir;
-              const agentDir = preparedModelRuntime.agentDir;
               const progressController = createEmbeddedRunProgressController({
                 attempt: params,
                 noteLaneTaskProgress,
@@ -472,7 +470,7 @@ async function runEmbeddedAgentForSession(
                 sessionKey: resolvedSessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: resolvedWorkspace,
-                activeProjectKeys: [...activeProjectKeys],
+                activeProjectKeys: [...projects.activeProjectKeys],
                 modelProviderId: provider,
                 modelId,
                 trigger: params.trigger,
@@ -554,10 +552,13 @@ async function runEmbeddedAgentForSession(
                 contextEngineAgentId,
                 provider,
                 modelId,
-                agentDir,
+                agentDir: preparedModelRuntime.agentDir,
                 workspaceResolution,
                 workspaceDir: resolvedWorkspace,
-                bootstrapWorkspaceDir: resolveRunBootstrapWorkspaceDir(params, canonicalWorkspace),
+                bootstrapWorkspaceDir: await resolveRunBootstrapWorkspaceDir(
+                  params,
+                  canonicalWorkspace,
+                ),
                 isCanonicalWorkspace,
                 globalLane,
                 hookRunner,

@@ -1,9 +1,15 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import {
-  createStagedInputPathMatcher,
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../../agents/workspace-state-guard.js";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import {
   stagedInputDirectoriesFromEntries,
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
@@ -14,7 +20,13 @@ import {
   WorkspaceResultLimitError,
 } from "./workspace-inventory-limits.js";
 import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
-import { captureWorkspaceManifest, prepareWorkspacePatch } from "./workspace-manifest-worker.js";
+import type { WorkspaceReconciliationOperations } from "./workspace-manifest-computation.js";
+import {
+  captureWorkspaceManifest,
+  prepareWorkspacePatch,
+  prepareWorkspaceTemporaryDirectory,
+  runWorkspaceFilesystemComputation,
+} from "./workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -22,21 +34,14 @@ import type {
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
-  applyWorkspaceDirectoryChanges,
-  ConcurrentWorkspacePathError,
   createWorkspaceManifestVerifier,
   preflightWorkspaceApply,
+  prepareWorkspaceDirectoryChanges,
   retainedConflictPaths,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile-core.js";
-import {
-  prepareNonDirectoryTargets,
-  reconciliationDirectories,
-} from "./workspace-reconcile-derived-paths.js";
-import {
-  applyWorkspacePatch,
-  recoverWorkerWorkspaceReconciliation,
-} from "./workspace-reconcile-recovery.js";
+import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile-recovery.js";
 
 export async function applyStagedWorkerWorkspace(params: {
   root: string;
@@ -48,6 +53,7 @@ export async function applyStagedWorkerWorkspace(params: {
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
+  workerAuthority?: WorktreeWorkerAuthority;
   /** Holds every target writer through acceptance or rollback. */
   freezeTarget?: () => Promise<void>;
   onPhase?: (phase: "preflight" | "patch" | "capture" | "verification" | "apply") => void;
@@ -63,7 +69,18 @@ export async function applyStagedWorkerWorkspace(params: {
     | { kind: "exact-target"; verify: () => Promise<void> };
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
-    const root = await fs.realpath(params.root);
+    const target =
+      params.workerAuthority?.workspaceEvidence?.find(
+        (evidence) => evidence.workspaceDir === params.root,
+      ) ?? (await captureWorkspaceFilesystemEvidence(params.root));
+    const root = target.canonical;
+    const filesystemAuthority = {
+      workerAuthority: params.workerAuthority,
+      assertCurrent: composeSessionSourceAssertion([
+        params.assertCurrent,
+        createWorkspaceFilesystemSource(target, () => {}),
+      ]),
+    };
     const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
     if (preflightInput.changedPaths.length > MAX_WORKSPACE_RESULT_CHANGED_PATHS) {
       throw new WorkspaceResultLimitError(
@@ -92,35 +109,32 @@ export async function applyStagedWorkerWorkspace(params: {
         verifyLocalStable: verify,
       };
     };
+    const candidates: WorkspaceReconciliationOperations["workspace.reconcile.ownership"]["input"]["candidates"] =
+      [];
+    if (stagedInputDirectories.size > 0) {
+      for (const entryPath of currentNodes.keys()) {
+        const directory = stagedInputPathDirectory(entryPath);
+        if (directory && stagedInputDirectories.has(directory)) {
+          candidates.push({
+            path: entryPath,
+            directory,
+            changesMarker: entryPath === `${directory}/.gitignore` && changed.has(entryPath),
+            isNew: !baseNodes.has(entryPath),
+          });
+        }
+      }
+    }
     const assertInputOwnership = async () => {
       if (stagedInputDirectories.size === 0) {
         return;
       }
-      const workspaceRoot = await openFsSafeRoot(root);
-      const isRetainedInput = createStagedInputPathMatcher(workspaceRoot);
-      const unownedInputDirectories = new Set<string>();
-      for (const directory of stagedInputDirectories) {
-        if ((await workspaceRoot.exists(directory)) && !(await isRetainedInput(directory))) {
-          unownedInputDirectories.add(directory);
-        }
-      }
-      // Worker ownership cannot enroll local project data. Preserve ordinary entries
-      // already shared at dispatch, but reject marker changes and newly selected local
-      // paths before accepted publication can return their private conflict bytes.
-      for (const entryPath of currentNodes.keys()) {
-        const directory = stagedInputPathDirectory(entryPath);
-        if (!directory || !unownedInputDirectories.has(directory)) {
-          continue;
-        }
-        const changesMarker = entryPath === `${directory}/.gitignore` && changed.has(entryPath);
-        const selectsLocalPath =
-          !baseNodes.has(entryPath) && (await workspaceRoot.exists(entryPath));
-        if (changesMarker || selectsLocalPath) {
-          throw new ConcurrentWorkspacePathError(
-            `Cloud input conflicts with an unowned Gateway directory: ${directory}. Keep the project directory unchanged and reattach the input.`,
-          );
-        }
-      }
+      await runWorkspaceFilesystemComputation(
+        {
+          type: "workspace.reconcile.ownership",
+          input: { root: params.root, stagedInputDirectories, candidates },
+        },
+        filesystemAuthority,
+      );
     };
     await assertInputOwnership();
     const preserveDirectories = new Set(
@@ -216,9 +230,7 @@ export async function applyStagedWorkerWorkspace(params: {
     await params.freezeTarget?.();
     const confirmedPreflight = await inspectPaths();
     if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
-      throw new ConcurrentWorkspacePathError(
-        "Gateway workspace changed while cloud reconciliation was being prepared",
-      );
+      throw new Error("Gateway workspace changed while cloud reconciliation was being prepared");
     }
     // Revalidate before mutation, not after applying our own newly admitted paths.
     await assertInputOwnership();
@@ -239,26 +251,30 @@ export async function applyStagedWorkerWorkspace(params: {
     await params.journal.begin(journal);
     try {
       params.onPhase?.("apply");
-      const staged = createStagedInputPathMatcher(await openFsSafeRoot(root));
-      await prepareNonDirectoryTargets(
-        root,
-        appliedEntries,
-        async (entryPath) => Boolean(buildCacheInputs?.has(entryPath)) || (await staged(entryPath)),
-        params.assertCurrent,
-        buildCacheInputs !== undefined,
-      );
-      await applyWorkspacePatch({
-        root,
-        patch: snapshot.patch,
-        assertCurrent: params.assertCurrent,
-      });
-      await applyWorkspaceDirectoryChanges({
-        root,
-        baseNodes,
-        currentNodes,
-        applyPaths: preflight.applyPaths,
-        assertCurrent: params.assertCurrent,
-      });
+      const temporary = await prepareWorkspaceTemporaryDirectory("openclaw-workspace-apply-input-");
+      try {
+        const patchPath = path.join(temporary, "patch");
+        await fs.writeFile(patchPath, snapshot.patch);
+        await runWorkspaceFilesystemComputation(
+          {
+            type: "workspace.reconcile.apply",
+            input: {
+              root: params.root,
+              directories: prepareWorkspaceDirectoryChanges({
+                baseNodes,
+                currentNodes,
+                applyPaths: preflight.applyPaths,
+              }),
+              appliedEntries,
+              buildCacheInputs,
+              patchPath,
+            },
+          },
+          filesystemAuthority,
+        );
+      } finally {
+        await fs.rm(temporary, { recursive: true, force: true });
+      }
       if (acceptance.kind === "exact-target") {
         await inspectPaths();
       } else {
@@ -267,17 +283,21 @@ export async function applyStagedWorkerWorkspace(params: {
     } catch (error) {
       // Transport or settlement timeouts are observation evidence, never authority
       // for an inverse operation; recovery owns restoring both sides.
-      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+      if (
+        error instanceof AcceptedWorkspacePublicationIndeterminateError ||
+        hasErrnoCode(error, "GATEWAY_STATE_OWNER_REQUIRED") ||
+        hasErrnoCode(error, "WORKSPACE_ALIAS_REPOINTED")
+      ) {
         throw error;
       }
       // A revoked owner cannot authorize an inverse mutation or consume the journal.
       params.assertCurrent?.();
       try {
         await recoverWorkerWorkspaceReconciliation({
-          root,
+          root: params.root,
           journal,
           buildCacheInputs: buildCacheInputs && [...buildCacheInputs],
-          assertCurrent: params.assertCurrent,
+          ...filesystemAuthority,
         });
         params.assertCurrent?.();
         await params.journal.abort();

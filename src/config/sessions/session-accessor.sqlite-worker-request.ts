@@ -1,12 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/boundary-path.js";
+import { settleWithCleanup } from "../../infra/error-graph-internal.js";
 import {
   acquireStateDatabaseSchemaLease,
   type captureStateDatabaseAccess,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import { resolveDatabasePathKeyAsync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import type {
   RetainedWorkerTransactionAdmission,
@@ -14,6 +16,7 @@ import type {
 } from "../../infra/sqlite-worker-operation-settlement.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -129,8 +132,8 @@ export type SqliteMutationWorkerValidationOwner =
       isCurrent: () => boolean;
     }
   | {
-      source: { agentId: string; path: string };
-      claim: AgentDatabaseGenerationClaim;
+      source: { agentId: string; path: string; canonicalPath: string };
+      claim: Pick<AgentDatabaseGenerationClaim, "identity" | "incarnation" | "assertCurrent">;
     };
 
 export type SqliteMutationWorkerMessage<Result> =
@@ -177,9 +180,12 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   const { transport, operationId } = params;
   const validationOwner = params.validationOwner;
   const validationPath = validationOwner
-    ? "database" in validationOwner
-      ? validationOwner.database.path
-      : validationOwner.source.path
+    ? {
+        canonicalPath:
+          "database" in validationOwner
+            ? readOpenClawAgentDatabaseIdentity(validationOwner.database).canonicalPath
+            : validationOwner.source.canonicalPath,
+      }
     : params.validationPath;
   if (validationOwner && "source" in validationOwner) {
     validationOwner.claim.assertCurrent();
@@ -363,17 +369,25 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                       maintenanceScope: authority.maintenanceScope,
                     })
                   : undefined;
-              if (assertStateAccess) {
+              const creationPaths = new Set(
+                allowed && authority
+                  ? await Promise.all(
+                      authority.creationPaths.map(resolveIdentityPathViaExistingAncestor),
+                    )
+                  : [],
+              );
+              const validationSource =
+                allowed && typeof validationPath === "string"
+                  ? { canonicalPath: await resolveDatabasePathKeyAsync(validationPath) }
+                  : validationPath;
+              if (allowed) {
                 assertCreationCurrent();
-                assertStateAccess();
+                assertStateAccess?.();
               }
               const metadata =
                 allowed && authority
                   ? createSqliteDatabaseAdmissionRelay(assertCreationCurrent)
                   : undefined;
-              const creationPaths = new Set(
-                authority?.creationPaths.map(resolveIdentityPathViaExistingAncestorSync),
-              );
               if (metadata && authority) {
                 let schemaLease: StateDatabaseSchemaLease | undefined;
                 const assertAccess = () => {
@@ -389,7 +403,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                   assertRequest: assertCreationCurrent,
                   assertAccess,
                   assertCreate(location) {
-                    if (!creationPaths.has(resolveIdentityPathViaExistingAncestorSync(location))) {
+                    if (!creationPaths.has(location)) {
                       throw new Error(
                         "SQLite reclamation creation target differs from its admitted databases",
                       );
@@ -416,41 +430,48 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                       metadata.service(),
                     )
                   : undefined;
-              try {
-                if (assertStateAccess) {
-                  assertCreationCurrent();
-                  assertStateAccess();
-                }
-                worker.postMessage(
-                  {
-                    type: "admission",
-                    operationId,
-                    allowed,
-                    validation: allowed ? readValidation() : undefined,
-                    integrityRevoked:
-                      allowed && validationPath !== undefined
-                        ? hasRevokedOpenClawAgentDatabaseValidation(validationPath)
-                        : false,
-                    ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
-                  },
-                  metadata ? [metadata.port] : [],
-                );
-                if (transport.kind === "pooled") {
-                  recordWorkerMessage("admission", "to_worker");
-                }
-                // Refusal holds the FIFO until exit. The owner publishes successful results
-                // before returning this writer section; preliminary admissions release separately.
-                await requested.released.promise;
-                if (metadata?.failure) {
-                  throw toErrorObject(metadata.failure, "SQLite worker admission failed");
-                }
-                return completed && !workerError && !transportError && !params.getFailure?.()
-                  ? result
-                  : undefined;
-              } finally {
-                metadata?.finish();
-                releaseService?.();
-              }
+              return settleWithCleanup(
+                (async () => {
+                  if (assertStateAccess) {
+                    assertCreationCurrent();
+                    assertStateAccess();
+                  }
+                  worker.postMessage(
+                    {
+                      type: "admission",
+                      operationId,
+                      allowed,
+                      validation: allowed ? readValidation() : undefined,
+                      integrityRevoked:
+                        allowed && validationSource !== undefined
+                          ? hasRevokedOpenClawAgentDatabaseValidation(validationSource)
+                          : false,
+                      ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
+                    },
+                    metadata ? [metadata.port] : [],
+                  );
+                  if (transport.kind === "pooled") {
+                    recordWorkerMessage("admission", "to_worker");
+                  }
+                  // Refusal holds the FIFO until exit. The owner publishes successful results
+                  // before returning this writer section; preliminary admissions release separately.
+                  await requested.released.promise;
+                  if (metadata?.failure) {
+                    throw toErrorObject(metadata.failure, "SQLite worker admission failed");
+                  }
+                  return completed && !workerError && !transportError && !params.getFailure?.()
+                    ? result
+                    : undefined;
+                })(),
+                async () => {
+                  try {
+                    await metadata?.finish();
+                  } finally {
+                    releaseService?.();
+                  }
+                },
+                "SQLite reclamation and admission cleanup failed",
+              );
             },
             requested.diagnostics,
             retained,

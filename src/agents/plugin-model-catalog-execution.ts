@@ -13,7 +13,7 @@ import {
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import {
   openOpenClawAgentSqliteWorkerStore,
   type OpenClawAgentSqliteWorkerStore,
@@ -66,7 +66,7 @@ export async function withPluginModelCatalogWorker<T>(
     scope: Pick<SqliteWorkerStore<PluginModelCatalogCredentialOperations>, "execute">,
   ) => Promise<T>,
 ): Promise<T> {
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   let worker: OpenClawAgentSqliteWorkerStore<PluginModelCatalogCredentialOperations> | undefined;
   try {
     if (prepare) {

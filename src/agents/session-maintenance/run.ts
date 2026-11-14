@@ -1,7 +1,11 @@
+import { isMainThread } from "node:worker_threads";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import type { CapturedSessionEntryCurrentRead } from "../../config/sessions/session-entry-current.types.js";
-import { listSqliteTargetCandidatePathsForSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
-import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "../../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fenceScheduledGatewayContextResolver } from "../../gateway/scheduled-run-gateway-context.js";
@@ -12,7 +16,11 @@ import {
 } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  getSqliteDatabaseAdmissionSourceForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} from "../../infra/sqlite-database-admission.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import {
@@ -40,6 +48,9 @@ import { createSessionMaintenanceOwner } from "./coordinator.js";
 
 const log = createSubsystemLogger("agents/session-maintenance");
 export type SessionMaintenanceRequest = {
+  sourceTarget: Omit<CapturedSessionTranscriptTargetBinding, "agentId"> &
+    Pick<FollowupRun["run"], "agentId">;
+  sourceIdentities: readonly DatabasePathIdentity[];
   prepared: {
     cfg: OpenClawConfig;
     sessionKey?: string;
@@ -56,6 +67,50 @@ export type SessionMaintenanceRequest = {
   agentHarnessId?: string;
   compactionRequestBudget?: CompactionRequestBudget;
 };
+
+/** Prepare the original complete source cohort before handing data to the synchronous scheduler. */
+export async function prepareSessionMaintenanceRequest(
+  request: Omit<SessionMaintenanceRequest, "sourceTarget" | "sourceIdentities">,
+): Promise<SessionMaintenanceRequest | undefined> {
+  const sessionKey = request.prepared.sessionKey;
+  if (!sessionKey || request.oneShotCliRun) {
+    return undefined;
+  }
+  try {
+    const sourceTarget = captureSessionTranscriptTargetBinding({
+      agentId: request.followupRun.run.agentId,
+      sessionId: request.sessionId,
+      storePath: request.prepared.storePath,
+      sessionKey,
+    });
+    const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(sourceTarget.storePath);
+    const admitted =
+      isMainThread && (target.agentId || target.shared)
+        ? getSqliteDatabaseAdmissionSourceForPath(target.path)
+        : undefined;
+    if (admitted && hasSqliteDatabaseSchemaAdmissionForIdentity(admitted.identity)) {
+      return {
+        ...request,
+        sourceTarget,
+        sourceIdentities: [{ ...admitted.identity, canonicalPath: admitted.canonicalPath }],
+      };
+    }
+    const { prepareSessionStoreCandidatesInWorker } = await loadSessionStoreRuntime();
+    const { write } = await prepareSessionStoreCandidatesInWorker({
+      write: { storePath: sourceTarget.storePath },
+    });
+    if (
+      !write ||
+      (write.candidates.some((candidate) => candidate.scope) && !write.familyListingComplete)
+    ) {
+      throw new Error("Session maintenance source inventory is incomplete");
+    }
+    return { ...request, sourceTarget, sourceIdentities: write.identities };
+  } catch (error) {
+    log.warn(`Optional session maintenance source unavailable: ${formatErrorMessage(error)}`);
+    return undefined;
+  }
+}
 
 /** Copy data only: turn callbacks, tool grants, delivery context and writer custody stay behind. */
 export function createSessionMaintenanceFollowup(params: {
@@ -142,20 +197,9 @@ export function scheduleSessionMaintenance(
   request: SessionMaintenanceRequest,
   afterOwnerSettles?: Promise<boolean>,
 ): void {
-  const { prepared, followupRun } = request;
-  const sessionKey = prepared.sessionKey;
-  if (!sessionKey) {
-    return;
-  }
-  const sessionReadScope = {
-    ...captureSessionTranscriptTargetBinding({
-      agentId: followupRun.run.agentId,
-      sessionId: request.sessionId,
-      storePath: prepared.storePath,
-      sessionKey,
-    }),
-    readConsistency: "latest" as const,
-  };
+  const { prepared, followupRun, sourceTarget, sourceIdentities } = request;
+  const sessionKey = sourceTarget.sessionKey;
+  const sessionReadScope = { ...sourceTarget, readConsistency: "latest" as const };
   if (request.oneShotCliRun) {
     log.debug("Optional session maintenance skipped: one-shot CLI owns no post-return runtime.");
     return;
@@ -169,15 +213,6 @@ export function scheduleSessionMaintenance(
   const resolveGatewayContext = fenceScheduledGatewayContextResolver(
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
   );
-  let sourceIdentities: ReturnType<typeof readDatabasePathIdentitySync>[];
-  try {
-    sourceIdentities = listSqliteTargetCandidatePathsForSessionStorePath(
-      sessionReadScope.storePath,
-    ).map(readDatabasePathIdentitySync);
-  } catch (error) {
-    log.warn(`Optional session maintenance source unavailable: ${formatErrorMessage(error)}`);
-    return;
-  }
   const budget = createCommandBudget(request.startedAt, prepared.timeoutMs);
   if (budget.remainingMs() === 0) {
     budget.dispose();

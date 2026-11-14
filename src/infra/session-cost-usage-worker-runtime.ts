@@ -268,7 +268,7 @@ async function runPreparedUsageCostWorker(
     };
     const lock =
       capturedOperation.kind === "refresh"
-        ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
+        ? await prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
             env: location.env,
             assertCurrent,
           })

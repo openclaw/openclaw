@@ -22,6 +22,7 @@ import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -474,6 +475,9 @@ describe("worktree Git maintenance", () => {
     expect(failed.result.gitMaintenance?.stage).toBe("suspended");
     expect(await packNames(repo)).toEqual(beforeFailure);
     commands.mockImplementation(execute);
+    // The retirement-budget case below separately covers elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const checkpoints: Array<NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>> = [];
@@ -579,14 +583,18 @@ describe("worktree Git maintenance", () => {
     await packBlobs(repo, ["busy-a", "busy-b", "busy-c"]);
     await register(repo, "busy-maintenance", { branch: "main" });
     const maintain = createWorktreeGitMaintenance(env);
-    await withProjectCheckoutLifecycle(repo, { env }, async () => {
-      const progress = new WorktreeGcProgress();
-      await maintain({ progress });
-      expect(await packNames(repo)).toHaveLength(3);
-      expect(progress.result.issues).toEqual([
-        expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
-      ]);
-    });
+    await withProjectCheckoutLifecycle(
+      repo,
+      { context: captureOpenClawStateWorkerContext({ env }) },
+      async () => {
+        const progress = new WorktreeGcProgress();
+        await maintain({ progress });
+        expect(await packNames(repo)).toHaveLength(3);
+        expect(progress.result.issues).toEqual([
+          expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+        ]);
+      },
+    );
     await maintain({});
     expect(await packNames(repo)).toHaveLength(1);
   });
@@ -640,16 +648,20 @@ describe("worktree Git maintenance", () => {
         expect(peer.result.issues).toEqual([
           expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
         ]);
-        await withProjectCheckoutLifecycle(repo, { env, signal, waitMs: 0 }, async (lease) => {
-          await requireGit(
-            repo,
-            ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
-            {
-              signal: lease.signal,
-              beforeRun: () => lease.assertCurrent(),
-            },
-          );
-        });
+        await withProjectCheckoutLifecycle(
+          repo,
+          { context: captureOpenClawStateWorkerContext({ env }), signal, waitMs: 0 },
+          async (lease) => {
+            await requireGit(
+              repo,
+              ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
+              {
+                signal: lease.signal,
+                beforeRun: () => lease.assertCurrent(),
+              },
+            );
+          },
+        );
       }
       return await execute(cwd, args, options);
     });
@@ -676,10 +688,14 @@ describe("worktree Git maintenance", () => {
       .mockImplementation(async (cwd, args, options) => {
         const result = await execute(cwd, args, options);
         if (args.at(-1) === "openclaw-consolidate") {
-          foreground = withProjectCheckoutLifecycle(repo, { env, waitMs: 0 }, async () => {
-            entered.resolve();
-            await release.promise;
-          });
+          foreground = withProjectCheckoutLifecycle(
+            repo,
+            { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
+            async () => {
+              entered.resolve();
+              await release.promise;
+            },
+          );
           await Promise.race([entered.promise, foreground]);
         }
         return result;

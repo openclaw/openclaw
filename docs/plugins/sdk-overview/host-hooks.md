@@ -427,7 +427,12 @@ after completion or failure; optional `formatFailure(stderr, exitCode)` customiz
 command failure messages. Remote PTY requests affect the command built by the
 adapter; the local transport still runs with piped input.
 
-Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. The
+Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. Optional
+`prepareCurrent` performs asynchronous physical selection checks before the final
+synchronous assertion; supply it on both the session and returned
+`SandboxBackendExecSpec` when deferred execution needs that preparation. Core
+exec consumers await it at process admission, after approval and transport setup.
+The assertion still owns immediate in-process revocation. The
 shared owner checks it around asynchronous preparation, and uploads recheck after
 local traversal immediately before spawning. Provider authority remains with the
 transport command: preparing local argv or retaining connection credentials does

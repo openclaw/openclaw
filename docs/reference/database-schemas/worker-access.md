@@ -181,6 +181,11 @@ execution; host lifecycle guards stay in memory. Worker admission publication
 consumes the broker's prepared identity instead of rescanning the same file and
 aliases. Warm admission exchanges reuse their locally retained descriptor facts.
 Native opening, replacement, and retirement keep their existing custody checks.
+Sandbox preparation carries its captured lexical and canonical state paths to
+filesystem and registry workers. Those owners compare physical paths before the
+existing final live host grant; host callbacks retain only lifecycle authority.
+Container launch prepares path identity asynchronously before its synchronous
+launch guard. Published custom backend callbacks keep their synchronous contract.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -1709,15 +1714,12 @@ without opening a SQLite database or allocating a database worker.
 Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
-Registry receipts and physical replacement invalidate reusable target facts.
-The discovery memo adopts each decoded result once and shares a deeply readonly,
-frozen snapshot on warm reads. Inventory preparation captures its selection facts
-once; repeated reads still check registry, physical-file, and applicable row revisions.
-Session-row writes invalidate fixed-store inventories, whose agent visibility
-can depend on those rows. Per-agent inventories retain their path and registry
-facts across ordinary turns, avoiding another discovery and
-reader-cleanup request. Current authorization at
-search disclosure, project removal, and other real effects remains required.
+Each preparation asks the existing discovery worker for its selected facts. There
+is no host selection memo that polls file identity or write revisions before
+reusing an inventory. Fixed-store visibility is read from current rows, including
+after the database owner closes; per-agent targets keep the same ownership policy.
+Current authorization at search disclosure, project removal, and other real
+effects remains required.
 The released synchronous transcript-hit SDK and native mutation callbacks retain
 their existing kernels until those owning contracts are migrated; this is not a
 claim that all shared discovery kernels are worker-only.
@@ -5404,27 +5406,55 @@ stored bytes, retention, and update behavior are unchanged.
 
 Workspace snapshots and conditional alias registration, first-writer setup merges,
 and exact expired-state deletion use the shared-state writer. Read-only snapshots
-retain the existing reader. The host captures the physical database and filesystem
-evidence before waiting, rechecks current authority and workspace identity at
-transaction and commit admission, and validates the evidence after delivery.
+retain the existing reader. The host captures the database admission and raw
+filesystem evidence before waiting. Workers validate that evidence before each
+transaction and commit grant; the host grants only current logical authority.
+Warm snapshot reads observe raw filesystem identity asynchronously and reuse the
+existing committed snapshot and legacy-source absence owners. NFC identities stay
+storage keys only. Reads recheck retained database and caller authority after
+filesystem validation. Cold registration and writes consume the observed canonical
+target after the grant without resolving the lexical alias again. An external
+retarget after observation cannot redirect the operation to the replacement; the
+next observation refuses it. Native Template and maintenance kernels retain their
+synchronous path discovery.
+Deletion captures canonical alias facts asynchronously before filesystem removal.
+Its existing-only worker owns missing-database handling; cleanup retires cached
+workspace files without recreating the database or its directory.
 Local preparation, consented bootstrap seeding, sandbox copying, and dev-template
 publication share a FIFO keyed by the resolved filesystem directory. Each caller
 retains its own path identity, options, and authority while waiting; different
 directories remain independent. A predecessor may create an initially absent
 directory, but existing directory identities and alias targets remain pinned.
+One admission tail preserves invocation order through asynchronous identity
+discovery and canonical enqueue. A slow discovery temporarily holds later
+discoveries; admitted operations in different directories remain independent.
 The queue holds admitted filesystem and worker operations through settlement.
 Sandbox copying and its following preparation retain the same queue slot.
 Workspace guards separate SQL-free host authority from a serialized recovery-hold
 predicate. The shared recovery reader evaluates that predicate on the worker's
 transaction connection before commit; refusal preserves the caller's duplicate-agent
 error. Creation guards never recursively read that database from a host grant.
-Host filesystem mutations retain a separate recovery-aware callback after awaited
-preparation and immediately before each effect. It uses the same recovery kernel
-through the existing current read-only connection, outside all worker grants.
-These host guards explicitly allow a native read when the worker owns the cached
-writer, avoiding a snapshot subprocess per file mutation. Artifact-preserving
+Directory creation, bootstrap publication, consented seeding, copying, and removal
+run in the existing filesystem worker. The worker consumes the original raw
+canonical directory and fs-safe's pinned roots; physical checks precede its final
+live host grant. Git initialization uses the process supervisor's final spawn
+guard and settles the child before releasing preparation custody. Released legacy
+callbacks run before dispatch. Legacy reset captures candidate roots before removing
+workspace paths and sends one cleanup batch to the same worker. Missing roots stay
+absent, sibling markers require their ownership header, and refused removals remain
+per-candidate warnings. Preview inspects files without requesting mutation grants.
+Workspace filesystem effects preserve the caller's native policy, including
+programmatic `require` and `off`; preexisting provisioning keeps its worker policy.
+Host grants retain the recovery kernel's current
+read-only connection, allowing a native read when the worker owns the cached
+writer and avoiding a snapshot subprocess per file mutation. Artifact-preserving
 scopes and schema-admission reads still select private snapshots; current guards
 never reuse an inherited discovery snapshot.
+Publication and workspace adoption carry captured filesystem facts through
+composed session sources. Native session writers and worktree effects validate
+them before the final live grant. Private session actors observe them asynchronously
+after companion I/O and before installation. Prepared source lifetimes last through
+effect settlement.
 Expiry rereads current setup and attestation rows, preserving the 24-hour and
 future-timestamp protections. Native commit receipts retire the stored workspace's
 file cache even if ordinary result delivery fails; uncertain writes are never
@@ -7412,6 +7442,11 @@ Doctor's reserved-session-key repair awaits its temporary history readers' clean
 before returning or starting another repair. A following repair can immediately
 reopen the same database; the existing journal and retry semantics remain intact.
 This changes no schema, retention, permissions, or update format.
+
+Ordinary session readers qualify cold file locators through the asynchronous
+path owner; bounded families use the existing discovery worker. They retain lexical
+and canonical paths; inspection readers additionally capture physical file identity. Live prepared sources reuse their admitted facts without
+another qualification. Both paths retain physical FIFO ordering and alias custody.
 
 Known-source history reads skip native admission during worker preparation. Cold
 reads use the existing read-candidate owner to retain any available native handle

@@ -1,3 +1,6 @@
+import type { WorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
+import type { SessionStoreReadCustody } from "../config/sessions/session-store-read-candidates.js";
+import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
@@ -8,11 +11,14 @@ import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.j
 export type AgentDatabaseGenerationClaim = {
   readonly identity: string;
   readonly incarnation: string;
+  readonly authority: SqliteWorkerExecutionAuthority;
   assertCurrent(): void;
 };
 
 /** A request owner composes its retained admission with the native owner's validation. */
 export type AgentDatabaseRequestExecutionSource = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   assertCurrent(): void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
@@ -20,6 +26,8 @@ export type AgentDatabaseRequestExecutionSource = {
       kind: "agent-execution";
       startupJournal: boolean;
       startupIntegrityRequired: boolean;
+      readCustody?: readonly SessionStoreReadCustody[];
+      workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
     };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;

@@ -1,11 +1,11 @@
 import path from "node:path";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -20,8 +20,10 @@ import {
 import { readAdmittedSessionEntry } from "./session-entry-read-ordered.js";
 import { captureSessionEntryReadScope } from "./session-entry-read-request.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import {
+  prepareSessionStoreReaderCandidates,
+  withSessionStoreTarget,
+} from "./session-store-target-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -61,14 +63,17 @@ export async function readSessionEntryInWorker(
     }
     storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
   }
-  const candidates = captureSessionStoreReadCandidates(storePath);
+  const { candidates } = await prepareSessionStoreReaderCandidates(storePath, {
+    inspection: false,
+    allowDirect: false,
+  });
   const loadedRead = await withSessionStoreTarget(
     { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
     async (target, owner) => {
       const sessionKey = resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId);
       const options = { ...target.database, env };
-      const targetIdentity = readDatabasePathIdentitySync(options.path);
-      const execution = captureOpenClawAgentDatabaseExecution(
+      const targetIdentity = await readDatabasePathIdentity(options.path);
+      const execution = await captureOpenClawAgentDatabaseExecutionAsync(
         options,
         toAgentExecutionConstraints(targetIdentity),
       );
@@ -77,7 +82,9 @@ export async function readSessionEntryInWorker(
         owner.assertCurrent();
       };
       const source = {
-        ...createSessionWorkerExecutionSource(assertCurrent, "Session read authority expired"),
+        ...createSessionWorkerExecutionSource(assertCurrent, "Session read authority expired", [
+          owner.readCustody,
+        ]),
         onRegistryChange(change: AgentDatabaseRegistryChange) {
           owner.onRegistryChange(change);
           onRegistryChange?.(change);

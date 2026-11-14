@@ -1,4 +1,5 @@
-import type { MessagePort } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
@@ -55,6 +56,7 @@ export type SqliteWorkerDatabaseAuthority = {
   assertRequest?(): void;
   assertAccess(): void;
   assertCreate?(databasePath: string): void;
+  prepareCreate?(databasePath: string): Promise<void>;
   acquireSchema(): { assertCurrent(): void; release(): void };
 };
 
@@ -212,3 +214,54 @@ export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
       }
     },
 );
+
+/** Decode private admission framing and retain the receiving thread's wait budget. */
+export function readSqliteWorkerAdmissionDecision(message: unknown):
+  | {
+      decision: Int32Array<SharedArrayBuffer>;
+      expired: () => boolean;
+      request: SqliteWorkerAdmissionRequest;
+    }
+  | undefined {
+  const REQUESTED = 0;
+  const TIMED_OUT = 3;
+  if (
+    !isRecord(message) ||
+    !(message.decision instanceof SharedArrayBuffer) ||
+    message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
+    (message.stage !== "open" &&
+      message.stage !== "prepare" &&
+      message.stage !== "transaction" &&
+      message.stage !== "commit")
+  ) {
+    return undefined;
+  }
+  const decision = new Int32Array(message.decision);
+  // Bun starts process.hrtime at zero in each thread, so the worker's deadline
+  // instant cannot cross threads. The host bounds its own late work from receipt;
+  // the worker still enforces its budget through the shared decision word.
+  const deadlineNs =
+    typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
+      ? readSqliteWorkerMonotonicNs() +
+        BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
+      : undefined;
+  const expired = () => {
+    if (deadlineNs !== undefined && readSqliteWorkerMonotonicNs() >= deadlineNs) {
+      if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
+        Atomics.notify(decision, 0);
+      }
+    }
+    if (Atomics.load(decision, 0) !== TIMED_OUT) {
+      return false;
+    }
+    if (Array.isArray(message.ports)) {
+      for (const port of message.ports) {
+        if (port instanceof MessagePort) {
+          port.close();
+        }
+      }
+    }
+    return true;
+  };
+  return { decision, expired, request: { stage: message.stage, facts: message.facts } };
+}

@@ -170,8 +170,15 @@ async function ensureSandboxContainerLifecycle<T>(
     assertPodmanSandboxTarget(params.podmanTarget, podmanRuntimeInfo.target);
   }
   const engine = podmanRuntimeInfo
-    ? bindPodmanSandboxEngine(podmanRuntimeInfo.target)
+    ? {
+        ...bindPodmanSandboxEngine(podmanRuntimeInfo.target),
+        stateGuard: configuredEngine.stateGuard,
+      }
     : configuredEngine;
+  const stateGuard = engine.stateGuard && {
+    assertHost: engine.stateGuard.assertHost,
+    stateOwnerPath: engine.stateGuard.stateOwnerPath,
+  };
   params.assertCurrent?.();
   phases.mark("attempt.setup.sandbox.backend.registry_read");
   let existingRegistryEntry = await readRegistryEntry(containerName);
@@ -219,7 +226,7 @@ async function ensureSandboxContainerLifecycle<T>(
       // A removed or replaced Podman target can leave registry metadata behind.
       // Drop it only after the recorded target no longer exposes the runtime.
       phases.mark("attempt.setup.sandbox.backend.stale_registry_remove");
-      await removeRegistryEntry(containerName);
+      await removeRegistryEntry(containerName, {}, stateGuard);
       existingRegistryEntry = null;
     }
   }
@@ -372,6 +379,7 @@ async function ensureSandboxContainerLifecycle<T>(
       phases.mark("attempt.setup.sandbox.backend.registry_reserve");
       await updateRegistry(
         needsSetupReservation ? { ...readyEntry, runtimeState: "pending" } : readyEntry,
+        stateGuard,
       );
     }
     let allocated = false;
@@ -404,15 +412,16 @@ async function ensureSandboxContainerLifecycle<T>(
         phases.mark("attempt.setup.sandbox.backend.setup_command");
         await execContainer(engine, ["exec", "-i", containerId, "/bin/sh", "-lc", setupCommand], {
           signal: params.operatorAuthority?.signal,
+          assertCurrent: params.assertCurrent,
         });
       }
       params.assertCurrent?.();
       readyEntry.lastUsedAtMs = Date.now();
       phases.mark("attempt.setup.sandbox.backend.registry_publish");
       if (needsSetupReservation) {
-        await completeSandboxRegistryReservation(readyEntry);
+        await completeSandboxRegistryReservation(readyEntry, false, stateGuard);
       } else {
-        await updateRegistry(readyEntry);
+        await updateRegistry(readyEntry, stateGuard);
       }
       params.assertCurrent?.();
       return await complete(expectedHash, true);
@@ -425,7 +434,7 @@ async function ensureSandboxContainerLifecycle<T>(
         // writable layer. Shared/unknown environments remain running.
         if (params.workspaceSource !== "managed-worktree" && !needsSetupReservation) {
           phases.mark("attempt.setup.sandbox.backend.cancelled_registry_publish");
-          await updateRegistry(readyEntry);
+          await updateRegistry(readyEntry, stateGuard);
         }
         throw creationError;
       }
@@ -459,11 +468,14 @@ async function ensureSandboxContainerLifecycle<T>(
     }
   }
   phases.mark("attempt.setup.sandbox.backend.registry_publish");
-  await updateRegistry({
-    ...readyEntry,
-    lastUsedAtMs: Date.now(),
-    configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
-  });
+  await updateRegistry(
+    {
+      ...readyEntry,
+      lastUsedAtMs: Date.now(),
+      configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
+    },
+    stateGuard,
+  );
   params.assertCurrent?.();
   return await complete(hashMismatch ? currentHash : expectedHash, !hashMismatch);
 }

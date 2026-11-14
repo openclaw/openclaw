@@ -310,7 +310,7 @@ it.each(["entry", "actor"] as const)(
         },
       };
       const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-      const actor = captureDurableSessionActor({
+      const actor = await captureDurableSessionActor({
         database: target.database,
         target: actorTarget,
         lifetime: authority,

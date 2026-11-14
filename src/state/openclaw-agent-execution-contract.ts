@@ -61,12 +61,15 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   readonly creationIdentity?: DatabasePathIdentity;
+  readonly fileIdentity?: AgentDatabaseExecutionFileIdentity;
   getPendingPreparation(): Promise<void> | undefined;
+  getOpeningIdentity(): Readonly<DatabasePathIdentity> | undefined;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     expectedCreationIdentity?: DatabasePathIdentity,
     requestedPath?: string,
+    observedIdentity?: DatabasePathIdentity,
   ): OpenClawAgentDatabaseExecution;
   closeIdle(): Promise<void>;
   retireForCleanup(): Promise<void>;

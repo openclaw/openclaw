@@ -57,6 +57,8 @@ materialized copies, not the original host paths.
 After a Gateway restart, sandbox skill synchronization compares existing copies
 with the current source content. Unchanged files are retained; changed or removed
 instructions and supporting files are reconciled before the turn uses them.
+Filesystem admission and mutations for the sandbox copy run on the skills worker,
+with live mutation authority retained by the Gateway.
 
 Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer

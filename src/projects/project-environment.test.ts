@@ -6,8 +6,8 @@ const mocks = vi.hoisted(() => {
   const lease = () => ({
     signal: new AbortController().signal,
     assertCurrent: vi.fn(),
-    assertOwned: vi.fn(),
-    assertOwnedInTransaction: vi.fn(),
+    assertOwned: vi.fn<() => Promise<void>>(async () => {}),
+    renew: vi.fn<() => Promise<void>>(async () => {}),
   });
   return {
     originLease: lease(),
@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     checkouts: new Set<string>(),
     finishWorker: vi.fn<() => void>(),
     finishCheckout: vi.fn<() => void>(),
+    workerLeases: vi.fn(),
     remove: vi.fn<(target: string) => Promise<void>>(),
     execute: vi.fn(),
     read: vi.fn(),
@@ -64,8 +65,9 @@ vi.mock("../state/openclaw-state-db.js", () => ({
   openOpenClawStateDatabase: mocks.forbiddenSqlite,
   runOpenClawStateWriteTransaction: mocks.forbiddenSqlite,
 }));
+// mock-isolation: Environment routing keeps real lease storage and heartbeat effects forbidden.
 vi.mock("../state/openclaw-state-lease.js", () => ({
-  withOpenClawStateLease: mocks.lease,
+  withOpenClawStateLeaseAsync: mocks.lease,
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
@@ -76,17 +78,22 @@ vi.mock("../state/openclaw-state-db-readonly.js", () => ({
 }));
 // mock-isolation: synthetic worker callbacks preserve finalizer ordering without native writes.
 vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
-  runWithOpenClawStateLeaseWorker: async (
-    _lease: unknown,
+  runWithOpenClawStateLeasesWorker: async (
+    leases: readonly unknown[],
     context: unknown,
     run: (
       scope: { execute: (command: unknown) => Promise<unknown> },
-      identity: { scope: string; key: string; owner: string },
+      identities: readonly { scope: string; key: string; owner: string }[],
     ) => Promise<unknown>,
   ) => {
+    mocks.workerLeases(leases, context);
     const result = await run(
       { execute: async (command) => await mocks.execute(context, command) },
-      { scope: "projects.checkout", key: "fixture-checkout", owner: "fixture-owner" },
+      leases.map((_, index) => ({
+        scope: index === 0 ? "projects.checkout" : "projects.clone",
+        key: `fixture-${index}`,
+        owner: `fixture-owner-${index}`,
+      })),
     );
     mocks.finishWorker();
     return result;
@@ -158,7 +165,7 @@ import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/wo
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
+import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -181,7 +188,7 @@ beforeEach(() => {
   mocks.remove.mockImplementation(mocks.forbiddenFilesystem);
 });
 
-type LeaseRun = (lease: OpenClawStateLeaseContext) => Promise<unknown>;
+type LeaseRun = (lease: OpenClawStateAsyncLeaseContext) => Promise<unknown>;
 
 const root = path.resolve("/synthetic-project-state");
 const databasePath = path.join(root, "state", "openclaw.sqlite");
@@ -217,10 +224,7 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
         entered.resolve();
         await resume.promise;
       });
-      const lease: OpenClawStateLeaseContext = {
-        ...mocks.checkoutLease,
-        assertOwnedInTransaction: mocks.forbiddenSqlite,
-      };
+      const lease: OpenClawStateAsyncLeaseContext = mocks.checkoutLease;
       mocks.checkout.mockImplementation(async (_root, _options, run) => {
         if (source) {
           return undefined;
@@ -228,7 +232,7 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
         await pauseOnce();
         return await run(lease);
       });
-      mocks.lease.mockImplementation(async (_options, run) => {
+      mocks.lease.mockImplementation(async (_options, _context, run) => {
         await pauseOnce();
         return await run(lease);
       });
@@ -295,7 +299,7 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
           const selected = await selectStoredProjectRegistry(sourceProject.id, options);
           expect(selected?.project).toEqual(sourceProject);
           await selected?.withRollback(async () => undefined);
-          return mocks.checkout.mock.calls[0]?.[1].env;
+          return mocks.checkout.mock.calls[0]?.[1].context.environment;
         },
         migration: async () => {
           expect(
@@ -331,8 +335,9 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
           expect(context.environment).toEqual(environmentSnapshot);
         }
         for (const [, captured] of mocks.checkout.mock.calls) {
-          expect(captured).toMatchObject({ path: databasePath, env: environmentSnapshot });
-          expect(captured.env).not.toBe(caller);
+          expect(captured.context.admission.databasePath).toBe(databasePath);
+          expect(captured.context.environment).toEqual(environmentSnapshot);
+          expect(captured.context.environment).not.toBe(caller);
         }
         for (const [, captured] of [
           ...mocks.clone.mock.calls,
@@ -344,13 +349,18 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
         if (source) {
           expect(result).toHaveProperty("OPENCLAW_STATE_DIR", root);
           expect(result).not.toBe(caller);
-          expect(Object.keys(result ?? {})).toContain("OpenClaw_State_Dir");
-          expect(Object.keys(result ?? {})).not.toContain("OPENCLAW_STATE_DIR");
+          if (operation === "migration") {
+            expect(Object.keys(result ?? {})).toContain("OpenClaw_State_Dir");
+            expect(Object.keys(result ?? {})).not.toContain("OPENCLAW_STATE_DIR");
+          } else {
+            expect(result).toEqual(environmentSnapshot);
+          }
         } else if (operation === "materialize") {
           const target = path.join(root, "projects", sha256HexPrefixCore(originUrl, 16), "project");
           expect(result).toMatchObject({ repoRoot: target });
           expect(mocks.clone.mock.calls[0]?.[0].target).toBe(target);
-          expect(mocks.lease.mock.calls[0]?.[0].database.options.path).toBe(databasePath);
+          expect(mocks.lease.mock.calls[0]?.[1].admission.databasePath).toBe(databasePath);
+          expect(mocks.lease.mock.calls[0]?.[1].environment).toEqual(environmentSnapshot);
         } else if (operation === "refresh") {
           expect(mocks.refresh.mock.calls[0]?.[0]).toEqual({
             target: project.repoRoot,
@@ -378,8 +388,9 @@ describe("clone registration", () => {
   beforeEach(() => {
     mocks.checkouts.clear();
     mocks.read.mockResolvedValue({ ok: true, type: "projects.list", projects: [] });
-    mocks.lease.mockImplementation(async (_options: unknown, run: LeaseRun) =>
-      run(mocks.originLease),
+    mocks.lease.mockImplementation(
+      async (_options: unknown, _context: OpenClawStateWorkerContext, run: LeaseRun) =>
+        run(mocks.originLease),
     );
     mocks.resolveCheckout.mockImplementation(async (repoRoot: string) => ({
       path: repoRoot,
@@ -403,6 +414,12 @@ describe("clone registration", () => {
 
   it("returns an acknowledged registration and retains its checkout", async () => {
     const registered = await materialize();
+    const [leases, context] = mocks.workerLeases.mock.calls[0]!;
+    expect(leases).toHaveLength(2);
+    expect(leases[0]).toBe(mocks.checkoutLease);
+    expect(leases[1]).toBe(mocks.originLease);
+    expect(context).toBe(mocks.lease.mock.calls[0]?.[1]);
+    expect(context).toBe(mocks.checkout.mock.calls[0]?.[1].context);
     expect(mocks.checkouts).toEqual(new Set([registered.repoRoot]));
     expect(mocks.remove).not.toHaveBeenCalled();
   });
@@ -434,7 +451,7 @@ describe("clone registration", () => {
       mocks.execute.mockImplementation(async () => {
         if (stage === "origin" || stage === "checkout") {
           const lease = stage === "origin" ? mocks.originLease : mocks.checkoutLease;
-          lease.assertOwned.mockImplementation(() => {
+          lease.assertOwned.mockImplementation(async () => {
             throw new Error("Owner is no longer current");
           });
         }

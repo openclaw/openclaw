@@ -36,8 +36,8 @@ function writerFixture() {
   database.exec("CREATE TABLE proof (value INTEGER)");
   const { admission, admit } = admissionFixture();
   const owner: SqliteWorkerOperationContext = { port: admission.port };
-  onTestFinished(() => {
-    admission.finish();
+  onTestFinished(async () => {
+    await admission.finish();
     database.close();
   });
   const write = (request: () => void) =>
@@ -98,7 +98,7 @@ it.each([
   { stage: "commit", priorCommit: true },
 ] as const)(
   "rolls back delayed $stage admission and retains prior commits ($priorCommit)",
-  ({ stage, priorCommit }) => {
+  async ({ stage, priorCommit }) => {
     const filename = path.join(tempDirs.make("sqlite-admission-timeout-"), "proof.sqlite");
     const writer = new DatabaseSync(filename);
     const competitor = new DatabaseSync(filename);
@@ -160,7 +160,7 @@ it.each([
           : { kind: "completed" },
       );
     } finally {
-      admission.finish();
+      await admission.finish();
       competitor.close();
       writer.close();
     }
@@ -189,7 +189,7 @@ it("refuses a host grant whose policy preparation crosses the deadline", () => {
 
 it.each(["fake timers", "thread origin"] as const)(
   "grants across a host clock skew from %s",
-  (clock) => {
+  async (clock) => {
     let now = process.hrtime.bigint();
     const aheadOfRealClockMs = Number(now / 1_000_000n) + 60_000;
     if (clock === "thread origin") {
@@ -213,7 +213,7 @@ it.each(["fake timers", "thread origin"] as const)(
       expect(admission.failure).toBeUndefined();
     } finally {
       vi.useRealTimers();
-      admission.finish();
+      await admission.finish();
     }
   },
 );

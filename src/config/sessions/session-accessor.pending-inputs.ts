@@ -201,7 +201,7 @@ export function bindSessionPendingInputSources(
     throw new Error("Collected input exceeds the Gateway payload limit");
   }
   const aggregateInputId = randomUUID();
-  const aggregate = ownerReceipt({
+  const aggregateOwner: SessionPendingInputOwner = {
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
@@ -214,7 +214,13 @@ export function bindSessionPendingInputSources(
     messageJson,
     sources,
     finish: finishPendingInputSources.bind(undefined, sources),
-  });
+  };
+  // A timer's owner must not retain this scope's original settlement receipts.
+  aggregateOwner.assertReadCurrent = assertSessionPendingInputLifetimeCurrent.bind(
+    undefined,
+    aggregateOwner,
+  );
+  const aggregate = ownerReceipt(aggregateOwner);
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
     throwIfSettledRejected(results, "Failed to settle collected input custody");
@@ -576,6 +582,10 @@ async function stagePreparedPendingInput(
           store.assertCurrent();
           options.assertCurrent();
         },
+        async assertReadCurrent() {
+          await store.assertReadCurrent();
+          options.assertCurrent();
+        },
         consumed: true,
         finish,
       };
@@ -659,6 +669,10 @@ async function stagePreparedPendingInput(
               messageJson: staged.message_json,
               assertCurrent: () => {
                 store.assertCurrent();
+                assertAdmittedCurrent();
+              },
+              async assertReadCurrent() {
+                await store.assertReadCurrent();
                 assertAdmittedCurrent();
               },
               ...(existing ? { dedupeRetryAvailable: true as const } : {}),

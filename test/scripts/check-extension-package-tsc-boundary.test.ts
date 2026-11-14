@@ -192,6 +192,7 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     "scripts/lib",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
+    "src/infra/directory-walk.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/plugins/package-entrypoints.ts",
     ...resolveNativeDeclarationFixtureSources(),

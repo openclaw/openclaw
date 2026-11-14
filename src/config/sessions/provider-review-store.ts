@@ -9,8 +9,10 @@ import type {
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import {
+  prepareSessionStoreReaderCandidates,
+  withSessionStoreTarget,
+} from "./session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionEntry } from "./types.js";
 
@@ -25,7 +27,7 @@ async function withProviderReviewDatabase<T>(
   operation: (
     options: OpenClawAgentDatabaseOptions,
     sessionKey: string,
-    assertCurrent: () => void,
+    owner: Parameters<Parameters<typeof withSessionStoreTarget>[1]>[1],
   ) => Promise<T>,
 ): Promise<T> {
   assertCallerCurrent();
@@ -35,11 +37,13 @@ async function withProviderReviewDatabase<T>(
   const logical = resolveSqliteScope({ ...target, storePath: undefined, env });
   const storePath =
     logical.path ?? target.storePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const candidates = captureSessionStoreReadCandidates(storePath);
+  const { candidates } = await prepareSessionStoreReaderCandidates(storePath, {
+    inspection: false,
+    allowDirect: false,
+  });
   return withSessionStoreTarget(
     { agentId: logical.agentId, storePath, env, candidates },
-    (selected, owner) =>
-      operation({ ...selected.database, env }, logical.sessionKey, owner.assertCurrent),
+    (selected, owner) => operation({ ...selected.database, env }, logical.sessionKey, owner),
     assertCallerCurrent,
   );
 }
@@ -49,24 +53,23 @@ export async function readSessionProviderReview(
   assertCurrent: () => void,
 ): Promise<SessionEntry | undefined> {
   const { sessionId, lifecycleRevision } = target;
-  return withProviderReviewDatabase(
-    target,
-    assertCurrent,
-    async (options, sessionKey, assertHeld) => {
-      const result = await withSessionHistoryWorkerDatabase(options, (owner) =>
-        owner.readExactEntries({
+  return withProviderReviewDatabase(target, assertCurrent, async (options, sessionKey, owner) => {
+    const result = await withSessionHistoryWorkerDatabase(
+      { ...options, readCustody: [owner.readCustody] },
+      (reader) =>
+        reader.readExactEntries({
           sessionKeys: [sessionKey],
           snapshotFields: [],
           env: options.env ?? {},
         }),
-      );
-      assertHeld();
-      const entry = result.entries.find((row) => row.sessionKey === sessionKey)?.entry;
-      return entry?.sessionId === sessionId && entry.lifecycleRevision === lifecycleRevision
-        ? entry
-        : undefined;
-    },
-  );
+    );
+    await owner.revalidateTarget();
+    owner.assertCurrent();
+    const entry = result.entries.find((row) => row.sessionKey === sessionKey)?.entry;
+    return entry?.sessionId === sessionId && entry.lifecycleRevision === lifecycleRevision
+      ? entry
+      : undefined;
+  });
 }
 
 /** A review clear can consume only the exact refusal the human acknowledged. */
@@ -89,18 +92,19 @@ export async function compareSessionProviderReview(
   return withProviderReviewDatabase(
     capturedTarget,
     params.assertCurrent,
-    async (options, sessionKey, assertHeld) => {
+    async (options, sessionKey, owner) => {
       input.sessionKey = sessionKey;
       return runSessionEntryWorkerMutation(
         { ...options, path: resolveOpenClawAgentSqlitePath(options) },
         undefined,
-        assertHeld,
+        owner.assertCurrent,
         async (worker) => {
           const result = await worker.execute({ type: "session.providerReview.compare", input });
           return { kind: "committed", value: result.entry, publication: result.publication };
         },
         { identityAgentId: options.agentId },
         {
+          readCustody: [owner.readCustody],
           errors: {
             identity: "Provider review has no prepared native database identity",
             unknown: "Provider review has no confirmed native completion and commit receipt",

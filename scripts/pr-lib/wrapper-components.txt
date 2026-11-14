@@ -358,6 +358,7 @@ src/agents/sandbox/browser-network.ts
 src/agents/sandbox/config-contract.ts
 src/agents/sandbox/host-paths.ts
 src/agents/sandbox/network-mode.ts
+src/agents/sandbox/state-owner-path.ts
 src/agents/session-dirs.ts
 src/agents/session-slug.ts
 src/agents/core-tool-facts.ts
@@ -373,7 +374,10 @@ src/agents/workspace-access.ts
 src/agents/workspace-default-path.ts
 src/agents/workspace-default.ts
 src/agents/workspace-dirs.ts
+src/agents/workspace-file-mutation-guard.ts
+src/agents/workspace-filesystem.ts
 src/agents/workspace-git.ts
+src/agents/workspace-state-guard.ts
 src/agents/workspace-state-identity.ts
 src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
@@ -407,6 +411,7 @@ src/agents/worktrees/owner.ts
 src/agents/worktrees/pending-slots.ts
 src/agents/worktrees/pending-slots.worker.ts
 src/agents/worktrees/preparation-timing.ts
+src/agents/worktrees/provisioned-copy-host.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts
@@ -813,6 +818,7 @@ src/config/sessions/session-store-config.ts
 src/config/sessions/session-store-owner.ts
 src/config/sessions/session-store-read-candidates.ts
 src/config/sessions/session-store-target-inventory.ts
+src/config/sessions/session-store-target-routing.ts
 src/config/sessions/session-store-target-runtime.ts
 src/config/sessions/supported-session-store.ts
 src/config/sessions/session-transcript-mutation-projection.ts
@@ -1087,6 +1093,7 @@ src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-env.ts
+src/infra/fs-safe-filesystem-worker.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
 src/infra/gc-observer.ts
@@ -1101,6 +1108,7 @@ src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
 src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
+src/infra/gateway-state-owner-lifecycle.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
@@ -1243,6 +1251,7 @@ src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-context.ts
+src/infra/sqlite-database-admission-descriptor.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-delta.ts
@@ -1880,6 +1889,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-process-identity.ts
 src/process/command-reservation-census.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
@@ -2120,6 +2130,7 @@ src/state/openclaw-agent-db-session-provenance.ts
 src/state/openclaw-agent-db-terminal.ts
 src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts
+src/state/openclaw-agent-db-validation-observation.ts
 src/state/openclaw-agent-db-validation-facts.ts
 src/state/openclaw-agent-db-validation-schema.ts
 src/state/openclaw-agent-db.paths.ts
@@ -2897,6 +2908,7 @@ src/media/inbound-media-path.ts
 src/media/store-path.ts
 src/media/store.shared.ts
 src/media/store.ts
+src/media/generated-html-provenance.ts
 src/sessions/session-run-error-presentation.ts
 src/sessions/user-turn-media.ts
 src/shared/channel-read-authority.ts

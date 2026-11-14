@@ -4,7 +4,13 @@ import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import type { Actor, OperationScope, StoreClient } from "./sqlite-worker-broker.types.js";
+import type {
+  Actor,
+  EnqueueOptions,
+  RequestBody,
+  OperationScope,
+  StoreClient,
+} from "./sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
@@ -14,6 +20,7 @@ import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-adm
 import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
 import {
   captureSqliteWorkerStateContext,
+  sqliteWorkerRequestBytes,
   type SqliteWorkerStateContext,
 } from "./sqlite-worker-state-context.js";
 
@@ -65,13 +72,12 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
   isDraining: () => boolean;
   isAvailable: () => boolean;
   retireIdle?: () => Promise<void> | undefined;
+  databaseIdentity?: Extract<RequestBody, { type: "execute" }>["databaseIdentity"];
+  cleanupAccess?: EnqueueOptions["cleanupAccess"];
   dispatch: (
-    payload: Buffer<ArrayBuffer>,
-    signal: AbortSignal | undefined,
-    scope: OperationScope | undefined,
-    assertCurrent: (() => void) | undefined,
-    createAdmission: SqliteWorkerAdmissionFactory | undefined,
-    requestClass: string,
+    request: Extract<RequestBody, { type: "execute" }>,
+    bytes: number,
+    options: EnqueueOptions,
   ) => Promise<unknown>;
   release: (reclaiming: boolean) => Promise<void>;
 }) {
@@ -126,14 +132,30 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         );
       }
       const operation = owner.dispatch(
-        payload,
-        options.signal,
-        scope,
-        assertCurrent,
-        createAdmission && inCaller
-          ? (admissionOperation) => inCaller(createAdmission, admissionOperation)
-          : undefined,
-        requestClass,
+        {
+          type: "execute",
+          actor: owner.actor.id,
+          databaseIdentity: owner.databaseIdentity,
+          input: payload,
+          ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
+        },
+        sqliteWorkerRequestBytes(payload, scope?.stateContext),
+        {
+          signal: options.signal,
+          requestClass,
+          scope,
+          assertCurrent,
+          createAdmission:
+            createAdmission && inCaller
+              ? (admissionOperation) => inCaller(createAdmission, admissionOperation)
+              : undefined,
+          cleanupAccess: owner.cleanupAccess,
+          maintenanceScope: owner.cleanupAccess
+            ? undefined
+            : scope
+              ? scope.maintenanceScope
+              : getOpenClawDatabaseMaintenanceScope(),
+        },
       );
       pending.add(operation);
       scope?.pending.add(operation);

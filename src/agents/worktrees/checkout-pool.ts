@@ -22,6 +22,7 @@ export async function isWarmWorktreeClean(
   const gitOptions = {
     signal: options.signal,
     beforeRun: options.commitGuard,
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
     killProcessTree: true,
   };
   const output = await withWorktreeGitConfig(record.path, sourceOnly, gitOptions, async (git) => {
@@ -59,7 +60,13 @@ export async function takeWarmWorktree(
   options: WorktreeFilesystemOptions,
 ) {
   const wanted = selectWarmWorktree(request.template);
-  const record = await readTemplateAsync(env, wanted.cacheKey, options.commitGuard);
+  const record = await readTemplateAsync(
+    env,
+    wanted.cacheKey,
+    options.commitGuard,
+    undefined,
+    options.workerAuthority,
+  );
   if (
     !record ||
     record.status !== "ready" ||
@@ -70,7 +77,13 @@ export async function takeWarmWorktree(
   }
   // Unpublication is atomic with exclusive reader admission. A preparing slot
   // is never consumable, even if another request observed it before this claim.
-  const retained = await retainWorktreeTemplate(env, record, options.commitGuard, true);
+  const retained = await retainWorktreeTemplate(
+    env,
+    record,
+    options.commitGuard,
+    true,
+    options.workerAuthority,
+  );
   if (!retained) {
     return undefined;
   }
@@ -89,6 +102,7 @@ export async function takeWarmWorktree(
         sourceIndex: await resolveGitMetadataPath(retained.path, "index", {
           signal: options.signal,
           beforeRun: options.commitGuard,
+          stateOwnerPath: options.workerAuthority?.stateOwnerPath,
         }),
       };
     }

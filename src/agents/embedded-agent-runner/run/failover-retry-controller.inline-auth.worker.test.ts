@@ -504,7 +504,10 @@ it.each(["local-agent", "legacy-main"] as const)(
       let commits = 0;
       let invalidations = 0;
       const unregister = snapshots.registerRuntimeAuthProfileStoreMutationListener((event) => {
-        if (event.agentDir === agentDir) {
+        if (
+          event.agentDir === agentDir ||
+          (owner === "legacy-main" && closing && event.affectsInheritedStores)
+        ) {
           invalidations++;
           throw new Error("synthetic snapshot observer failure");
         }

@@ -1,4 +1,4 @@
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { assertSessionGoalOperationTime } from "./goals-operation-policy.js";
 import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
@@ -97,7 +97,7 @@ export async function mutateSessionGoal(
     resolved,
     async () => {
       // The existing writer owns durable Goal changes and publishes them before FIFO release.
-      const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
+      const execution = await captureOpenClawAgentDatabaseExecutionAsync(databaseOptions);
       const client = await import("./goals-management.js").catch(async (error: unknown) => {
         await execution.release();
         throw error;

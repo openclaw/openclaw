@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect } from "vitest";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createSqliteAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
 
@@ -29,7 +29,7 @@ export async function withTestAcpEventLedgerDatabase<T>(
     try {
       return await fn({ databasePath });
     } finally {
-      await closeOpenClawStateDatabaseAsync();
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
     }
   });
 }
@@ -40,13 +40,9 @@ async function closeTestAcpEventLedgers(): Promise<void> {
   if (handles.length === 0) {
     return;
   }
-  try {
-    await closeOpenClawStateDatabaseAsync();
-  } catch (error) {
-    errors.push(error);
-  }
   for (const { tempDir } of handles) {
     try {
+      await closeOpenClawStateDatabaseByPathAsync(path.join(tempDir, "openclaw.sqlite"));
       fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     } catch (error) {
       errors.push(error);

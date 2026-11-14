@@ -1,5 +1,4 @@
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { assertNoUnmigratedWorkspaceState } from "./workspace-legacy-state.js";
 import {
   readWorkspaceStateSnapshot,
   type WorkspaceStateSnapshot,
@@ -13,13 +12,13 @@ export async function readCanonicalWorkspaceStateSnapshot(
 ): Promise<WorkspaceStateSnapshot> {
   const snapshot = await readWorkspaceStateSnapshot(dir, {
     ...options,
+    checkLegacySources: true,
     assertCurrent: guard?.assertHost,
+    filesystem: guard?.filesystem,
+    stateOwnerPath: guard?.stateOwnerPath,
     recoveryHoldPredicate: guard?.recoveryHoldPredicate,
     beforeLegacyApply: guard?.beforeLegacyApply,
   });
   guard?.assertHost?.();
-  assertNoUnmigratedWorkspaceState({
-    workspaceDir: dir,
-  });
   return snapshot;
 }

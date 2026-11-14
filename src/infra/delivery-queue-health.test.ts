@@ -169,11 +169,17 @@ describe("delivery queue health publication", () => {
     await writeConfigMachineStateAsync("config.lastTouchedAt", "changed", {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
+    const aliasDir = path.join(tmpDir, "state-alias");
+    fs.symlinkSync(stateDir, aliasDir, "junction");
+    await expect(pruneExpiredDeliveryQueueTombstones(aliasDir)).resolves.toBeUndefined();
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     try {
       await pruneExpiredDeliveryQueueTombstones(stateDir);
       await pruneExpiredDeliveryQueueTombstones(stateDir);
       expect(requests).not.toHaveBeenCalled();
+      await expect(pruneExpiredDeliveryQueueTombstones(aliasDir)).resolves.toBeUndefined();
+      await expect(pruneExpiredDeliveryQueueTombstones(aliasDir)).resolves.toBeUndefined();
+      expect(requests.mock.calls.length).toBe(0);
 
       seedDeliveryQueueEntry({
         queueName: QUEUE,
@@ -181,7 +187,7 @@ describe("delivery queue health publication", () => {
         status: "completed",
         stateDir,
       });
-      await pruneExpiredDeliveryQueueTombstones(stateDir);
+      await pruneExpiredDeliveryQueueTombstones(aliasDir);
       expect(loadDeliveryQueueEntry(QUEUE, "expired-ordinary", stateDir, "all")).toBeNull();
 
       await pruneExpiredDeliveryQueueTombstones(stateDir);

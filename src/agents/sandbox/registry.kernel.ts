@@ -8,22 +8,27 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { SandboxPersistentExecWorkspaceBinding } from "./persistent-exec-store.types.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
+import type { SandboxStateOwnerPath } from "./state-owner-path.js";
 
 export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
 export type SandboxRegistryPrune = { now: number; idleHours: number; maxAgeDays: number };
 export type SandboxRegistryCleanupOperations = {
   "sandboxRegistry.finishRemoval": { input: SandboxRegistryEntry; output: void };
 };
+type SandboxStatePathGuard = { stateOwnerPath?: SandboxStateOwnerPath };
 export type SandboxRegistryOperations = {
-  "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
-  "sandboxRegistry.reserve": { input: SandboxRegistryEntry; output: SandboxRegistryEntry };
+  "sandboxRegistry.write": { input: SandboxRegistryWrite & SandboxStatePathGuard; output: void };
+  "sandboxRegistry.reserve": {
+    input: SandboxRegistryEntry & SandboxStatePathGuard;
+    output: SandboxRegistryEntry;
+  };
   "sandboxRegistry.beginRemoval": {
     input: {
       entry: SandboxRegistryEntry;
       reserveRuntime?: boolean;
       prune?: SandboxRegistryPrune;
       preservePersistentExecs?: boolean;
-    };
+    } & SandboxStatePathGuard;
     output: SandboxRegistryEntry | null;
   };
 };

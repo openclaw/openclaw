@@ -2,8 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  drainStoreWriterQueuesForTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as admissionTurn from "../infra/sqlite-database-admission-turn.js";
 import { withOpenClawAgentDatabaseWrite as writeDatabase } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
@@ -99,9 +103,28 @@ describe("agent database write admission", () => {
       }
       const reservation = reserveWorkerOperation();
       await reservation.entered;
+      const enqueued = createDeferredCore();
+      const enqueue = admissionTurn.runWithSqliteDatabaseAdmissionTurn;
+      const queueSpy = vi
+        .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
+        .mockImplementation((...args) => {
+          const result = enqueue(...args);
+          if (args[0].includes(aliased.path)) {
+            enqueued.resolve();
+          }
+          return result;
+        });
       const queued = write("queued");
-      const refused = expect(queued).rejects.toThrow("database target changed");
+      const refused = expect(queued).rejects.toThrow(
+        /^(?:Agent database target changed before write admission|SQLite database pathname changed during admission|SQLite database file identity changed before existing-only open)$/u,
+      );
+      void refused.catch(() => {});
       try {
+        await awaitGateBeforeSettlement(
+          enqueued.promise,
+          queued,
+          "Write settled before capturing and queuing its target",
+        );
         retarget();
         const next = write("successor");
         if (cold) {
@@ -110,6 +133,7 @@ describe("agent database write admission", () => {
           await expect(next).rejects.toThrow("database file identity changed");
         }
       } finally {
+        queueSpy.mockRestore();
         await reservation.finish();
         await Promise.allSettled([queued, refused]);
         borrowed?.release();

@@ -19,6 +19,7 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
+import type { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { getPendingOpenClawAgentDatabasePreparation } from "../../state/openclaw-agent-execution.js";
 import {
@@ -36,14 +37,15 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
+  type SessionStoreReadCustody,
 } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetPreparationRequest,
-  SessionStoreTargetInventoryRequest,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import {
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
@@ -53,7 +55,7 @@ import {
 } from "./session-transcript-read-pools.js";
 import {
   createSessionStoreTargetReaders,
-  sessionDiscoveryConfig,
+  prepareSessionStoreTargetDiscovery,
 } from "./session-transcript-worker-readers.js";
 import type {
   SessionHistoryWorkerInput,
@@ -69,8 +71,11 @@ export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
   requestedPaths?: readonly string[];
   readIdentity?: DatabasePathIdentity;
   readSourcePath?: string;
+  readCustody?: readonly SessionStoreReadCustody[];
   /** Capture a cold physical source after admission and before the row request. */
-  prepareRead?: () => void;
+  prepareRead?: (
+    validation: Awaited<ReturnType<typeof captureOpenClawAgentDatabaseReadValidation>>,
+  ) => void | Promise<void>;
 };
 
 export type HistoryDatabaseResource = {
@@ -335,7 +340,7 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
-  let created = false;
+  const created = !resource;
   if (resource?.revoked) {
     // Failed retirement keeps cleanup custody until the existing close/prune owner settles it.
     assertAgentDatabaseResourceAdmission(resource.database);
@@ -453,7 +458,6 @@ export function acquireHistoryDatabaseResource(
       aliases.clear();
     };
     resource = owned;
-    created = true;
   }
   try {
     resource.observeMaintenance();
@@ -503,8 +507,7 @@ export function acquireSessionTranscriptReadResource(storePath: string): History
 export async function prepareSessionStoreCandidatesInWorker(
   request: SessionStoreTargetPreparationRequest,
 ) {
-  const prepared =
-    "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  const { request: prepared, inputBytes } = prepareSessionStoreTargetDiscovery(request);
   const lane = targetDiscoveryLane;
   clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
@@ -513,7 +516,7 @@ export async function prepareSessionStoreCandidatesInWorker(
       () => ({ kind: "session-target-prepare", request: prepared }),
       {
         diagnosticOperation: "session-target-prepare",
-        inputBytes: JSON.stringify(prepared).length * 2,
+        inputBytes,
         timeoutMs: 60_000,
       },
     );

@@ -178,7 +178,7 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
                 ),
                 [...postimages.keys()],
               );
-              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
+              await acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
             },
           ),
       });

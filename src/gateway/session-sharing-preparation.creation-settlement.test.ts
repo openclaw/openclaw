@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { renameSync, rmSync } from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expect, it as baseIt, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { readAgentDeleteDatabaseRegistry } from "../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -15,6 +17,7 @@ import {
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import * as discoveryResources from "../config/sessions/session-transcript-worker-resources.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -23,6 +26,7 @@ import * as workerStore from "../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -32,6 +36,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewaySessionLifecycleTargets } from "./session-lifecycle-preparation.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const it = baseIt.extend<{ state: OpenClawTestState }>({
@@ -41,6 +46,108 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 
 const prepareMissing = (cfg: OpenClawConfig, sessionKey: string) =>
   prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main", allowMissing: true });
+
+it.for(["creation", "storage", "early-storage"] as const)(
+  "observes failed %s opening through the lifecycle readiness chain",
+  async (kind, { state, signal }) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:sharing-opening-failure",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    const capturedInventory = createDeferredCore();
+    const releaseInventory = createDeferredCore();
+    const prepareInventory = discoveryResources.prepareSessionStoreCandidatesInWorker;
+    const interception =
+      kind === "early-storage"
+        ? vi
+            .spyOn(discoveryResources, "prepareSessionStoreCandidatesInWorker")
+            .mockImplementation(async (...args) => {
+              const result = await prepareInventory(...args);
+              capturedInventory.resolve();
+              await releaseInventory.promise;
+              return result;
+            })
+        : undefined;
+    const ready = createDeferredCore();
+    const failure = new Error("Synthetic opening registration refused");
+    const observed: string[] = [];
+    let failed = false;
+    const refuse = () => {
+      if (!failed) {
+        failed = true;
+        throw failure;
+      }
+    };
+    const followRegistration = () => {
+      observed.push("original");
+      if (kind === "creation") {
+        refuse();
+      }
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    process.on("unhandledRejection", onUnhandled);
+    const opening =
+      kind !== "creation"
+        ? prepareSessionEntryMutationDatabases(
+            [{ scope, assertCurrent() {}, followRegistration }],
+            ready.promise,
+          )
+        : undefined;
+    const stop = opening?.sources[0]?.observeRegistration(() => {
+      observed.push("observer");
+      refuse();
+    });
+    const lifecycle = prepareGatewaySessionLifecycleTargets({
+      cfg,
+      ...(kind === "creation"
+        ? { creation: { ready: ready.promise, assertCurrent() {}, followRegistration } }
+        : {}),
+      targets: [
+        {
+          target: {
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            canonicalKey: scope.sessionKey,
+          },
+          storageReady: opening?.sources[0],
+        },
+      ],
+    });
+    try {
+      if (kind === "early-storage") {
+        await withinTest(capturedInventory.promise, signal);
+        ready.reject(failure);
+        await setImmediate();
+        expect(observed).toEqual([]);
+        releaseInventory.resolve();
+      } else {
+        ready.resolve();
+      }
+      await expect(lifecycle.preparations[0]).rejects.toBe(failure);
+      expect(failed).toBe(kind !== "early-storage");
+      expect(observed.slice(0, kind === "creation" ? 1 : 2)).toEqual(
+        kind === "creation" ? ["original"] : kind === "storage" ? ["original", "observer"] : [],
+      );
+      await lifecycle[Symbol.asyncDispose]();
+      await opening?.[Symbol.asyncDispose]();
+      await setImmediate();
+      expect(unhandled).toEqual([]);
+    } finally {
+      releaseInventory.resolve();
+      interception?.mockRestore();
+      ready.resolve();
+      stop?.();
+      await lifecycle[Symbol.asyncDispose]();
+      await opening?.[Symbol.asyncDispose]();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  },
+);
 
 it.for(["planning", "settlement"] as const)(
   "creates an unchanged agent session during another agent's creation and deletion %s",
@@ -327,6 +434,155 @@ it.for(["metadata", "reset-aba", "unknown", "retirement"] as const)(
         (read) => read.release(),
         () => {},
       );
+    }
+  },
+);
+
+it.for(["missing", "existing"] as const)(
+  "admits its own %s storage opening while inventory is preparing",
+  async (kind, { state }) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:sharing-cold-creation";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    if (kind === "existing") {
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    }
+    const captured = createDeferredCore();
+    const releaseInventory = createDeferredCore();
+    const openingReady = createDeferredCore();
+    await using opening = prepareSessionEntryMutationDatabases(
+      [{ scope: { agentId: "main", storePath, sessionKey }, assertCurrent: () => {} }],
+      openingReady.promise,
+    );
+    const prepare = discoveryResources.prepareSessionStoreCandidatesInWorker;
+    let intercepted = false;
+    const interception = vi
+      .spyOn(discoveryResources, "prepareSessionStoreCandidatesInWorker")
+      .mockImplementation(async (...args) => {
+        const result = await prepare(...args);
+        if (!intercepted && "config" in args[0]) {
+          intercepted = true;
+          captured.resolve();
+          await releaseInventory.promise;
+        }
+        return result;
+      });
+    const pending = prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      allowMissing: true,
+      storageReady: opening.sources[0] ?? opening.preparations[0],
+    });
+    void pending.catch(() => {});
+    try {
+      await captured.promise;
+      openingReady.resolve();
+      await opening.preparations[0];
+      releaseInventory.resolve();
+      const read = await pending;
+      try {
+        expect(read.readCurrent(cfg).target).toBeNull();
+        expect(read.storageTarget.agentId).toBe("main");
+      } finally {
+        read.release();
+      }
+    } finally {
+      interception.mockRestore();
+      openingReady.resolve();
+      releaseInventory.resolve();
+      await pending.then(
+        (read) => read.release(),
+        () => {},
+      );
+    }
+  },
+);
+
+it.for(["unchanged", "replaced"] as const)(
+  "keeps the %s default fallback in a custom store opening cohort",
+  async (kind, { state }) => {
+    const cfg = {
+      agents: { entries: { main: {} } },
+      session: { store: state.statePath("custom/{agentId}/sessions.sqlite") },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:sharing-default-fallback";
+    const storePath = cfg.session.store.replace("{agentId}", "main");
+    const fallback = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const replacement = state.statePath("fallback-replacement.sqlite");
+    for (const pathname of [fallback, replacement]) {
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 }),
+        { agentId: "main", path: pathname },
+      );
+      await closeOpenClawAgentDatabaseByPathAsync(pathname, "main");
+    }
+    const captured = createDeferredCore();
+    const releaseInventory = createDeferredCore();
+    const openingReady = createDeferredCore();
+    await using opening = prepareSessionEntryMutationDatabases(
+      [{ scope: { agentId: "main", storePath, sessionKey }, assertCurrent() {} }],
+      openingReady.promise,
+    );
+    const openingResult = opening.preparations[0]!.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const prepare = discoveryResources.prepareSessionStoreCandidatesInWorker;
+    let intercepted = false;
+    const interception = vi
+      .spyOn(discoveryResources, "prepareSessionStoreCandidatesInWorker")
+      .mockImplementation(async (...args) => {
+        if (!intercepted && "config" in args[0]) {
+          intercepted = true;
+          captured.resolve();
+          await releaseInventory.promise;
+        }
+        return prepare(...args);
+      });
+    const pending = prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      storageReady: opening.sources[0],
+    });
+    void pending.catch(() => {});
+    try {
+      await captured.promise;
+      if (kind === "replaced") {
+        renameSync(fallback, state.statePath("retired-fallback.sqlite"));
+        renameSync(replacement, fallback);
+        registerOpenClawAgentDatabase({ agentId: "main", path: fallback, env: state.env });
+      }
+      openingReady.resolve();
+      const openingFailure = await openingResult;
+      releaseInventory.resolve();
+      if (kind === "replaced") {
+        await expect(pending).rejects.toBe(openingFailure);
+        expect(openingFailure).toBeInstanceOf(AggregateError);
+      } else {
+        const read = await pending;
+        try {
+          expect(read.readCurrent(cfg).target.entry.sessionId).toBe("original");
+        } finally {
+          read.release();
+        }
+      }
+    } finally {
+      interception.mockRestore();
+      openingReady.resolve();
+      releaseInventory.resolve();
+      await pending.then(
+        (read) => read.release(),
+        () => {},
+      );
+      await openingResult;
     }
   },
 );

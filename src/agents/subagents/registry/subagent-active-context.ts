@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { preparePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { sanitizeForPromptLiteral } from "../../sanitize-for-prompt.js";
@@ -87,7 +87,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
   if (!agentId) {
     return undefined;
   }
-  const storePath = resolvePhysicalSessionStorePath(
+  const storePath = await preparePhysicalSessionStorePath(
     { sessionKey: controllerSessionKey, agentId },
     params.cfg,
   );

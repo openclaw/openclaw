@@ -1,10 +1,11 @@
 import { addAbortListener } from "node:events";
 import { isDeepStrictEqual } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { captureRuntimeWorkerGenerationContext } from "../../infra/runtime-worker-generation.js";
 import {
   assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -22,9 +23,9 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import {
@@ -46,12 +47,12 @@ import {
   restartSessionMaintenanceAgeScan,
   updateSessionEntryMaintenanceAgeFact,
   type SessionEntryMaintenanceAgeFact,
-  type SessionEntryMaintenanceAgeChange,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
   readSessionEntryMaintenanceAgeAfterWriterRelease,
   releaseSessionEntryMaintenanceExecution,
+  type SessionEntryMaintenanceState,
 } from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
@@ -77,30 +78,10 @@ type SessionEntryMaintenanceRequest = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "databaseAgentId" | "env" | "path">;
   skipMaintenance?: boolean;
+  source?: AgentDatabaseExecutionFileIdentity;
   storePath: string;
 };
-type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
-  activeSessionKeys: Set<string>;
-  ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
-  assertCurrent: () => void;
-  captureExecution: () => OpenClawAgentDatabaseExecution | undefined;
-  runInRuntimeGeneration: ReturnType<typeof captureRuntimeWorkerGenerationContext>;
-  maintenanceResource?: ReturnType<typeof captureOpenClawDatabaseMaintenanceResource>;
-  execution?: OpenClawAgentDatabaseExecution;
-  active?: Promise<void>;
-  release?: Promise<void>;
-  retirement?: Promise<void>;
-  generation: number;
-  running: boolean;
-  ageFact?: SessionEntryMaintenanceAgeFact;
-  noCandidates?: boolean;
-  rejections: number;
-  retryDelayMs?: number;
-  immediate?: ReturnType<typeof setImmediate>;
-  timer?: ReturnType<typeof setTimeout>;
-  timerDeadlineMonotonicMs?: number;
-  unregisterClose?: () => void;
-};
+type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & SessionEntryMaintenanceState;
 
 const maintenanceByStore = new Map<string, SessionEntryMaintenanceOwner>();
 const MAINTENANCE_WRITE_QUIET_MS = 1_000;
@@ -158,10 +139,12 @@ export function kickSessionEntryMaintenanceAfterWrite(
   const scope = { ...params.scope, env, path: databasePath };
   const options = toDatabaseOptions(scope);
   const assertAdmitted = captureAgentDatabaseAdmission(options.agentId, { env });
-  const identity = isIncognitoOpenClawAgentSqlitePath(databasePath, options)
-    ? undefined
-    : readDatabasePathIdentitySync(databasePath);
-  if (identity && !identity.key.startsWith("file:")) {
+  const identity: DatabasePathIdentity | undefined = params.source && {
+    key: `file:${params.source.physicalIdentity}`,
+    canonicalPath: params.source.nativeLocation,
+    birthtime: params.source.birthtime,
+  };
+  if (!identity && !isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
     return;
   }
   const created: SessionEntryMaintenanceOwner = {
@@ -169,9 +152,17 @@ export function kickSessionEntryMaintenanceAfterWrite(
     scope,
     activeSessionKeys: new Set([params.activeSessionKey]),
     ageChanges: new Map(),
-    captureExecution: () =>
-      supportsOpenClawAgentDatabaseExecution(options) && identity
-        ? captureOpenClawAgentDatabaseExecution(options, {
+    readCustody: identity
+      ? [
+          {
+            sourcePath: databasePath,
+            candidates: [{ path: databasePath, physicalPath: identity.canonicalPath, identity }],
+          },
+        ]
+      : undefined,
+    captureExecution: async () =>
+      isMainThread && supportsOpenClawAgentDatabaseExecution(options) && identity
+        ? captureOpenClawAgentDatabaseExecutionAsync(options, {
             expectedIdentity: {
               kind: "file",
               physicalIdentity: identity.key.slice(5),
@@ -184,7 +175,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
     assertCurrent: () => {
       assertAdmitted();
       created.execution?.assertCurrent();
-      if (identity) {
+      if (identity && (!isMainThread || !supportsOpenClawAgentDatabaseExecution(options))) {
         assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
       }
     },
@@ -476,7 +467,7 @@ async function runPendingMaintenance(
   let failed = false;
   let preservation: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
   try {
-    owner.execution ??= owner.captureExecution();
+    owner.execution ??= await owner.captureExecution();
     const maintenance = resolveOwnerMaintenance(owner);
     if (maintenance.mode === "warn") {
       return retireMaintenanceOwner(databasePath, owner);
@@ -552,6 +543,8 @@ async function runPendingMaintenance(
       };
       const result = await runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-plan" },
+        retainedExecution: owner.execution,
+        readCustody: owner.readCustody,
         assertCommitAllowed: assertInputsCurrent,
         // Consume the committed worker proof under FIFO; later observers retain invalidation ownership.
         onWorkerResult: consumePlanning,
@@ -603,6 +596,8 @@ async function runPendingMaintenance(
             [plan],
             {
               isCurrent,
+              retainedExecution: owner.execution,
+              readCustody: owner.readCustody,
             },
           );
       finalized = true;
@@ -635,6 +630,8 @@ async function runPendingMaintenance(
           maintenance,
           ageChanges: owner.ageChanges,
           assertCurrent: assertInputsCurrent,
+          retainedExecution: owner.execution,
+          readCustody: owner.readCustody,
         });
         if (age.kind === "maintenance-plan-stale") {
           planningChanged = true;

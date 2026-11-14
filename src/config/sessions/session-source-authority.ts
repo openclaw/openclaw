@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { WorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -73,6 +75,9 @@ export type SessionSourceValidation = {
 };
 
 export type PreparedSessionSourceAuthority = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  /** Original workspace targets, observed by the effect owner before its live grant. */
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   transaction?: SessionSourceTransactionGrant;
   /** Process-held sources require native atomicity when writing a durable target. */
   nativeSource?: boolean;
@@ -94,6 +99,8 @@ export type PreparedSessionSourceAuthority = {
 };
 
 export type PreparedSessionSourceEffect = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   assertCurrent: () => void;
   release?: () => void | Promise<void>;
   scopedSources?: ReadonlyMap<SessionSourceAssertion, PreparedSessionSourceEffect>;
@@ -231,6 +238,8 @@ export async function prepareSessionSourceEffect(
   scopes.set(assertion, prepared);
   let active = true;
   return {
+    workspaceEvidence: prepared.workspaceEvidence,
+    readCustody: prepared.readCustody,
     assertCurrent: () => {
       if (!active) {
         throw new Error("Session source effect authority is released");
@@ -430,6 +439,8 @@ export function composeSessionSourceAssertion(
         return undefined;
       }
       return {
+        workspaceEvidence: prepared.flatMap((source) => source.workspaceEvidence ?? []),
+        readCustody: prepared.flatMap((source) => source.readCustody ?? []),
         nativeSource: prepared.some((source) => source.nativeSource),
         opaqueCommitGuard: prepared.some((source) => source.opaqueCommitGuard),
         hasOpaqueCheck: options?.hasOpaqueCheck || prepared.some((source) => source.hasOpaqueCheck),
@@ -498,6 +509,8 @@ export function composeSessionSourceAssertion(
         }
       }
       return {
+        workspaceEvidence: prepared.flatMap((source) => source.workspaceEvidence ?? []),
+        readCustody: prepared.flatMap((source) => source.readCustody ?? []),
         assertCurrent: () =>
           check(() => {
             for (const source of prepared) {

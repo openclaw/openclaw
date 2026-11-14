@@ -9,6 +9,8 @@ import {
 const boundary = vi.hoisted(() => ({
   foreignProcfs: false,
   census: vi.fn(),
+  syncCensus: vi.fn(),
+  syncGroupCensus: vi.fn(),
   identity: vi.fn(),
   dead: vi.fn(),
   delay: vi.fn(),
@@ -17,8 +19,26 @@ const boundary = vi.hoisted(() => ({
 }));
 vi.mock("../supervisor/service-child-group-ownership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../supervisor/service-child-group-ownership.js")>()),
-  readProcessGroupMembers: boundary.census,
-  isProcessGroupGoneByCensus: boundary.groupGone,
+  readProcessGroupMembers: (...args: unknown[]) => {
+    boundary.syncCensus();
+    return boundary.census(...args);
+  },
+  async *readLinuxProcessGroupMembersAsync(...args: unknown[]) {
+    yield* boundary.census(...args);
+  },
+  readLinuxProcessGroupMemberAsync: async (pid: number) => {
+    const member = [...boundary.census()].find((entry) => entry.pid === pid);
+    if (!member) {
+      throw Object.assign(new Error("missing member"), { code: "ENOENT" });
+    }
+    return { ...member, startedAt: boundary.identity(pid) };
+  },
+  isOwnProcfsAsync: async () => !boundary.foreignProcfs,
+  isProcessGroupGoneByCensus: (...args: unknown[]) => {
+    boundary.syncGroupCensus();
+    return boundary.groupGone(...args);
+  },
+  isProcessGroupGoneByCensusAsync: async (...args: unknown[]) => boundary.groupGone(...args),
 }));
 // A nested PID namespace with the parent's /proc mounted reports another PID for /proc/self.
 vi.mock("node:fs", async (importOriginal) => {
@@ -35,6 +55,11 @@ vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../shared/pid-alive.js")>()),
   getProcessInstanceStartTime: boundary.identity,
   isPidDefinitelyDead: boundary.dead,
+  isPidDefinitelyDeadAsync: async (pid: number) => boundary.dead(pid),
+}));
+vi.mock("../command-process-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../command-process-identity.js")>()),
+  readCommandProcessStartTime: async (pid: number) => boundary.identity(pid),
 }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
@@ -208,6 +233,8 @@ describe.skipIf(process.platform !== "linux")("denied negative-PID signals", () 
     // A kernel group kill reaches every signalable member, so one refusal must not skip the rest.
     expect(memberSignals(kill)).toContainEqual([222, "SIGTERM"]);
     expect(await outcome).toMatchObject({ cause: { code: "EPERM", syscall: "kill" } });
+    expect(boundary.syncCensus).not.toHaveBeenCalled();
+    expect(boundary.syncGroupCensus).not.toHaveBeenCalled();
   });
 
   it("classifies a denial with the signal that failed, not with signal 0", async () => {
@@ -289,6 +316,23 @@ describe.skipIf(process.platform !== "linux")("denied negative-PID signals", () 
     expect(memberSignals(kill)).toEqual([]);
   });
 
+  it("forces a private broker group synchronously for process exit", async () => {
+    const live = useProcessTable([111]);
+    const kill = denyGroupSignals((pid, signal) => {
+      if (signal === "SIGKILL") {
+        live.delete(pid);
+      }
+    });
+    const cleanup = terminateBrokerProcessGroup(pgid);
+    try {
+      cleanup.force();
+      expect(memberSignals(kill)).toContainEqual([111, "SIGKILL"]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(deadlineMs);
+      await cleanup.settled;
+    }
+  });
+
   it("confirms a lost detached child without identity from the census", async () => {
     const exited = vi.fn(() => false);
     boundary.killTree.mockReturnValue({ exited, force: vi.fn() });
@@ -299,5 +343,7 @@ describe.skipIf(process.platform !== "linux")("denied negative-PID signals", () 
     // The agent-core wait still reports the group alive, but the group owner proves it gone.
     expect(await outcome).toBe("settled");
     expect(exited).toHaveBeenCalled();
+    expect(boundary.syncCensus).not.toHaveBeenCalled();
+    expect(boundary.syncGroupCensus).not.toHaveBeenCalled();
   });
 });

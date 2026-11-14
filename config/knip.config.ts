@@ -262,6 +262,9 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
+  "scripts/perf/workspace-snapshot-read-measure.ts!",
+  "scripts/perf/workspace-git-main-thread-measure.mjs!",
+  "scripts/perf/session-create-root-measure.mjs!",
   "scripts/perf/reply-directives-stream-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",

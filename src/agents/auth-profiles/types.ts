@@ -7,6 +7,8 @@ import type { z } from "zod";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type {
   inlineAuthProfileCredentialSchema,
   OAuthCredentialMetadata,
@@ -20,6 +22,7 @@ export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location:
 /** Internal prepared ownership, carried through commit publication and compensation. */
 export type AuthProfileStoreOwner = {
   databasePath: string;
+  databaseIdentity?: DatabasePathIdentity | AgentDatabaseExecutionFileIdentity;
   sharedDatabasePath: string;
   location: SharedAuthStoreOwnership["location"];
 };

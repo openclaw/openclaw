@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { markCanonicalSessionValidationPending } from "../../../../src/config/sessions/session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "../../../../src/config/sessions/session-canonical-validation.js";
+import * as transcriptResources from "../../../../src/config/sessions/session-transcript-worker-resources.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../../../../src/state/openclaw-agent-db-registry.js";
@@ -74,17 +75,21 @@ async function seedSession(
 function pauseDirectoryDiscovery(sessionsDir: string) {
   const entered = createDeferred();
   const release = createDeferred();
-  const realpath = fs.realpath.bind(fs);
+  const prepare = transcriptResources.prepareSessionStoreCandidatesInWorker;
+  const storePath = path.join(sessionsDir, "sessions.json");
   let paused = false;
-  const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (file) => {
-    if (!paused && file === sessionsDir) {
-      paused = true;
-      entered.resolve();
-      await release.promise;
-    }
-    return realpath(file);
-  });
-  return { entered, release, realpathSpy };
+  const discoverySpy = vi
+    .spyOn(transcriptResources, "prepareSessionStoreCandidatesInWorker")
+    .mockImplementation(async (request) => {
+      const result = await prepare(request);
+      if (!paused && "storePath" in request && request.storePath === storePath) {
+        paused = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+  return { entered, release, discoverySpy };
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
@@ -344,7 +349,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         } else {
           registerOpenClawAgentDatabase({ agentId: "ops", path: unsuffixedDatabase });
         }
-        const { entered, release, realpathSpy } = pauseDirectoryDiscovery(sessionsDir);
+        const { entered, release, discoverySpy } = pauseDirectoryDiscovery(sessionsDir);
         const listing = listCorpus("main", {
           readOnly,
           ...(readOnly ? { includeContentRevision: false } : {}),
@@ -387,7 +392,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           release.resolve();
           await listing.finally(() => {
             Reflect.set(process.env, "OPENCLAW_STATE_DIR", state.stateDir);
-            realpathSpy.mockRestore();
+            discoverySpy.mockRestore();
           });
         }
       });

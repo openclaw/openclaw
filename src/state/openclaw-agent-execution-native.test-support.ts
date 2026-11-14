@@ -1,3 +1,4 @@
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
@@ -17,6 +18,7 @@ export function createNativeIntegrityGeneration(
     database.agentId,
     database.path,
     context,
+    captureGatewayStateOwner(context.admission.databasePath),
     new AgentDatabaseExecutionLifetime().state,
     assertCurrent,
     assertCleanup,

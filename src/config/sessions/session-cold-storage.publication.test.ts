@@ -25,12 +25,14 @@ const observed = vi.hoisted(() => ({
   claimCurrent: true,
 }));
 
-vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({
+vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
   withOpenClawAgentDatabaseReadOnly: observed.native,
   retainOpenClawAgentDatabaseReadOnly: (options: OpenClawAgentDatabaseOptions) => ({
     found: true,
     database: { path: options.path, db: { prepare: observed.native } },
     claim: {
+      identity: "1:1",
       assertCurrent() {
         if (!observed.claimCurrent) {
           throw new Error("database owner retired");
@@ -108,16 +110,22 @@ const preparation: SessionColdReadPreparation = {
     env: { OPENCLAW_STATE_DIR: "/synthetic/cold-publication" },
   },
   readMetadata: async () => ({
-    session_id: "archived-transcript",
-    generation: "archived-generation",
-    archive_name: "archive.jsonl.zst",
-    archive_sha256: "0".repeat(64),
-    event_count: 1,
-    raw_bytes: 100,
-    archive_bytes: 80,
-    last_seq: 1,
-    archived_at: 1,
-    storage: "file",
+    kind: "cold-metadata",
+    source: {
+      readIdentity: { key: "file:1:1", canonicalPath: "/synthetic/cold-publication.sqlite" },
+    },
+    archive: {
+      session_id: "archived-transcript",
+      generation: "archived-generation",
+      archive_name: "archive.jsonl.zst",
+      archive_sha256: "0".repeat(64),
+      event_count: 1,
+      raw_bytes: 100,
+      archive_bytes: 80,
+      last_seq: 1,
+      archived_at: 1,
+      storage: "file",
+    },
   }),
 };
 const result: SessionColdMutationResult = {

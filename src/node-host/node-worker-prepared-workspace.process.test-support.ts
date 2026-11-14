@@ -14,9 +14,11 @@ workerThreads.Worker = class extends Worker {
 };
 syncBuiltinESMExports();
 
-// Preload in the registration process and its computation workers. Advancing the
-// clock exercises settled checkpoint files without a real ctime-margin sleep.
-const now = Date.now() + 60_000;
+// Share one advanced clock across the registration process and its workers so
+// settled checkpoint files and ownership heartbeats use the same timestamps.
+const inheritedNow: unknown = workerThreads.getEnvironmentData(import.meta.url);
+const now = typeof inheritedNow === "number" ? inheritedNow : Date.now() + 60_000;
+workerThreads.setEnvironmentData(import.meta.url, now);
 Date.now = () => now;
 const open = fs.promises.open.bind(fs.promises);
 fs.promises.open = async (...args: Parameters<typeof open>) => {

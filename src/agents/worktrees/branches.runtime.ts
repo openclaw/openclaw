@@ -74,7 +74,7 @@ export async function readRepositoryBranches(
     if (options.includeRepositoryStatus && !(await fs.stat(requested)).isDirectory()) {
       return { branches: [], repositoryStatus: "unavailable" };
     }
-    const candidate = findGitCheckoutRoot(requested);
+    const candidate = await findGitCheckoutRoot(requested);
     if (options.includeRepositoryStatus && !candidate) {
       return { branches: [], repositoryStatus: "not_git" };
     }
@@ -178,7 +178,7 @@ export async function readRepositoryBranchSnapshot(
     const head = readGitHead(repoRoot);
     if (head) {
       const gitDir = path.dirname(head.headPath);
-      const root = findGitCheckoutRoot(repoRoot) ?? repoRoot;
+      const root = (await findGitCheckoutRoot(repoRoot)) ?? repoRoot;
       return {
         ...result,
         observation: { root, gitDir, commonDir: resolveGitRefsBase(head.headPath) },

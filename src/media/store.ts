@@ -6,7 +6,7 @@ import {
   readFileHandleBounded,
   sanitizeUntrustedFileName,
 } from "@openclaw/fs-safe/advanced";
-import { fileStore } from "@openclaw/fs-safe/store";
+import { fileStore, type FileStorePruneOptions } from "@openclaw/fs-safe/store";
 import {
   basenameFromAnyPath,
   extnameFromAnyPath,
@@ -20,10 +20,12 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { runFsSafeStoreOperation } from "../infra/fs-safe-filesystem-worker.js";
 import { FsSafeError, isPathInside, type OpenResult } from "../infra/fs-safe.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { pruneGeneratedHtmlProvenance } from "./generated-html-provenance.js";
 import { getMediaDir } from "./store-path.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
@@ -157,6 +159,10 @@ function rethrowMediaWriteError(error: unknown): never {
   throw findErrorWithCode(error, "ENOSPC") ?? error;
 }
 
+function pruneMediaStore(options: FileStorePruneOptions, rootDir = getMediaDir()): Promise<void> {
+  return runFsSafeStoreOperation({ type: "prune-store", rootDir, options });
+}
+
 async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
   const dir = resolveMediaScopedDir(PLAYBACK_TRANSCODE_SUBDIR, "prunePlaybackTranscodeCacheToSize");
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch((error: unknown) => {
@@ -193,24 +199,26 @@ async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
       PLAYBACK_TRANSCODE_SUBDIR,
       "prunePlaybackTranscodeCacheToSize",
     );
-    await openMediaStore()
-      .remove(relativePath)
-      .catch((error: unknown) => {
-        if (!findErrorWithCode(error, "ENOENT") && !findErrorWithCode(error, "not-found")) {
-          throw error;
-        }
-      });
+    await runFsSafeStoreOperation({
+      type: "remove-store-file",
+      rootDir: getMediaDir(),
+      relativePath,
+    }).catch((error: unknown) => {
+      if (!findErrorWithCode(error, "ENOENT") && !findErrorWithCode(error, "not-found")) {
+        throw error;
+      }
+    });
     totalBytes -= file.size;
   }
 }
 
 async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOptions): Promise<void> {
   if (options.recursive === false) {
-    await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
+    await pruneMediaStore({ ttlMs, recursive: false, maxDepth: 0 });
     return;
   }
   const mediaDir = getMediaDir();
-  await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
+  await pruneMediaStore({ ttlMs, recursive: false, maxDepth: 0 });
   const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch((error: unknown) => {
     if (!findErrorWithCode(error, "ENOENT")) {
       throw error;
@@ -227,12 +235,15 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
     }
     const scopedDir = path.join(mediaDir, entry.name);
     const recursive = options.recursive === true;
-    await openMediaStore(MEDIA_MAX_BYTES, scopedDir).pruneExpired({
-      ttlMs,
-      recursive,
-      maxDepth: recursive ? undefined : 0,
-      pruneEmptyDirs: options.pruneEmptyDirs,
-    });
+    await pruneMediaStore(
+      {
+        ttlMs,
+        recursive,
+        maxDepth: recursive ? undefined : 0,
+        pruneEmptyDirs: options.pruneEmptyDirs,
+      },
+      scopedDir,
+    );
     if (options.pruneEmptyDirs) {
       await fs.rmdir(scopedDir).catch((error: unknown) => {
         // Missing or still-populated directories need no further cleanup.
@@ -277,11 +288,14 @@ export async function prunePlaybackTranscodeCache(): Promise<void> {
       PLAYBACK_TRANSCODE_SUBDIR,
       "prunePlaybackTranscodeCache",
     );
-    await openMediaStore(MEDIA_MAX_BYTES, cacheDir).pruneExpired({
-      ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
-      recursive: true,
-      pruneEmptyDirs: true,
-    });
+    await pruneMediaStore(
+      {
+        ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
+        recursive: true,
+        pruneEmptyDirs: true,
+      },
+      cacheDir,
+    );
     await prunePlaybackTranscodeCacheToSize();
   });
 }
@@ -290,12 +304,14 @@ export async function prunePlaybackTranscodeCache(): Promise<void> {
 export async function pruneOutboundMedia(): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
   const outboundDir = resolveMediaScopedDir(OUTBOUND_STAGING_SUBDIR, "pruneOutboundMedia");
-  await openMediaStore(MEDIA_MAX_BYTES, outboundDir).pruneExpired({
-    ttlMs: OUTBOUND_STAGING_TTL_MS,
-    recursive: true,
-    pruneEmptyDirs: true,
-  });
-  const { pruneGeneratedHtmlProvenance } = await import("./generated-html-provenance.js");
+  await pruneMediaStore(
+    {
+      ttlMs: OUTBOUND_STAGING_TTL_MS,
+      recursive: true,
+      pruneEmptyDirs: true,
+    },
+    outboundDir,
+  );
   await pruneGeneratedHtmlProvenance(context);
 }
 
@@ -303,7 +319,6 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
   const context = captureOpenClawStateWorkerContext();
   await pruneNonPlaybackMedia(ttlMs, options);
   // Trust metadata must not outlive the staged file that it authorizes.
-  const { pruneGeneratedHtmlProvenance } = await import("./generated-html-provenance.js");
   await pruneGeneratedHtmlProvenance(context);
 }
 
@@ -696,5 +711,9 @@ export async function readMediaBuffer(
  */
 export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
-  await openMediaStore().remove(relativePath);
+  await runFsSafeStoreOperation({
+    type: "remove-store-file",
+    rootDir: getMediaDir(),
+    relativePath,
+  });
 }

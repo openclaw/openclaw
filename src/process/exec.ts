@@ -12,6 +12,7 @@ import {
   CommandProcessCleanupError,
   createSanitizedCommandError,
   hasCommandProcessCleanupError,
+  readCommandProcessCleanup,
   readCommandProcessFailure,
 } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -362,6 +363,15 @@ export async function runCommandBuffered(
     const termination: BufferedCommandResult["termination"] = result.outputLimitExceeded
       ? "output-limit"
       : result.termination;
+    const pendingCleanup = readCommandProcessCleanup(result);
+    const cleanupError = pendingCleanup
+      ? await pendingCleanup.then(
+          (cleanup) => (cleanup === "uncertain" ? new CommandProcessCleanupError() : undefined),
+          (cause: unknown) => new CommandProcessCleanupError({ cause }),
+        )
+      : result.cleanup === "uncertain"
+        ? new CommandProcessCleanupError()
+        : undefined;
     return {
       stdout: capturedOutput("stdout"),
       stderr: capturedOutput("stderr"),
@@ -371,7 +381,7 @@ export async function runCommandBuffered(
       termination,
       ...(outputLimitStream ? { outputLimitStream } : {}),
       ...(result.outputErrorStream ? { errorStream: result.outputErrorStream } : {}),
-      ...(result.cleanup === "uncertain" ? { error: new CommandProcessCleanupError() } : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
     };
   } catch (error) {
     const commandError = error instanceof Error ? error : new Error("Command execution failed");

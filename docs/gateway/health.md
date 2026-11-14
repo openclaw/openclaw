@@ -347,12 +347,12 @@ The optional `cpuBreakdown` separates independent native counters:
   measured main and tracked worker CPU, clamped at zero. It includes untracked
   workers and native threads, not a measured worker category.
 
-Thread values use the same core-equivalent unit as `cpuCoreRatio`. Worker reads
-are asynchronous and must complete within 100 ms of each sampling boundary;
-these are not atomic cross-thread measurements. The residual can vary with
-measurement skew. A timed-out request never delays the event-loop sample, and
-at most one native request is outstanding per tracked worker, even across
-monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
+Thread values use the same core-equivalent unit as `cpuCoreRatio`. Linux host
+reads and worker reads are asynchronous and must complete within 100 ms of each
+sampling boundary; these are not atomic measurements. The residual can vary
+with measurement skew. A timed-out request never delays the event-loop sample.
+At most one host filesystem sample per monitor and one native request per
+tracked worker remain outstanding, even across monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
 resets, and collection failures require fresh baselines before publishing the
 affected rates. Missing fields mean unavailable, not zero.
 

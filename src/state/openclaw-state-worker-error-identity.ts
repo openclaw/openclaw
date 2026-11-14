@@ -1,6 +1,7 @@
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SandboxStateOwnerRequiredError } from "../agents/sandbox/state-owner-path.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import {
   SessionWorktreeLifecycleError,
@@ -71,6 +72,9 @@ function isMessageOnlyErrorIdentity(node: { type?: unknown }): node is MessageOn
 export type ErrorIdentity = ReturnType<typeof identifyError>;
 
 export function identifyError(error: Error) {
+  if (error instanceof SandboxStateOwnerRequiredError) {
+    return { type: "sandbox-state-owner-required" as const };
+  }
   if (error instanceof AuthProfileStoreUnreadableError) {
     return { type: "auth-profile-store-unreadable" as const, databasePath: error.databasePath };
   }
@@ -213,6 +217,8 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
     return new ErrorType(node.message);
   }
   switch (node.type) {
+    case "sandbox-state-owner-required":
+      return new SandboxStateOwnerRequiredError();
     case "session-worktree-owner-mismatch":
       return new SessionWorktreeLifecycleError(node.message, "owner-mismatch");
     case "worktree-removal-contention":

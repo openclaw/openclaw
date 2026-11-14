@@ -1,9 +1,18 @@
+import { execFile } from "node:child_process";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import {
+  buildSkillSnapshot,
+  resolveSkillsPrompt,
+} from "../skills/loading/workspace-skill-prompt.js";
 import {
   createCanonicalFixtureSkill,
   createFixtureSkillEntry,
@@ -28,6 +37,74 @@ import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetCodeModeTestState);
 
+it("preserves native filesystem policy across companion reads in a reused worker", async () => {
+  const home = tempDirs.make("skill-companion-native-policy-");
+  await promisify(execFile)(
+    process.execPath,
+    [
+      "--no-addons",
+      "--conditions=openclaw-custom",
+      ...resolveRuntimeWorkerArgv(
+        new URL("./code-mode.skill-read.native-policy.test-support.ts", import.meta.url),
+      ),
+      home,
+    ],
+    {
+      timeout: 60_000,
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: home,
+        USERPROFILE: home,
+        TMPDIR: home,
+        OPENCLAW_STATE_DIR: home,
+        FS_SAFE_NATIVE_MODE: "auto",
+        NODE_OPTIONS: "--no-addons",
+      },
+    },
+  );
+});
+
+it("carries prepared skill directory identities without filesystem lookups or worker tasks", async () => {
+  const dir = tempDirs.make("skill-resource-admission-");
+  const linked = `${dir}-linked`;
+  await fs.symlink(dir, linked, "dir");
+  onTestFinished(() => fs.unlink(linked));
+  const skill = createCanonicalFixtureSkill({
+    name: "guide",
+    description: "Guide",
+    filePath: path.join(linked, "SKILL.md"),
+    baseDir: linked,
+    source: "bundled",
+  });
+  const snapshot = await buildSkillSnapshot(dir, {
+    entries: [
+      skill,
+      { ...skill, name: "missing", filePath: path.join(dir, "missing", "SKILL.md") },
+    ].map((candidate) => ({ skill: candidate, frontmatter: {} })),
+  });
+  const workerTasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+  const stat = vi.spyOn(syncFs, "statSync");
+  const realpath = vi.spyOn(syncFs.realpathSync, "native");
+  syncBuiltinESMExports();
+  try {
+    const catalog = prepareInstalledSkillCatalog({
+      snapshot,
+      workspaceDir: dir,
+    });
+    await catalog[0]!.resourceRoot;
+    await expect(catalog[1]!.resourceRoot).rejects.toThrow();
+    expect(stat).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
+    expect(workerTasks).not.toHaveBeenCalled();
+  } finally {
+    stat.mockRestore();
+    realpath.mockRestore();
+    workerTasks.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
 it("reads local skill companions through the worker without exposing escaped, binary or oversized files", async () => {
   const dir = tempDirs.make("code-mode-skill-resources-");
   const root = path.join(dir, "guide");
@@ -49,14 +126,7 @@ it("reads local skill companions through the worker without exposing escaped, bi
     baseDir: root,
     source: "bundled",
   });
-  const snapshot = {
-    prompt: await resolveSkillsPrompt({
-      workspaceDir: dir,
-      entries: [{ skill, frontmatter: {} }],
-    }),
-    skills: [{ name: "guide" }],
-    discoverySkills: [skill],
-  };
+  const snapshot = await buildSkillSnapshot(dir, { entries: [{ skill, frontmatter: {} }] });
   let active = true;
   const catalog = prepareInstalledSkillCatalog({
     snapshot,
@@ -115,10 +185,26 @@ it("reads local skill companions through the worker without exposing escaped, bi
     },
   });
   const read = tools.find((tool) => tool.name === "skills_read")!;
-  expect(
-    (await read.execute("native", { name: "guide", relativePath: "references/workflow.md" }))
-      .content,
-  ).toEqual([{ type: "text", text: "Companion text 😀" }]);
+  const syncLookups = [
+    vi.spyOn(syncFs, "statSync"),
+    vi.spyOn(syncFs, "lstatSync"),
+    vi.spyOn(syncFs, "fstatSync"),
+    vi.spyOn(syncFs, "openSync"),
+    vi.spyOn(syncFs.realpathSync, "native"),
+  ];
+  syncBuiltinESMExports();
+  try {
+    expect(
+      (await read.execute("native", { name: "guide", relativePath: "references/workflow.md" }))
+        .content,
+    ).toEqual([{ type: "text", text: "Companion text 😀" }]);
+    for (const lookup of syncLookups) {
+      expect(lookup).not.toHaveBeenCalled();
+    }
+  } finally {
+    syncLookups.forEach((lookup) => lookup.mockRestore());
+    syncBuiltinESMExports();
+  }
   const resourceRoot = (await catalog[0]!.resourceRoot)!;
   const readFile = resourceRoot.read.bind(resourceRoot);
   for (const cancel of [false, true]) {
@@ -143,12 +229,19 @@ it("reads local skill companions through the worker without exposing escaped, bi
     spy.mockRestore();
     active = true;
   }
+  const unreadCatalog = prepareInstalledSkillCatalog({ snapshot, workspaceDir: dir });
+  await unreadCatalog[0]!.resourceRoot;
   await fs.rename(root, `${root}-old`);
   await fs.mkdir(root);
   await fs.writeFile(path.join(root, "SKILL.md"), "Replacement marker");
   expect(await h.complete('return await skills.read("guide", "SKILL.md");')).toMatchObject({
     status: "failed",
   });
+  await expect(
+    createInstalledSkillTools(unreadCatalog)
+      .find((tool) => tool.name === "skills_read")!
+      .execute("replaced-before-read", { name: "guide", relativePath: "SKILL.md" }),
+  ).rejects.toThrow();
 });
 
 it("keeps restricted placements instruction-only for companion requests", async () => {

@@ -19,10 +19,15 @@ import {
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readVerifiedSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { decodeSessionColdRecords } from "./session-cold-storage-codec.js";
-import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
+import {
+  readSessionColdMetadataInDatabase,
+  readSessionColdStorageInventory,
+} from "./session-cold-storage-inventory.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type { SessionTranscriptMatchDiagnostics } from "./session-history-read.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match-read.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
@@ -36,12 +41,13 @@ export function readSessionColdStorageInventoryInWorker(options: OpenClawAgentDa
 export function readSessionColdMetadataInWorker(
   options: OpenClawAgentDatabaseOptions,
   sessionId: string,
-) {
+  readCustody?: readonly SessionStoreReadCustody[],
+): SessionColdMetadataWorkerResult {
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionColdTranscript(database.db, sessionId),
+    (database) => readSessionColdMetadataInDatabase(database, sessionId, readCustody),
     options,
   );
-  return result.found ? result.value : undefined;
+  return result.found ? result.value : { kind: "cold-metadata", archive: undefined };
 }
 
 /** Newest-first matching retains only one bounded archive chunk and verifies every chunk. */

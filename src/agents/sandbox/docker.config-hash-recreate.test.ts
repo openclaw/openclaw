@@ -342,6 +342,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     ).toBe(false);
     expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeState: "pending" }),
+      undefined,
     );
     expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
     expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
@@ -474,7 +475,11 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       });
       if (state === "missing") {
         await expect(operation).resolves.toMatchObject(allocatedContainer(containerName));
-        expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(containerName);
+        expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(
+          containerName,
+          {},
+          undefined,
+        );
         expect(spawnState.calls).toContainEqual(createCall);
       } else {
         await expect(operation).rejects.toThrow(

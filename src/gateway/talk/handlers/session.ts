@@ -301,6 +301,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           ]),
           source: sessionMutationAuthorization?.assertCurrent,
           prepareWorkerGrant: sessionMutationAuthorization?.prepareWorkerGrant,
+          followRegistration: (change) =>
+            sessionMutationAuthorization?.followRegistration?.(
+              { agentId, sessionKey: target.canonicalKey },
+              change,
+            ),
           assertCurrent: requester.assertPreparationCurrent,
           onCommittedSource: (readSource, entry) =>
             sessionMutationAuthorization?.recordCreatedSession?.({

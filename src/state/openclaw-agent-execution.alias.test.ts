@@ -1,6 +1,9 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { defaultPayload } from "../infra/gateway-state-owner-record.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
@@ -14,6 +17,84 @@ import {
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
 import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+it("prepares native Gateway ownership without synchronous filesystem lookup", async () => {
+  const { options } = fixture();
+  const databasePath = resolveOpenClawStateSqlitePath(options.env);
+  const owner = acquireGatewayStateOwner({
+    databasePath,
+    payload: { ...defaultPayload(databasePath), role: "gateway" },
+  });
+  const execution = capture(options);
+  const realpath = fs.realpathSync.native;
+  let generationLookups = 0;
+  const observed = vi
+    .spyOn(fs.realpathSync, "native")
+    .mockImplementation((...args: Parameters<typeof fs.realpathSync.native>) => {
+      if (new Error().stack?.includes("createAgentDatabaseNativeGeneration")) {
+        generationLookups++;
+      }
+      return Reflect.apply(realpath, fs.realpathSync, args);
+    });
+  syncBuiltinESMExports();
+  try {
+    await execution.prepare(source());
+    expect(execution.fileIdentity).toBeDefined();
+    expect(generationLookups).toBe(0);
+  } finally {
+    observed.mockRestore();
+    syncBuiltinESMExports();
+    await execution.release();
+    owner.release();
+  }
+});
+
+it("rechecks the request after awaited native Gateway ownership preparation", async () => {
+  const { options } = fixture();
+  const databasePath = resolveOpenClawStateSqlitePath(options.env);
+  const owner = acquireGatewayStateOwner({
+    databasePath,
+    payload: { ...defaultPayload(databasePath), role: "gateway" },
+  });
+  const execution = capture(options);
+  const entered = createDeferred();
+  const resume = createDeferred();
+  const realpath = fsPromises.realpath;
+  let held = false;
+  let revoked = false;
+  const observed = vi
+    .spyOn(fsPromises, "realpath")
+    .mockImplementation(async (...args: Parameters<typeof fsPromises.realpath>) => {
+      if (!held && args[0] === databasePath) {
+        held = true;
+        entered.resolve();
+        await resume.promise;
+      }
+      return Reflect.apply(realpath, fsPromises, args);
+    });
+  syncBuiltinESMExports();
+  const request = source();
+  request.assertCurrent = () => {
+    if (revoked) {
+      throw new Error("Synthetic request retired during native preparation");
+    }
+  };
+  const pending = execution.prepare(request);
+  try {
+    await entered.promise;
+    revoked = true;
+    resume.resolve();
+    await expect(pending).rejects.toThrow("Synthetic request retired during native preparation");
+    expect(fs.existsSync(options.path)).toBe(false);
+  } finally {
+    resume.resolve();
+    await pending.catch(() => {});
+    observed.mockRestore();
+    syncBuiltinESMExports();
+    await execution.release();
+    owner.release();
+  }
+});
 
 it.each(["removed", "replaced"])("closes after %s state lock", async (ending) => {
   const { options, aliased } = fixture();

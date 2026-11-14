@@ -1,12 +1,16 @@
 // Workspace run tests cover runtime workspace resolution from explicit input,
 // agent config, session keys, and environment fallback.
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
   resolveRunWorkspaceDir,
+  resolveRunBootstrapWorkspaceDir,
 } from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -262,4 +266,39 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.agentId).toBe("ops");
     expect(result.workspaceDir).toBe(path.resolve(opsWorkspace));
   });
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
+
+it("selects rooted bootstrap instructions without main-thread Git metadata reads", async () => {
+  const root = tempDirs.make("bootstrap-git-owner-");
+  const workspace = path.join(root, "agent");
+  const checkout = path.join(root, "checkout");
+  const gitDir = path.join(workspace, ".git", "worktrees", "checkout");
+  await fs.promises.mkdir(gitDir, { recursive: true });
+  await fs.promises.mkdir(checkout);
+  await fs.promises.writeFile(path.join(gitDir, "commondir"), "../..\n");
+  await fs.promises.writeFile(path.join(checkout, ".git"), `gitdir: ${gitDir}\n`);
+  const params = { workspaceDir: workspace, sessionRoot: checkout };
+  expect(await resolveRunBootstrapWorkspaceDir(params)).toBe(checkout);
+  const sync = [
+    vi.spyOn(fs, "statSync"),
+    vi.spyOn(fs, "lstatSync"),
+    vi.spyOn(fs.realpathSync, "native"),
+    vi.spyOn(fs, "openSync"),
+    vi.spyOn(fs, "fstatSync"),
+  ];
+  syncBuiltinESMExports();
+  for (let i = 0; i < 10; i++) {
+    expect(await resolveRunBootstrapWorkspaceDir(params)).toBe(checkout);
+    expect(await resolveRunBootstrapWorkspaceDir({ ...params, sessionRoot: root })).toBe(workspace);
+  }
+  for (const call of sync) {
+    expect(call).not.toHaveBeenCalled();
+  }
 });
