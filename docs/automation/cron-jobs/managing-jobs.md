@@ -13,6 +13,8 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 
 In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
 
+Deleting a conversation does not remove its linked automations. Command automations can continue running after their creating conversation is deleted. The conversation's deletion confirmation warns that automations may continue; disable or remove them separately to stop future runs.
+
 Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
 
 ## CLI examples
@@ -168,7 +170,7 @@ Conversation automation views use the conversation's physical key and selected a
 
 Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. An agent's main session, including `global`, cannot be archived.
 
-Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names the jobs that will pause and offers **Archive anyway** or **Delete anyway**; the warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
+Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names linked jobs and offers **Archive anyway** or **Delete anyway**. For deletion, it warns that automations may keep running and should be disabled or removed separately. The warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 

@@ -18,7 +18,7 @@ type SessionAutomationTarget = {
   hasAutomation?: boolean;
 };
 
-/** Confirmation copy for enabled automations that an archive or delete pauses. */
+/** Confirmation copy for enabled automations bound to archive or delete targets. */
 export type BoundAutomationNotice = {
   action: "archive" | "delete";
   message: string;
@@ -40,7 +40,7 @@ export type BoundAutomationRequest = {
 };
 
 /**
- * Runs an archive or delete confirmation with the pause warning when any
+ * Runs an archive or delete confirmation with an automation warning when any
  * target row reports an enabled bound automation. Without one, `present`
  * receives null synchronously, so existing confirmations keep their timing.
  * Shown, confirmed and cancelled warnings are recorded for visibility.
@@ -75,8 +75,8 @@ async function readBoundAutomationNotice(
         ? "sessionsView.automationPauseArchiveOne"
         : "sessionsView.automationPauseArchiveOther"
       : single
-        ? "sessionsView.automationPauseDeleteOne"
-        : "sessionsView.automationPauseDeleteOther",
+        ? "sessionsView.automationDeleteWarningOne"
+        : "sessionsView.automationDeleteWarningOther",
     { session: single?.label ?? single?.key ?? "", count: String(targets.length) },
   );
   if (jobs.length === 0) {
@@ -148,7 +148,7 @@ async function listBoundAutomations(
 }
 
 /**
- * Adds the pause warning to an archive or delete confirmation. The warning is
+ * Adds the automation warning to an archive or delete confirmation. The warning is
  * never skippable, so an opted-out delete confirmation still appears for it.
  */
 export function withBoundAutomationNotice<T extends ConfirmDialogOptions>(
