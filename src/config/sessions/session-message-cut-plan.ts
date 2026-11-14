@@ -14,12 +14,10 @@ import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
-import { createSessionTranscriptHeader, readInheritedThrough } from "./transcript-header.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
-  isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
-  selectSessionTranscriptTreeTipNodes,
 } from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
@@ -51,77 +49,29 @@ export type SessionMessageCutInPlacePlan =
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
 
-/** Semantic preflight before workspace retirement; the committing planner checks it again. */
-export function selectSessionMessageCut(
-  currentEntry: SessionEntry | undefined,
+/** Fork identity and prefix policy; the backend owns the atomic install. */
+export function planSessionMessageCut(
+  entry: SessionEntry | undefined,
   events: readonly TranscriptEvent[],
-  params: SessionMessageCutIntent,
+  params: SessionMessageCutIntent & { mode: "fork" },
   sourceRepositoryWorkspaceId?: string,
-):
-  | Exclude<SessionMessageCutResult, { status: "created" }>
-  | {
-      status: "selected";
-      entry: SessionEntry;
-      cut?: MessageCut;
-    } {
-  if (!currentEntry?.sessionId) {
-    return { status: "missing-session" };
+): SessionMessageCutPlan {
+  const refusal = refuseUnselectableMessageCut(entry, params, sourceRepositoryWorkspaceId);
+  if (refusal) {
+    return refusal;
   }
-  if (
-    !params.expectedState ||
-    currentEntry.sessionId !== params.expectedState.sessionId ||
-    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
-  ) {
-    return { status: "conflict" };
-  }
-  if (
-    sourceRepositoryWorkspaceId !== undefined &&
-    currentEntry.repositoryWorkspaceId !== sourceRepositoryWorkspaceId
-  ) {
-    throw new Error("Repository workspace changed before session fork");
-  }
-  // Local cuts rotate transcript identity and clear harness ownership. Locked
-  // history must instead stay with its native owner, even without an upstream link.
-  assertModelSelectionUnlocked(
-    currentEntry,
-    "Session history changes are unavailable while model selection is locked.",
-  );
-  const cut =
-    params.mode === "switch"
-      ? undefined
-      : resolveMessageCut(events, params.entryId, params.mode === "fork");
-  if (cut && cut.status !== "cut") {
+  const currentEntry = entry!;
+  const cut = resolveForkPrefix(events, params.entryId);
+  if (cut.status !== "cut") {
     return cut;
   }
-  if (params.mode === "switch") {
-    const tipStatus = validateBranchTip(events, params.entryId);
-    if (tipStatus) {
-      return { status: tipStatus };
-    }
-  }
   if (
-    params.mode === "fork" &&
     currentEntry.repositoryWorkspaceId &&
     (!params.repositoryWorkspaceId ||
       params.repositoryWorkspaceId === currentEntry.repositoryWorkspaceId)
   ) {
     throw new Error("Repository session fork requires its own prepared workspace");
   }
-  return { status: "selected", entry: currentEntry, cut };
-}
-
-/** Shared history selection and identity policy; the backend owns the atomic install. */
-export function planSessionMessageCut(
-  entry: SessionEntry | undefined,
-  events: readonly TranscriptEvent[],
-  params: SessionMessageCutIntent,
-  sourceRepositoryWorkspaceId?: string,
-): SessionMessageCutPlan {
-  const selected = selectSessionMessageCut(entry, events, params, sourceRepositoryWorkspaceId);
-  if (selected.status !== "selected") {
-    return selected;
-  }
-  const { entry: currentEntry, cut } = selected;
   if (settledWorkspaceConflicts(currentEntry, params)) {
     return { status: "conflict" };
   }
@@ -130,44 +80,19 @@ export function planSessionMessageCut(
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
     version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
-    // A fork copies a prefix of the counted active path. Rewind and switch copy the whole
-    // tree: the source counts its active path, and its own inherited paths stay inherited.
-    inheritedThrough:
-      params.mode === "fork" && cut
-        ? [readLastEventId(cut.prefix)].filter((id): id is string => id !== null)
-        : [
-            ...new Set(
-              [
-                ...readInheritedThrough(findSessionTranscriptHeader(events)),
-                scanSessionTranscriptTree(events).leafId,
-              ].filter((id): id is string => typeof id === "string"),
-            ),
-          ],
+    // The prefix comes from the counted active path, so the source already counts
+    // every event through its last id.
+    inheritedThrough: [readLastEventId(cut.prefix)].filter((id): id is string => id !== null),
   });
-  const nextEvents =
-    params.mode === "fork" && cut
-      ? [header, ...cut.prefix]
-      : [
-          header,
-          ...events.filter((event) => !isSessionHeader(event)),
-          {
-            type: "leaf",
-            id: uniqueEntryId(events),
-            parentId: readLastEventId(events),
-            timestamp: new Date().toISOString(),
-            targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
-          },
-        ];
-  const nextEntry = buildMessageCutSessionEntry(currentEntry, params, nextSessionId);
   return {
     status: "prepared",
     header,
-    events: nextEvents,
+    events: [header, ...cut.prefix],
     result: {
       status: "created",
       key: params.targetKey,
-      entry: nextEntry,
-      ...readMessageCutEditorFields(cut?.message),
+      entry: buildMessageCutSessionEntry(currentEntry, params, nextSessionId),
+      ...readMessageCutEditorFields(cut.message),
     },
   };
 }
@@ -384,28 +309,9 @@ function readMessageCutEditorFields(message: Record<string, unknown> | undefined
   };
 }
 
-function validateBranchTip(
+function resolveForkPrefix(
   events: readonly TranscriptEvent[],
   entryId: string,
-): "missing-entry" | "not-branch-tip" | "already-active" | undefined {
-  const tree = scanSessionTranscriptTree(events);
-  const target = tree.byId.get(entryId);
-  if (!target) {
-    return "missing-entry";
-  }
-  if (isSessionTranscriptLeafControl(target.entry)) {
-    return "not-branch-tip";
-  }
-  if (!selectSessionTranscriptTreeTipNodes(tree).some((node) => node.id === entryId)) {
-    return "not-branch-tip";
-  }
-  return tree.leafId === entryId ? "already-active" : undefined;
-}
-
-function resolveMessageCut(
-  events: readonly TranscriptEvent[],
-  entryId: string,
-  copyPrefix: boolean,
 ): MessageCut | Exclude<SessionMessageCutMutationResult, { status: "created" }> {
   const tree = scanSessionTranscriptTree(events);
   const target = tree.byId.get(entryId);
@@ -423,7 +329,7 @@ function resolveMessageCut(
     return { status: "off-active-path" };
   }
   const prefix: TranscriptEvent[] = [];
-  for (const node of copyPrefix ? activePath.slice(0, targetIndex) : []) {
+  for (const node of activePath.slice(0, targetIndex)) {
     const entry = asRecord(node.entry);
     // Spread (not Object.assign) so a parsed own `__proto__` key stays an inert
     // data property instead of rebinding the copy's prototype.
@@ -504,19 +410,4 @@ function readTranscriptHeaderCwd(events: readonly TranscriptEvent[]): string | u
 function readLastEventId(events: readonly TranscriptEvent[]): string | null {
   const id = asRecord(events.findLast((event) => !isSessionHeader(event)))?.id;
   return typeof id === "string" && id.trim() ? id : null;
-}
-
-function uniqueEntryId(events: readonly TranscriptEvent[]): string {
-  const ids = new Set(
-    events.flatMap((event) => {
-      const id = asRecord(event)?.id;
-      return typeof id === "string" ? [id] : [];
-    }),
-  );
-  for (;;) {
-    const id = randomUUID().slice(0, 8);
-    if (!ids.has(id)) {
-      return id;
-    }
-  }
 }

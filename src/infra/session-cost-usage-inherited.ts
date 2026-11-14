@@ -1,6 +1,7 @@
 import { readInheritedThrough } from "../config/sessions/transcript-header.js";
 import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import {
+  isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
@@ -17,11 +18,53 @@ export function projectUsageScanFields(
 }
 
 /**
- * Rewind, branch switch, fork, branched sessions and subagent parent forks copy history into a
- * new transcript. The header's `inheritedThrough` names copied events whose paths the source
- * transcript (or its own sources) already counts; those paths are dropped here. Copied events off
- * them (an inactive source branch) still count, because no source did. Paths follow the canonical
- * transcript tree, so leaf controls resolve to their targets.
+ * Billed rows for one transcript: the active path plus every path that an
+ * earlier leaf control selected, minus paths an upstream transcript already
+ * counted.
+ *
+ * Usage reports money that was really spent, so moving the active branch must
+ * not remove a completed turn's tokens. Before in-place history cuts, the same
+ * total came from the retired copy, which kept counting the path that was
+ * active when it was retired.
+ */
+export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
+  records: readonly T[],
+): T[] {
+  const tree = scanSessionTranscriptTree(records);
+  const selected: T[] = [];
+  const seen = new Set<T>();
+  const addPath = (leafId: string | null) => {
+    for (const node of selectSessionTranscriptTreePathNodes(tree, leafId)) {
+      if (!seen.has(node.entry)) {
+        seen.add(node.entry);
+        selected.push(node.entry);
+      }
+    }
+  };
+  addPath(tree.leafId);
+  // Each leaf control names both branches of one repoint: its target became
+  // active, and its raw parent is the tip that was active until then. Both were
+  // billed. A sibling that was never active is not reachable this way and stays
+  // unbilled, matching the retired-copy accounting this replaced.
+  for (const node of tree.nodes) {
+    if (!isSessionTranscriptLeafControl(node.entry)) {
+      continue;
+    }
+    addPath(node.id);
+    const previousTip = node.entry.parentId;
+    if (typeof previousTip === "string" && previousTip) {
+      addPath(previousTip);
+    }
+  }
+  return dropInheritedTranscriptEvents(records, selected);
+}
+
+/**
+ * Fork, branched sessions and subagent parent forks copy history into a new transcript. The
+ * header's `inheritedThrough` names copied events whose paths the source transcript (or its own
+ * sources) already counts; those paths are dropped here. Copied events off them (an inactive
+ * source branch) still count, because no source did. Paths follow the canonical transcript tree,
+ * so leaf controls resolve to their targets.
  */
 export function dropInheritedTranscriptEvents<T extends Record<string, unknown>>(
   records: readonly T[],

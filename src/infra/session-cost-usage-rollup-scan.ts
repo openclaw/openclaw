@@ -2,10 +2,9 @@ import type { ModelCostConfig } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
-import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import {
-  dropInheritedTranscriptEvents,
+  selectBilledTranscriptEvents,
   projectUsageScanFields,
 } from "./session-cost-usage-inherited.js";
 import {
@@ -153,8 +152,8 @@ export async function scanMemoryUsageCostRollup(params: {
   });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
   await scan.addEntries(
-    dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records)).flatMap(
-      (record) => (record.usageEntry ? [record.usageEntry] : []),
+    selectBilledTranscriptEvents(records).flatMap((record) =>
+      record.usageEntry ? [record.usageEntry] : [],
     ),
   );
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;

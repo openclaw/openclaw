@@ -227,7 +227,7 @@ export function executeSessionActorMemoryForkCommand(
       const plan = planSessionMessageCut(
         source?.hot.entry,
         sourceEvents,
-        preparedIntent,
+        { ...preparedIntent, mode: "fork" },
         sourceRepositoryWorkspaceId,
       );
       if (plan.status !== "prepared") {

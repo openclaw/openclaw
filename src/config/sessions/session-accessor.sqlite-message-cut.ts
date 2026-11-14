@@ -481,7 +481,7 @@ export function mutateSqliteSessionAtMessageInTransaction(
   const plan = planSessionMessageCut(
     currentEntry,
     source?.events ?? [],
-    params,
+    { ...params, mode: "fork" },
     projection?.sourceRepositoryWorkspaceId,
   );
   if (plan.status !== "prepared") {

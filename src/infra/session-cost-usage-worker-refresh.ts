@@ -21,12 +21,11 @@ import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
-import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
-  dropInheritedTranscriptEvents,
+  selectBilledTranscriptEvents,
   projectUsageScanFields,
 } from "./session-cost-usage-inherited.js";
 import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
@@ -547,7 +546,7 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   // Appended rows follow any inherited history, so only full scans drop it.
   const selected = appendOnly
     ? records.filter(isCanonicalSessionTranscriptEntry)
-    : dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records));
+    : selectBilledTranscriptEvents(records);
   const scan = createUsageRollupScan({ ...params, appendOnly });
   await scan.addEntries(
     selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),
