@@ -335,6 +335,7 @@ async function runBoundTurn(params: {
             clientId: client.getInstanceId(),
             cwd: response.thread.cwd ?? (networkProxyBindingChanged ? workspaceDir : binding.cwd),
             model: response.model ?? modelSelection?.model ?? binding.model,
+            reasoningEffort: response.reasoningEffort,
             modelProvider: await normalizeCodexAppServerBindingModelProvider({
               authProfileId: binding.authProfileId,
               modelProvider:
