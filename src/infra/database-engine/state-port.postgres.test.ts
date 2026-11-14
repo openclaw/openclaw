@@ -81,7 +81,8 @@ describe.skipIf(!connection)("shared-state database port", () => {
       storeId,
       assertCurrent() {},
     });
-    expect(staged).toEqual({ tables: before.tables, allocations: before.allocations });
+    const { catalog: _catalog, ...sourceVerification } = before;
+    expect(staged).toEqual(sourceVerification);
     const plannerRows = (schema: string) =>
       rows(
         `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

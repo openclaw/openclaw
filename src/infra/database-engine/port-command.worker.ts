@@ -86,6 +86,16 @@ export class DatabasePortError extends Error {}
 function refuse(fact: string): never {
   throw new DatabasePortDataError(fact);
 }
+// Recorded proofs from builds before typed row digests are checked with their own digest.
+function recordedLegacyDigest(task: DatabasePortTask) {
+  const recorded =
+    task.operation === "verify"
+      ? task.verification
+      : task.operation === "stage"
+        ? task.sourceVerification
+        : undefined;
+  return Boolean(recorded && !recorded.digest);
+}
 function compare(actual: PortVerification, expected: PortVerification) {
   if (!isDeepStrictEqual(actual, expected)) {
     refuse("observed changed canonical rows or allocations; required recorded verification");
@@ -95,6 +105,7 @@ async function inspectSqliteImage(
   db: DatabaseSync,
   descriptor: PortDescriptor,
   allowMigration = false,
+  legacyDigest = false,
 ) {
   const {
     version,
@@ -121,19 +132,25 @@ async function inspectSqliteImage(
     return { version, migrationRequired, notes: admitted.notes };
   }
   const admitted = inspectSqlitePortSchema(db, descriptor);
-  const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, admitted);
+  const { catalog: _catalog, ...verification } = await inspectDatabasePort(
+    { engine: "sqlite", db },
+    admitted,
+    undefined,
+    false,
+    legacyDigest,
+  );
   return {
     version,
     migrationRequired,
     notes: admitted.notes,
-    verification: { tables, allocations },
+    verification,
   };
 }
-async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
+async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor, legacyDigest = false) {
   const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
   try {
     using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
-    return await inspectSqliteImage(db, descriptor);
+    return await inspectSqliteImage(db, descriptor, false, legacyDigest);
   } finally {
     prepared.cleanup();
   }
@@ -143,16 +160,18 @@ async function inspectPostgres(
   descriptor: PortDescriptor,
   identity: Identity,
   verifyDefinitions = true,
+  legacyDigest = false,
 ) {
   await assertDatabasePortNamespaceOwner(db, identity.namespace);
   await db.query("SET row_security = off");
-  const { tables, allocations } = await inspectDatabasePort(
+  const { catalog: _catalog, ...verification } = await inspectDatabasePort(
     { engine: "postgres", db, namespace: identity.namespace },
     descriptor,
     identity.storeId,
     verifyDefinitions,
+    legacyDigest,
   );
-  return { tables, allocations };
+  return verification;
 }
 async function preflight(
   task: Extract<DatabasePortTask, { operation: "preflight" }>,
@@ -189,6 +208,8 @@ async function stage(
   source: Awaited<ReturnType<typeof inspectSqliteImage>>,
 ): Promise<{ verification: PortVerification; plannerStatistics?: PostgresPlannerStatistics }> {
   const { migrationRequired, verification } = source;
+  // A legacy recorded source proof keeps this staging, and its receipt, on the legacy digest.
+  const legacyDigest = !verification?.digest;
   let plannerStatistics: PostgresPlannerStatistics | undefined;
   if (migrationRequired || !verification) {
     refuse("observed unmigrated private source; required migrate phase before staging");
@@ -205,7 +226,10 @@ async function stage(
     );
     if (task.to === "sqlite") {
       using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
-      compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
+      compare(
+        (await inspectSqliteImage(image, descriptor, false, legacyDigest)).verification!,
+        verification,
+      );
     }
   };
   if (task.sourceVerification) {
@@ -263,7 +287,7 @@ async function stage(
           if (!task.resume) {
             refuse("observed occupied target namespace; required fresh namespace");
           }
-          compare(await inspectPostgres(db, descriptor, task), verification);
+          compare(await inspectPostgres(db, descriptor, task, true, legacyDigest), verification);
           plannerStatistics = await refreshPostgresPlannerStatistics(db, task.namespace);
           return;
         }
@@ -278,6 +302,7 @@ async function stage(
             descriptor,
             storeId: task.storeId,
             assertCurrent,
+            legacyDigest,
             onPlannerStatistics: (result) => {
               plannerStatistics = result;
             },
@@ -291,7 +316,7 @@ async function stage(
       }
       // COMMIT may have succeeded despite a lost reply; the fresh connection below decides.
       await withDatabasePortConnection(task.config, async (db) =>
-        compare(await inspectPostgres(db, descriptor, task), verification),
+        compare(await inspectPostgres(db, descriptor, task, true, legacyDigest), verification),
       );
     }
     assertCurrent();
@@ -334,10 +359,14 @@ async function verify(
       "observed mismatched anchor identity; required recorded engine, store UUID and namespace",
     );
   }
+  const legacyDigest = recordedLegacyDigest(task);
   const actual =
     task.engine === "postgres"
-      ? await withDatabasePortConnection(task.config, (db) => inspectPostgres(db, descriptor, task))
-      : (source?.facts ?? (await inspectSqlite(task.sourcePath, descriptor))).verification!;
+      ? await withDatabasePortConnection(task.config, (db) =>
+          inspectPostgres(db, descriptor, task, true, legacyDigest),
+        )
+      : (source?.facts ?? (await inspectSqlite(task.sourcePath, descriptor, legacyDigest)))
+          .verification!;
   compare(actual, task.verification);
 }
 export async function executeDatabasePortTask(
@@ -403,6 +432,7 @@ export async function executeDatabasePortTask(
         db,
         descriptor,
         task.operation === "inspect" || task.operation === "migrate",
+        recordedLegacyDigest(task),
       );
       return { engine, descriptor, facts };
     } finally {

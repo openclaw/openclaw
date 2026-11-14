@@ -100,6 +100,9 @@ A PostgreSQL capture contains the original anchor, a sanitized SQLite export
 image, and a format-2 manifest with the profile, engine, store UUID, versions,
 active fragments, allocation facts, sizes, and hashes. The manifest contains no
 DSN. Keep these artifacts together; copying only the anchor does not back up rows.
+Table hashes record their row digest; captures from earlier versions without one
+still verify and restore, but a capture made by this version cannot be restored
+by an earlier version.
 Existing format-1 SQLite snapshots remain readable. See
 [Database engines](/reference/database-engines#anchors-and-backups) for matched
 restore and update-recovery behavior.
