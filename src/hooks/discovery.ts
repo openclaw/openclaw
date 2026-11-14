@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/frontmatter.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import {
+  describeRootFileOpenFailure,
+  isRootFileMissingFailure,
+  openRootFileSync,
+  readFileDescriptorBoundedSync,
+} from "../infra/boundary-file-read.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveHookManifestMetadata } from "./frontmatter.js";
 import type { Hook, HookEntry, HookSource } from "./types.js";
@@ -91,6 +97,7 @@ function loadHookFromDir(
           rootPath: params.hookDir,
           boundaryLabel: "hook directory",
         },
+        warn,
         (opened) => opened.path,
       );
       if (safeCandidatePath) {
@@ -201,7 +208,7 @@ function readRootFileUtf8(
   params: { absolutePath: string; rootPath: string; boundaryLabel: string; maxBytes: number },
   warn?: HookDiscoveryWarning,
 ): string | null {
-  return withOpenedRootFileSync(params, (opened) => {
+  return withOpenedRootFileSync(params, warn, (opened) => {
     try {
       return readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf-8");
     } catch (err) {
@@ -225,6 +232,7 @@ function withOpenedRootFileSync<T>(
     rootPath: string;
     boundaryLabel: string;
   },
+  warn: HookDiscoveryWarning | undefined,
   read: (opened: { fd: number; path: string }) => T,
 ): T | null {
   const opened = openRootFileSync({
@@ -236,6 +244,18 @@ function withOpenedRootFileSync<T>(
     rejectSymlinks: false,
   });
   if (!opened.ok) {
+    if (!isRootFileMissingFailure(opened)) {
+      warn?.(
+        opened.error instanceof FsSafeError && opened.error.code === "hardlink"
+          ? `Ignoring hardlinked hook file ${params.absolutePath}. Replace it with an independent copy; for bundled hooks, reinstall OpenClaw with your package manager.`
+          : describeRootFileOpenFailure({
+              failure: opened,
+              subject: "Hook file",
+              boundaryLabel: params.boundaryLabel,
+              filePath: params.absolutePath,
+            }),
+      );
+    }
     return null;
   }
   try {

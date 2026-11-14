@@ -24,7 +24,7 @@ import {
   PORTABLE_PLUGIN_ICON_PATH,
 } from "./portable-icon-paths.js";
 
-/** These files must keep independent inodes for the existing plugin safety checks. */
+/** These files must keep independent inodes for the existing plugin and hook safety checks. */
 export function collectPluginSafetyInspectedFiles(
   entries: readonly { path: string; kind: "file" | "directory" | "symlink" }[],
 ): Set<string> {
@@ -35,6 +35,15 @@ export function collectPluginSafetyInspectedFiles(
   const skillScopes: Array<readonly [string, string]> = [];
   withPluginCache(createPluginCache({ kind: "operation" }), () => {
     for (const entry of entries) {
+      if (entry.kind === "file" && path.basename(entry.path) === "HOOK.md") {
+        // Hook discovery strictly opens both metadata and handler candidates.
+        for (const name of ["HOOK.md", "handler.ts", "handler.js", "index.ts", "index.js"]) {
+          const file = path.join(path.dirname(entry.path), name);
+          if (entryKinds.get(file) === "file") {
+            pluginFiles.add(file);
+          }
+        }
+      }
       if (path.basename(entry.path) !== "openclaw.plugin.json") {
         continue;
       }
