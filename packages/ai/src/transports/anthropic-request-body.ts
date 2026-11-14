@@ -101,7 +101,7 @@ function samePlainData(left: unknown, right: unknown, seen = new Map<object, obj
   return true;
 }
 
-/** Hooks receive editable containers; any edit opts the whole request out of fragment reuse. */
+/** Hooks receive editable containers; envelope edits preserve unchanged history fragments. */
 export async function applyAnthropicPayloadHook(
   params: MessageCreateParamsStreaming,
   model: Model<"anthropic-messages">,
@@ -133,7 +133,8 @@ export async function applyAnthropicPayloadHook(
   const unchanged =
     (replacement === undefined || replacement === editable) &&
     snapshot !== undefined &&
-    samePlainData(snapshot, editable);
+    (samePlainData(snapshot, editable) ||
+      (plain?.(editable) && samePlainData(snapshot.messages, editable.messages)));
   if (unchanged && !("toJSON" in Object.prototype) && !("toJSON" in Array.prototype)) {
     // Encode equal editable copies before yielding: hooks may retain and mutate them.
     // Keep frozen keys, while avoiding the slow JSON path for their frozen arrays.

@@ -22,6 +22,9 @@
  * Other modes retain their no-material-GC-regression rule. Measure allocation separately.
  * Restored mode includes transport/SSE replay; other modes measure preparation only.
  * No mode measures live provider calls or whole-Gateway latency.
+ * --turns 100|500 uses three messages/turn and 40 KiB tool results; --hook
+ * none|observer|service-tier selects no hook, an observer, or the bundled tier wrapper.
+ * --diagnostics reports cold/warm/appended encode work separately from timing passes.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -46,6 +49,9 @@ const { values } = parseArgs({
     "prepared-system": { type: "boolean", default: false },
     images: { type: "boolean", default: false },
     restored: { type: "boolean", default: false },
+    turns: { type: "string" },
+    hook: { type: "string" },
+    diagnostics: { type: "boolean", default: false },
     "baseline-dir": { type: "string" },
   },
 });
@@ -54,7 +60,13 @@ assert(
   ["full", "build", "serialize", "system"].includes(values.mode),
   "--mode must be full, build, serialize or system",
 );
-const messageCount = values.images ? 48 : Number(values.messages);
+assert(values.turns === undefined || ["100", "500"].includes(values.turns));
+assert(values.hook === undefined || ["none", "observer", "service-tier"].includes(values.hook));
+const messageCount = values.turns
+  ? Number(values.turns) * 3
+  : values.images
+    ? 48
+    : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   fallback: values.restored ? 20 : 2000,
@@ -72,7 +84,8 @@ if (values.restored) {
 }
 const { prepareSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } =
   await import("../../packages/ai/src/utils/system-prompt-cache-boundary.js");
-const { configureAiTransportHost } = await import("../../packages/ai/src/host.js");
+const { configureAiTransportHost, getAiTransportHost } =
+  await import("../../packages/ai/src/host.js");
 const { buildAnthropicSystemBlocks } =
   await import("../../packages/ai/src/transports/anthropic-payload-policy.js");
 const { buildAnthropicRequest, prepareAnthropicRequest } =
@@ -83,7 +96,13 @@ const { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } =
   await import("../../src/shared/immutable-data.js");
 const { normalizeAnthropicInlineContentBlocks } =
   await import("../../src/media/anthropic-inline-images.js");
+const defaultHost = getAiTransportHost();
 configureAiTransportHost({
+  resolveProviderRequestCapabilities: (input) => ({
+    ...defaultHost.resolveProviderRequestCapabilities(input),
+    endpointClass: "anthropic-public",
+    allowsAnthropicServiceTier: true,
+  }),
   normalizeAnthropicInlineContentBlocks,
   transformTransportMessages,
   immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
@@ -103,7 +122,9 @@ const model: Model<"anthropic-messages"> = {
 const messages: Context["messages"] = [];
 for (let index = 0; index < messageCount; index++) {
   const turn = Math.floor(index / 3);
-  const text = `Synthetic ${index}: ` + 'line "quoted" \\ café 🦞\n'.repeat(160);
+  const text =
+    `Synthetic ${index}: ` +
+    'line "quoted" \\ café 🦞\n'.repeat(values.turns && index % 3 === 2 ? 1600 : 160);
   if (index % 3 === 0) {
     messages.push({ role: "user", timestamp: index, content: [{ type: "text", text }] });
   } else if (index % 3 === 1) {
@@ -182,8 +203,25 @@ const options: AnthropicOptions = {
   thinkingEnabled: true,
   onPayload: () => undefined,
 };
+if (values.hook === "none") {
+  delete options.onPayload;
+} else if (values.hook === "service-tier") {
+  const host = getAiTransportHost();
+  const { createAnthropicServiceTierWrapper } =
+    await import("../../extensions/anthropic/stream-wrappers.js");
+  const { AssistantMessageEventStream } =
+    await import("../../packages/ai/src/utils/event-stream.js");
+  configureAiTransportHost(host);
+  await createAnthropicServiceTierWrapper((_model, _context, wrapped) => {
+    options.onPayload = wrapped?.onPayload;
+    return new AssistantMessageEventStream();
+  }, "auto")(model, context, options);
+  const probe = {};
+  await options.onPayload?.(probe, model);
+  assert.equal(Reflect.get(probe, "service_tier"), "auto");
+}
 const serialize =
-  values["baseline-dir"] && !values.images
+  values["baseline-dir"] && !values.images && !values.hook
     ? undefined
     : (await import("../../packages/ai/src/transports/anthropic-request-body.js"))
         .serializeAnthropicRequestBody;
@@ -220,6 +258,95 @@ async function collect(): Promise<void> {
     await setImmediate();
     globalThis.gc?.();
   }
+}
+if (values.diagnostics) {
+  assert(serialize);
+  const nativeStringify = JSON.stringify;
+  const NativeBlob = Blob;
+  const counts = {
+    messageEncodes: 0,
+    wholeEncodes: 0,
+    encodedBytes: 0,
+    assemblyMs: 0,
+    frozenChecks: 0,
+    frozenCheckMs: 0,
+  };
+  configureAiTransportHost({
+    ...getAiTransportHost(),
+    immutableData: {
+      freezeJsonSnapshot,
+      isPlainData,
+      isDeeplyFrozenPlainData(value) {
+        const start = performance.now();
+        const result = isDeeplyFrozenPlainData(value);
+        counts.frozenCheckMs += performance.now() - start;
+        counts.frozenChecks++;
+        return result;
+      },
+    },
+  });
+  JSON.stringify = (value, replacer, space) => {
+    const result =
+      typeof replacer === "function"
+        ? nativeStringify(value, replacer, space)
+        : nativeStringify(value, replacer, space);
+    if (value && typeof value === "object") {
+      const message = ["user", "assistant"].includes(Reflect.get(value, "role"));
+      const whole = Array.isArray(Reflect.get(value, "messages"));
+      if (message) {
+        counts.messageEncodes++;
+      }
+      if (whole) {
+        counts.wholeEncodes++;
+      }
+      if ((message || whole) && result) {
+        counts.encodedBytes += Buffer.byteLength(result);
+      }
+    }
+    return result;
+  };
+  globalThis.Blob = class extends NativeBlob {
+    constructor(...args: ConstructorParameters<typeof Blob>) {
+      const start = performance.now();
+      super(...args);
+      if (args[1]?.type === "application/json") {
+        counts.assemblyMs += performance.now() - start;
+      }
+    }
+  };
+  try {
+    for (const phase of ["cold", "warm", "appended"]) {
+      if (phase === "appended") {
+        messages.push(
+          freezeJsonSnapshot({ role: "user", timestamp: messageCount, content: "New tail" }),
+        );
+      }
+      for (const key of Object.keys(counts)) {
+        Reflect.set(counts, key, 0);
+      }
+      const prepared = await build();
+      const body = serialize(prepared.params, prepared.messageSources);
+      const wire = typeof body === "string" ? body : await body.text();
+      assert.equal(wire, nativeStringify(prepared.params));
+      console.log(
+        nativeStringify({
+          phase,
+          messages: prepared.params.messages.length,
+          hook: values.hook,
+          ...counts,
+          reusedMessageFragments: counts.wholeEncodes
+            ? 0
+            : prepared.params.messages.length - counts.messageEncodes,
+          wireBytes: Buffer.byteLength(wire),
+          sha256: hash("sha256", wire),
+        }),
+      );
+    }
+  } finally {
+    JSON.stringify = nativeStringify;
+    globalThis.Blob = NativeBlob;
+  }
+  process.exit(0);
 }
 if (values.retained) {
   assert(globalThis.gc, "--retained requires --expose-gc");
@@ -428,6 +555,8 @@ console.log(
     mode: values.mode,
     preparedSystem: values["prepared-system"],
     images: values.images ? 12 : 0,
+    turns: values.turns,
+    hook: values.hook,
     allocation: values.allocation,
     iterations,
     scenarioHashes,

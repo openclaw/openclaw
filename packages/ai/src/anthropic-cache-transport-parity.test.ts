@@ -291,57 +291,67 @@ describe("Anthropic immutable request bytes", () => {
     return { wire, encodedBody, payload };
   }
 
-  it("reuses frozen history bytes with an observer hook and preserves moving cache checkpoints", async () => {
-    let messages: Context["messages"] = [
-      { role: "user", content: 'Frozen "history" 🦞', timestamp: 0 },
-    ];
-    for (let turn = 0; turn < 3; turn++) {
-      messages = turn === 0 ? messages : appendToolTurn(messages, turn);
-      const latestAssistant = messages.at(-2);
-      if (latestAssistant?.role === "assistant") {
-        const call = latestAssistant.content.find((block) => block.type === "toolCall");
-        if (call?.type === "toolCall") {
-          call.arguments.values = Object.assign(["x"], { slice: 0, constructor: 0 });
+  it.each([false, true])(
+    "reuses growing frozen history with envelope edits=%s",
+    async (editEnvelope) => {
+      const hook: AnthropicOptions["onPayload"] = (payload) => {
+        if (editEnvelope && isRecord(payload)) {
+          payload.service_tier = "auto";
+        }
+      };
+      let messages: Context["messages"] = [
+        { role: "user", content: 'Frozen "history" 🦞', timestamp: 0 },
+      ];
+      for (let turn = 0; turn < 3; turn++) {
+        messages = turn === 0 ? messages : appendToolTurn(messages, turn);
+        const latestAssistant = messages.at(-2);
+        if (latestAssistant?.role === "assistant") {
+          const call = latestAssistant.content.find((block) => block.type === "toolCall");
+          if (call?.type === "toolCall") {
+            call.arguments.values = Object.assign(["x"], { slice: 0, constructor: 0 });
+          }
+        }
+        messages.forEach(freezeJsonSnapshot);
+        const first = await send(messages, hook);
+        expect(hash("sha256", first.wire)).toBe(hash("sha256", JSON.stringify(first.payload)));
+        const stringify = JSON.stringify;
+        let wholePayloadEncodes = 0;
+        let assistantEncodes = 0;
+        const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
+          if (isRecord(value) && value.model === model.id && Array.isArray(value.messages)) {
+            wholePayloadEncodes++;
+          }
+          if (isRecord(value) && value.role === "assistant") {
+            assistantEncodes++;
+          }
+          return stringify(value, replacer, space);
+        });
+        let repeated: Awaited<ReturnType<typeof send>>;
+        try {
+          repeated = await send(messages, hook);
+        } finally {
+          spy.mockRestore();
+        }
+        expect(wholePayloadEncodes).toBe(0);
+        expect(first.encodedBody).toBeInstanceOf(Blob);
+        expect(repeated.wire).toBe(first.wire);
+        expect(markerPaths(JSON.parse(repeated.wire))).toContain(
+          `messages[${turn * 2}].content[0]`,
+        );
+        if (turn > 0) {
+          expect(assistantEncodes).toBe(0);
+          expect(repeated.wire).toContain('"values":["x"]');
         }
       }
-      messages.forEach(freezeJsonSnapshot);
-      const first = await send(messages);
-      expect(hash("sha256", first.wire)).toBe(hash("sha256", JSON.stringify(first.payload)));
-      const stringify = JSON.stringify;
-      let wholePayloadEncodes = 0;
-      let assistantEncodes = 0;
-      const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
-        if (isRecord(value) && value.model === model.id && Array.isArray(value.messages)) {
-          wholePayloadEncodes++;
-        }
-        if (isRecord(value) && value.role === "assistant") {
-          assistantEncodes++;
-        }
-        return stringify(value, replacer, space);
-      });
-      let repeated: Awaited<ReturnType<typeof send>>;
-      try {
-        repeated = await send(messages);
-      } finally {
-        spy.mockRestore();
-      }
-      expect(wholePayloadEncodes).toBe(0);
-      expect(first.encodedBody).toBeInstanceOf(Blob);
-      expect(repeated.wire).toBe(first.wire);
-      expect(markerPaths(JSON.parse(repeated.wire))).toContain(`messages[${turn * 2}].content[0]`);
-      if (turn > 0) {
-        expect(assistantEncodes).toBe(0);
-        expect(repeated.wire).toContain('"values":["x"]');
-      }
-    }
-    const tail = { role: "user" as const, content: "First tail", timestamp: 10 };
-    const firstTail = await send([...messages, tail]);
-    tail.content = "Changed tail";
-    const changedTail = await send([...messages, tail]);
-    expect(changedTail.wire).toContain("Changed tail");
-    expect(changedTail.wire).not.toBe(firstTail.wire);
-    expect(changedTail.wire).toBe(JSON.stringify(changedTail.payload));
-  });
+      const tail = { role: "user" as const, content: "First tail", timestamp: 10 };
+      const firstTail = await send([...messages, tail]);
+      tail.content = "Changed tail";
+      const changedTail = await send([...messages, tail]);
+      expect(changedTail.wire).toContain("Changed tail");
+      expect(changedTail.wire).not.toBe(firstTail.wire);
+      expect(changedTail.wire).toBe(JSON.stringify(changedTail.payload));
+    },
+  );
 
   it("keeps checked history bytes when a hook later mutates its retained copy", async () => {
     configureAiTransportHost({
