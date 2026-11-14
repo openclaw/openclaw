@@ -550,7 +550,6 @@ it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
   async (stopSignal, { signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
-      mkdirSync(path.join(checkoutRoot, ".git"));
       const childPidPath = path.join(fixtureRoot, "child.pid");
       const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const childPath = path.join(fixtureRoot, "resistant-child.mjs");
