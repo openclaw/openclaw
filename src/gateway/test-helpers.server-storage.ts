@@ -34,5 +34,5 @@ export async function recreateGatewayTestStateDir(home: string, stateDir: string
   // at deletion so the recreated database never inherits that admission.
   await closeGatewayTestHomeDatabases(home);
   await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
-  await fs.mkdir(stateDir, { recursive: true });
+  await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
 }

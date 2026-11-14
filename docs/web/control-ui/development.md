@@ -274,8 +274,7 @@ post-commit work after DOM bindings. Hidden documents bypass frame scheduling;
 retained hidden panes park presentation until shown. Retiring the render-lifecycle
 scope cancels queued background work.
 
-The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
-structural update counts; chat-page unit tests cover intervening roster publications.
+Chat-page unit tests cover intervening roster publications.
 
 Session descriptors share connection-scoped reads. Full row changes invalidate
 them; unchanged ancestor references reuse the settled read. Swarm progress follows

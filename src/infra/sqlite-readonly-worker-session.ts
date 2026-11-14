@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import childProcess, { type ChildProcess, type SpawnOptions } from "node:child_process";
 import { Socket } from "node:net";
 import path from "node:path";
 import { serialize } from "node:v8";
@@ -88,7 +88,7 @@ export function createSqliteReadOnlyWorkerSession(
   const child: ChildProcess =
     transport.kind === "broker"
       ? transport.owner.spawn(executable, argv, spawnOptions)
-      : spawn(executable, argv, spawnOptions);
+      : childProcess.spawn(executable, argv, spawnOptions);
   recordChildProcessSpawn(
     executable,
     child,

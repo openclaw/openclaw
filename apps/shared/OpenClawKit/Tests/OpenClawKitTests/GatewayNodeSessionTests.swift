@@ -4496,21 +4496,44 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `server event subscription filters before buffering`() async {
+    func `server event overflow counts only admitted drops until cancellation`() async {
         let gateway = GatewayNodeSession()
         let subscription = await gateway.makeServerEventSubscription(
             bufferingNewest: 1,
             matching: { $0.event == "target" })
-        defer { subscription.cancel() }
-        let stream = subscription.events
+        let fast = await gateway.makeServerEventSubscription(bufferingNewest: 1)
+        defer {
+            subscription.cancel()
+            fast.cancel()
+        }
+        var fastIterator = fast.events.makeAsyncIterator()
+        for sequence in 1...8 {
+            let counts = await gateway._test_broadcastServerEvent(
+                EventFrame(type: "event", event: "target", seq: sequence))
+            #expect(counts == [0, sequence - 1])
+            #expect(await fastIterator.next()?.seq == sequence)
+            let afterNoise = await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+            #expect(afterNoise == counts)
+            #expect(await fastIterator.next()?.event == "noise")
+        }
 
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "target"))
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+        subscription.cancel()
+        // Exercise .terminated as well as the scheduled onTermination cleanup.
+        // Either path must discard the old counter without recording another drop.
+        let afterCancel = await gateway._test_broadcastServerEvent(
+            EventFrame(type: "event", event: "target", seq: 9))
+        #expect(afterCancel == [0])
+        #expect(await fastIterator.next()?.seq == 9)
+        var iterator = subscription.events.makeAsyncIterator()
+        #expect(await iterator.next()?.seq == 8)
+        #expect(await iterator.next() == nil)
 
-        var iterator = stream.makeAsyncIterator()
-        let event = await iterator.next()
-        #expect(event?.event == "target")
+        let replacement = await gateway.makeServerEventSubscription(bufferingNewest: 1)
+        defer { replacement.cancel() }
+        let afterReplacement = await gateway._test_broadcastServerEvent(
+            EventFrame(type: "event", event: "target", seq: 10))
+        #expect(afterReplacement == [0, 0])
+        #expect(await fastIterator.next()?.seq == 10)
     }
 
     @Test
