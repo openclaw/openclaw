@@ -285,28 +285,26 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/gateway/session-utils.search.test.ts",
     watchGlobs: ["src/agents/identity-file.worker.ts"],
   },
-  ...[
-    "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
-    "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
-      "src/gateway/worker-environments/placement-turn-claims.worker.ts",
-    ],
-  })),
-  ...[
-    "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
-    "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/gateway/worker-environments/store.kernel.ts",
-      "src/gateway/worker-environments/store.worker.ts",
-      "src/state/openclaw-state-worker-registry.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  })),
+  ...["src/gateway/worker-environments/worker-turn-launcher-media.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/gateway/worker-environments/placement-lifecycle.worker.ts",
+        "src/gateway/worker-environments/placement-turn-claims.worker.ts",
+      ],
+    }),
+  ),
+  ...["src/gateway/worker-environments/worker-turn-launcher-media.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/gateway/worker-environments/store.kernel.ts",
+        "src/gateway/worker-environments/store.worker.ts",
+        "src/state/openclaw-state-worker-registry.ts",
+        "src/state/openclaw-state.worker.ts",
+      ],
+    }),
+  ),
   {
     testFile: "test/scripts/crabbox-wrapper.test.ts",
     watchGlobs: [
@@ -506,10 +504,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state-worker-registry.ts",
     ],
   })),
-  {
-    testFile: "src/agents/model-auth.profiles.test.ts",
-    watchGlobs: ["src/agents/auth-profiles/store.worker.ts"],
-  },
   {
     testFile: "src/agents/sandbox/registry-read.test.ts",
     watchGlobs: [

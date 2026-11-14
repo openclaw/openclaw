@@ -3237,7 +3237,7 @@ const dockerDigests = "src/docker-image-digests.test.ts";
 const openaiChatToolsE2e = "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts";
 const npmPostpublish = "test/openclaw-npm-postpublish-verify.test.ts";
 const crossOsReleaseChecks = "openclaw-cross-os-release-checks";
-const runNode = "src/infra/run-node.test.ts";
+const runNode = "test/openclaw-launcher.e2e.test.ts";
 const pluginSdkEntryOwners = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
