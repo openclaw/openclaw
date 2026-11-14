@@ -678,7 +678,6 @@
   font-size: 12px;
 }
 
-.agent-chat__dictation-phase,
 .chat-controls__account-selection {
   min-width: 0;
   overflow: hidden;
@@ -687,10 +686,9 @@
   white-space: nowrap;
 }
 
-/* The startup label can become the microphone permission hint; keep that recovery text whole. */
-.agent-chat__dictation-phase--starting {
-  overflow: visible;
-  white-space: normal;
+/* Phase labels wrap: the startup label can become the microphone permission hint. */
+.agent-chat__dictation-phase {
+  color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {

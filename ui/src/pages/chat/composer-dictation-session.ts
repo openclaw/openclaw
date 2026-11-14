@@ -11,6 +11,7 @@ import {
   RealtimeTalkPcmInputPump,
 } from "./talk/audio.ts";
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -59,6 +60,8 @@ export class ComposerDictationSession {
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
+  // Live microphone level for the listening meter; lives with the lazily loaded capture.
+  readonly inputLevel = new RealtimeTalkLevelSignal();
   private unsubscribe: (() => void) | null = null;
   private sessionId: string | null = null;
   private transcriptionSessionId: string | null = null;
@@ -150,10 +153,11 @@ export class ComposerDictationSession {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
       }
     });
-    if (this.callbacks.onLevel) {
-      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
-      this.inputMeter.start(media, context);
-    }
+    this.inputMeter = new RealtimeTalkMediaStreamMeter((level) => {
+      this.inputLevel.set(level);
+      this.callbacks.onLevel?.(level);
+    });
+    this.inputMeter.start(media, context);
     this.inputPump.start(media, context, (samples) => {
       if (this.stopped) {
         return;
