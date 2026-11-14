@@ -1,6 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import type { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
@@ -61,10 +62,75 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
   return typeof res.stdout === "string" ? res.stdout : "";
 }
 
+const MAX_PUBLICATION_LINK_HOPS = 40;
+
+// Publish to the final path a Corefile symlink chain names, including a chain
+// that dangles because the target file does not exist yet: the previous
+// writeFileSync created that target, and fs-safe rejects the link itself.
+function resolvePublicationTarget(filePath: string): string {
+  let current = filePath;
+  for (let hops = 0; ; hops += 1) {
+    if (hops > MAX_PUBLICATION_LINK_HOPS) {
+      throw Object.assign(new Error(`too many symbolic links while resolving ${filePath}`), {
+        code: "ELOOP",
+      });
+    }
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (err) {
+      // SAFETY: lstatSync throws ErrnoException with code on missing targets.
+      if ((err as { code?: string }).code !== "ENOENT") {
+        throw err;
+      }
+      break;
+    }
+    if (!stat.isSymbolicLink()) {
+      break;
+    }
+    current = path.resolve(path.dirname(current), fs.readlinkSync(current));
+  }
+  const existingDir = path.dirname(current);
+  // A missing parent must fail like writeFileSync instead of creating the tree.
+  return path.join(fs.realpathSync(existingDir), path.basename(current));
+}
+
+// A rename publishes a new inode, and preserveExistingMode carries only rwx
+// bits, so an operator Corefile's uid/gid would silently become ours. EPERM is
+// left to the caller's sudo fallback, which edits the existing inode in place.
+function preservePublicationOwnership(filePath: string, tempPath: string): void {
+  const existing = fs.lstatSync(filePath, { throwIfNoEntry: false });
+  if (!existing?.isFile()) {
+    return;
+  }
+  const staged = fs.lstatSync(tempPath);
+  if (staged.uid !== existing.uid || staged.gid !== existing.gid) {
+    fs.chownSync(tempPath, existing.uid, existing.gid);
+  }
+}
+
 function writeFileSudoIfNeeded(filePath: string, content: string): void {
   // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
   try {
-    fs.writeFileSync(filePath, content, "utf-8");
+    // Operator-owned files (Corefile, .server) must never be truncated in place:
+    // a crash or ENOSPC during the write must leave the previous contents
+    // exactly as they were, published by temp-file + rename (#184888).
+    const targetPath = resolvePublicationTarget(filePath);
+    const existingDir = path.dirname(targetPath);
+    // fs-safe applies dirMode to the immediate parent; match the current mode
+    // instead of its 0700 default. New directories use 0755.
+    const dirMode = fs.existsSync(existingDir) ? fs.statSync(existingDir).mode & 0o7777 : 0o755;
+    replaceFileAtomicSync({
+      filePath: targetPath,
+      content,
+      // Existing operator files keep their rwx bits; ancestor directories keep
+      // their modes instead of the fs-safe 0700 default (#184888).
+      preserveExistingMode: true,
+      // New files keep writeFileSync's umask-respecting default, not fs-safe's 0600.
+      mode: 0o666 & ~process.umask(),
+      dirMode,
+      beforeRename: ({ tempPath }) => preservePublicationOwnership(targetPath, tempPath),
+    });
     return;
   } catch (err) {
     const code = (err as { code?: string }).code;
