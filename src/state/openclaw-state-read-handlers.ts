@@ -8,7 +8,7 @@ import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js
 import {
   isConfigMachineStateReadCommand,
   readConfigMachineStateCommandInDatabase,
-} from "./config-machine-state.js";
+} from "./config-machine-state.read.worker.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 /** Load only the selected query owner before entering its synchronous database read. */
 export async function prepareOpenClawStateRead(

@@ -6,6 +6,7 @@
 // order per sample against --build-dir <candidate>, reporting both arms for each worker.
 // --prewarm-history measures foreground transcript workers' eager presentation imports.
 // --transcript-task prewarm includes explicit history presentation preparation in the first task.
+// --state-task machine-state reads a persisted synthetic machine-state row in the first task.
 // Example: node --import ./scripts/tsx.mjs scripts/perf/worker-spawn-measure.mjs --built --build-dir . --samples 5 --output .local/spawn/built.json
 // Run arms in alternating order. Every sample owns a fresh isolate; one unmeasured preparation
 // isolate per owner caches transpiled source bytes in source mode. Built mode uses the shipped
@@ -188,6 +189,7 @@ if (!isMainThread) {
       worker: { type: "string" },
       "prewarm-history": { type: "boolean" },
       "transcript-task": { type: "string", default: "sqlite-target" },
+      "state-task": { type: "string", default: "admit" },
       "baseline-dir": { type: "string" },
       built: { type: "boolean" },
       "build-dir": { type: "string" },
@@ -211,6 +213,11 @@ if (!isMainThread) {
     ["sqlite-target", "prewarm"].includes(values["transcript-task"]) &&
       (values["transcript-task"] === "sqlite-target" || values.worker === "session-transcript"),
     "--transcript-task prewarm requires --worker session-transcript",
+  );
+  assert(
+    ["admit", "machine-state"].includes(values["state-task"]) &&
+      (values["state-task"] === "admit" || values.worker === "openclaw-state-read"),
+    "--state-task machine-state requires --worker openclaw-state-read",
   );
   const baselineDir = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
   // Keep this parent-only directory walker outside the measured worker import graph.
@@ -348,10 +355,12 @@ if (!isMainThread) {
     }
     if (name === "openclaw-state-read") {
       return {
-        command: { type: "admit" },
+        command: {
+          type: values["state-task"] === "machine-state" ? "voicewake.triggers" : "admit",
+        },
         checkFreshAdmission: false,
         databasePath: path.join(state, "openclaw.db"),
-        location: state,
+        location: path.join(state, "openclaw.db"),
         context: { environment },
       };
     }
@@ -437,7 +446,14 @@ if (!isMainThread) {
     } else {
       assert.equal(reply.ok, true, JSON.stringify(reply));
       if (name === "openclaw-state-read") {
-        assert.equal(reply.type, "admit");
+        assert.equal(
+          reply.type,
+          values["state-task"] === "machine-state" ? "voicewake.triggers" : "admit",
+        );
+        if (values["state-task"] === "machine-state") {
+          assert.equal(reply.sourceAdmitted, true);
+          assert.deepEqual(JSON.parse(reply.row.value_json), { triggers: ["benchmark"] });
+        }
       } else if (name === "git-operation") {
         assert.equal(reply.value.headBranch, "main");
       } else if (name === "session-transcript" && values["transcript-task"] === "prewarm") {
@@ -446,6 +462,18 @@ if (!isMainThread) {
         assert.equal(reply.value.target.agentId, "benchmark");
       }
     }
+  }
+  if (values["state-task"] === "machine-state") {
+    // Fixture creation uses the database owner and stays outside measured intervals.
+    const { writeConfigMachineState } =
+      await import("../../src/state/config-machine-state-write.js");
+    const { closeOpenClawStateDatabase } = await import("../../src/state/openclaw-state-db.js");
+    writeConfigMachineState(
+      "voicewake.triggers",
+      { triggers: ["benchmark"] },
+      { env: environment, path: path.join(state, "openclaw.db") },
+    );
+    closeOpenClawStateDatabase();
   }
   let reconcile;
   async function run(name, cache, prepare, releaseTask, selectedBuildRoot = buildRoot) {
@@ -653,6 +681,7 @@ if (!isMainThread) {
     built: values.built === true,
     prewarmHistory: values["prewarm-history"] === true,
     transcriptTask: values["transcript-task"],
+    stateTask: values["state-task"],
     buildRoot: values.built ? buildRoot : null,
     comparisonRoot: comparisonRoot ?? null,
     order: comparisonRoot ? "AB/BA per sample: base then candidate on even indices" : "single arm",
@@ -664,7 +693,9 @@ if (!isMainThread) {
       "Cold load count is source-loader-only; census excludes the benchmark module but source mode includes loader modules",
       "Reconcile measures release of an existing synthetic lease, not transcript indexing; fixture admission is outside timing",
       "First-task counters include task transport and host wait, not host Git subprocess CPU",
-      "State admit does not open a database; transcript sqlite-target uses an explicit agent path",
+      values["state-task"] === "machine-state"
+        ? "State machine-state reads a persisted synthetic row through database admission"
+        : "State admit does not open a database; transcript sqlite-target uses an explicit agent path",
       "No full Gateway load, main-thread CPU, RSS, or GC/promotion claim",
     ],
   };
