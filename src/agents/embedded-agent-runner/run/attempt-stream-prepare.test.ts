@@ -122,13 +122,6 @@ describe("prepareEmbeddedAttemptStream", () => {
       const controller = new AbortController();
       const prepared = prepareCatalogExecutor({
         runAbortController: controller,
-        activeSession: {
-          agent: { hasQueuedMessages: () => false },
-          isStreaming: false,
-          messages: [],
-          pendingMessageCount: 0,
-          subscribe: () => () => {},
-        } as never,
         hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       });
       const event = {
