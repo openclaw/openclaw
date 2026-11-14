@@ -8,6 +8,7 @@ import { normalizeMediaFacts, resolveMediaFacts } from "../../../media/media-fac
 import * as utils from "../../../utils.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import { registerAgentWorkspaceAccess } from "../../workspace-access.js";
 import {
   detectAndLoadPromptImages,
   hasHydratableMediaImages,
@@ -248,6 +249,42 @@ describe("fact-carried image references", () => {
       sandbox: sandboxAt(sandboxRoot),
     });
     expect(result.images[0]).toMatchObject(image());
+  });
+
+  it("reads a staged sandbox copy when the workspace binding can prepare attachments", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-native-image-staged-bound-");
+    const mediaId = "bound-photo.png";
+    const stagedPath = `media/inbound/${mediaId}`;
+    await writeImage(sandboxRoot, stagedPath);
+    const release = registerAgentWorkspaceAccess(sandboxRoot, {
+      bridge: createHostSandboxFsBridge(sandboxRoot),
+      prepareTurnAttachments: async () => undefined,
+    });
+
+    try {
+      const result = await loadImages({
+        prompt: "",
+        media: [
+          {
+            path: stagedPath,
+            url: `media://inbound/${mediaId}`,
+            staged: true,
+            contentType: "image/png",
+          },
+        ],
+        workspaceDir: sandboxRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(sandboxRoot),
+      });
+
+      expect(result).toMatchObject({
+        loadedCount: 1,
+        failedMediaCount: 0,
+        images: [image()],
+      });
+    } finally {
+      release();
+    }
   });
 
   it.each([false, true])(

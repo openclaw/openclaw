@@ -170,7 +170,7 @@ function rawAliasDedupeKey(alias: string): string | undefined {
 }
 
 async function loadMediaFromRef(
-  ref: MediaFileRef & { workspaceDir?: string },
+  ref: MediaFileRef & { workspaceDir?: string; staged?: boolean },
   options: PromptMediaOptions,
   label: string,
   attachment = false,
@@ -179,6 +179,7 @@ async function loadMediaFromRef(
   // Admitted managed originals belong to Gateway; staged and discovered paths stay sandboxed.
   const gatewayAttachment =
     attachment &&
+    ref.staged !== true &&
     Boolean(
       ref.type === "media-uri" ||
       getAgentWorkspaceAccess(
