@@ -489,17 +489,17 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
     ],
   })),
-  ...[
-    "src/agents/sessions/session-manager-model-context.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/agents/sessions/session-manager-metadata.worker.ts",
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-    ],
-  })),
+  ...["src/agents/sessions/session-manager-model-context.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/agents/sessions/session-manager-metadata.worker.ts",
+        "src/config/sessions/session-transcript-reconcile.worker.ts",
+        "src/config/sessions/session-transcript.worker.ts",
+        "src/infra/sqlite-store.worker.ts",
+      ],
+    }),
+  ),
   ...[
     "src/agents/shell-snapshot.broker.test.ts",
     "src/process/spawn-broker/cleanup.test.ts",
@@ -778,14 +778,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-agent-execution.worker.ts",
     ],
   })),
-  {
-    testFile: "src/config/sessions/session-accessor.sqlite-deletion.test.ts",
-    watchGlobs: [
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-    ],
-  },
   ...[
     "src/config/sessions/session-accessor.sqlite-participants.test.ts",
     "src/config/sessions/session-logical-entry-read.worker.test.ts",

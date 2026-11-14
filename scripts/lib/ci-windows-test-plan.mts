@@ -110,7 +110,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/shared/worker-bundle-archive.test.ts": 4,
   "src/snapshot/local-repository.windows.test.ts": 3.7,
   "src/state/openclaw-database-paths.windows.test.ts": 8.8,
-  "src/state/openclaw-state-ownership.test.ts": 12.9,
   "src/test-utils/openclaw-test-state.test.ts": 10.5,
   "src/tui/tui.resolve-codex-bin.test.ts": 10.3,
   "src/utils.test.ts": 1.3,
