@@ -50,6 +50,56 @@ import Testing
         #expect(GatewayConnectionIssue.addingEndpointGuidance(to: timeout, host: "gateway.example.com") == timeout)
     }
 
+    /// A gateway behind Tailscale Serve listens on loopback only: dialing its tailnet address on the
+    /// gateway port is refused while Tailscale works. The message named neither the address nor the
+    /// fix and told the user to open Tailscale.
+    @Test @MainActor func `refused tailnet route names the address and the working route`() throws {
+        let model = NodeAppModel()
+        defer { model.disconnectGateway() }
+        model.activeGatewayConnectConfig = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://100.77.74.91:18809")),
+            stableID: "refused-route-test",
+            tls: nil,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+
+        let problem = model.mapNodeGatewayConnectionError(URLError(.cannotConnectToHost))
+
+        #expect(problem.kind == .connectionRefused)
+        #expect(problem.localizedMessage.contains("100.77.74.91:18809"))
+        #expect(problem.localizedMessage.contains("Tailscale Serve"))
+        #expect(!problem.localizedMessage.contains("install or open Tailscale"))
+        #expect(problem.actionCommand == "openclaw qr")
+        #expect(problem.docsURL == GatewayConnectionIssue.tailscaleServeDocsURL)
+        #expect(problem.retryable && !problem.pauseReconnect)
+        #expect(GatewayConnectionIssue.addingEndpointGuidance(
+            to: problem, host: "100.77.74.91", port: 18809) == problem)
+    }
+
+    @Test func `transport failures name the dialed address once`() throws {
+        let timeout = try #require(GatewayConnectionProblemMapper.map(error: URLError(.timedOut)))
+        let named = GatewayConnectionIssue.addingEndpointGuidance(
+            to: timeout, host: "gateway.example.com", port: 18789)
+        #expect(named.localizedMessage.contains("Address: gateway.example.com:18789"))
+        #expect(named.docsURL == timeout.docsURL)
+        #expect(GatewayConnectionIssue.addingEndpointGuidance(
+            to: named, host: "gateway.example.com", port: 18789) == named)
+
+        // A message that already names its address (TLS probe failures) is left as it is.
+        let probe = GatewayConnectionProblem(
+            kind: .reachabilityFailed,
+            owner: .network,
+            title: "Gateway is not reachable",
+            message: "Can't reach gateway at gateway.example.com:18789.",
+            messagePresentation: .verbatim("Can't reach gateway at gateway.example.com:18789."),
+            retryable: true,
+            pauseReconnect: false)
+        #expect(GatewayConnectionIssue.addingEndpointGuidance(
+            to: probe, host: "gateway.example.com", port: 18789) == probe)
+    }
+
     @Test(arguments: [
         GatewayConnectionProblem.Kind.gatewayAuthTokenMismatch, .pairingRequired, .tlsPinMismatch,
         .tlsCertificateUnavailable, .websocketCancelled,
