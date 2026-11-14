@@ -155,9 +155,10 @@ it("drains dependent readers before retiring warm executors during shutdown", as
   await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual([]);
   beginGatewayShutdownCleanup();
-  await borrowing.release();
-  await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual([]);
+  await borrowing.release();
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(closedAgents()).toEqual(["second"]);
   await closeOpenClawAgentDatabasesAsync();
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);

@@ -188,7 +188,7 @@ it.each([false, true])(
       beginGatewayShutdownCleanup();
       const cleanupThread = await following.execute(append("cleanup"), allow);
       expect(cleanupThread).toBe(firstThread);
-      expect(readLeases()).toEqual(retainedLeases);
+      expect(readLeases()).toEqual(retainGeneration ? retainedLeases : hostLeases);
       expectValues(db, ["first", "second", "third", "cleanup"]);
       await following.close();
       await execution?.release();

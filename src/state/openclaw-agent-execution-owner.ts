@@ -615,8 +615,8 @@ export function createAgentDatabaseExecution(
       return borrowed;
     },
     async closeIdle() {
-      // Shutdown drains dependent readers before retiring the native writer.
-      if (getGatewayShutdownCleanupSignal().aborted) {
+      // Shutdown drains retained idle owners after readers; active borrowers still join close.
+      if (getGatewayShutdownCleanupSignal().aborted && executionState.idle.has(owner)) {
         return;
       }
       await closeNative();
