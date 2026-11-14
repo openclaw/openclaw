@@ -52,7 +52,9 @@ export function canReceiveSessionEvent(params: {
   event?: string;
   payload?: unknown;
   prepared: {
-    sharing: ReturnType<typeof prepareSessionSharing>;
+    sharing:
+      | ReturnType<typeof prepareSessionSharing>
+      | (() => ReturnType<typeof prepareSessionSharing>);
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
 }): boolean {
@@ -79,7 +81,8 @@ export function canReceiveSessionEvent(params: {
       event !== "session.typing"
     );
   }
-  const sharing = params.prepared.sharing;
+  const preparedSharing = params.prepared.sharing;
+  const sharing = typeof preparedSharing === "function" ? preparedSharing() : preparedSharing;
   const authorId =
     event === "session.suggestion" && params.payload && typeof params.payload === "object"
       ? (params.payload as { suggestion?: { author?: { id?: unknown } } }).suggestion?.author?.id // SAFETY: publishSuggestion emits SessionSuggestionEvent; this only reads the optional author id.
