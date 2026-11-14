@@ -126,7 +126,7 @@ function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boo
         value.every(
           (effort) =>
             typeof effort === "string" &&
-            /^(minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
+            /^(none|minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
         )
       );
     }
