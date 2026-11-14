@@ -106,7 +106,8 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   json(sdkConfig, {
     extends: "../../tsconfig.json",
     include: ["../../src/**/*.ts"],
-    exclude: ["../../src/shared/deferred.ts"],
+    // The emitter's own source dependency is tooling, not a fixture SDK root.
+    exclude: ["../../src/shared/deferred.ts", "../../src/infra/directory-walk.ts"],
   });
   write(sdkCore, 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
@@ -114,6 +115,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
     ...resolvePreparationSources().filter((file) => !file.startsWith("src/")),
     "src/shared/deferred.ts",
+    "src/infra/directory-walk.ts",
     "packages/normalization-core/package.json",
   ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
