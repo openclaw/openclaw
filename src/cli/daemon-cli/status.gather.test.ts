@@ -66,6 +66,7 @@ import {
   createStatusCommand,
   registerServiceInspectionStatusTests,
 } from "./status.gather.service-inspection.test-support.js";
+import { registerStatusSystemdScanTests } from "./status.gather.systemd.test-support.js";
 import { registerStatusTimeoutTests } from "./status.gather.timeout.test-support.js";
 
 const readFile = fs.readFile.bind(fs);
@@ -96,6 +97,7 @@ const fetchNpmPackageTargetStatus = vi.fn(
 const findSystemdGatewayInstallation = vi.fn<
   typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
 >(async () => ({ kind: "none" }));
+
 const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
   applies: false,
   severity: "info" as const,
@@ -1227,32 +1229,10 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("reports dueling systemd diagnosis for its native target", async () => {
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    findSystemdGatewayInstallation.mockResolvedValue({
-      kind: "dueling",
-      user: {
-        scope: "user",
-        unitName: "openclaw-gateway.service",
-        unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
-      },
-      system: {
-        scope: "system",
-        unitName: "openclaw-gateway.service",
-        unitPath: "/etc/systemd/system/openclaw-gateway.service",
-      },
-    });
-    try {
-      const status = await gatherStatus({ probe: false, deep: true });
-      const printed = capturePrintedDaemonStatus(status, { json: false, deep: true });
-      const output = `${printed.logs}\n${printed.errors}`;
-      expect(output.match(/they will SIGTERM each other/g)).toHaveLength(1);
-      expect(output).toContain(status.gateway?.duelingScopesWarning);
-      expect(output).toContain("Run `openclaw doctor` interactively");
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-    }
+  registerStatusSystemdScanTests({
+    gatherStatus: (deep) => gatherStatus({ probe: false, deep }),
+    capturePrintedDaemonStatus,
+    findSystemdGatewayInstallation,
   });
 
   registerStatusLaunchdScanTests({

@@ -25,6 +25,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   readGatewayLastShutdownAsync,
   readGatewayRecentCrashesAsync,
@@ -37,6 +38,7 @@ import type { PortConnection } from "../../infra/ports-types.js";
 import { readGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
 import { describeUnreadableStateDatabase } from "../../infra/state-repair-message.js";
 import { inspectWindowsGatewayFirewall } from "../../infra/windows-gateway-firewall-diagnostics.js";
+import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
 import {
@@ -259,13 +261,21 @@ async function gatherDaemonStatusImpl(
       )
     : undefined;
   let duelingScopesWarning: string | null = null;
+  let duelingScopesWarningError: string | undefined;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
       await import("../../daemon/systemd-scope.js");
-    const installation = await findSystemdGatewayInstallation(serviceEnv).catch(() => null);
-    duelingScopesWarning = installation
-      ? formatDuelingScopesWarning(installation, daemonPort)
-      : null;
+    try {
+      const installation = await findSystemdGatewayInstallation(serviceEnv);
+      duelingScopesWarning = installation
+        ? formatDuelingScopesWarning(installation, daemonPort)
+        : null;
+    } catch (error: unknown) {
+      duelingScopesWarningError = redactSupportDiagnosticLine(formatErrorMessage(error), {
+        env: process.env,
+        stateDir: resolveStateDir(process.env),
+      });
+    }
   }
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
@@ -575,6 +585,7 @@ async function gatherDaemonStatusImpl(
       ...crashHistory,
       ...(lastShutdown ? { lastShutdown } : {}),
       ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
+      ...(duelingScopesWarningError ? { duelingScopesWarningError } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
       ...(opts.probe
         ? {
