@@ -34,7 +34,6 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
     props.library.edit((state) => {
       state.draft!.files = state.draft!.files.filter((file) => file.path !== path);
       state.draft!.selectedFile = "SKILL.md";
-      state.draft!.dirty = true;
     });
   };
   const text = createMemo(() =>
@@ -44,7 +43,7 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
         ? libraryFileText(support()!)
         : null,
   );
-  const mutationLocked = () => disabled() || draft().dirty;
+  const mutationLocked = () => disabled() || props.library.isDirty();
   const changeText = (value: string) => {
     if (disabled()) {
       return;
@@ -55,10 +54,11 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
         active.content = value;
       } else {
         active.files = active.files.map((file) =>
-          file.path === active.selectedFile ? { ...file, content: value, encoding: "utf8" } : file,
+          file.path === active.selectedFile
+            ? Object.assign({}, file, { content: value, encoding: "utf8" as const })
+            : file,
         );
       }
-      active.dirty = true;
     });
   };
   const MutationButton = (button: {
@@ -97,7 +97,7 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
               disabled={
                 disabled() ||
                 Boolean(draft().importedFiles && !props.library.uploadsEnabled()) ||
-                !draft().dirty ||
+                !props.library.isDirty() ||
                 !draft().content.trim()
               }
             >
@@ -155,7 +155,6 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
           onInput={(event) =>
             props.library.edit((state) => {
               state.draft!.slug = event.currentTarget.value;
-              state.draft!.dirty = true;
             })
           }
         />
@@ -204,7 +203,6 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
                 state.draft!.files = state.draft!.files.map((file) =>
                   file.path === path ? Object.assign({}, file, { executable }) : file,
                 );
-                state.draft!.dirty = true;
               })
             }
           />
@@ -263,7 +261,6 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
                   const active = state.draft!;
                   active.files = [...active.files, { path, content: "", encoding: "utf8" }];
                   active.selectedFile = path;
-                  active.dirty = true;
                 }
               });
               if (!exists) {
