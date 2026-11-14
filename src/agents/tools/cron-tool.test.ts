@@ -672,6 +672,25 @@ it("fails incomplete inherited and unknown finite adds while preserving known fi
   });
 });
 
+it("names an unavailable canonical native tool instead of blaming MCP capture", async () => {
+  const tool = createTestCronTool({
+    ...restrictedCaller,
+    creatorToolAllowlist: [
+      { name: "read" },
+      { name: "exec", aliasName: "gateway_exec", execTarget: { host: "gateway", ask: "always" } },
+    ],
+    creatorToolAllowlistCaptureRef: {},
+  });
+
+  await expect(
+    tool.execute(
+      "call-native-process-not-captured",
+      addJob({ payload: agentTurn({ toolsAllow: ["read", "exec", "process"] }) }),
+    ),
+  ).rejects.toThrow('Requested automation tool "process" cannot be carried');
+  expect(callGatewayMock).not.toHaveBeenCalled();
+});
+
 it("caps a systemEvent trigger-script update to the creator tool surface", async () => {
   callGatewayMock.mockResolvedValueOnce({
     id: "job-trigger",

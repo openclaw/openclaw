@@ -270,14 +270,19 @@ function explicitFiniteToolsNeedResolution(
   if (!Array.isArray(toolsAllow)) {
     return false;
   }
+  if (creatorToolAllowlist === undefined) {
+    return true;
+  }
   const creatorNames = new Set(
-    normalizeCronCreatorToolsAllow(creatorToolAllowlist ?? []).flatMap((tool) =>
+    normalizeCronCreatorToolsAllow(creatorToolAllowlist).flatMap((tool) =>
       tool.aliasName ? [tool.name, tool.aliasName] : [tool.name],
     ),
   );
+  // Deferred MCP discovery cannot supply a missing canonical core tool; let
+  // the normal capper reject that native selector precisely below.
   return expandToolGroups(
     toolsAllow.filter((entry): entry is string => typeof entry === "string"),
-  ).some((name) => !creatorNames.has(name));
+  ).some((name) => !creatorNames.has(name) && !NATIVE_CRON_CREATOR_CAPABILITIES.has(name));
 }
 
 /** Resolve the requested selection before deciding which creator authority is needed. */
