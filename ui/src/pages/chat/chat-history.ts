@@ -18,6 +18,7 @@ import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-histor
 import { clearHistoryCursor, historySessionId } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
+  getAcceptedChatHistorySession,
   getChatHistoryLoadState,
   setChatHistoryLoad,
 } from "./chat-history-state.ts";
@@ -127,20 +128,13 @@ export async function loadChatHistory(
     if (!opts.supersedeInFlight && inFlight.key === requestKey) {
       return inFlight.promise;
     }
-    const accepted = requests.acceptedHistory;
     // An append cannot be erased before any transcript is shown, and the refresh
     // still follows. Retiring the first read anyway lets a busy run's appends keep
     // the chat loading forever.
-    const keepsFirstPublication =
-      opts.supersedeInFlight === "append" &&
-      !(
-        accepted?.sessionKey === sessionKey &&
-        accepted.requestAgentId === requestAgentId &&
-        accepted.client === client &&
-        accepted.sessions === sessions &&
-        accepted.connectionEpoch === connectionEpoch
-      );
-    const version = keepsFirstPublication ? requests.historyVersion : ++requests.historyVersion;
+    const version =
+      opts.supersedeInFlight === "append" && !getAcceptedChatHistorySession(state)
+        ? requests.historyVersion
+        : ++requests.historyVersion;
     const refresh = {
       startup: startup || inFlight.startup,
       deferBranches: opts.deferBranches === true,

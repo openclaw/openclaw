@@ -56,7 +56,7 @@ type ChatPanePresentation = () => boolean;
 function refreshChatEventHistory(
   state: ChatPageHost,
   presented: boolean,
-  supersedeInFlight?: true,
+  supersedeInFlight?: true | "append",
 ): void {
   void loadChatHistory(state, {
     deferBranches: !presented,
@@ -132,10 +132,7 @@ function handleSessionMessageEvent(
     // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
     // Fence it before run settlement, while retaining the loader's single queued refresh.
     if (getChatHistoryLoadState(state).phase === "in-flight") {
-      void loadChatHistory(state, {
-        deferBranches: !presentation(),
-        supersedeInFlight: "append",
-      });
+      refreshChatEventHistory(state, presentation(), "append");
     }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
