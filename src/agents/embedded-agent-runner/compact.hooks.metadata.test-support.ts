@@ -6,6 +6,7 @@ import {
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
@@ -13,9 +14,11 @@ import type {
 import type { AuthStorage } from "../sessions/auth-storage.js";
 
 export type CompactHooksQueuedCompaction = (
-  params: Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[0],
-  host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
-) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
+  params: Parameters<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>[0],
+  host?: Partial<
+    Parameters<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>[1]
+  >,
+) => ReturnType<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>;
 
 const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 
@@ -135,3 +138,8 @@ export type MockResolvedModel = {
   authStorage: Pick<AuthStorage, "setRuntimeApiKey" | "getApiKey">;
   modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
 };
+
+export function createDefaultCompactionAuthStore(): AuthProfileStore {
+  const profile = { type: "api_key", provider: "openai", key: "test" } as const;
+  return { version: 1, profiles: { "openai:test": profile }, order: { openai: ["openai:test"] } };
+}

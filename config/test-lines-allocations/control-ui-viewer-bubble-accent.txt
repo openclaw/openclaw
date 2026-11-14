@@ -1,2 +1,0 @@
-# Regression test: right-side (viewer) bubbles keep the accent when the viewer profile is unknown (#190459).
-15

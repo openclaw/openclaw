@@ -130,7 +130,7 @@ function WorktreeFields(props: {
     />
   );
   return (
-    <>
+    <div class="new-session-page__checkout-fields">
       <div class="new-session-page__menu-field">
         <span>{t("newSession.worktreeBaseRef")}</span>
         {suggestions().length ? (
@@ -203,15 +203,13 @@ function WorktreeFields(props: {
         )}
       </div>
       <RepositoryRead read={props.params.place.repositoryState.repositoryRead}>
-        {() => (
-          <div class="new-session-page__menu-note">
-            {t(
-              branches()?.branchesUnavailable
-                ? "newSession.worktreeBranchesUnavailable"
-                : "newSession.worktreeBranchesLimited",
-            )}
-          </div>
-        )}
+        {() =>
+          branches()?.branchesUnavailable ? (
+            <div class="new-session-page__menu-note" role="status">
+              {t("newSession.worktreeBranchesUnavailable")}
+            </div>
+          ) : undefined
+        }
       </RepositoryRead>
       {props.params.place.remoteRepository ? undefined : (
         <>
@@ -234,7 +232,7 @@ function WorktreeFields(props: {
           </div>
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -287,7 +285,6 @@ export function CheckoutPickerContent(props: {
                   value: "worktree",
                   label: t("newSession.checkoutWorktree"),
                   icon: <Icon name="gitBranch" />,
-                  sub: t("newSession.checkoutWorktreeSub"),
                   checked: props.params.place.worktree,
                   disabled: !worktreeAvailable(),
                   title: worktreeAvailable()

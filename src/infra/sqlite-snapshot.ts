@@ -153,6 +153,7 @@ export async function createStoppedSqliteSnapshot(options: {
   sourcePath: string;
   targetPath: string;
   sourceIdentity: BigIntStats;
+  integrity?: CreateVerifiedSqliteSnapshotOptions["integrity"];
 }): Promise<VerifiedSqliteSnapshot> {
   if (options.sourceIdentity.size === 0n) {
     throw new Error(`SQLite snapshot source must not be empty: ${options.sourcePath}`);
@@ -166,6 +167,9 @@ export async function createStoppedSqliteSnapshot(options: {
   let userVersion: number;
   try {
     configureSqliteSnapshotPragmas(snapshot);
+    if (options.integrity) {
+      assertSqliteIntegrity(snapshot, options.targetPath, options.integrity);
+    }
     userVersion = readSqliteUserVersion(snapshot);
   } finally {
     snapshot.close();

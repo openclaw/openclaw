@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   replaceSessionEntry,
@@ -16,7 +17,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import * as worker from "../infra/sqlite-worker-store.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -176,6 +177,116 @@ it.for(["runtime", "automation"])(
     expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
   },
 );
+
+it("retains selected committed sharing facts across a broad sessions notification", async ({
+  harness,
+}) => {
+  const { cfg, scope } = harness;
+  harness.write(restrictedEntry("broad-survivor", "original"));
+  await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+  using prepared = releasing(await harness.prepare());
+  sessionChanges.emit({ all: true, scope: "sessions" });
+  const current = prepared.readCurrent(cfg);
+  expect(current.target.entry.sessionId).toBe("broad-survivor");
+  expect(current.membership.has("requester")).toBe(true);
+  expect(harness.authorize(current)).toBeNull();
+});
+
+it.for([
+  { all: true, scope: "sessions", factsInvalidated: true },
+  { all: true, scope: "sessions", runtimeSession: { sessionId: "guarded" } },
+  { all: true, scope: "stores" },
+  { all: true, scope: { agentId: "main" } },
+  { all: true, scope: { storePath: "selected" } },
+  { all: true, scope: { topology: true } },
+  { all: true, scope: "future-unknown-scope" },
+] satisfies SessionRowChange[])(
+  "keeps nonallowlisted publication closed: %j",
+  async (change, { harness }) => {
+    harness.write(restrictedEntry("guarded", "original"));
+    using prepared = releasing(await harness.prepare());
+    sessionChanges.emit(change);
+    sessionChanges.emit({ all: true, scope: "sessions" });
+    expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+  },
+);
+
+it.for(["released", "absent", "sessionId", "lifecycle", "unknown"] as const)(
+  "does not revive %s facts after a broad sessions notification",
+  async (condition, { harness }) => {
+    const entry = restrictedEntry("guarded", "original");
+    if (condition !== "absent") {
+      harness.write(entry);
+    }
+    using prepared = releasing(await harness.prepareMissing());
+    const publish = () => sessionChanges.emit({ all: true, scope: "sessions" });
+    if (condition === "released") {
+      prepared.release();
+    } else if (condition === "sessionId") {
+      harness.write({ ...entry, sessionId: "replacement" });
+    } else if (condition === "lifecycle") {
+      harness.write({ ...entry, lifecycleRevision: "replacement" });
+    } else if (condition === "unknown") {
+      harness.transaction((database) =>
+        publishSessionEntryCacheInvalidation(database, { sessionKey: harness.sessionKey }),
+      );
+    }
+    publish();
+    expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+  },
+);
+
+it("restores exact committed facts after rollback without reviving a refused admission", async ({
+  harness,
+}) => {
+  const entry = restrictedEntry("rollback-sharing", "original");
+  harness.write(entry);
+  await addSessionMember(harness.scope, { identityId: "requester", addedBy: "creator" });
+  using prepared = releasing(await harness.prepare());
+  const before = prepared.readCurrent(harness.cfg);
+  const committedEntry = structuredClone(before.target.entry);
+  const committedMembers = [...before.membership];
+  const assertSource = () => {
+    const denied = harness.authorize(prepared.readCurrent(harness.cfg));
+    if (denied) {
+      throw new Error(denied.message);
+    }
+  };
+  const admission = prepareSystemAgentRunAdmission(
+    harness.cfg,
+    "pending-rollback-admission",
+    "main",
+    "pending-rollback",
+    assertSource,
+  );
+  const publish = () => sessionChanges.emit({ all: true, scope: "sessions" });
+  try {
+    await admission.admit("plugin-harness", "rollback-harness");
+    expect(harness.authorize(before)).toBeNull();
+    expect(() => admission.assertSourceCurrent()).not.toThrow();
+    expect(() =>
+      harness.transaction((database) => {
+        writeSessionEntry(database, harness.sessionKey, { ...entry, visibility: "draft" });
+        publish();
+        expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+        expect(() => admission.assertSourceCurrent()).toThrow(unavailableMessage);
+        throw new Error("candidate rollback");
+      }),
+    ).toThrow("candidate rollback");
+    publish();
+    const after = prepared.readCurrent(harness.cfg);
+    expect(after.target.entry).toEqual(committedEntry);
+    expect([...after.membership]).toEqual(committedMembers);
+    expect(after.target.entry.visibility).toBe("read-only");
+    expect(after.membership.has("requester")).toBe(true);
+    expect(harness.authorize(after)).toBeNull();
+    expect(() => admission.assertSourceCurrent()).toThrow(
+      "source execution authority is no longer active",
+    );
+  } finally {
+    admission.close();
+  }
+});
 
 it("refuses a worker sharing result whose captured birthtime differs from its retained source", async ({
   harness,

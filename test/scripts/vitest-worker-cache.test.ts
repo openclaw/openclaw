@@ -188,6 +188,32 @@ it("leaves incompatible preset generations available for their original borrower
   }
 });
 
+it.each([
+  ["--max-old-space-size=8192", "", true],
+  ["--max-old-space-size=8192", "--max_old_space_size=4096", true],
+  ["--max-old-space-size=8192", "--conditions=custom", false],
+  ["--conditions=custom --max-old-space-size=8192", "--conditions=custom", true],
+])(
+  "reuses worker bytes across heap budgets while retaining Node options: %s -> %s",
+  async (before, after, reuse) => {
+    const f = fixture("run-cache-runtime-0");
+    try {
+      vi.stubEnv("NODE_OPTIONS", before);
+      await f.seed("runtime");
+      f.nextInvocation();
+      vi.stubEnv("NODE_OPTIONS", after);
+      expect(Boolean(await f.restore("runtime"))).toBe(reuse);
+      if (reuse) {
+        expect(f.observe().value).toBe("first");
+      } else {
+        f.expectAbsent("dist");
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
 it("retains each preset independently at their original executable paths", async () => {
   const full = fixture();
   await full.seed();

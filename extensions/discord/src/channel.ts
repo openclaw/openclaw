@@ -59,6 +59,7 @@ import {
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
 import { prepareDiscordConversationRouteOwnersAsync } from "./conversation-route-owner.js";
+import { normalizeDiscordSnowflake } from "./directory-cache.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -659,10 +660,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
             : currentMessagingTarget,
           currentChatType,
           currentMessagingTarget,
-          currentMessageId: context.CurrentMessageId,
+          currentMessageId: normalizeDiscordSnowflake(context.CurrentMessageId ?? "") ?? undefined,
           hasRepliedRef,
         };
       },
+      // Session-event turns carry internal UUIDs as message ids; Discord rejects a
+      // reply reference that is not a message snowflake, so drop such anchors.
+      resolveReplyTransport: ({ replyToId }) =>
+        replyToId && !normalizeDiscordSnowflake(replyToId) ? { replyToId: null } : null,
     },
     outbound: {
       ...discordOutbound,

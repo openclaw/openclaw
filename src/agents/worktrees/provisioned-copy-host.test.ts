@@ -56,6 +56,7 @@ it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const failure = new Error("copy refused");
+    const copyDetails = { copier: "linux-batched", batchCount: 2, sourceBytes: 4096 };
     const assertCurrent = vi.fn();
     run.mockImplementation(async (input, options) => {
       clock = 40;
@@ -76,7 +77,7 @@ it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
       if (outcome === "copy-failure") {
         throw failure;
       }
-      return { type: "provisioned", paths: ["file"] };
+      return { type: "provisioned", paths: ["file"], copyDetails };
     });
     const pending = withWorktreePreparationTiming("managed", () =>
       copyProvisionedPathsInWorker("source", "destination", ["file"], { assertCurrent }),
@@ -89,6 +90,11 @@ it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
     }
     expect(poolOptions).toHaveBeenCalledWith(expect.objectContaining({ maxWorkers: 2 }));
     const receipt = log.mock.calls[0]?.[1];
+    if (outcome === "returned") {
+      expect(receipt.copyDetails).toEqual(copyDetails);
+      expect(receipt.consoleMessage).toContain(`copyDetails=${JSON.stringify(copyDetails)}`);
+      expect(event.mock.calls[0]?.[0].details["copy.batchCount"]).toBe(2);
+    }
     expect(receipt.phaseDurationsMs).toEqual(
       outcome === "waiting-failure" || outcome === "skipped"
         ? { provisionCopyWait: 40 }

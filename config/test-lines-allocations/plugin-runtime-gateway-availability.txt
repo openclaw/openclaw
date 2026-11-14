@@ -1,2 +1,0 @@
-# Existing runtime API regression covers cold Gateway presence and live request-scope precedence.
-19

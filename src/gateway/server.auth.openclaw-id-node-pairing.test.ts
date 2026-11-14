@@ -1,5 +1,5 @@
 // Exercise the tunnel connect boundary with the real SQLite pairing broker.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import http, { type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
@@ -28,6 +28,7 @@ import { NODE_CLIENT, openWs } from "./server.auth.test-helpers.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
+  rpcReq,
   installGatewayTestHooks,
   testState,
 } from "./test-helpers.js";
@@ -103,6 +104,11 @@ beforeAll(async () => {
     record: async (deviceId, role, peerKey) => {
       bindings.set(`${deviceId}:${role}`, peerKey);
     },
+    forget: async (tokens) => {
+      for (const token of tokens) {
+        bindings.delete(`${token.deviceId}:${token.role}`);
+      }
+    },
     reportMismatch: () => {},
   });
 });
@@ -119,10 +125,12 @@ async function connect(
   path: string,
   commands = ["system.run"],
   caps = ["approved"],
+  ws?: Awaited<ReturnType<typeof openWs>>,
+  permissions?: Record<string, boolean>,
 ) {
-  const ws = await openWs(started.port, { [header]: peerKey });
+  const socket = ws ?? (await openWs(started.port, { [header]: peerKey }));
   try {
-    return await connectReq(ws, {
+    return await connectReq(socket, {
       client: { ...NODE_CLIENT, platform: "linux", displayName: description.display_name },
       role: "node",
       scopes: [],
@@ -130,9 +138,12 @@ async function connect(
       deviceIdentityPath: path,
       commands,
       caps,
+      permissions,
     });
   } finally {
-    ws.close();
+    if (!ws) {
+      socket.close();
+    }
   }
 }
 
@@ -185,6 +196,37 @@ test("approves the reviewed subset, prompts for additions, and never re-pairs af
   expect(await getPairedDevice(deviceId)).toBeNull();
   expect(await getPairedDevice(secondId)).toBeNull();
   expect(ssh).not.toHaveBeenCalled();
+});
+
+test("records first-connect OS permissions so the same or a narrower reconnect needs no approval", async () => {
+  const peer = nodePeer();
+  const path = identityPath("ocid-node-permissions");
+  const deviceId = loadOrCreateDeviceIdentity({ path }).deviceId;
+  const pendingFor = async () =>
+    (await listNodePairing()).pending.filter((node) => node.nodeId === deviceId);
+  const granted = { notifications: true, screenRecording: false };
+  try {
+    expect((await connect(peer, path, undefined, undefined, undefined, granted)).ok).toBe(true);
+    expect((await getPairedDevice(deviceId))?.nodeSurface?.permissions).toEqual(granted);
+    expect(await pendingFor()).toEqual([]);
+    // Dropping a command or revoking a permission only narrows the live surface.
+    expect((await connect(peer, path, [], [], undefined, { notifications: false })).ok).toBe(true);
+    expect(await pendingFor()).toEqual([]);
+    // A permission that was not granted at approval still needs operator approval.
+    expect(
+      (
+        await connect(peer, path, undefined, undefined, undefined, {
+          notifications: true,
+          screenRecording: true,
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await pendingFor()).toMatchObject([
+      { permissions: { notifications: true, screenRecording: true } },
+    ]);
+  } finally {
+    await removeNodePairings([peer]);
+  }
 });
 
 test("keeps removal manual when the first tunnel connection used an existing pairing", async () => {
@@ -299,6 +341,26 @@ test("does not approve merged operator requests or stale principals", async () =
     setOpenClawIdNodeDescriptionLookup((key) => (peers.has(key) ? description : undefined));
   }
   expect(ssh).not.toHaveBeenCalled();
+});
+
+test("refuses an unlisted node before pairing and closes a live session once its listing is removed", async () => {
+  const pendingPath = identityPath("ocid-node-unlisted");
+  const unlisted = `iroh:${"f".repeat(64)}`;
+  expect((await connect(unlisted, pendingPath)).ok).toBe(false);
+  expect(
+    await getPairedDevice(loadOrCreateDeviceIdentity({ path: pendingPath }).deviceId),
+  ).toBeNull();
+  const peer = nodePeer();
+  const ws = await openWs(started.port, { [header]: peer });
+  expect((await connect(peer, identityPath("ocid-node-live"), undefined, undefined, ws)).ok).toBe(
+    true,
+  );
+  // Discovery may still serve the node's earlier signed listing; the Gateway checks its own.
+  peers.delete(peer);
+  const closed = once(ws, "close");
+  void rpcReq(ws, "node.event", { event: "probe" }).catch(() => {});
+  expect((await closed)[0]).toBe(4001);
+  await removeNodePairings([peer]);
 });
 
 test("reconciles orphaned listing provenance while retaining current nodes", async () => {

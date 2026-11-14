@@ -242,10 +242,11 @@ export async function runUsageCostWorker(
       operation.kind === "refresh"
         ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
         : operation;
+    let resolver: Promise<UsageCostResolver> | undefined;
     return runSessionActorUsage(
       prepared.memory,
       request,
-      createUsageCostResolver(prepared, pricing),
+      () => (resolver ??= createUsageCostResolver(prepared, pricing)),
       waitForRefresh,
     );
   }
@@ -288,14 +289,13 @@ async function runPreparedUsageCostWorker(
     }
     assertCurrent();
     let workerOperation: UsageCostWorkerOperation;
-    let resolveCost: UsageCostResolver;
+    let resolveCost: UsageCostResolver | undefined;
     if (capturedOperation.kind === "refresh") {
       const pricing = await prepareUsageCostPricing(prepared.config, prepared.agentDir);
       workerOperation = { ...capturedOperation, pricingFingerprint: pricing.fingerprint() };
-      resolveCost = createUsageCostResolver(prepared, pricing);
+      resolveCost = await createUsageCostResolver(prepared, pricing);
     } else {
       workerOperation = capturedOperation;
-      resolveCost = createUsageCostResolver(prepared);
     }
     const failures = openUsageCostRefreshFailures(location.env);
     const failureKey = (sessionFile: string) =>
@@ -344,6 +344,7 @@ async function runPreparedUsageCostWorker(
                   uncommittedSessionFiles.add(request.input.sessionFile);
                   break;
                 case "pricing":
+                  resolveCost ??= await createUsageCostResolver(prepared);
                   output = request.input.map(resolveCost);
                   break;
                 case "prune-rows":

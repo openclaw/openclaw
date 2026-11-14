@@ -112,7 +112,8 @@ export function withAdmittedCliCandidate(
       if (target && contextEntry) {
         params.onCompactionAccounting?.({
           kind: "durable",
-          count: 0,
+          // Native compactions the CLI completed during this turn; its transcript stays native.
+          count: runResult.meta.agentMeta?.compactionCount ?? 0,
           target: {
             ...target,
             sessionId: contextEntry.sessionId,

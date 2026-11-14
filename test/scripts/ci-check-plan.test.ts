@@ -163,6 +163,10 @@ it.each([
     expect(row.requires_sdk_declarations === true).toBe(hasExtensions);
   }
   const central = JSON.parse(plan.central_lint_selection_json);
+  const centralRow = plan.check_matrix.include.find((row) => row.task === "lint");
+  if (centralRow) {
+    expect(centralRow.requires_sdk_declarations).toBe(runnerProfile === "blacksmith");
+  }
   if (runnerProfile === "github" && mode === "full") {
     expect(plan.lint_core_matrix.include).toHaveLength(5);
     expect(central.fullExtensionStripes).toBeUndefined();
@@ -206,8 +210,38 @@ it("retains central extension lint when no other SDK consumer is selected", asyn
     lintExtensionMatrix: stripeMatrix(6),
   });
   expect(JSON.parse(plan.central_lint_selection_json).extensionStripes).toEqual([6]);
+  expect(plan.check_matrix.include.find((row) => row.task === "lint")).toMatchObject({
+    requires_sdk_declarations: true,
+  });
   expect(plan.lint_core_matrix.include.some((row) => row.requires_sdk_declarations)).toBe(false);
 });
+it.each([
+  [undefined, "false", "false", true],
+  [true, "false", "false", true],
+  [false, "false", "false", false],
+  [false, "true", "false", true],
+  [false, "false", "true", true],
+] as const)(
+  "preserves central SDK restore admission for requirement=%s frozen=%s compatibility=%s",
+  (required, frozen, compatibility, enabled) => {
+    const step = readCiWorkflow().jobs["check-shard"].steps.find(
+      (candidate: WorkflowStep) => candidate.id === "extension-boundary-inputs",
+    );
+    expect(
+      evaluateWorkflowExpression(
+        `\${{ ${step.if} }}`,
+        prContext({
+          matrix: { task: "lint", requires_sdk_declarations: required },
+          preflightOutputs: {
+            runner_profile: "github",
+            frozen_target: frozen,
+            compatibility_target: compatibility,
+          },
+        }),
+      ),
+    ).toBe(enabled);
+  },
+);
 it.each([
   ["src/config/sessions/session-input-actor.ts", true, false],
   ["ui/src/styles/base.css", false, false],
@@ -307,14 +341,63 @@ it("retains the complete full-check stripe inventory", async () => {
   expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
 });
 
-it.each([undefined, "affected", "full"] as const)(
-  "keeps broad guards and types while selecting tooling lint in %s mode",
-  async (extensionLintMode) => {
+it.each(["hybrid", "github"])(
+  "sizes serial extension and script type checks independently on %s",
+  async (runnerProfile) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(["extensions-test", "scripts"]);
+    const plan = await createPlan({
+      runnerProfile,
+      extensionLintMode: "affected",
+      checkMatrix: {
+        include: [
+          { ...checks("test-types").include[0]!, runner_label: "blacksmith-4vcpu-ubuntu-2404" },
+        ],
+      },
+    });
+    expect(plan.check_matrix.include[0]).toMatchObject({
+      runner: "unused",
+      runner_label: "blacksmith-2vcpu-ubuntu-2404",
+      core_type_graph_names_json: "[]",
+      core_type_concurrency: 1,
+      type_graph_names_json: JSON.stringify(["extensions-test", "scripts"]),
+    });
+  },
+);
+
+it.each([
+  { extensionLintMode: undefined },
+  { preserveFullChecks: true },
+  { runnerProfile: "blacksmith" },
+  { runnerProfile: "boat" },
+  { graphs: ["scripts", "test-root-tooling"] },
+  { runnerLabel: "blacksmith-8vcpu-ubuntu-2404" },
+])(
+  "retains unqualified central type capacity: %j",
+  async ({ graphs, runnerLabel, ...overrides }) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(graphs ?? ["extensions-test", "scripts"]);
+    const label = runnerLabel ?? "blacksmith-4vcpu-ubuntu-2404";
+    const plan = await createPlan({
+      extensionLintMode: "affected",
+      checkMatrix: { include: [{ ...checks("test-types").include[0]!, runner_label: label }] },
+      ...overrides,
+    });
+    expect(plan.check_matrix.include[0]!.runner_label).toBe(label);
+  },
+);
+
+it.each([
+  [undefined, "scripts/ci-sdk-declarations.mts"],
+  ["affected", "scripts/ci-sdk-declarations.mts"],
+  ["full", "scripts/ci-sdk-declarations.mts"],
+  ["affected", "test/scripts/check-dependency-pins.test.ts"],
+] as const)(
+  "keeps broad guards and types while selecting tooling lint in %s mode for %s",
+  async (extensionLintMode, changedPath) => {
     selectLint();
     const input = planInput({
       preserveFullChecks: true,
       extensionLintMode,
-      changedPaths: ["scripts/ci-sdk-declarations.mts"],
+      changedPaths: [changedPath],
       checkMatrix: checks("lint", "prod-types", "test-types", "guards"),
       lintCoreMatrix: stripeMatrix(2),
     });
@@ -324,11 +407,19 @@ it.each([undefined, "affected", "full"] as const)(
       input.checkMatrix.include.filter(({ task }) => task !== "lint"),
     );
     if (extensionLintMode === "affected") {
-      expect(plan.lint_core_matrix.include).toEqual([]);
-      expect(JSON.parse(plan.central_lint_selection_json)).toMatchObject({
-        files: ["scripts/ci-sdk-declarations.mts"],
-        rootTestFiles: [],
+      expect(plan.check_matrix.include.find(({ task }) => task === "lint")).toMatchObject({
+        requires_sdk_declarations: false,
       });
+      if (changedPath.startsWith("scripts/")) {
+        expect(plan.lint_core_matrix.include).toEqual([]);
+        expect(JSON.parse(plan.central_lint_selection_json)).toMatchObject({
+          files: [changedPath],
+          rootTestFiles: [],
+        });
+      } else {
+        expect(plan.lint_core_matrix.include.map(({ stripe }) => stripe)).toEqual([1, 2]);
+        expect(JSON.parse(plan.central_lint_selection_json).fullGroups).toEqual(["scripts"]);
+      }
     } else {
       expect(plan.lint_core_matrix.include.map(({ stripe }) => stripe)).toEqual([1, 2]);
     }
@@ -423,6 +514,9 @@ it.each(["hybrid", "github", "blacksmith"])(
       shards.map(({ name, args }) => JSON.stringify({ name, args })).toSorted(),
     );
     expect(plan.central_lint_selection_json).toBe("");
+    expect(
+      plan.check_matrix.include.find(({ task }) => task === "lint")?.requires_sdk_declarations,
+    ).toBeUndefined();
   },
 );
 

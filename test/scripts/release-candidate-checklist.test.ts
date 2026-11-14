@@ -1962,7 +1962,6 @@ describe("release candidate checklist", () => {
         source?: string;
         separatePackage?: boolean;
         providerMode?: string;
-        waived?: boolean;
         qualificationSha?: string;
         qualificationRef?: string;
         transport?: "missing" | "moved";
@@ -1989,7 +1988,6 @@ describe("release candidate checklist", () => {
       "passed",
     ],
     ["live provider", { coveragePolicy: "npm-stable-v1", providerMode: "live-frontier" }, "passed"],
-    ["waiver", { coveragePolicy: "npm-stable-v1", waived: true }, "waived"],
     ["missing transport", { transport: "missing" }, /qualification ref/],
     ["moved transport", { transport: "moved" }, /qualification ref/],
     [
@@ -2076,16 +2074,7 @@ describe("release candidate checklist", () => {
             current: {
               manifest: {
                 releaseProfile: options.releaseProfile,
-                waivers: scenario.waived
-                  ? [
-                      {
-                        childRole: "releaseChecksCandidate",
-                        jobName:
-                          "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
-                        reason: "reviewed fixture outage",
-                      },
-                    ]
-                  : [],
+                waivers: [],
               },
             },
           },

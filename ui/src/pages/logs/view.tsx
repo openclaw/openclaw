@@ -263,6 +263,9 @@ export function LogsView(props: LogsProps) {
     }, READER_INTENT_MS);
   };
   const beginReaderScroll = () => {
+    // Native offsets can precede/coalesce scroll events while an incoming batch renders.
+    // A return gesture starting above the tail must not depend on that earlier event.
+    readerLeftEnd ||= stream.scrollHeight - stream.scrollTop - stream.clientHeight >= 2;
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();

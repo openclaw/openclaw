@@ -47,6 +47,7 @@ import {
   createMessageToolOnlyDispatchArgs,
 } from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
+import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const FAST_ABORT_SESSION_MODEL = Object.freeze({
@@ -1261,24 +1262,21 @@ describe("dispatchReplyFromConfig", () => {
       onDeferred: vi.fn(),
       onSettled: vi.fn(),
     };
-    const firstReplyResolver = vi.fn(
-      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
-        await opts?.turnAdoptionLifecycle?.onAdopted();
-        const operation = (
-          opts as { replyOperation?: { abortForRestart: () => boolean } } | undefined
-        )?.replyOperation;
-        expect(operation?.abortForRestart()).toBe(true);
-        return await new Promise<never>(() => {});
-      },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
-      replyOptions: { turnAdoptionLifecycle },
-      replyResolver: firstReplyResolver,
+    const firstReplyResolver = vi.fn<InternalGetReplyFromConfig>(async (_ctx, opts) => {
+      await opts?.turnAdoptionLifecycle?.onAdopted();
+      expect(opts?.replyOperation?.abortForRestart()).toBe(true);
+      return undefined;
     });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: { turnAdoptionLifecycle },
+        replyResolver: firstReplyResolver,
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
     expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
 
     const duplicateReplyResolver = vi.fn(
