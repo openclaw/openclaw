@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
+import {
+  isHardlinkFallbackError,
+  syncDirectoryBestEffortSync,
+} from "../../infra/directory-durability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   encodeSessionArchiveContent,
@@ -214,7 +217,24 @@ export function publishEncodedSessionTranscriptArchive(params: {
   try {
     fs.linkSync(tempPath, archivePath);
   } catch (error) {
-    if (!hasErrnoCode(error, "EEXIST")) {
+    if (isHardlinkFallbackError(error)) {
+      // link(2) publishes the fsynced staging inode and fails if the name exists.
+      // rename(2) replaces an archive created after the existence check, so a
+      // refused hard link copies exclusively and leaves EEXIST for the hash check.
+      try {
+        fs.copyFileSync(tempPath, archivePath, fs.constants.COPYFILE_EXCL);
+        const published = fs.openSync(archivePath, "r+");
+        try {
+          fs.fsyncSync(published);
+        } finally {
+          fs.closeSync(published);
+        }
+      } catch (copyError) {
+        if (!hasErrnoCode(copyError, "EEXIST")) {
+          throw copyError;
+        }
+      }
+    } else if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
     }
   } finally {
