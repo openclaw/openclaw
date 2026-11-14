@@ -729,7 +729,7 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed("late-session"));
   });
 
-  it.each(["keep this", ""])("reports one active disconnect with retained text %j", async (text) => {
+  it.each(["keep this", ""])("reports active disconnect once for %j", async (text) => {
     const harness = createHarness();
     await startHold(harness.target);
     if (text) {
