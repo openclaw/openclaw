@@ -489,7 +489,7 @@ The `linkReader` fields are:
 
 | Field           | Contract                                                                                                                                                                                            |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                                         |
+| `hosts`         | One or more exact lowercase DNS hostnames, at most 253 characters each with labels of at most 63 characters; no scheme, wildcard, or port. Duplicate hosts are removed.                             |
 | `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.              |
 | `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
 | `previewMethod` | Optional same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |

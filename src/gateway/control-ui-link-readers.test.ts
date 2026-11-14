@@ -5,6 +5,7 @@ import {
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginsUiDescriptorsResultSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { validatePluginsUiDescriptorsResult } from "../../packages/gateway-protocol/src/validators/integrations.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -169,6 +170,37 @@ describe("plugin link-reader discovery", () => {
     setActivePluginRegistry(replacement.registry.registry);
     expect(readers(["operator.read"])).toEqual([]);
   });
+  it("advertises every exact host beyond sixteen and deduplicates repeated hosts", () => {
+    const { register, readers, methods } = setup();
+    const hosts = Array.from({ length: 17 }, (_, index) => `forge-${index}.example`);
+    register("forge", {
+      declarations: [
+        descriptor("distinct", {
+          linkReader: { hosts, pathPattern: "^/items/[0-9]+$", detailMethod: "forge.read" },
+        }),
+        descriptor("duplicates", {
+          linkReader: {
+            hosts: Array.from({ length: 17 }, () => "forge.example"),
+            pathPattern: "^/items/[0-9]+$",
+            detailMethod: "forge.read",
+          },
+        }),
+      ],
+    });
+    const result = {
+      ok: true,
+      descriptors: listControlUiPluginDescriptors(["operator.read"]),
+      methods: methods().listAdvertisedMethods(),
+      controlUiLinkReaders: readers(["operator.read"]),
+    };
+    expect(result.controlUiLinkReaders.map((reader) => reader.linkReader.hosts)).toEqual([
+      hosts,
+      ["forge.example"],
+    ]);
+    expect(result.controlUiLinkReaders[0]!.linkReader.hosts).toHaveLength(17);
+    expect(validatePluginsUiDescriptorsResult(result)).toBe(true);
+    expect(readers([])).toEqual([]);
+  });
   it("copies valid declaration data and rejects malformed or misplaced routing metadata", () => {
     const { registry, register } = setup();
     const metadata = {
@@ -177,10 +209,22 @@ describe("plugin link-reader discovery", () => {
       detailMethod: "forge.read",
     };
     const invalid: Parameters<typeof descriptor>[1][] = [
+      { linkReader: { ...metadata, hosts: [] } },
       { linkReader: { ...metadata, hosts: ["*.example"] } },
+      { linkReader: { ...metadata, hosts: ["FORGE.example"] } },
+      { linkReader: { ...metadata, hosts: ["forge.example:443"] } },
+      { linkReader: { ...metadata, hosts: [`${"a".repeat(64)}.example`] } },
+      {
+        linkReader: {
+          ...metadata,
+          hosts: [Array.from({ length: 4 }, () => "a".repeat(63)).join(".")],
+        },
+      },
       { linkReader: { ...metadata, hosts: ["https://forge.example"] } },
       { linkReader: { ...metadata, pathPattern: "/items/" } },
       { linkReader: { ...metadata, pathPattern: "^[$" } },
+      { linkReader: { ...metadata, pathPattern: `^${"a".repeat(1023)}$` } },
+      { linkReader: { ...metadata, detailMethod: "a".repeat(129) } },
       { surface: "tab", linkReader: metadata },
       { linkReader: { ...metadata, detailMethod: "" } },
       { linkReader: { ...metadata, imageMethod: "" } },

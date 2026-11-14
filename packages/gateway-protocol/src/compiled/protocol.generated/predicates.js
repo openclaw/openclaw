@@ -8467,8 +8467,7 @@ var External = [
   check_1197 = (value) =>
     Array.isArray(value) &&
     value.every((unique_749, index) => check_1198(unique_749)) &&
-    value.length >= 1 &&
-    value.length <= 16,
+    value.length >= 1,
   check_1198 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&

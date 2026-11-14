@@ -80,6 +80,32 @@ it("retains discovered readers offline and retires them on client or fresh acces
   snapshot.hello = gatewayHelloForMethods(["forge.item"], []);
   expect(availableLinkReaders(snapshot)).toEqual([]);
 });
+it("routes the first and seventeenth host and replaces the complete host list on refresh", () => {
+  const { snapshot, anchor, accept, click } = setup();
+  const hosts = Array.from({ length: 17 }, (_, index) => `forge-${index}.example`);
+  snapshot.pluginCapabilities = readerCapabilities([
+    { ...reader, linkReader: { ...reader.linkReader, hosts } },
+  ]);
+  expect(availableLinkReaders(snapshot)[0]!.linkReader.hosts).toHaveLength(17);
+  for (const host of ["forge-0.example", "forge-16.example"]) {
+    anchor.href = `https://${host}/items/123`;
+    expect(click()).toBe(false);
+    expect((accept.mock.lastCall![0] as CustomEvent).detail.url).toBe(anchor.href);
+  }
+  snapshot.pluginCapabilities = readerCapabilities([
+    {
+      ...reader,
+      linkReader: { ...reader.linkReader, hosts: [...hosts.slice(0, 16), "new.example"] },
+    },
+  ]);
+  expect(availableLinkReaders(snapshot)[0]!.linkReader.hosts).toHaveLength(17);
+  expect(
+    resolveLinkReaderTarget("https://forge-16.example/items/123", availableLinkReaders(snapshot)),
+  ).toBeNull();
+  anchor.href = "https://new.example/items/123";
+  expect(click()).toBe(false);
+  expect((accept.mock.lastCall![0] as CustomEvent).detail.url).toBe(anchor.href);
+});
 it.each([false, true])(
   "honors the external preference before readers and browser panels (native: %s)",
   (native) => {
@@ -175,7 +201,11 @@ it("ignores disabled readers and malformed patterns", () => {
 it.each([
   "https://forge.example.evil.test/items/1",
   "https://forge.example:8443/items/1",
+  "http://forge.example/items/1",
+  "https://user:password@forge.example/items/1",
+  "https://forge.example/unsupported/1",
+  `https://forge.example/items/1?${"a".repeat(8192)}`,
   "not-a-url",
-])("leaves unsupported URLs external: %s", (url) => {
+])("leaves unsupported URL %# external", (url) => {
   expect(resolveLinkReaderTarget(url, [reader])).toBeNull();
 });

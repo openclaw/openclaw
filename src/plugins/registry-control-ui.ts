@@ -13,14 +13,9 @@ import {
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 
-/** Copy bounded plugin metadata before it becomes a browser routing contract. */
+/** Copy validated plugin metadata before it becomes a browser routing contract. */
 function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadata | undefined {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.hosts) ||
-    value.hosts.length === 0 ||
-    value.hosts.length > 16
-  ) {
+  if (!isRecord(value) || !Array.isArray(value.hosts) || value.hosts.length === 0) {
     return undefined;
   }
   const hostPattern =
@@ -208,7 +203,7 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
     ) {
       reportRegistrationError(
         record,
-        "link-reader descriptors require bounded exact hosts, an anchored pathPattern, and method names",
+        "link-reader descriptors require nonempty exact hosts, an anchored pathPattern, and method names",
       );
       return;
     }
