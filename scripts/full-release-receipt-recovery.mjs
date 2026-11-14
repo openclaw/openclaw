@@ -379,12 +379,14 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
   const children = [];
   for (const role of ROLES) {
     const selection = request.children[role];
-    requireValue(
-      selection.sourceParentRunId === request.originalParent.runId &&
+    const fresh = selection.sourceParentRunId === request.originalParent.runId;
+    if (fresh) {
+      requireValue(
         selection.sourceParentAttempt === 1 &&
-        selection.workflowRef === admission.request.transportRef,
-      "child does not belong to the original parent",
-    );
+          selection.workflowRef === admission.request.transportRef,
+        "child does not belong to the original parent",
+      );
+    }
     const spec = releaseChildSpec(role);
     const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
     const inputs = receiptRecoveryChildInputs(role, admission, binding, source);
@@ -430,6 +432,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     );
     validateReleaseChildDispatchBinding({
       child: { key: role, runId: selection.runId },
+      childReuse: fresh ? undefined : selection,
       log: await client.getJobLog(dispatchJobs[0].id),
       coveragePolicy: "npm-beta-v1",
       plannedRunAttempt: 1,
@@ -441,7 +444,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       runId: selection.runId,
       runAttempt: selection.runAttempt,
       workflowSha: qualificationSha,
-      sourceParentRunId: request.originalParent.runId,
+      sourceParentRunId: selection.sourceParentRunId,
       conclusion: verified.run.conclusion,
       waivers: policy.waivers,
       advisoryJobs: releaseChildAdvisories(child),
