@@ -81,6 +81,18 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  // An opener at the end of a full chunk used to split mid-marker or close as an empty block.
+  it.each([1990, 1991, 1992, 1993, 1994])(
+    "keeps a fence opener with its body after %i chars",
+    (pad) => {
+      const chunks = split("a".repeat(pad) + "\n```ts\nconst x = 1;\n```\nafter");
+      expect(chunks.map((chunk) => chunk.trimEnd())).toEqual([
+        "a".repeat(pad),
+        "```ts\nconst x = 1;\n```\nafter",
+      ]);
+    },
+  );
+
   it("puts continued code on the line after a reopened fence", () => {
     const text = `\`\`\`ts\nconst value = '${"x".repeat(80)}';\n\`\`\``;
     const chunks = split(text, { maxChars: 30, maxLines: 50 });

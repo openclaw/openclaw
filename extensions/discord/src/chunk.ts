@@ -110,9 +110,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     );
   };
   const flush = (frame: DiscordFrame) => {
-    let end = ranges.overlaps(frame.start, frame.end)
-      ? ranges.cutBoundary(frame.start, frame.end)
-      : ranges.boundary(frame.start, frame.end);
+    let end = ranges.cutBoundary(frame.start, frame.end);
     // A rejected nonempty range needs more source before its atomic unit can be emitted.
     if (frame.end > frame.start && end <= frame.start) {
       return frame;
