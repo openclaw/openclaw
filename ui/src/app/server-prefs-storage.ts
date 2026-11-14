@@ -124,8 +124,8 @@ export function readRetainedLocalPrefs(scope: string): Map<SyncedPrefKey, Retain
     return new Map();
   }
   const keys = Object.keys(stored).filter((key) => Object.hasOwn(SYNCED_PREFS, key));
-  // SAFETY: filtered against SYNCED_PREFS, so every key is a SyncedPrefKey.
   return new Map(
+    // SAFETY: filtered against SYNCED_PREFS, so every key is a SyncedPrefKey.
     (keys as SyncedPrefKey[]).map((key) => {
       const entry = asRecord(stored[key]);
       const value = entry?.value === null ? null : SYNCED_PREFS[key].extract(entry?.value);

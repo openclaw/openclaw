@@ -27,7 +27,6 @@ const uiE2eIncludePatterns = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
-  "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/agents-settings-delete.e2e.test.ts",
@@ -111,6 +110,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
+  "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
   "ui/src/e2e/toast-page-offset.e2e.test.ts",
   "ui/src/pages/plugins/plugins-base-path.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
