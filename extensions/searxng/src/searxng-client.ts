@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
@@ -70,12 +71,16 @@ function resolveSearxngBaseUrl(config?: OpenClawConfig): string | undefined {
   return normalizeBaseUrl(process.env[SEARXNG_BASE_URL_ENV_VAR]);
 }
 
-async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> {
+async function searxngEndpointTargetsPrivateNetwork(
+  url: URL,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (isBlockedHostnameOrIp(url.hostname)) {
     return true;
   }
   try {
     const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
+      signal,
       policy: {
         allowPrivateNetwork: true,
         allowRfc2544BenchmarkRange: true,
@@ -83,11 +88,15 @@ async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> 
     });
     return pinned.addresses.every((address) => isPrivateIpAddress(address));
   } catch {
+    signal?.throwIfAborted();
     return false;
   }
 }
 
-async function validateSearxngBaseUrl(baseUrl: string): Promise<"selfHosted" | "strict"> {
+async function validateSearxngBaseUrl(
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<"selfHosted" | "strict"> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -101,6 +110,7 @@ async function validateSearxngBaseUrl(baseUrl: string): Promise<"selfHosted" | "
 
   if (parsed.protocol === "http:") {
     await assertHttpUrlTargetsPrivateNetwork(parsed.toString(), {
+      signal,
       dangerouslyAllowPrivateNetwork: true,
       errorMessage:
         "SearXNG HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
@@ -108,7 +118,7 @@ async function validateSearxngBaseUrl(baseUrl: string): Promise<"selfHosted" | "
     return "selfHosted";
   }
 
-  return (await searxngEndpointTargetsPrivateNetwork(parsed)) ? "selfHosted" : "strict";
+  return (await searxngEndpointTargetsPrivateNetwork(parsed, signal)) ? "selfHosted" : "strict";
 }
 
 export async function runSearxngSearch(params: {
@@ -149,112 +159,124 @@ export async function runSearxngSearch(params: {
       "SearXNG base URL is not configured. Set SEARXNG_BASE_URL or configure plugins.entries.searxng.config.webSearch.baseUrl.",
     );
   }
-  const endpointMode = await validateSearxngBaseUrl(baseUrl);
-  params.signal?.throwIfAborted();
-
-  const cacheKey = JSON.stringify({
-    provider: "searxng",
-    query: params.query,
-    count,
-    categories: categories ?? "",
-    language: language ?? "",
-    baseUrl,
+  // One deadline owns DNS classification, transport, response consumption and cache publication.
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs: timeoutSeconds * 1_000,
+    signal: params.signal,
+    operation: "searxng.web_search",
+    url: baseUrl,
   });
-  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
-  if (cached) {
-    return cached;
-  }
+  try {
+    signal?.throwIfAborted();
+    const endpointMode = await validateSearxngBaseUrl(baseUrl, signal);
+    signal?.throwIfAborted();
 
-  const startedAt = Date.now();
-  const query = params.query;
-  const signal = params.signal;
-  const fetchSearxngResults = async (searchCategories: string | undefined) => {
-    let url = new URL(baseUrl);
-    const basePathname = url.pathname.replace(/\/+$/u, "");
-    url.pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
-    url.search = "";
-    url = new URL(nativeWebSearchCodecs["searxng.search"].request(url.href, query, count).url);
-    if (searchCategories) {
-      url.searchParams.set("categories", searchCategories);
-    }
-    if (language) {
-      url.searchParams.set("language", language);
+    const cacheKey = JSON.stringify({
+      provider: "searxng",
+      query: params.query,
+      count,
+      categories: categories ?? "",
+      language: language ?? "",
+      baseUrl,
+    });
+    const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
+    if (cached) {
+      return cached;
     }
 
-    const withEndpoint =
-      endpointMode === "selfHosted"
-        ? withSelfHostedWebSearchEndpoint
-        : withTrustedWebSearchEndpoint;
-    return await withEndpoint(
-      {
-        url: url.toString(),
-        timeoutSeconds,
-        signal,
-        init: {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
+    const startedAt = Date.now();
+    const query = params.query;
+    const fetchSearxngResults = async (searchCategories: string | undefined) => {
+      let url = new URL(baseUrl);
+      const basePathname = url.pathname.replace(/\/+$/u, "");
+      url.pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
+      url.search = "";
+      url = new URL(nativeWebSearchCodecs["searxng.search"].request(url.href, query, count).url);
+      if (searchCategories) {
+        url.searchParams.set("categories", searchCategories);
+      }
+      if (language) {
+        url.searchParams.set("language", language);
+      }
+
+      const withEndpoint =
+        endpointMode === "selfHosted"
+          ? withSelfHostedWebSearchEndpoint
+          : withTrustedWebSearchEndpoint;
+      return await withEndpoint(
+        {
+          url: url.toString(),
+          timeoutSeconds,
+          signal,
+          init: {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
           },
         },
-      },
-      async (response) => {
-        if (!response.ok) {
-          const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
-          throw new ProviderHttpError(
-            `SearXNG search error (${response.status}): ${detail || response.statusText}`,
-            { status: response.status },
-          );
-        }
+        async (response) => {
+          if (!response.ok) {
+            const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
+            throw new ProviderHttpError(
+              `SearXNG search error (${response.status}): ${detail || response.statusText}`,
+              { status: response.status },
+            );
+          }
 
-        const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
-        if (body.truncated) {
-          throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
-        }
-        const text = body.text;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          throw new Error("SearXNG returned invalid JSON.");
-        }
+          const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
+          if (body.truncated) {
+            throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
+          }
+          const text = body.text;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            throw new Error("SearXNG returned invalid JSON.");
+          }
 
-        return {
-          results: nativeWebSearchCodecs["searxng.search"].results(parsed, count),
-          unresponsiveEngines: readUnresponsiveEngines(parsed),
-        };
-      },
-    );
-  };
-  let page = await fetchSearxngResults(categories);
-  params.signal?.throwIfAborted();
-  if (page.results.length === 0 && categories) {
-    const normalized = categories
-      .split(",")
-      .map((category) => category.trim().toLowerCase())
-      .filter((category) => category.length > 0);
-    if (normalized.length > 0 && !normalized.includes("general")) {
-      page = await fetchSearxngResults("general");
-      params.signal?.throwIfAborted();
+          return {
+            results: nativeWebSearchCodecs["searxng.search"].results(parsed, count),
+            unresponsiveEngines: readUnresponsiveEngines(parsed),
+          };
+        },
+      );
+    };
+    let page = await fetchSearxngResults(categories);
+    signal?.throwIfAborted();
+    if (page.results.length === 0 && categories) {
+      const normalized = categories
+        .split(",")
+        .map((category) => category.trim().toLowerCase())
+        .filter((category) => category.length > 0);
+      if (normalized.length > 0 && !normalized.includes("general")) {
+        page = await fetchSearxngResults("general");
+        signal?.throwIfAborted();
+      }
     }
-  }
-  const { results, unresponsiveEngines } = page;
-  // No results while engines were suspended, rate-limited or timing out is a failed
-  // search, not an empty one: fail so the caller does not treat (and cache) it as "nothing found".
-  if (results.length === 0 && unresponsiveEngines.length > 0) {
-    throw new Error(
-      `SearXNG returned no results and reported unresponsive engines: ${unresponsiveEngines.join(", ")}.`,
-    );
-  }
+    const { results, unresponsiveEngines } = page;
+    // No results while engines were suspended, rate-limited or timing out is a failed
+    // search, not an empty one: fail so the caller does not treat (and cache) it as "nothing found".
+    if (results.length === 0 && unresponsiveEngines.length > 0) {
+      throw new Error(
+        `SearXNG returned no results and reported unresponsive engines: ${unresponsiveEngines.join(", ")}.`,
+      );
+    }
 
-  const payload = {
-    query: params.query,
-    provider: "searxng",
-    count: results.length,
-    tookMs: Date.now() - startedAt,
-    externalContent: externalContentStamp("searxng"),
-    results,
-  } satisfies Record<string, unknown>;
+    const payload = {
+      query: params.query,
+      provider: "searxng",
+      count: results.length,
+      tookMs: Date.now() - startedAt,
+      externalContent: externalContentStamp("searxng"),
+      results,
+    } satisfies Record<string, unknown>;
 
-  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
-  return payload;
+    signal?.throwIfAborted();
+    writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
+    return payload;
+  } finally {
+    cleanup();
+  }
 }
