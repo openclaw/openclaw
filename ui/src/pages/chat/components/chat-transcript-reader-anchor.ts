@@ -425,14 +425,22 @@ export class TranscriptReaderAnchor {
     // it) or a gap holding their estimated slot, and so move what follows. Placement owners
     // position by virtual geometry, as does a pane with no laid-out rows.
     const element = instance.elementsCache.get(item.key);
-    const laidOut = (row: VirtualItem) => {
-      const candidate = instance.elementsCache.get(row.key);
-      return candidate?.isConnected === true && candidate.dataset.preparedRow !== "true";
-    };
-    const flowStart = instance.getVirtualItems().find(laidOut);
+    // Earlier landings in this batch move virtual-core's range, so find the flow among the
+    // mounted rows: where it starts, and the first laid-out row after this one.
+    let flowStart: number | undefined;
+    let next: HTMLElement | undefined;
+    for (const candidate of instance.elementsCache.values()) {
+      if (candidate.isConnected && candidate.dataset.preparedRow !== "true") {
+        const index = instance.indexFromElement(candidate);
+        flowStart = Math.min(flowStart ?? index, index);
+        if (index > item.index && (!next || index < instance.indexFromElement(next))) {
+          next = candidate;
+        }
+      }
+    }
     let above: boolean;
     let moves = false;
-    if (owned || !flowStart) {
+    if (owned || flowStart === undefined) {
       above = isAboveReader(
         item.start,
         item.size,
@@ -452,13 +460,10 @@ export class TranscriptReaderAnchor {
           instance.scrollOffset ?? 0,
         );
     } else {
-      const next = instance.getVirtualItems().find((row) => row.index > item.index && laidOut(row));
       const readerTop = this.host.scrollElement?.getBoundingClientRect().top ?? 0;
       above =
-        item.index < flowStart.index ||
-        (next !== undefined &&
-          (instance.elementsCache.get(next.key)?.getBoundingClientRect().top ?? 0) <=
-            readerTop + 0.5);
+        item.index < flowStart ||
+        (next !== undefined && next.getBoundingClientRect().top <= readerTop + 0.5);
       moves = above;
       this.flowMoved ||= above;
     }

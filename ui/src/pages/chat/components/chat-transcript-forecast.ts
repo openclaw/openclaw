@@ -99,33 +99,51 @@ export function rowKeys(
 }
 
 /**
- * The flow starts at the first active row's virtual offset, which counts unmeasured rows at their
- * estimates. Rows arriving before laid-out content would enter the flow at their real size in the
- * frame the content already moved by an estimate's error, so they stay out of it, painted at their
- * slots, until all of them are measured. Removes them from `active` and returns their keys; with
- * nothing laid out, as after a jump, every row enters.
+ * The flow starts at the first active row's virtual offset, which counts rows of unknown size at
+ * their estimates. Rows arriving before laid-out content would enter the flow at their real size
+ * in a frame where the content already moved by an estimate's error, so they wait outside it
+ * until all of them have known sizes. Removes them from `active`; with nothing laid out, as after
+ * a jump, every row enters.
+ *
+ * A row outside the flow paints at its virtual slot, which is where it will land only once its
+ * size and those of the rows between it and the flow are known. Until then it stays unpainted
+ * (`unsettled`), so no text first appears in one place and then moves.
  */
 export function hold(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   active: number[],
-  predecessor: number | undefined,
   keys: Set<string>,
   measured: (indexes: readonly number[]) => boolean,
-): Set<string> {
+): { held: Set<string>; unsettled: Set<string> } {
   const key = (index: number) => String(virtualizer.options.getItemKey(index));
+  const known = (index: number) => virtualizer.itemSizeCache.has(key(index)) || measured([index]);
   const laidOut = active.findIndex((index) => {
     const element = virtualizer.elementsCache.get(key(index));
     return element?.isConnected === true && element.dataset.preparedRow !== "true";
   });
-  if (laidOut <= 0 || measured(active.slice(0, laidOut))) {
-    return new Set();
+  const held = new Set(
+    laidOut > 0 && !active.slice(0, laidOut).every(known) ? active.splice(0, laidOut).map(key) : [],
+  );
+  const unsettled = new Set(held);
+  const first = active[0];
+  const last = active.at(-1);
+  for (const item of virtualizer.getVirtualItems()) {
+    const row = String(item.key);
+    if (first === undefined || last === undefined || !keys.has(row) || held.has(row)) {
+      continue;
+    }
+    const [from, to] = item.index < first ? [item.index, first - 1] : [last + 1, item.index];
+    for (let index = from; index <= to; index++) {
+      if (!known(index)) {
+        unsettled.add(row);
+        break;
+      }
+    }
   }
-  const held = new Set(active.splice(0, laidOut).map(key));
-  // A measuring predecessor no longer borders the flow; it paints at its slot like them.
-  for (const row of predecessor === undefined ? held : [...held, key(predecessor)]) {
+  for (const row of held) {
     keys.add(row);
   }
-  return held;
+  return { held, unsettled };
 }
 
 export function retainedKeys(

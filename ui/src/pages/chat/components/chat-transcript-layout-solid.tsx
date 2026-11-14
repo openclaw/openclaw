@@ -146,7 +146,9 @@ function TranscriptRows(props: {
               );
               const paintPreparing = createMemo(
                 () =>
-                  forecast() || (preparing() && virtualRow().index + 1 === activeRows()[0]?.index),
+                  !props.snapshot.unsettledRowKeys?.has(row()?.key ?? "") &&
+                  (forecast() ||
+                    (preparing() && virtualRow().index + 1 === activeRows()[0]?.index)),
               );
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;

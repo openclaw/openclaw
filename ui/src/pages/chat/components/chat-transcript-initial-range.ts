@@ -31,8 +31,8 @@ export class TranscriptInitialRange {
   // keeping inactive rows outside the visible range's flow.
   readonly preparedRowKeys = new Set<string>();
   private preparingRowKey: string | undefined;
-  // Rows waiting out of the flow for their first measurement.
-  private heldRowKeys: ReadonlySet<string> = new Set();
+  // Rows waiting out of the flow for known sizes, and rows outside it not yet painted.
+  private hold: ReturnType<typeof forecast.hold> = { held: new Set(), unsettled: new Set() };
   readonly rowIndexes = new Map<string, number>();
   private cancelPreparation?: () => void;
   private preparationIsIdle = false;
@@ -197,11 +197,12 @@ export class TranscriptInitialRange {
     const keys = forecast.rowKeys(virtualizer, this.forecastViewport(), rows, this.preparedRowKeys);
     // Arriving rows wait out of the flow only while the reader moves through laid-out content.
     const arriving = this.reading && !this.preparingEnd ? active : [];
-    this.heldRowKeys = forecast.hold(virtualizer, arriving, predecessor, keys, this.rowsMeasured);
+    this.hold = forecast.hold(virtualizer, arriving, keys, this.rowsMeasured);
     return {
       activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
       forecastRowKeys: keys,
+      unsettledRowKeys: this.hold.unsettled,
     };
   }
 
@@ -494,8 +495,8 @@ export class TranscriptInitialRange {
     const size = this.measure(element, entry);
     const key = element.dataset.virtualRowKey;
     // A size equal to its estimate changes nothing virtual-core reports; admit the row anyway.
-    if (key !== undefined && entry && this.heldRowKeys.has(key)) {
-      queueMicrotask(() => this.heldRowKeys.has(key) && this.invalidate());
+    if (key !== undefined && entry && this.hold.held.has(key)) {
+      queueMicrotask(() => this.hold.held.has(key) && this.invalidate());
     }
     if (
       key !== undefined &&
