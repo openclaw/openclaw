@@ -44,7 +44,6 @@ async function metadataFixture() {
           guest: {
             agents: "*",
             scopes: ["operator.sessions.read"],
-            // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
             sessions: { others: "invited" },
           },
         },
@@ -155,21 +154,21 @@ it("chat.metadata rechecks membership after asynchronous placement preparation",
     expect(fixture.readChatMetadata).not.toHaveBeenCalled();
   }));
 
-it.for(["publication", "provider dispatch"] as const)(
+it.for(["publication", "guard consumption"] as const)(
   "chat.metadata rechecks membership before %s after preparation yields",
   async (boundary, { signal }) =>
     withInvitedMetadata(async (fixture) => {
       const entered = createDeferred();
       const release = createDeferred();
-      const inferenceIo = vi.fn();
-      // The metadata service is the handler dependency; its I/O fixture consumes the
-      // real handler-owned synchronous dispatch guard, never a mocked auth result.
+      const consume = vi.fn();
+      // This probes the retained guard contract. Production metadata reads only the
+      // published catalog; session-fork transport tests cover real inference I/O.
       fixture.readChatMetadata.mockImplementationOnce(async (scope) => {
         entered.resolve();
         await release.promise;
-        if (boundary === "provider dispatch") {
+        if (boundary === "guard consumption") {
           expectDefined(scope.beforeRequest, "saved-session dispatch authority")();
-          inferenceIo();
+          consume();
         }
         return fixture.metadata;
       });
@@ -189,8 +188,8 @@ it.for(["publication", "provider dispatch"] as const)(
         await request.pending;
       }
       expectHidden(request.respond);
-      if (boundary === "provider dispatch") {
-        expect(inferenceIo).not.toHaveBeenCalled();
+      if (boundary === "guard consumption") {
+        expect(consume).not.toHaveBeenCalled();
       }
     }),
 );
