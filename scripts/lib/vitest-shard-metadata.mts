@@ -156,7 +156,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/server-methods/tasks.test.ts", 19],
   ["src/gateway/server-methods/usage.sessions-usage-owner-attribution.integration.test.ts", 19],
   ["src/gateway/server-methods/system-agent-approval.test.ts", 18],
-  ["src/gateway/server-methods/sessions-mutations.catalog-queue.test.ts", 18],
   ["src/gateway/server-methods/chat-history-handler.test.ts", 17],
   ["src/gateway/server-methods/board.test.ts", 16],
   ["src/gateway/server-methods/chat-history-delta.test.ts", 15],

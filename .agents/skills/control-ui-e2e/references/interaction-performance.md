@@ -56,7 +56,7 @@
   environment caveat in step 2.
 - `ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts`: stream and idle budgets.
 - `ui/src/e2e/cron-search.e2e.test.ts`: interaction-scoped tracing.
-- `scripts/bench-control-ui-interactions.ts`: large-catalog input and sidebar measurements; `ui/src/e2e/chat-model-controls.e2e.test.ts` retains the behavior assertions.
+- `scripts/bench-control-ui-interactions.ts`: large-catalog input and sidebar measurements.
 - Use `--trace` for per-task source-mapped attribution (`longTaskDetails`), and
   separate `--thread-cpu-time` paired runs for actual renderer CPU deltas on a
   loaded host. A base/base comparison is the A/A control. `--first-pair-screenshots`

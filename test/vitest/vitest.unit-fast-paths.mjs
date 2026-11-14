@@ -103,7 +103,6 @@ export const forcedUnitFastTestFiles = [
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.cwd.test.ts",
-  "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",

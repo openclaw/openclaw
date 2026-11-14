@@ -460,10 +460,6 @@
       "group": "infra",
       "seconds": 364.385
     },
-    "src/infra/database-engine/port-command.integration.test.ts": {
-      "group": "infra",
-      "seconds": 632.783
-    },
     "src/infra/database-engine/port-command.mixed.integration.test.ts": {
       "group": "infra",
       "seconds": 240.365

@@ -1472,17 +1472,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/new-session-page.title.e2e.test.ts", ["chat", "new-session"]),
   pageWatch(
-    "ui/src/e2e/new-session-page.transition.e2e.test.ts",
-    ["chat", "new-session"],
-    [
-      "ui/src/components/image-lightbox.tsx",
-      "ui/src/components/modal-dialog.tsx",
-      "ui/src/pages/chat/chat-page.tsx",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/pending-session-create.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/new-session-page.workspace-memory.e2e.test.ts",
     ["chat", "new-session"],
     ["ui/src/pages/new-session/new-session-page-entry.ts"],
