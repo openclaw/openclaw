@@ -136,9 +136,13 @@ export function startGitOperationTiming(
             outcome,
             ...(kind === "worktree-removal" && outcome === "threw"
               ? {
+                  errorType: (error instanceof Error ? error.constructor.name : typeof error).slice(
+                    0,
+                    80,
+                  ),
                   error: redactSupportDiagnosticLine(
-                    `${error instanceof Error ? error.constructor.name : typeof error}: ${formatErrorMessage(error).replace(/\S*[\\/].*/u, "[redacted-path]")}`,
-                    { env: {}, stateDir: "" },
+                    formatErrorMessage(error),
+                    { env: {}, stateDir: "", redactRelativePaths: true },
                     500,
                   ),
                 }
