@@ -6,7 +6,6 @@ import { isMobileBrowserPlatform } from "../../lib/browser-platform.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
 import type {
   ChatComposerPlusMenuProps,
@@ -55,29 +54,6 @@ export function NewSessionPlusMenu(props: {
     };
   });
   return <ChatComposerPlusMenu menu={menu()} />;
-}
-
-export function NewSessionSelectionStatus(props: { options: NewSessionComposerCapabilityOptions }) {
-  const textarea = useContext(NewSessionComposerTextareaContext);
-  const count = createMemo(() => countSessionToolOverrides(props.options.toolOverrides));
-  return (
-    <Show when={count() > 0}>
-      <button
-        type="button"
-        class="new-session-page__selection-status"
-        disabled={props.options.submitting || props.options.messageLocked === true}
-        onClick={() => {
-          textarea.capabilityMenuView = "root";
-          textarea.capabilityMenuOpen = true;
-          props.options.onChange();
-        }}
-      >
-        {t(count() === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count", {
-          count: String(count()),
-        })}
-      </button>
-    </Show>
-  );
 }
 
 export function StartControl(props: {

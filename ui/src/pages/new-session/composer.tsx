@@ -62,11 +62,7 @@ import {
   ComposerWidthEdge,
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
-import {
-  NewSessionPlusMenu,
-  NewSessionSelectionStatus,
-  StartControl,
-} from "./composer-capability-controls.tsx";
+import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
@@ -639,9 +635,6 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal}>
-              <NewSessionSelectionStatus options={options()} />
-            </Show>
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">

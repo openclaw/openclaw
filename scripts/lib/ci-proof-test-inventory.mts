@@ -4962,7 +4962,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/pages/chat/dashboard-presentation-defaults.test.ts",
   "ui/src/pages/config/meeting-capture.test.ts",
   "ui/src/pages/cron/cron-page.test.ts",
-  "ui/src/pages/cron/run-transcript.e2e.test.ts",
   "ui/src/pages/meetings/meetings-page.test.ts",
   "ui/src/pages/new-session/draft-submission-worktree-preferences.test.ts",
   "ui/src/pages/new-session/palette-session-draft.test.ts",

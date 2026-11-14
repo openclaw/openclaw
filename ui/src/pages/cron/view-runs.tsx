@@ -31,7 +31,6 @@ type CronRunsSectionProps = Pick<
   | "onLoadMoreRuns"
   | "onRefresh"
   | "onRunsFiltersChange"
-  | "onViewRunTranscript"
   | "onRunMount"
 > & {
   conditionActivity?: {
@@ -356,9 +355,6 @@ export function RunsSection(props: CronRunsSectionProps) {
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
                 onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
-                onViewRunTranscript={(targetEntry, trigger) =>
-                  props.onViewRunTranscript?.(targetEntry, trigger)
-                }
               />
             )}
           </For>
@@ -398,7 +394,6 @@ function Run(props: {
   entry: CronRunLogEntry;
   formatTimestamp: ReturnType<typeof createCompactMsFormatter>;
   highlightedRunId?: string | null;
-  onViewRunTranscript?: CronProps["onViewRunTranscript"];
   onRunMount?: (
     ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
   ) => (() => void) | undefined;
@@ -474,16 +469,6 @@ function Run(props: {
           {props.entry.nextRunAtMs !== undefined ? (
             <div class="muted">
               {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
-            </div>
-          ) : undefined}
-          {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (
-            <div>
-              <button
-                class="btn btn--sm"
-                onClick={(event) => props.onViewRunTranscript?.(props.entry, event.currentTarget)}
-              >
-                {t("cron.runEntry.viewTranscript")}
-              </button>
             </div>
           ) : undefined}
           {showErrorInMeta() ? <RunError error={props.entry.error} /> : undefined}

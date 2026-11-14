@@ -63,10 +63,6 @@ const catalog = {
         adminBlocked: "You need admin access to manage MCP servers.",
         savingBlocked: "Saving… Try again in a moment.",
       },
-      overrides: {
-        count: "{count} overrides",
-        countOne: "{count} override",
-      },
       contextUsage: {
         title: "Context usage details",
         percentUsed: "Context: {pct}% used",

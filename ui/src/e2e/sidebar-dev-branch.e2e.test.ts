@@ -17,10 +17,10 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const DEV_BRANCH = "feat/dev-branch-badge";
+const DEV_BRANCH = "fix/control-ui-model-picker-capability-badge-and-sidebar-state-styling";
 
 suite.define(() => {
-  it("renders the dev checkout branch and its tooltip in the footer", async () => {
+  it("truncates a long dev branch on one line and keeps its full name in the tooltip", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, { devGitBranch: DEV_BRANCH });
 
@@ -40,6 +40,16 @@ suite.define(() => {
           }),
         )
         .toEqual({ name: DEV_BRANCH, description: DEV_BRANCH });
+      const name = badge.locator(".sidebar-footer-branch__name");
+      const layout = await name.evaluate((element) => ({
+        height: element.getBoundingClientRect().height,
+        lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        textOverflow: getComputedStyle(element).textOverflow,
+        clipped: element.scrollWidth > element.clientWidth,
+      }));
+      expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
+      expect(layout.textOverflow).toBe("ellipsis");
+      expect(layout.clipped).toBe(true);
     });
   });
 

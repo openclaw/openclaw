@@ -75,6 +75,8 @@ suite.define(() => {
       await menu.getByRole("switch", { name: "github", exact: true }).click();
       await menu.locator('[data-value="back"]').click();
       await menu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
+      await page.keyboard.press("Escape");
+      expect(await composer.getByRole("button", { name: /^\d+ overrides?$/ }).count()).toBe(0);
       await page.locator(".new-session-page__message").fill("prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();
       expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({

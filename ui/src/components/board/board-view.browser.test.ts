@@ -6,6 +6,7 @@ import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import "../../styles/base.css";
+import "../../styles/components.css";
 import "../../styles/chat/board.css";
 import "./board-view.tsx";
 
@@ -623,6 +624,14 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     });
     const body = view.querySelector<HTMLElement>(".board-widget__body--scrollable");
     const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
+    const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
+    expect(getComputedStyle(allow!).backgroundColor).not.toBe(
+      getComputedStyle(reject!).backgroundColor,
+    );
+    for (const button of [allow!, reject!]) {
+      expect(getComputedStyle(button).fontSize).toBe("12px");
+      expect(getComputedStyle(button).padding).toBe("6px 10px");
+    }
     expect(getComputedStyle(body!).overflowY).toBe("auto");
     expect(body!.scrollHeight).toBeGreaterThan(body!.clientHeight);
     allow?.focus();

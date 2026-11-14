@@ -36,10 +36,14 @@ const schema = configSchema(
     channels: objectSchema("", {
       telegram: objectSchema("Telegram", {
         botToken: { type: "string", title: "Bot Token" },
+        linkPreview: { type: "boolean", title: "Link previews", default: true },
       }),
     }),
   }),
-  { "channels.telegram.botToken": { sensitive: true, advanced: false } },
+  {
+    "channels.telegram.botToken": { sensitive: true, advanced: false },
+    "channels.telegram.linkPreview": { advanced: false },
+  },
 );
 
 const storedConfig = {
@@ -56,7 +60,11 @@ const storedSnapshot = {
 // What the Gateway sends when the file holds "Bearer ${TOKEN}": redacted like plaintext, no text.
 const templateSnapshot = { ...storedSnapshot, raw: null };
 
-async function openChannels(page: Page, current: Record<string, unknown> = snapshot) {
+async function openChannels(
+  page: Page,
+  current: Record<string, unknown> = snapshot,
+  entry: "settings" | "direct" = "settings",
+) {
   const wizard = buildChannelWizardMocks();
   const gateway = await installMockGateway(page, {
     featureMethods: [
@@ -85,8 +93,12 @@ async function openChannels(page: Page, current: Record<string, unknown> = snaps
       "config.patch": { ok: true, config, hash: "channel-config" },
     },
   });
-  await page.goto(`${suite.server.baseUrl}settings/profile`);
-  await page.getByRole("link", { name: "Channels", exact: true }).first().click();
+  if (entry === "direct") {
+    await page.goto(`${suite.server.baseUrl}settings/channels`);
+  } else {
+    await page.goto(`${suite.server.baseUrl}settings/profile`);
+    await page.getByRole("link", { name: "Channels", exact: true }).first().click();
+  }
   await page.locator(".channels-item").filter({ hasText: "Telegram" }).first().click();
   const detail = page.locator(".channels-detail");
   const token = detail.locator('input[type="password"]').first();
@@ -100,6 +112,21 @@ async function choose(page: Page, name: "Keep editing" | "Discard" | "Save") {
 }
 
 suite.define(() => {
+  it("subdues inherited controls on a cold visit and restores emphasis after editing", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, detail } = await openChannels(page, snapshot, "direct");
+      const control = detail.locator(".cfg-default-control");
+      await control.waitFor();
+      expect(await control.evaluate((element) => getComputedStyle(element).opacity)).toBe("0.55");
+      const toggle = detail.getByRole("switch", { name: "Link previews", exact: true });
+      expect(await toggle.isEnabled()).toBe(true);
+      await toggle.click();
+      await expect.poll(() => detail.locator(".cfg-default-control").count()).toBe(0);
+      expect(await toggle.isEnabled()).toBe(true);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+    });
+  });
+
   it("holds a partial credential until Save, across closing and leaving", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, detail, token } = await openChannels(page);
