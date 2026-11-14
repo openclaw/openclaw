@@ -540,11 +540,13 @@ export function UsageInsights(props: {
                   value={insights().cacheHitLabel}
                   sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().cacheHitRate > 0.6
-                      ? "good"
-                      : insights().cacheHitRate > 0.3
-                        ? "warn"
-                        : "bad"
+                    insights().cacheBase > 0
+                      ? insights().cacheHitRate > 0.6
+                        ? "good"
+                        : insights().cacheHitRate > 0.3
+                          ? "warn"
+                          : "bad"
+                      : undefined
                   }
                 />
                 <SummaryStat
