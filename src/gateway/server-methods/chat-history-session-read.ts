@@ -279,16 +279,18 @@ export async function prepareChatHistorySessionRead({
         sharing: NonNullable<ReturnType<typeof readCurrentSharing>>;
         publish: () => void;
       }) {
-        // A queued successor may rotate the current row while retained binding checks await.
+        // A queued successor may rotate the current row while sharing preparation or retained binding checks await.
         // Reacquire sharing once and repeat every transcript and authority check.
         for (let attempt = 0; attempt < 2; attempt += 1) {
-          const facts = await prepareSessionMutationFacts({
-            cfg: context.getRuntimeConfig(),
-            sessionKey: canonicalKey,
-            agentId: sessionAgentId,
-            allowMissing: true,
-          });
+          let releaseFacts: (() => void) | undefined;
           try {
+            const facts = await prepareSessionMutationFacts({
+              cfg: context.getRuntimeConfig(),
+              sessionKey: canonicalKey,
+              agentId: sessionAgentId,
+              allowMissing: true,
+            });
+            releaseFacts = facts.release;
             if (!(await publication.verify())) {
               unavailable("retained transcript changed while reading history");
               return;
@@ -347,7 +349,7 @@ export async function prepareChatHistorySessionRead({
               throw error;
             }
           } finally {
-            facts.release();
+            releaseFacts?.();
           }
         }
       },

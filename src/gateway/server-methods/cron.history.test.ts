@@ -44,6 +44,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
+import * as sharingFactsRead from "../session-sharing-facts-read.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import {
@@ -568,6 +569,59 @@ it.each([false, true])(
         }
       } finally {
         binding.mockRestore();
+      }
+    }),
+);
+
+it.each([false, true])(
+  "reads retained history after sharing preparation rollover (revoke sharing: %s)",
+  (revokeSharing) =>
+    withCronTranscript(async ({ baseKey, query }) => {
+      const readFacts = sharingFactsRead.readSessionSharingFactsInWorker;
+      let rotated = false;
+      const probe = vi
+        .spyOn(sharingFactsRead, "readSessionSharingFactsInWorker")
+        .mockImplementation(async (...args) => {
+          const facts = await readFacts(...args);
+          if (!rotated && args[0].sessionKeys.includes(baseKey)) {
+            rotated = true;
+            const cronSession = await prepareCronSession({
+              cfg: { agents: { entries: { main: {} } } },
+              agentId: "main",
+              sessionKey: baseKey,
+              nowMs: Date.now(),
+              forceNew: true,
+            });
+            await createPersistCronSessionEntry({
+              cronSession,
+              agentSessionKey: baseKey,
+              workspaceDir: process.cwd(),
+              persistSessionEntry: createCronSessionRowWriter({
+                agentId: "main",
+                agentSessionKey: baseKey,
+              }),
+            })();
+            if (revokeSharing) {
+              await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
+                visibility: "draft",
+              }));
+            }
+          }
+          return facts;
+        });
+      try {
+        const result = await query({ runId: "public-old-run" });
+        expect(rotated).toBe(true);
+        expect(result.ok).toBe(!revokeSharing);
+        expect(result.calls).toHaveLength(1);
+        if (revokeSharing) {
+          expect(result.payload?.messages).toBeUndefined();
+          expect(JSON.stringify(result.calls)).not.toContain(baseKey);
+        } else {
+          expectMessages(result, "Old first", "Old second", "Old last");
+        }
+      } finally {
+        probe.mockRestore();
       }
     }),
 );
