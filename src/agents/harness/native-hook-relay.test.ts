@@ -47,6 +47,7 @@ import {
 import {
   clearNativeHookRelaysForTests,
   createNativeHookRelayPermissionRequestFixture as createPermissionRequestFixture,
+  registerAgentTestNativeHookRelay as registerAgentRelay,
   registerTestNativeHookRelay as registerRelay,
   registerOwnedTestNativeHookRelay as registerOwnedRelay,
 } from "./native-hook-relay.test-support.js";
@@ -104,16 +105,6 @@ async function rewriteMcpThroughCli(
     },
   );
   return JSON.parse(String(stdout.read())).hookSpecificOutput;
-}
-
-function registerAgentRelay(
-  overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {},
-) {
-  return registerRelay({
-    agentId: "agent-1",
-    sessionKey: "agent:main:session-1",
-    ...overrides,
-  });
 }
 
 function readTestNativeAgentId(rawPayload: unknown): string | undefined {

@@ -11,6 +11,11 @@ export type InstalledTerminalDependencyEdge = {
   to: string | null;
   optionalAbsent: boolean;
 };
+export function installedTerminalNpmOwner(cli: string): {
+  cli: string;
+  version: string;
+  sha256: string;
+};
 export function extractInstalledTerminalCachedPackage(options: {
   npmCli: string;
   cache: string;

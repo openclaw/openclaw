@@ -22,7 +22,7 @@ function readInput(file) {
   return bytes;
 }
 
-function installedTerminalNpmOwner(cli) {
+export function installedTerminalNpmOwner(cli) {
   const actual = fs.realpathSync(cli);
   const root = path.dirname(path.dirname(actual));
   assert.equal(actual, path.join(root, "bin/npm-cli.js"));

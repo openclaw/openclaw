@@ -435,6 +435,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ["upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["published-upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["package-installed-recovery-older-runtime", "e2e/upgrade-survivor-docker.sh"],
+      ["installed-terminal", "e2e/installed-terminal-docker.sh"],
       ["dreaming-cron-doctor", "e2e/upgrade-survivor-docker.sh"],
       ["root-managed-vps-upgrade", "e2e/upgrade-survivor-docker.sh"],
       ["update-migration", "e2e/upgrade-survivor-docker.sh"],

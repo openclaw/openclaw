@@ -91,6 +91,17 @@ function prepareInstalledTerminalDependencyReference(role: "current" | "historic
   const lock: unknown = parseYaml(pnpmLockfileDocuments(read("pnpm-lock.yaml")).dependencies);
   read("pnpm-workspace.yaml");
   const allowed = runtimePnpmLock(lock, selected, source, []);
+  if (role === "current") {
+    // Global npm ignores source pnpm overrides. Admit this reviewed minimatch
+    // resolution explicitly; native edges, cached SRI and content still qualify it.
+    allowed.packages["brace-expansion@5.0.13"] = {
+      resolution: {
+        integrity:
+          "sha512-Vh3dmFbc4wZeox7M9I/0L9GfFd83Su4+yCck/OF9Gi/P/dAHn0RT7X4K9R7gMNMhDck3DvhR6QXsnQdjjgwNvQ==",
+      },
+      engines: { node: "20 || >=22" },
+    };
+  }
   const overrides = readNpmLockOverrides(selected, source);
   const normalized = packageJsonForNpmLock(selected, overrides);
   const requiredPackages = {

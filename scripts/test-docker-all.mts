@@ -1528,7 +1528,8 @@ async function runLane(
   const env = laneEnv(lane, baseEnv, logDir);
   delete env.DOCKER_E2E_CONTAINER_CIDFILE;
   const recoveryIndex = installedRecoveryLaneNames.indexOf(name);
-  if (recoveryIndex !== -1) {
+  const settlesProducer = recoveryIndex !== -1 || name === "installed-terminal";
+  if (settlesProducer) {
     // Candidate-writable evidence stays outside uploads, unique to this attempt.
     const privateRoot = path.join(ROOT_DIR, ".artifacts/upgrade-survivor");
     await mkdir(privateRoot, { recursive: true });
@@ -1586,31 +1587,38 @@ async function runLane(
   const attempts = [laneAttempt(1, startedAt, result)];
   let publicationStatus: number | null = 0;
   let publicationError: { cause: unknown } | undefined;
-  if (recoveryIndex !== -1) {
+  if (settlesProducer) {
     // The killed lane cannot publish its own interruption. This independent
     // bounded host command joins the daemon producer after the host group/log,
     // before the publisher can read candidate-writable evidence.
     try {
       // Normal admission stays closed. Finalization follows successful execution
       // cleanup and retains the same process/log custody and later-signal handling.
-      const destination = await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
+      const settle = `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)}`;
+      const destination =
+        recoveryIndex === -1
+          ? undefined
+          : await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
       await activeChildrenShutdownPromise;
       const publication = await runOwnedShellCommand({
-        command: `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)} && exec ${[
-          process.execPath,
-          "--import",
-          path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
-          path.join(HARNESS_ROOT_DIR, "scripts/upgrade-survivor-diagnostics.mjs"),
-          "installed-recovery",
-          env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR!,
-          destination,
-          String(result.status),
-          retirementCuts[recoveryIndex]!,
-          String(result.timedOut),
-          packageSha256 ?? "",
-        ]
-          .map(shellQuote)
-          .join(" ")}`,
+        command:
+          destination === undefined
+            ? settle
+            : `${settle} && exec ${[
+                process.execPath,
+                "--import",
+                path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
+                path.join(HARNESS_ROOT_DIR, "scripts/upgrade-survivor-diagnostics.mjs"),
+                "installed-recovery",
+                env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR!,
+                destination,
+                String(result.status),
+                retirementCuts[recoveryIndex]!,
+                String(result.timedOut),
+                packageSha256 ?? "",
+              ]
+                .map(shellQuote)
+                .join(" ")}`,
         env,
         label: `${name}-diagnostics`,
         logFile,
@@ -1650,7 +1658,7 @@ async function runLane(
     rerunCommand: buildLaneRerunCommand(name, baseEnv),
     startedAt: startedAtIso,
     status,
-    ...(recoveryIndex === -1 ? {} : { publicationStatus }),
+    ...(settlesProducer ? { publicationStatus } : {}),
     noOutputTimedOut: result.noOutputTimedOut,
     timedOut: result.timedOut,
   };
