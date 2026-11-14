@@ -267,11 +267,15 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   assert.deepEqual(legacySessions.warnings, [], "Legacy session migration must have no warnings");
   if (legacySessions.armed) {
     assert.equal(legacySessions.complete, true, "Legacy session migration must be complete");
-    assert.equal(
-      legacySessions.ledgerComplete,
-      true,
-      "Legacy session ledger must match current stores",
-    );
+    if (!legacySessions.ledgerComplete) {
+      // Only Doctor writes the historical import ledger. Ordinary fresh startup
+      // needs no such receipt when a full detect pass finds no legacy rows.
+      assert.deepEqual(
+        legacySessions.outcomes.map(({ kind }) => kind),
+        ["no-legacy-rows"],
+        "Uncertified legacy session claims must not remain",
+      );
+    }
   }
   using custody = openClientCredentialCustody(env, { readOnly: true });
   assert.ok(custody, "Native credential custody must exist");

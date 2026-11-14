@@ -175,7 +175,6 @@ async function runProof(options: ProducerOptions) {
     published = await createPublishedWireWorkspace(root);
     const gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",

@@ -105,7 +105,6 @@ export async function proveHotReloadTerminalDeferredRestart({
         assert(address && typeof address !== "string");
         const gateway = await owner.start({
           repoRoot,
-          initializeCurrentRuntimeState: true,
           useRepoCli: true,
           command: {
             executablePath: process.execPath,

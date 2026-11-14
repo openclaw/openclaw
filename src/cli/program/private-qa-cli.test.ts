@@ -13,12 +13,12 @@ vi.mock("../../infra/openclaw-root.js", () => ({
 describe("private-qa-cli", () => {
   let root: string;
 
-  async function registerPrivateQa(program: Command) {
+  async function registerPrivateQa(program: Command, args: string[] = []) {
     const qa = getSubCliEntriesCore().find((entry) => entry.name === "qa");
     if (!qa) {
       throw new Error("Expected private QA descriptor");
     }
-    await qa.register(program, [], { purpose: "runtime" });
+    await qa.register(program, ["node", "openclaw", ...args], { purpose: "runtime" });
   }
 
   beforeEach(() => {
@@ -50,6 +50,23 @@ describe("private-qa-cli", () => {
       expect(program.commands.map((command) => command.name())).toEqual(["fixture-qa"]);
     },
   );
+
+  it.each([
+    { args: [] },
+    { args: ["qa"] },
+    { args: ["qa", "suite"] },
+    { args: ["qa", "telegram"] },
+    { args: ["qa", "initialize"] },
+  ])("keeps every private QA invocation source-checkout-only ($args)", async ({ args }) => {
+    await expect(registerPrivateQa(new Command(), args)).rejects.toThrow(
+      "Private QA CLI is only available from an OpenClaw source checkout.",
+    );
+  });
+
+  it("does not advertise QA without private QA admission", () => {
+    vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
+    expect(getSubCliEntriesCore().some((entry) => entry.name === "qa")).toBe(false);
+  });
 
   it("rejects non-source package roots even when private QA is enabled", async () => {
     await expect(registerPrivateQa(new Command())).rejects.toThrow(
