@@ -798,6 +798,10 @@ extension OpenClawChatView {
                     self.expandedUserMessageIDs.insert(msg.id)
                 }
             },
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(self.viewModel),
+                sessionTarget: self.viewModel.currentSessionTarget,
+                sessionGeneration: self.viewModel.sessionGeneration),
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.transport.resolveInlineWidgetResource(path: path, replacing: failedResource)
