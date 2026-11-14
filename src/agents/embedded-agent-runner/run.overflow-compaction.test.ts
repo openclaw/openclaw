@@ -383,7 +383,10 @@ describe("createEmbeddedRunCompactionRuntime", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  async function createRuntime(sessionTarget?: ContextEngineSessionTarget) {
+  async function createRuntime(
+    sessionTarget?: ContextEngineSessionTarget,
+    isTurnTainted?: () => boolean,
+  ) {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforeCompaction: vi.fn(async () => undefined),
@@ -432,6 +435,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
         workspaceDir: "/tmp/workspace",
       },
       sessionPromptState,
+      isTurnTainted,
     });
     const compactResult = {
       ok: true,
@@ -477,6 +481,24 @@ describe("createEmbeddedRunCompactionRuntime", () => {
         sessionFile: baseRunParams.sessionKey,
       }),
       expect.objectContaining({ sessionId: "rotated-session" }),
+    );
+  });
+
+  it("reports the current turn taint on owned compaction hooks", async () => {
+    let tainted = false;
+    const { runtime, compactResult, hookRunner } = await createRuntime(undefined, () => tainted);
+
+    await runtime.runOwnsCompactionBeforeHook("overflow recovery");
+    tainted = true;
+    await runtime.runOwnsCompactionAfterHook("overflow recovery", compactResult);
+
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turnTainted: false }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turnTainted: true }),
     );
   });
 

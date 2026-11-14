@@ -218,6 +218,30 @@ describe("agent harness lifecycle hook helpers", () => {
     }
   });
 
+  it.each(["agent_end", "before_agent_finalize"] as const)(
+    "passes the turn taint through to %s handlers",
+    async (hook) => {
+      const dispatch = vi.fn(async (_event: unknown, _ctx: { turnTainted?: boolean }) => undefined);
+      const hookRunner = {
+        hasHooks: () => true,
+        runAgentEnd: dispatch,
+        runBeforeAgentFinalize: dispatch,
+      } as never;
+      for (const turnTainted of [true, false, undefined]) {
+        const params = { ctx: { ...ctx, turnTainted }, event: EVENT, hookRunner };
+        await (hook === "agent_end"
+          ? awaitAgentHarnessAgentEndHook(params)
+          : runAgentHarnessBeforeAgentFinalizeHook(params));
+      }
+      expect(dispatch.mock.calls.map(([, hookCtx]) => hookCtx.turnTainted)).toEqual([
+        true,
+        false,
+        undefined,
+      ]);
+      expect(dispatch.mock.calls[2]?.[1]).not.toHaveProperty("turnTainted");
+    },
+  );
+
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {
     const run = finalizer(
       [{ action: "revise", retry: retry("revise from context run", "stable") }],

@@ -228,6 +228,7 @@ export async function runPreparedEmbeddedLoop(
       hookRunner,
       hookContext: hookCtx,
       sessionPromptState,
+      isTurnTainted: turnTaintState.isTainted,
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
