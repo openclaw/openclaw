@@ -405,6 +405,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/live-events.test.ts",
   "src/gateway/worker-environments/local-workspace-conversion.test.ts",
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
+  "src/gateway/worker-environments/local-workspace-store.test.ts",
   "src/gateway/worker-environments/local-workspace-template.test.ts",
   "src/gateway/worker-environments/node-desktop-carrier.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
