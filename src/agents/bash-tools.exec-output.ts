@@ -48,7 +48,7 @@ export type ExecProcessOutcome =
 export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 // Keep launch and later process observations consistent without naming an aliased tool.
 export const EXEC_MANUAL_COLLECTION_FOLLOW_UP =
-  "Automatic completion wake is disabled for this command. If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.";
+  "Automatic completion wake is unavailable after ending this turn. If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.";
 export const MAX_EXEC_YIELD_MS = 120_000;
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. New output while this command is running does not start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
@@ -57,11 +57,17 @@ type ExitWakeFacts = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   notifySessionTarget?: object;
+  assertExitNotificationAcceptanceCurrent?: () => void;
 };
 
-/** Whether a process's exit starts a turn in its originating conversation. Hidden subagents have no target. */
+/** Whether completion can wake the conversation after the originating turn ends. */
 export function hasExitWake(session: ExitWakeFacts): boolean {
-  return session.notifyOnExit === true && session.notifySessionTarget !== undefined;
+  return (
+    session.notifyOnExit === true &&
+    session.notifySessionTarget !== undefined &&
+    // Cron completion admission still requires its originating run.
+    session.assertExitNotificationAcceptanceCurrent === undefined
+  );
 }
 
 /**

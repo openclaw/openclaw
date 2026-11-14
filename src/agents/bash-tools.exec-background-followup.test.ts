@@ -302,8 +302,12 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     try {
       const start = async () => {
         const started = await exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")');
-        const { sessionId: processSessionId } = runningSession(started.details);
+        const { sessionId: processSessionId, followUp } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
+        if (cron) {
+          expect(followUp).toContain("collect it before ending the turn");
+          expect(followUp).not.toContain("end this turn now");
+        }
         if (scenario === "queued cron") {
           const receipt = expectDefined(receipts[0], "queued cron completion receipt");
           expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
