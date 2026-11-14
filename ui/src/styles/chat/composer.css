@@ -759,6 +759,20 @@
   background: var(--chat-composer-group-hover);
 }
 
+/* The resting microphone is the narrowest glyph in the row, so its box tucks
+   into the gap on each side to hold the row's ink rhythm. The group wash
+   paints on the actions' 30px tier, level with the send disc beside it. */
+.agent-chat__input .agent-chat__composer-actions > .chat-talk-control {
+  box-sizing: border-box;
+  height: var(--chat-composer-send-size);
+  margin-inline: var(--chat-composer-talk-tuck, 0px);
+  border-block: calc(
+      (var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2
+    )
+    solid transparent;
+  background-clip: padding-box;
+}
+
 .chat-talk-control > openclaw-tooltip {
   display: inline-flex;
 }
@@ -2120,13 +2134,30 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   user-select: none;
 }
 
+.chat-controls__model-picker > summary {
+  /* The summary fills its details block without a percentage width. WebKit can
+     retain a stale intrinsic size when that percentage depends on the picker
+     flex item whose width is itself derived from the changing model label. */
+  width: auto;
+  max-width: 100%;
+}
+
 .agent-chat__input .chat-controls__inline-select-trigger {
   /* The chip fills the action row's box (see --chat-composer-chip-height) and
-     paints its pill one step inside it, on the same 30px tier as the primary
-     action's painted disc. */
-  border-block: 1px solid transparent;
+     paints its pill inside it, one tier below the primary action's disc. */
+  border-block: var(--chat-composer-chip-surface-inset, 1px) solid transparent;
   border-radius: var(--radius-full);
   background-clip: padding-box;
+}
+
+.agent-chat__input .chat-controls__inline-select-trigger .chat-controls__permission-icon,
+.agent-chat__input .chat-controls__inline-select-trigger .chat-controls__trigger-provider-icon,
+.agent-chat__input .chat-controls__inline-select-trigger .chat-controls__effort-zap {
+  margin-inline-start: var(--chat-composer-chip-glyph-pull, 0px);
+}
+
+.agent-chat__input .chat-controls__inline-select-trigger > .chat-controls__inline-select-chevron {
+  margin-inline-end: var(--chat-composer-chip-glyph-pull, 0px);
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
@@ -2640,13 +2671,19 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-size: 9px;
 }
 
-/* The trigger's own brand mark hangs 1px below the chip icon box so its filled
-   glyph reads the same optical size as the context ring's stroked circle next
-   to it; the calc keeps the mobile touch-size raise proportional. */
+/* The trigger's own brand mark and the context ring's stroked circle beside it
+   are sized as a pair so the filled glyph and the ring read one optical size.
+   The composer owns both sizes; the fallback hangs the mark 1px below the chip
+   icon box and keeps the mobile touch-size raise proportional. */
 .chat-controls__trigger-provider-icon {
-  width: calc(var(--chat-composer-chip-icon, 16px) - 1px);
-  height: calc(var(--chat-composer-chip-icon, 16px) - 1px);
-  flex: 0 0 calc(var(--chat-composer-chip-icon, 16px) - 1px);
+  --chat-brand-icon-size: var(
+    --chat-composer-brand-icon-size,
+    calc(var(--chat-composer-chip-icon, 16px) - 1px)
+  );
+
+  width: var(--chat-brand-icon-size);
+  height: var(--chat-brand-icon-size);
+  flex: 0 0 var(--chat-brand-icon-size);
 }
 
 /* Chat uses a neutral OpenAI mark in persistent chrome. New-session deliberately
@@ -4126,7 +4163,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   flex: 0 1 auto;
 }
 
-.chat-controls__model-option:disabled {
+.chat-controls__model-option:disabled,
+.chat-controls__model-option[aria-disabled="true"] {
   opacity: 0.42;
   color: var(--muted);
   cursor: default;
@@ -4178,6 +4216,18 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding: 0 10px 2px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.chat-controls__model-option[data-chat-model-cooldown] {
+  opacity: 1;
+}
+
+.chat-controls__model-option[data-chat-model-cooldown] .chat-controls__model-option-title,
+.chat-controls__model-option[data-chat-model-cooldown] .chat-controls__model-option-name,
+.chat-controls__model-option[data-chat-model-cooldown] .chat-controls__model-state-label,
+.chat-controls__model-option[data-chat-model-cooldown] .chat-controls__model-chat-only-info,
+.chat-controls__model-option[data-chat-model-cooldown] .provider-brand-icon {
+  color: color-mix(in srgb, var(--muted) 50%, transparent);
 }
 
 .chat-controls__model-auth-state[data-auth-failed] > span {
@@ -4910,6 +4960,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent);
 }
 
+.chat-controls__model-cooldown {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chat-controls__model-cooldown,
 .chat-controls__provider-heading > .chat-controls__auth-meta,
 .chat-controls__model-state-label--default {
   flex: 0 0 auto;
@@ -5233,5 +5289,97 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 @media (prefers-reduced-motion: reduce) {
   .chat-controls__catalog-skeleton span {
     animation: none;
+  }
+}
+
+/* Favorites share the model row without stealing its selection action. */
+.chat-controls__model-favorite {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  margin-left: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: min(7px, var(--radius-menu-item));
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  cursor: var(--cursor-action);
+}
+
+.chat-controls__model-menu .chat-controls__model-favorite > svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+}
+
+.chat-controls__model-favorite[aria-pressed="true"],
+.chat-controls__model-option:hover .chat-controls__model-favorite,
+.chat-controls__model-option[data-chat-model-highlighted] .chat-controls__model-favorite,
+.chat-controls__model-favorite:focus-visible {
+  opacity: 1;
+}
+
+.chat-controls__model-favorite[aria-pressed="true"] > svg {
+  fill: currentColor;
+}
+
+.chat-controls__model-favorite:hover {
+  color: var(--text-strong);
+  background: var(--menu-hover);
+}
+
+[data-chat-model-provider-group="$favorites"] .chat-controls__model-option-provider {
+  display: inline-flex;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__model-favorite {
+    transition:
+      opacity 140ms,
+      color 140ms;
+  }
+
+  .chat-controls__model-favorite[data-popped] > svg {
+    animation: chat-model-favorite-pop 360ms ease-out;
+  }
+}
+
+@keyframes chat-model-favorite-pop {
+  from {
+    transform: scale(0.5);
+  }
+  55% {
+    transform: scale(1.3);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-controls__model-option-wrap:has(.chat-controls__model-favorite)
+    .chat-controls__context-menu {
+    /* Reserve the trailing star's 28px box and the row's 12px gap. */
+    right: 76px;
+  }
+
+  .chat-controls__model-favorite {
+    order: 4;
+    flex-basis: 28px;
+    width: 28px;
+    height: 28px;
+    margin-left: 0;
+    border-radius: min(9px, var(--radius-menu-item));
+    opacity: 1;
+  }
+
+  .chat-controls__model-menu .chat-controls__model-favorite > svg {
+    width: 15px;
+    height: 15px;
   }
 }

@@ -589,6 +589,9 @@ export class GatewayBoardProvider implements BoardProvider {
             ...(previous.sandboxOrigin !== undefined
               ? { sandboxOrigin: previous.sandboxOrigin }
               : {}),
+            ...(previous.sandboxShellHtml !== undefined
+              ? { sandboxShellHtml: previous.sandboxShellHtml }
+              : {}),
           };
           copyBoardWidgetTicketReceipt(preserved, previous, receivedAtMs);
           return preserved;

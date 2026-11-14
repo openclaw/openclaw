@@ -12,7 +12,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 // decision is recorded on the message object and persisted in the durable
 // spool payload, so lane keys, authorization, sessions, delivery and restart
 // replay all read the same topic fact instead of re-deriving it.
-export const TELEGRAM_DM_TOPIC_ADOPT_WINDOW_SEC = 3;
+const TELEGRAM_DM_TOPIC_ADOPT_WINDOW_SEC = 3;
 const TELEGRAM_DM_TOPIC_ADOPT_MAX_ENTRIES = 512;
 
 type PendingDmTopic = {
@@ -102,7 +102,7 @@ export function adoptTelegramDmTopicUpdate(
  * Idempotent per message object and per service message: resolving either
  * update again never rearms the adoption window.
  */
-export function adoptTelegramDmTopicMessage(
+function adoptTelegramDmTopicMessage(
   message: TelegramDmTopicMessage,
   state: TelegramDmTopicAdoptState,
 ): number | undefined {

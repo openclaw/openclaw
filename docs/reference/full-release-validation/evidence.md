@@ -142,7 +142,7 @@ reviewed row with an exact target version, child role, job name, and reason.
 For example (illustrative only, not an active grant):
 
 ```js
-export const RELEASE_VALIDATION_WAIVERS = [
+const RELEASE_VALIDATION_WAIVERS = [
   {
     targetVersion: "YYYY.M.PATCH",
     childRole: "releaseChecksIndependent",
