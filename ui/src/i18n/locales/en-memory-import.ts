@@ -77,7 +77,7 @@ const enMemoryImport = {
       subtitle:
         "Stage trusted memories from earlier agent sessions. Dreaming promotes the useful ones into long-term memory.",
       dateRange: "Session date range",
-      dateRangeHint: "Leave either date blank to scan the full available range.",
+      dateRangeHint: "Leave both dates blank to scan the full available range.",
       from: "From",
       to: "To",
       actions: "Backfill",
@@ -86,10 +86,10 @@ const enMemoryImport = {
       apply: "Apply",
       applying: "Applying…",
       rollback: "Rollback",
-      previewSummary: "{candidates} candidates across {days} days",
+      previewSummary: "Candidates: {candidates} · Days: {days}",
       previewTruncated:
         "This preview shows the first bounded batch. Apply continues through the remaining candidates.",
-      candidateCount: "{count} candidates",
+      candidateCount: "Candidates: {count}",
       noCandidates: "No new trusted session candidates were found.",
       progress: "Processed {days} days · {staged} staged",
       processedCandidates: "{count} session candidates processed",
