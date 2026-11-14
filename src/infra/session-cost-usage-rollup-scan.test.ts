@@ -70,6 +70,20 @@ it("does not retain decoded payloads while refreshing memory usage", async () =>
   expect((await scan(Array<string>(640).fill(shared))).parsedRecords).toBe(1);
 });
 
+it("bills a flat transcript whose rows carry no navigation ids", async () => {
+  // An older appender wrote rows without an id, so no path reaches them. With no
+  // leaf control the transcript is still one branch and base bills all 8 rows
+  // (72 tokens), so the flat fallback must keep doing that.
+  const result = await scan(Array<string>(8).fill(JSON.stringify(message(7))));
+  expect(result.parsedRecords).toBe(8);
+  expect(Object.values(result.rollup.buckets)[0]!.totals).toMatchObject({
+    input: 56,
+    output: 16,
+    totalTokens: 72,
+    totalCost: 8,
+  });
+});
+
 it("preserves rewind, side append and parentless navigation with canonical byte anchors", async () => {
   // The real append path writes a side artifact without a parentId, so it hangs
   // off the leaf that was active when it landed, and a later rewind chains its

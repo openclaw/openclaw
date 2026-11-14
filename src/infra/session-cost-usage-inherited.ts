@@ -56,7 +56,13 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
       addPath(previousTip);
     }
   }
-  return dropInheritedTranscriptEvents(records, selected);
+  // Rows an older appender wrote without an id carry no navigation, so no path
+  // reaches them. Without a leaf control the whole transcript is still one
+  // branch, and `selectVisibleTranscriptEventEntries` bills it flat; keep that.
+  return dropInheritedTranscriptEvents(
+    records,
+    selected.length === 0 && !tree.hasLeafControl ? [...records] : selected,
+  );
 }
 
 /**
