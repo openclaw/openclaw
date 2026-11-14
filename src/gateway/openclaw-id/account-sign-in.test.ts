@@ -241,7 +241,7 @@ describe("createOpenClawIdSignIn", () => {
     const refused = await signIn.begin({
       issuerUrl: ISSUER,
       clientId: "ui",
-      redirectUri: "https://evil.example.test/steal?x=1",
+      redirectUri: "http://localhost:18789/steal",
     });
     expect(refused).toMatchObject({ ok: false, code: "malformed" });
   });

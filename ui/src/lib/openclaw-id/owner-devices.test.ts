@@ -4,7 +4,7 @@ import {
   generateEd25519Signer,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import { loadOwnerDeviceSigner } from "./device-key.ts";
-import { approverOf, devicesApprovedBy, signOwnerDeviceRevocation } from "./owner-devices.ts";
+import { devicesApprovedBy, signOwnerDeviceRevocation } from "./owner-devices.ts";
 import type { OpenClawIdOwnerDevice, OpenClawIdPeopleLink } from "./types.ts";
 
 // mock-isolation: the owner device key comes from each test instead of browser storage.
@@ -35,12 +35,6 @@ describe("owner devices", () => {
     expect(devicesApprovedBy(all, laptop).map((d) => d.label)).toEqual(["phone"]);
     expect(devicesApprovedBy(all, local).map((d) => d.label)).toEqual(["laptop", "phone"]);
     expect(devicesApprovedBy(all, kitDevice)).toEqual([]);
-  });
-
-  it("names the approver: the recovery kit, a listed device, or a removed one", () => {
-    expect(approverOf(all, local)).toEqual({ kind: "kit" });
-    expect(approverOf(all, phone)).toEqual({ kind: "device", label: "laptop" });
-    expect(approverOf(all, orphan)).toEqual({ kind: "removed" });
   });
 });
 

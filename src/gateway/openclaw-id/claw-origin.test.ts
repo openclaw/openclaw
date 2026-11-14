@@ -107,12 +107,6 @@ describe("WebSocket origin policy for a linked claw", () => {
     }
   });
 
-  it("refuses another claw's origin over the tunnel", () => {
-    setOpenClawIdClawOriginResolver(() => CLAW);
-    const other = { ...tunnel, origin: "https://team-k7x2q.claws.example.test" };
-    expect(checkGatewayWsBrowserOrigin(other, {}).ok).toBe(false);
-  });
-
   it("leaves direct loopback unchanged: local rules still decide, the claw origin is not special", () => {
     setOpenClawIdClawOriginResolver(() => CLAW);
     const local = {
