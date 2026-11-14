@@ -4,7 +4,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { readInstalledTerminalDependencyTree } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
+import {
+  readInstalledTerminalDependencyTree,
+  readInstalledTerminalMetadata,
+} from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
   type InstalledTerminalProcessAbsence,
   readInstalledTerminalEvents,
@@ -32,8 +35,10 @@ type Row = Record<string, unknown>;
 
 function fixture() {
   const base = fs.realpathSync(dirs.make("installed-watch-"));
-  const root = path.join(base, "package");
-  fs.mkdirSync(root);
+  // VERSION's two ancestor candidates must stay inside the fixture, away from
+  // the runner's package.json; package admission must still check both.
+  const root = path.join(base, "prefix/openclaw");
+  fs.mkdirSync(root, { recursive: true });
   for (const [relative, entry] of Object.entries(captured.files)) {
     expect(hash(entry.source)).toBe(entry.sha256);
     fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
@@ -91,22 +96,40 @@ function fixture() {
           "require('node:fs').writeFileSync(" + JSON.stringify(path.join(watched,"preload-ran")) + ",'ran');");
         options.env["NODE_OPTIONS=--require"] = preload;
       }
-      const child = spawn(process.execPath, args, options);
-      const registered = once(child.stdout, "data");
-      const closed = once(child, "close");
-      child.stdin.write(JSON.stringify({id:1,path:watched}) + "\\n");
-      const [bytes] = await registered;
-      assert.equal(JSON.parse(bytes.toString().trim()).event, "change");
-      fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:child.pid,reads}));
-      if(mode === "creator-exit") process.exit(0);
-      if(mode === "live-absence") {
-        const {captureInstalledTerminalProcessAbsence} = await import(${JSON.stringify(observer)});
-        fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({
-          pid:child.pid, receipts:captureInstalledTerminalProcessAbsence(${JSON.stringify(path.join(base, "events"))})
-        }));
+      if(mode === "permission") {
+        const {captureDirectoryWatchLaunch} = await import(${JSON.stringify(new URL("../../scripts/e2e/lib/upgrade-survivor/installed-terminal-directory-watch.mjs", import.meta.url).href)});
+        assert.equal(captureDirectoryWatchLaunch(process.execPath,
+          {argv:args,options},{environmentQualified:true}),undefined);
       }
-      child.stdin.end();
-      const [code, signal] = await closed;
+      const child = spawn(process.execPath, args, options);
+      // Native errors settle registration, but only close proves the child joined.
+      const closed = new Promise(resolve => child.once("close",(code,signal)=>resolve([code,signal])));
+      const registered = Promise.race([
+        once(child.stdout,"data"),
+        new Promise((_,reject) => {
+          child.once("error",reject);
+          child.stdin.once("error",reject);
+        }),
+        closed.then(([code,signal]) => {throw new Error("watch closed before registration: "+code+"/"+signal);}),
+      ]);
+      let outcome;
+      try {
+        child.stdin.write(JSON.stringify({id:1,path:watched}) + "\\n");
+        const [bytes] = await registered;
+        assert.equal(JSON.parse(bytes.toString().trim()).event, "change");
+        fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({pid:child.pid,reads}));
+        if(mode === "creator-exit") process.exit(0);
+        if(mode === "live-absence") {
+          const {captureInstalledTerminalProcessAbsence} = await import(${JSON.stringify(observer)});
+          fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({
+            pid:child.pid, receipts:captureInstalledTerminalProcessAbsence(${JSON.stringify(path.join(base, "events"))})
+          }));
+        }
+      } finally {
+        child.stdin.end();
+        outcome = await closed;
+      }
+      const [code, signal] = outcome;
       assert.equal(code,null); assert.equal(signal,"SIGKILL");
     }
     if(mode.startsWith("retained") || mode === "unregistered") {
@@ -152,6 +175,7 @@ function fixture() {
   );
   const bindInventory = () => {
     const identity = readWorkerCellPackageIdentity(root);
+    readInstalledTerminalMetadata(root, identity);
     const inventory = path.join(base, "inventory.json");
     writeJson(inventory, identity);
     return {
@@ -224,6 +248,10 @@ function run(f: ReturnType<typeof fixture>, mode = "joined") {
 }
 
 function records(f: ReturnType<typeof fixture>) {
+  const failure = path.join(f.directory, "observer-failed.json");
+  if (fs.existsSync(failure)) {
+    assert.fail(fs.readFileSync(failure, "utf8"));
+  }
   return fs
     .readdirSync(f.directory)
     .filter((name) => name.endsWith(".jsonl"))
@@ -254,6 +282,7 @@ it("admits the real sanitized helper only as a closed native lifetime", () => {
   const f = fixture();
   const result = run(f);
   expect(result.status, result.stderr).toBe(0);
+  records(f);
   const { pid } = JSON.parse(fs.readFileSync(f.resultPath, "utf8"));
   const rows = readInstalledTerminalEvents(f.directory, f.spec);
   expect(rows.filter((row) => row.event === "startup" && row.pid === pid)).toEqual([]);
@@ -270,7 +299,7 @@ it("admits the real sanitized helper only as a closed native lifetime", () => {
     spawned: true,
   });
   const created = rows.find((row) => row.event === "spawn" && row.child === pid);
-  assert(created);
+  assert(created && typeof created.pid === "number" && typeof created.thread === "number");
   const filename = path.join(f.directory, `${created.pid}-${created.thread}.jsonl`);
   const original = readJsonLines<Row>(filename);
   for (const changed of [
@@ -301,7 +330,11 @@ it("admits post-reap absence of the real watch after its creator exits without c
       assert(error instanceof Error && "code" in error && error.code === "ESRCH");
       absent = true;
     }
-    if (!absent) await new Promise((resolve) => setTimeout(resolve, 10));
+    if (!absent) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
   }
   expect(absent).toBe(true);
   expect(records(f).filter((row) => row.event === "startup" && row.pid === pid)).toEqual([]);
@@ -322,7 +355,7 @@ it("admits post-reap absence of the real watch after its creator exits without c
     expect(() =>
       readInstalledTerminalEvents(f.directory, {
         ...f.spec,
-        processAbsence: processAbsence.map((receipt) => ({ ...receipt, errorCode })),
+        processAbsence: processAbsence.map((receipt) => Object.assign({}, receipt, { errorCode })),
       }),
     ).toThrow("strict kernel absence");
   }
@@ -335,13 +368,13 @@ it.each([
   "extra-argument",
   "cache",
   "inherited-coverage",
-  "permission",
 ])("preserves native behavior without granting helper coverage for %s", (mode) => {
   const f = fixture();
   const result = run(f, mode);
   expect(result.status, result.stderr).toBe(0);
   const created = records(f).find((row) => row.event === "spawn");
-  expect(created?.directoryWatch).toBeUndefined();
+  assert(created && typeof created.child === "number");
+  expect(created.directoryWatch).toBeUndefined();
   expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow(
     "Missing Node child preload",
   );
@@ -351,6 +384,22 @@ it.each([
   if (mode === "env-equals") {
     expect(fs.readFileSync(path.join(f.base, "preload-ran"), "utf8")).toBe("ran");
   }
+});
+
+it("preserves native completion while refusing permission-mode observer coverage", () => {
+  const f = fixture();
+  const result = run(f, "permission");
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(fs.readFileSync(f.resultPath, "utf8")).pid).toBeTypeOf("number");
+  expect(result.stderr).toContain("[installed-terminal-observer] preload failed:");
+  expect(result.stderr).toContain("fchmod API is disabled when Permission Model is enabled.");
+  expect(records(f)).toEqual([]);
+  const files = fs.readdirSync(f.directory).filter((file) => file.endsWith(".jsonl"));
+  expect(files).toHaveLength(1);
+  expect(fs.readFileSync(path.join(f.directory, files[0]!))).toHaveLength(0);
+  expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow(
+    "Observer record was truncated",
+  );
 });
 
 it.each(["host", "parent", "resolver", "dependency", "scope", "symlink"])(
@@ -367,20 +416,22 @@ it.each(["host", "parent", "resolver", "dependency", "scope", "symlink"])(
             ? "dist/runtime-process-url-CL3_jEBq.mjs"
             : "node_modules/@openclaw/fs-safe/dist/json.js",
     );
-    if (mode === "scope")
+    if (mode === "scope") {
       writeJson(path.join(f.root, "dist/infra/package.json"), { type: "module" });
-    else if (mode === "symlink") {
-      fs.renameSync(target, target + ".real");
-      fs.symlinkSync(target + ".real", target);
-    } else fs.appendFileSync(target, "\n// changed physical bytes\n");
+    } else if (mode === "symlink") {
+      const linked = target.replace(/\.js$/u, ".real.js");
+      fs.renameSync(target, linked);
+      fs.symlinkSync(linked, target);
+    } else {
+      fs.appendFileSync(target, "\n// changed physical bytes\n");
+    }
     // Admit the new inventory independently. The fixed helper contract, not a
     // stale first-main package receipt, must reject these changed runtime bytes.
     f.rebind();
     const result = run(f);
     expect(result.status, result.stderr).toBe(0);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(f.directory, "observer-failed.json"), "utf8")),
-    ).toMatchObject({ event: "directory-watch-custody" });
+    const failure = fs.readFileSync(path.join(f.directory, "observer-failed.json"), "utf8");
+    expect(JSON.parse(failure), failure).toMatchObject({ event: "directory-watch-custody" });
     expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow(
       "Observer recording failed",
     );
@@ -395,7 +446,7 @@ it("does not turn a real live helper observation into an absence proof", () => {
   expect(receipts).toHaveLength(1);
   expect(receipts[0]).toMatchObject({ child: pid, errorCode: null });
   const created = records(f).find((row) => row.event === "spawn" && row.child === pid);
-  assert(created);
+  assert(created && typeof created.pid === "number" && typeof created.thread === "number");
   const filename = path.join(f.directory, `${created.pid}-${created.thread}.jsonl`);
   rewrite(
     filename,
@@ -412,9 +463,15 @@ it("joins a real retained-runtime producer before admitting its copied helper", 
   const f = fixture();
   const result = run(f, "retained");
   expect(result.status, result.stderr).toBe(0);
+  records(f);
   const rows = readInstalledTerminalEvents(f.directory, f.spec);
   const creator = rows.find((row) => row.event === "spawn" && row.retainedRuntime);
-  assert(creator && typeof creator.child === "number");
+  assert(
+    creator &&
+      typeof creator.child === "number" &&
+      typeof creator.pid === "number" &&
+      typeof creator.thread === "number",
+  );
   expect(rows.find((row) => row.pid === creator.child && row.event === "spawn")).toMatchObject({
     coverage: { role: "directory-watch", reason: "closed-helper-lifetime" },
   });
@@ -431,7 +488,7 @@ it("joins a real retained-runtime producer before admitting its copied helper", 
       filename,
       original.map((row) =>
         row.spawnId === creator.spawnId && row.event === "spawn"
-          ? { ...row, retainedRuntime: changed }
+          ? Object.assign({}, row, { retainedRuntime: changed })
           : row,
       ),
     );

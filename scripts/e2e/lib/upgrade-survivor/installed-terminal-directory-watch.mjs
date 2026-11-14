@@ -133,6 +133,7 @@ const closures = [
 const dependencySha256 = "4b955b777dce5967e0564965b8d673cf96f640aace7dc2ca99f14b00c156feb0";
 const dependencyManifestSha256 = "0c154a03725c38851263848b9f133baafd4eec359b0d2d843d7865ef07202b16";
 const registrationKey = Symbol.for("openclaw.retainedUpdateRuntimes");
+// oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the actual native Set receiver.
 const setForEach = Set.prototype.forEach;
 // Node can inject permission flags into NODE_OPTIONS after spawn normalization.
 // That mode is outside the reviewed empty-preload launch contract.
