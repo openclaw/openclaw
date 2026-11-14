@@ -1154,7 +1154,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   content: "";
   /* Keep the highlight offscreen when reduced motion disables the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+  animation: var(--skeleton-animation, shimmer) var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
 }
 
