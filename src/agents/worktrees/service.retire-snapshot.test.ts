@@ -166,6 +166,7 @@ describe("Exact removed worktree snapshot retirement", () => {
 
   it("retires only the exact CLI snapshot", async () => {
     const cli = retirementCli();
+    await git("branch", record.branch, source);
     const foreign: ManagedWorktreeRecord = {
       ...record,
       id: "a0000000-0000-4000-8000-000000000002",
@@ -183,6 +184,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     expect(cli.output).toHaveBeenCalledExactlyOnceWith({ retired: true, id: record.id });
 
     expect(registry()).toBeUndefined();
+    expect(await git("branch", "--list", record.branch)).toBe("");
     await expect(git("show-ref", "--verify", snapshotRef)).rejects.toThrow();
     await expect(fs.lstat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(getRegistryWorktree(env, foreign.id)).toEqual(foreign);
@@ -190,6 +192,16 @@ describe("Exact removed worktree snapshot retirement", () => {
       await expectRef(ref);
     }
     expect(await git("show", "HEAD:README.md")).toBe("base");
+  });
+
+  it("requires retained source outside the managed branch lifecycle", async () => {
+    await git("branch", record.branch, source);
+    await expect(retire({ retainedSourceRef: `refs/heads/${record.branch}` })).rejects.toThrow(
+      "choose an ordinary branch or remote-tracking retained source ref",
+    );
+    expect(registry()).toBeDefined();
+    await expectRef(snapshotRef, snapshot);
+    await expectRef(`refs/heads/${record.branch}`);
   });
 
   it("preserves exact-state recovery instead of treating it as a redundant ordinary snapshot", async () => {

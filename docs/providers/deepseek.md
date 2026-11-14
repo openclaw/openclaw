@@ -80,25 +80,29 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                               | Name                                    | Input       | Context   | Max output | Notes                            |
-| --------------------------------------- | --------------------------------------- | ----------- | --------- | ---------- | -------------------------------- |
-| `deepseek/deepseek-flash`               | DeepSeek V4.1 Flash                     | text, image | 1,000,000 | 384,000    | Main Flash model                 |
-| `deepseek/deepseek-v4-flash`            | DeepSeek V4 Flash                       | text        | 1,000,000 | 384,000    | Fast V4 thinking-capable surface |
-| `deepseek/deepseek-v4-pro`              | DeepSeek V4 Pro                         | text        | 1,000,000 | 384,000    | Onboarding default               |
-| `deepseek/deepseek-v4-flash-vision-exp` | DeepSeek V4 Flash Vision (Experimental) | text, image | 1,000,000 | 384,000    | Experimental image understanding |
+| Model ref                               | Name                                      | Input       | Context   | Max output | Notes                      |
+| --------------------------------------- | ----------------------------------------- | ----------- | --------- | ---------- | -------------------------- |
+| `deepseek/deepseek-flash`               | DeepSeek V4.1 Flash                       | text, image | 1,000,000 | 384,000    | Main Flash model           |
+| `deepseek/deepseek-v4-flash`            | DeepSeek V4.1 Flash (Legacy Alias)        | text, image | 1,000,000 | 384,000    | Legacy alias of V4.1 Flash |
+| `deepseek/deepseek-v4-pro`              | DeepSeek V4 Pro                           | text        | 1,000,000 | 384,000    | Onboarding default         |
+| `deepseek/deepseek-v4-flash-vision-exp` | DeepSeek V4.1 Flash (Legacy Vision Alias) | text, image | 1,000,000 | 384,000    | Legacy alias of V4.1 Flash |
 
 <Warning>
 DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
 15:59 UTC. Those model IDs are no longer accessible. Move configured model refs
-to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
+to `deepseek/deepseek-flash` or `deepseek/deepseek-v4-pro`.
 </Warning>
 
 OpenClaw's local costs are estimates. `deepseek/deepseek-flash` uses DeepSeek's peak
 rates: $0.30 per million input tokens, $1.20 per million output tokens, and
 $0.006 per million cached input tokens. Published off-peak rates are half those amounts.
-Legacy rows retain their earlier bundled metadata. DeepSeek still accepts
+V4 Pro uses peak rates of $1.32 per million input tokens, $3.96 per million output
+tokens, and $0.044 per million cached input tokens; its off-peak rates are also half.
+DeepSeek still accepts
 `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp`, routes them to V4.1 Flash,
-and bills them at current Flash rates. Existing explicit selections remain valid in OpenClaw.
+and bills them at current Flash rates. Both aliases use the same prices and image
+capabilities in OpenClaw. Existing explicit selections remain valid. Exact older
+bundled pricing snapshots are refreshed; custom prices and token limits are preserved.
 DeepSeek can change rates; its
 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) page is
 authoritative for billing.
@@ -113,8 +117,11 @@ PNG, JPEG, GIF, and WebP images through the same API and API key. See
 Flash and V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
-Use `/think xhigh` or `/think max` with DeepSeek V4 models to request DeepSeek's
-maximum `reasoning_effort`; both map to `"max"`.
+Use `/think minimal` or `/think low` for DeepSeek's `"low"` effort;
+`/think medium`, `/think high`, and `/think xhigh` use `"high"`.
+Use `/think max` for `"max"` effort. Thinking remains enabled by default.
+DeepSeek does not expose a separate priority service tier for Fast mode;
+selecting Flash is a model choice, not a speed-tier request.
 </Tip>
 
 ## Thinking and tools
@@ -161,7 +168,7 @@ pnpm test:live src/agents/models.profiles.live.test.ts
 Verifies both V4 models complete and that thinking/tool follow-up turns
 preserve the replay payload DeepSeek requires.
 
-To check the experimental vision model with the same `DEEPSEEK_API_KEY`:
+To check the legacy Flash vision alias with the same `DEEPSEEK_API_KEY`:
 
 ```bash
 OPENCLAW_LIVE_DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp \
@@ -276,7 +283,8 @@ Search uses the shared timeout and cache settings. Cached results are separated
 by query, result count, and credential. Errors are not cached or automatically
 retried by the DeepSeek adapter.
 
-DeepSeek documents a limit of 5 search requests per second per account and a
+DeepSeek documents separate per-account limits of 100 search requests and 25 fetch
+requests per second. Search has a
 price of $0.75 per 1,000 successful non-empty search requests. Empty results and
 failed requests are not billed. See [DeepSeek Search & Fetch](https://api-docs.deepseek.com/guides/search/)
 for current pricing and account limits. This plugin integration adds search only;

@@ -6,13 +6,16 @@ import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registr
 import type { ChannelId } from "../../../channels/plugins/types.public.js";
 import { deliveryContextFromConversation } from "../../../channels/route-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { resolveBoundDeliveryDestination } from "../../../infra/outbound/bound-delivery-router.js";
 import {
   stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
 } from "../../../infra/outbound/channel-target-prefix.js";
+import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../../../infra/outbound/session-binding-service.js";
 import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue.records.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
@@ -29,11 +32,7 @@ import {
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
-import {
-  resolveBoundDeliveryDestination,
-  getGlobalHookRunner,
-  resolveConversationIdFromTargets,
-} from "./subagent-announce-delivery.runtime.js";
+
 export type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 
 function normalizeAnnounceRouteTarget(

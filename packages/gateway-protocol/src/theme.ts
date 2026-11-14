@@ -261,21 +261,24 @@ function requireChoice<T extends string>(value: unknown, allowed: readonly T[], 
 const NUMBER = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
 const COMPONENT = `${NUMBER}%?`;
 const HUE = `${NUMBER}(?:deg|grad|rad|turn)?`;
-const LEGACY_COLOR_FUNCTION = new RegExp(
+const LEGACY_COLOR_FUNCTION = /* @__PURE__ */ new RegExp(
   `^(?:(?:rgb|rgba)\\( *(?:${NUMBER} *, *${NUMBER} *, *${NUMBER}|${NUMBER}% *, *${NUMBER}% *, *${NUMBER}%)|(?:hsl|hsla)\\( *${HUE} *, *${NUMBER}% *, *${NUMBER}%)(?: *, *${COMPONENT})? *\\)$`,
   "i",
 );
-const COLOR_FUNCTION = new RegExp(
+const COLOR_FUNCTION = /* @__PURE__ */ new RegExp(
   `^(?:(?:rgb|rgba|oklab|lab)\\( *${COMPONENT} +${COMPONENT} +${COMPONENT}|(?:hsl|hsla)\\( *${HUE} +${COMPONENT} +${COMPONENT}|(?:oklch|lch)\\( *${COMPONENT} +${COMPONENT} +${HUE})(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
-const COLOR_SPACE_FUNCTION = new RegExp(
+const COLOR_SPACE_FUNCTION = /* @__PURE__ */ new RegExp(
   `^color\\( *(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65) +${COMPONENT} +${COMPONENT} +${COMPONENT}(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
 const FONT_IDENTIFIER = "(?:--[a-z0-9_-]*|-?[a-z_][a-z0-9_-]*)";
 const FONT_FAMILY = `(?:"[a-z0-9 ,'._-]*"|'[a-z0-9 ,"._-]*'|${FONT_IDENTIFIER}(?: +${FONT_IDENTIFIER})*)`;
-const FONT_FAMILY_LIST = new RegExp(`^${FONT_FAMILY}(?: *, *${FONT_FAMILY})*$`, "i");
+const FONT_FAMILY_LIST = /* @__PURE__ */ new RegExp(
+  `^${FONT_FAMILY}(?: *, *${FONT_FAMILY})*$`,
+  "i",
+);
 const CSS_WIDE_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
 const GENERIC_FONT_FAMILIES = new Set([
   "serif",

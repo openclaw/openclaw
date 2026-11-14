@@ -1,0 +1,4 @@
+# Preserve focused setup authorization, durable-write guard, profile-link,
+# and UI eligibility coverage across Gateway, authority, and Control UI owners.
+# The change adds 654 net test lines; 400 are covered by the default allowance.
+254

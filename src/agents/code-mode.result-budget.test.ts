@@ -346,16 +346,33 @@ describe("fresh producer results through persistence and model guards", () => {
     expect(text(mcp)).toContain("Retry with a narrower query.");
   });
 
-  it("refuses a whole skill that fits the byte cap but exceeds the model text budget", async () => {
+  it("pages an oversized skill through read continuations that survive the result guard", async () => {
     const locator = "node://fixture/skills/whole/SKILL.md";
-    const base = createReadTool("/");
-    const read = wrapReadToolWithSkillContent(
-      base,
-      [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],
-      { modelContextWindowTokens: contextWindow },
-    );
-    const result = await read.execute("skill", { path: locator, offset: 2, limit: 1 });
-    expect(text(result)).toContain("cannot be partially served");
-    expect(text(result)).not.toContain("INSTRUCTIONS");
+    const source = Array.from(
+      { length: 3000 },
+      (_, index) => `step ${index}: ${"中é".repeat(12)}`,
+    ).join("\n");
+    const skills = [{ filePath: locator, readContent: source }];
+    const read = wrapReadToolWithSkillContent(createReadTool("/"), skills, {
+      modelContextWindowTokens: contextWindow,
+    });
+    const pages: string[] = [];
+    let continuation: ReadToolContinuation | undefined;
+    do {
+      const page = await execute(
+        read,
+        `skill-${pages.length}`,
+        { path: locator, ...continuation },
+        "skill",
+      );
+      expect(
+        text(toolResult(await dispatch([page], contextWindow), 0)),
+        "pages must not be clipped",
+      ).toBe(text(page));
+      pages.push(resultDetails(page).content as string);
+      continuation = resultDetails(page).continuation as ReadToolContinuation | undefined;
+    } while (continuation && pages.length < 32);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.join("\n")).toBe(source);
   });
 });

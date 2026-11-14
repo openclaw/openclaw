@@ -6,19 +6,35 @@ import { expect } from "vitest";
 import { deliverSessionMemoryEntries } from "./session-memory-entry.worker.js";
 import type {
   SessionEntriesWorkerInput,
-  SessionEntriesWorkerResult,
+  SessionEntriesWorkerUpdate,
 } from "./session-transcript-worker-read.types.js";
 
-type PreparedEntries = SessionEntriesWorkerResult["entries"];
+type Value = Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"];
+type Exported = Extract<Value, { summary: unknown }>;
+type Collected =
+  | { cold: true }
+  | {
+      entry: (NonNullable<Exported["summary"]> & { content: string }) | null;
+      resetRecallCutoff: Exported["resetRecallCutoff"];
+      pages: number;
+    };
+type Request = Omit<SessionEntriesWorkerInput["entries"][number], "pages" | "messages"> &
+  Partial<Pick<SessionEntriesWorkerInput["entries"][number], "pages" | "messages">>;
 
 /** Collect the production worker's acknowledged deliveries without starting another thread. */
 export async function collectSessionMemoryEntries(
-  entries: SessionEntriesWorkerInput["entries"],
-  publish?: (index: number, value: PreparedEntries[number]) => Promise<void>,
-): Promise<PreparedEntries> {
-  const collected: PreparedEntries = [];
+  entries: readonly Request[],
+  publish?: (index: number, value: Collected) => Promise<void>,
+  observe?: (
+    index: number,
+    update: Exclude<SessionEntriesWorkerUpdate, { value: unknown }>,
+  ) => void,
+): Promise<Collected[]> {
+  const collected: Collected[] = [];
+  const lines = entries.map((): string[] => []);
+  const pages = entries.map(() => 0);
   const result = await deliverSessionMemoryEntries(
-    entries,
+    entries.map((entry) => ({ pages: true, messages: false, ...entry })),
     {
       consumeInput() {},
       notify() {},
@@ -27,11 +43,32 @@ export async function collectSessionMemoryEntries(
         const update = value as {
           kind: "session-entries";
           index: number;
-          value: PreparedEntries[number];
-        };
+        } & SessionEntriesWorkerUpdate;
         expect(update.kind).toBe("session-entries");
-        await publish?.(update.index, update.value);
-        collected[update.index] = update.value;
+        if (!("value" in update)) {
+          observe?.(update.index, update);
+        }
+        if ("reset" in update) {
+          lines[update.index] = [];
+        } else if ("page" in update) {
+          expect(update.page.startLine).toBe(lines[update.index]!.length);
+          lines[update.index]!.push(...update.page.lines);
+          pages[update.index]!++;
+        } else {
+          const done = update.value;
+          const entry: Collected =
+            "cold" in done
+              ? done
+              : {
+                  entry: done.summary
+                    ? { ...done.summary, content: lines[update.index]!.join("\n") }
+                    : null,
+                  resetRecallCutoff: done.resetRecallCutoff,
+                  pages: pages[update.index]!,
+                };
+          await publish?.(update.index, entry);
+          collected[update.index] = entry;
+        }
         return { input: undefined, consumed() {} };
       },
     },

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -112,6 +113,7 @@ export function reusablePairedDeviceToken(
     role: string;
     scopes: string[];
     issuer?: DeviceAuthToken["issuer"];
+    approval?: DeviceAuthToken["approval"];
   },
 ): DeviceAuthToken | null {
   const role = params.role.trim();
@@ -130,6 +132,7 @@ export function reusablePairedDeviceToken(
     }) &&
     scopesWithinApprovedDeviceBaseline({ role, scopes: existing.scopes, approvedScopes }) &&
     deviceTokenIssuerMatches(existing, params.issuer) &&
+    (!params.approval || isDeepStrictEqual(existing.approval, params.approval)) &&
     roleScopesAllow({
       role,
       requestedScopes,

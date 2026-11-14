@@ -615,13 +615,11 @@ describe("prepareEmbeddedAttemptTransport", () => {
       const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
       configureAiTransportHost({
         ...previousHost,
-        buildModelFetch: () => async (_input, init) => {
-          if (typeof init?.body !== "string") {
-            throw new Error("expected a JSON Anthropic request body");
-          }
+        buildModelFetch: () => async (input, init) => {
+          const request = new Request(input, init);
           requests.push({
-            headers: new Headers(init.headers),
-            payload: JSON.parse(init.body) as Record<string, unknown>,
+            headers: request.headers,
+            payload: JSON.parse(await request.text()) as Record<string, unknown>,
           });
           return createAnthropicResponse(anthropicEvents);
         },

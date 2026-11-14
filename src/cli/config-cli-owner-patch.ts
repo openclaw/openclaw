@@ -124,7 +124,7 @@ function buildConfigOwnerPatch(
 /**
  * Bind a routed config change to the file the running Gateway writes. The change is prepared
  * from this command's own read; the returned commit sends it as one config.patch against the
- * owner's revision and returns the restart hint, if any.
+ * owner's revision and returns the restart hint, if any, plus the owner's billing-route warnings.
  */
 export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.ProcessEnv) {
   const current = await requestOwner<{ hash?: unknown; path?: unknown }>("config.get", {});
@@ -141,12 +141,20 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
     await readConfigSnapshotForEngineSelection();
   }
   return async (change: { previous: OpenClawConfig; next: OpenClawConfig }) => {
-    const result = await requestOwner<{ restart?: unknown; restartPending?: unknown }>(
-      "config.patch",
-      buildConfigOwnerPatch(change, current.hash),
-    );
-    return result.restart || result.restartPending
-      ? "The Gateway is restarting to apply it."
-      : undefined;
+    const result = await requestOwner<{
+      restart?: unknown;
+      restartPending?: unknown;
+      billingRouteWarnings?: unknown;
+    }>("config.patch", buildConfigOwnerPatch(change, current.hash));
+    return {
+      hint:
+        result.restart || result.restartPending
+          ? "The Gateway is restarting to apply it."
+          : undefined,
+      // Older Gateways omit the field; the owner computed it against its own credentials.
+      warnings: Array.isArray(result.billingRouteWarnings)
+        ? result.billingRouteWarnings.filter((warning) => typeof warning === "string")
+        : [],
+    };
   };
 }

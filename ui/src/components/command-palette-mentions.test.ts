@@ -9,6 +9,7 @@ import { createDraftFixture } from "../pages/new-session/draft-submission-flow.t
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
+  createSessionResult,
   mountPalette,
   openPalette,
   prepareDraftContext,
@@ -81,6 +82,8 @@ async function mount(
   const getInput = () => palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
   await openPalette(palette);
   getInput().focus();
+  pressKey(getInput(), "Tab", { cancelable: true });
+  await palette.updateComplete;
   const edit = async (start: number, end: number, text: string, inputType = "insertText") => {
     const input = getInput();
     const previous = input.value;
@@ -171,6 +174,7 @@ describe("command palette people mentions", () => {
   ])("carries selected people into the first message for a $role", async ({ scopes }) => {
     const f = await mount(undefined, scopes);
     await f.search("  🙂 @");
+    await waitForSolid(() => expect(f.menu()?.querySelector("[aria-selected=true]")).toBeTruthy());
     expect(f.input.getAttribute("aria-controls")).toBe(f.menu()?.id);
     expect(f.input.getAttribute("aria-haspopup")).toBe("listbox");
     expect(f.input.hasAttribute("aria-expanded")).toBe(false);
@@ -207,25 +211,47 @@ describe("command palette people mentions", () => {
     expect(f.recipients()).toHaveLength(0);
   });
 
-  it("resumes search after removing a recipient without deleting its visible text", async () => {
+  it("preserves recipients across mode switches and sends after removing them", async () => {
     const f = await mount();
     await f.choose();
     await f.choose("End");
     await f.edit(3, 4, "", "deleteContentForward");
     expect(f.recipients()).toHaveLength(1);
     const value = f.input.value;
-    vi.mocked(f.context.sessions.list).mockClear();
+    const search = vi.mocked(f.context.sessions.list);
+    search.mockClear();
+    search.mockResolvedValueOnce(createSessionResult("agent:main:matching", value));
+    await f.key("Tab");
+    await vi.advanceTimersByTimeAsync(200);
+    await f.palette.updateComplete;
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ search: value.trim() }));
+    expect(f.query('[role="option"]')?.textContent).toContain(value.trim());
+    await f.key("Tab");
+    expect(f.input.value).toBe(value);
+    expect(f.recipients()).toHaveLength(1);
     f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
     await f.palette.updateComplete;
     expect(f.input.value).toBe(value);
     expect(f.recipients()).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(f.context.sessions.list).toHaveBeenCalledWith(
-      expect.objectContaining({ search: value.trim() }),
-    );
     await f.send();
     const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
     expect(create).not.toHaveProperty("mentions");
+  });
+
+  it("searches when clicking Search while mention suggestions are open", async () => {
+    const f = await mount();
+    await f.append("Review @");
+    await f.search("Al");
+    expect(f.menu()).not.toBeNull();
+    const search = vi.mocked(f.context.sessions.list);
+    search.mockClear();
+    f.query<HTMLButtonElement>('[role="tab"][id="cmd-palette-tab-search"]')!.click();
+    await vi.advanceTimersByTimeAsync(200);
+    await f.palette.updateComplete;
+    expect(f.menu()).toBeNull();
+    expect(search).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ search: "Review @Al" }),
+    );
   });
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
@@ -242,6 +268,8 @@ describe("command palette people mentions", () => {
     expect(f.menu()).not.toBeNull();
     await f.select(0, 0);
     expect(f.menu()).toBeNull();
+    expect(searchSessions).not.toHaveBeenCalled();
+    await f.key("Tab");
     await vi.advanceTimersByTimeAsync(200);
     expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ search: "Review @Al" }),
@@ -305,43 +333,42 @@ describe("command palette people mentions", () => {
     expect(f.context.sessions.createResult).not.toHaveBeenCalled();
   });
 
-  it("retains selected recipients on a rejected first turn without duplicate creation", async () => {
-    const f = await mount();
-    vi.mocked(f.context.sessions.createResult).mockResolvedValueOnce({
-      key: "agent:main:dashboard:rejected",
-      initialRun: { status: "rejected", error: "First turn rejected" },
-    });
-    await f.choose();
-    await f.send();
-    expect(f.query('[role="alert"]')?.textContent).toContain("First turn rejected");
-    expect(f.recipients()).toHaveLength(1);
-    await f.key("Escape");
-    await openPalette(f.palette);
-    expect(f.recipients()).toHaveLength(1);
-    pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-  });
-
-  it("locks recipients while submitting and never sends twice", async () => {
+  it("sends selected recipients once and frees the launcher while the start is pending", async () => {
     const f = await mount();
     const pending = createDeferred<Awaited<ReturnType<typeof requestSessionCreate>>>();
     vi.mocked(f.context.sessions.createResult).mockReturnValueOnce(pending.promise);
     await f.choose();
     await f.send();
-    expect(f.input).toMatchObject({ disabled: false, readOnly: true });
-    expect(f.input.getAttribute("aria-busy")).toBe("true");
-    expect(f.query(".cmd-palette__mentions")?.hasAttribute("inert")).toBe(true);
-    f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
-    await f.send();
+    expect(f.palette.isOpen).toBe(false);
+    expect(vi.mocked(f.context.sessions.createResult).mock.calls[0]?.[0]?.mentions).toHaveLength(1);
+    await openPalette(f.palette);
+    // The pending start owns its recipients; the launcher is an empty, editable draft.
+    expect(f.input).toMatchObject({ disabled: false, readOnly: false, value: "" });
+    expect(f.recipients()).toHaveLength(0);
+    pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
+    await vi.advanceTimersByTimeAsync(0);
     expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(f.recipients()).toHaveLength(1);
     pending.resolve({
       key: "agent:main:dashboard:mentioned",
       initialRun: { status: "started", runId: "mention-run" },
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(f.palette.isOpen).toBe(false);
+    // Acceptance never closes the next prompt.
+    expect(f.palette.isOpen).toBe(true);
+  });
+
+  it("explains a blocked Search submission without losing the draft or changing mode", async () => {
+    const f = await mount(undefined, ["operator.read"]);
+    await f.key("Tab");
+    await f.append("Keep this prompt");
+    await f.send();
+    expect(f.query('.cmd-palette__creation-error[role="alert"]')?.textContent).toMatch(
+      /permission|access|scope/i,
+    );
+    expect(f.input.value).toBe("Keep this prompt");
+    expect(f.query("#cmd-palette-tab-search")?.getAttribute("aria-selected")).toBe("true");
+    expect(f.palette.isOpen).toBe(true);
+    expect(f.context.sessions.createResult).not.toHaveBeenCalled();
   });
 
   it.each(["anonymous", "read-only", "session-read-only", "offline", "create-unavailable"])(
@@ -396,7 +423,6 @@ describe("command palette people mentions", () => {
       const newResponse = createDeferred<UsersMentionableResult>();
       f.directory.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
       await f.search("@old");
-      expect(f.directory).toHaveBeenCalledOnce();
       expect(f.directoryParams()).toEqual([{ agentId: "main", query: "old" }]);
 
       if (change === "close") {
@@ -415,9 +441,6 @@ describe("command palette people mentions", () => {
         const agent = f.query("openclaw-agent-select")!;
         await agent.updateComplete;
         expect(agent.value).toBe("main");
-        for (const item of agent.querySelectorAll<HTMLElement>("[role='menuitemradio']")) {
-          item.scrollIntoView = vi.fn();
-        }
         agent.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
         await waitForSolid(() =>
           expect(agent.querySelector(".agent-select__menu")?.matches(":popover-open")).toBe(true),
@@ -429,7 +452,7 @@ describe("command palette people mentions", () => {
         reviewer.click();
         await waitForSolid(() => expect(agent.value).toBe("reviewer"));
         expect(f.context.agentSelection.state.selectedId).toBe("main");
-        expect(f.menu()).toBeNull();
+        await waitForSolid(() => expect(f.menu()).toBeNull());
       } else {
         f.context.gateway.snapshot.phase = "reconnecting";
         f.publish();

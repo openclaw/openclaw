@@ -1,3 +1,9 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
@@ -14,7 +20,25 @@ import {
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
-import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
+
+type PdfModelConfig = Exclude<AgentModelConfig, string>;
+
+export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
+  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
+  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
+  const modelConfig: PdfModelConfig = {};
+  if (primary?.trim()) {
+    modelConfig.primary = primary.trim();
+  }
+  if (fallbacks.length > 0) {
+    modelConfig.fallbacks = fallbacks;
+  }
+  return modelConfig;
+}
+
+export function resolvePdfToolMaxTokens(modelMaxTokens: number | undefined) {
+  return Math.min(4096, asPositiveFiniteNumber(modelMaxTokens) ?? 4096);
+}
 
 export type PdfToolActiveModel = {
   provider: string;
@@ -58,44 +82,6 @@ function resolveConfiguredTextModelFromConfig(params: {
     ?.find((model) => Boolean(model?.id?.trim()) && model.input?.includes("text"))
     ?.id?.trim();
   return modelId || undefined;
-}
-
-function resolveImageCandidateRefs(
-  params: PdfModelConfigContext & { filter?: (providerId: string) => boolean },
-): string[] {
-  // Candidate refs only include providers with usable auth so the tool avoids dead fallbacks.
-  return resolveAutoMediaKeyProviders({
-    capability: "image",
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-  })
-    .filter((providerId) => !params.filter || params.filter(providerId))
-    .filter((providerId) => hasProviderAuthForTool({ ...params, provider: providerId }))
-    .map((providerId) => {
-      const documentImageModel = resolveDocumentMediaModel({
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        providerId,
-        mode: "image",
-      });
-      if (documentImageModel === false) {
-        return null;
-      }
-      const modelId =
-        documentImageModel ??
-        resolveProviderVisionModelFromConfig({
-          cfg: params.cfg,
-          provider: providerId,
-        }) ??
-        resolveDefaultMediaModel({
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          providerId,
-          capability: "image",
-        });
-      return modelId ? formatProviderModelRef(providerId, modelId) : null;
-    })
-    .filter((value): value is string => Boolean(value));
 }
 
 export function resolvePdfModelConfigForTool(
@@ -144,33 +130,60 @@ export function resolvePdfModelConfigForTool(
     workspaceDir: params.workspaceDir,
     providerId: primary.provider,
   });
-  const nativePdfCandidates = resolveImageCandidateRefs({
-    ...params,
-    filter: (providerId) =>
+  const autoImageProviders = resolveAutoMediaKeyProviders({
+    capability: "image",
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const nativePdfCandidates: string[] = [];
+  const genericImageCandidates: string[] = [];
+  // Resolve each authenticated image candidate once, retaining native PDF priority.
+  for (const providerId of autoImageProviders) {
+    if (!hasProviderAuthForTool({ ...params, provider: providerId })) {
+      continue;
+    }
+    const documentImageModel = resolveDocumentMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId,
+      mode: "image",
+    });
+    if (documentImageModel === false) {
+      continue;
+    }
+    const modelId =
+      documentImageModel ??
+      resolveProviderVisionModelFromConfig({ cfg: params.cfg, provider: providerId }) ??
+      resolveDefaultMediaModel({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId,
+        capability: "image",
+      });
+    if (!modelId) {
+      continue;
+    }
+    const ref = formatProviderModelRef(providerId, modelId);
+    genericImageCandidates.push(ref);
+    if (
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         providerId,
-      }),
-  });
-  const genericImageCandidates = resolveImageCandidateRefs(params);
-  const textExtractionParams = { ...params, primary };
+      })
+    ) {
+      nativePdfCandidates.push(ref);
+    }
+  }
   const textExtractionCandidates: string[] = [];
-  const providerIds = [
-    textExtractionParams.primary.provider,
-    ...resolveAutoMediaKeyProviders({
-      capability: "image",
-      cfg: textExtractionParams.cfg,
-      workspaceDir: textExtractionParams.workspaceDir,
-    }),
-  ];
+  const providerIds = [primary.provider, ...autoImageProviders];
   for (const providerId of providerIds) {
-    if (!providerId || !hasProviderAuthForTool({ ...textExtractionParams, provider: providerId })) {
+    if (!providerId || !hasProviderAuthForTool({ ...params, provider: providerId })) {
       continue;
     }
     const documentTextModel = resolveDocumentMediaModel({
-      cfg: textExtractionParams.cfg,
-      workspaceDir: textExtractionParams.workspaceDir,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerId,
       mode: "textExtraction",
     });
@@ -178,18 +191,18 @@ export function resolvePdfModelConfigForTool(
       continue;
     }
     const documentImageModel = resolveDocumentMediaModel({
-      cfg: textExtractionParams.cfg,
-      workspaceDir: textExtractionParams.workspaceDir,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerId,
       mode: "image",
     });
     const preferredTextModel =
-      providerId === textExtractionParams.primary.provider
-        ? textExtractionParams.primary.model
-        : resolveConfiguredTextModelFromConfig({ cfg: textExtractionParams.cfg, providerId });
+      providerId === primary.provider
+        ? primary.model
+        : resolveConfiguredTextModelFromConfig({ cfg: params.cfg, providerId });
     const providerDefaultImageModel = resolveDefaultMediaModel({
-      cfg: textExtractionParams.cfg,
-      workspaceDir: textExtractionParams.workspaceDir,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerId,
       capability: "image",
       includeConfiguredImageModels: false,

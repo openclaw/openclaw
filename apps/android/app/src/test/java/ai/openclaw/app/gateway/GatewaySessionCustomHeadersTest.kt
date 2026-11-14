@@ -128,16 +128,25 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
+  @Test
+  fun sourceFaviconsRecoverAfterTransientHttpFailureWithoutReconnecting() {
+    runBlocking {
+      assertSourceFavicons(contextPath = "/socket", basePath = "/ui", recoverFailedFavicon = true)
+    }
+  }
+
   private suspend fun assertSourceFavicons(
     contextPath: String,
     basePath: String,
     proxyAcceptsRead: Boolean? = null,
     expectedBasePath: String = basePath.ifEmpty { contextPath },
+    recoverFailedFavicon: Boolean = false,
   ) = coroutineScope {
     val connected = CompletableDeferred<Unit>()
     val slowStarted = CompletableDeferred<Unit>()
     val releaseSlow = java.util.concurrent.CountDownLatch(1)
     val iconRequests = ConcurrentLinkedQueue<RecordedRequest>()
+    val failFirstRecoveryRequest = AtomicBoolean(true)
     val imageBytes = byteArrayOf(1, 2, 3, 4)
     val tls = if (proxyAcceptsRead != null) sourceFaviconTls() else null
     val proxyAuthorization = "Basic c3ludGhldGljOnByb3h5"
@@ -178,6 +187,9 @@ class GatewaySessionCustomHeadersTest {
               val authorization = request.getHeader("Authorization")
               if (proxyAcceptsRead == true && authorization != proxyAuthorization) return MockResponse().setResponseCode(401)
               if (proxyAcceptsRead != true && authorization != "Bearer shared-token") return MockResponse().setResponseCode(401)
+              if (request.path?.endsWith("recover.example") == true && failFirstRecoveryRequest.getAndSet(false)) {
+                return MockResponse().setResponseCode(503)
+              }
               return when {
                 request.path?.endsWith("redirect.example") == true -> {
                   MockResponse().setResponseCode(302).setHeader("Location", trap.url("/must-not-load"))
@@ -251,6 +263,15 @@ class GatewaySessionCustomHeadersTest {
       if (tls != null) assertTrue(iconRequests.all { it.getHeader("X-Proxy-Route") == "source-proof" })
       assertArrayEquals(imageBytes, load("example.com")?.bytes)
       assertEquals(expectedAuthorization.size, iconRequests.size)
+      if (recoverFailedFavicon) {
+        assertNull(load("recover.example"))
+        val recovered = load("recover.example")
+        assertArrayEquals("A transient HTTP failure must not poison the connection cache", imageBytes, recovered?.bytes)
+        val requestsAfterRecovery = iconRequests.size
+        val cached = load("recover.example")
+        assertArrayEquals(imageBytes, cached?.bytes)
+        assertEquals(requestsAfterRecovery, iconRequests.size)
+      }
       assertNull(load("redirect.example"))
       assertEquals(0, trap.requestCount)
       assertNull(load("large.example"))

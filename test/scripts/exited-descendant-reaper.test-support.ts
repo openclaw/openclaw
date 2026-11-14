@@ -41,7 +41,7 @@ export function assertFixtureProcessGroupStopped(pgid: number, platform = proces
 // Retain adopted exits until settlement; tsx/esbuild SIGPIPE exits are not failures.
 // Fail only on live descendants. No JS template escapes in the embedded source.
 export const exitedDescendantReaper = `
-import ctypes, os, signal, subprocess, sys
+import ctypes, json, os, signal, subprocess, sys
 from pathlib import Path
 if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
     raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
@@ -72,7 +72,9 @@ def running_children():
     return rows
 
 try:
-    result = subprocess.run(sys.argv[1:])
+    lifetime_fds = ((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+        item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
+    result = subprocess.run(sys.argv[1:], pass_fds=lifetime_fds)
 finally:
     reaped = []
     while True:

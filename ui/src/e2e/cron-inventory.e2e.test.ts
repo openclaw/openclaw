@@ -24,6 +24,7 @@ const held = createCronJob("held", "Held automation", {
   updatedAtMs: 1,
   schedule: { kind: "every", everyMs: 600_000 },
   sessionTarget: `session:${sessionKey}`,
+  state: { nextRunAtMs: now + 3_600_000 },
 });
 const other = createCronJob("other", "Other session automation", {
   agentId: "main",
@@ -70,7 +71,8 @@ async function fixture(page: Page, supported = true) {
   await row(held.name).waitFor();
   const settled = () => details.locator('.chat-summary__automations[aria-busy="false"]').waitFor();
   await settled();
-  await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).waitFor();
+  const childRoster = { source: "chat-pane", spawnedBy: sessionKey };
+  await gateway.waitForRequest("sessions.list", { match: childRoster });
   return { page, gateway, details, row, settled };
 }
 
@@ -93,6 +95,17 @@ function runtime(job: CronJob, action: "started" | "finished", revision: number)
 }
 
 suite.define(() => {
+  it("shows the scheduler's next run when hovering an automation row", async () => {
+    await suite.withPage({ locale: "en-US", timezoneId: "UTC" }, async ({ page }) => {
+      const { row } = await fixture(page);
+      await row(held.name).hover();
+      await page.clock.runFor(1_000);
+      await expect
+        .poll(async () => (await page.getByRole("tooltip").textContent())?.trim())
+        .toBe("Next run today at 7:00 AM");
+    });
+  });
+
   it.each([
     { mode: "advertised", supported: true, tabs: 3, stateOnly: false },
     { mode: "unadvertised", supported: false, tabs: 1, stateOnly: false },
@@ -205,11 +218,10 @@ suite.define(() => {
       await row(retargeted.name).waitFor({ state: "detached" });
       await row(held.name).waitFor();
       await settled();
-      expect(
-        (await gateway.getRequests()).filter(({ method }) =>
-          ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(method),
-        ),
-      ).toEqual([]);
+      const writes = (await gateway.getRequests()).filter(({ method: rpc }) =>
+        ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(rpc),
+      );
+      expect(writes).toHaveLength(0);
     });
   });
 });

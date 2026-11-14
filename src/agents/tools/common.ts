@@ -1,4 +1,3 @@
-import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,
   asSafeIntegerInRange,
@@ -12,11 +11,8 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "../../../packages/agent-core/src/types.js";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { ToolAuthorizationError, ToolInputError } from "../tool-input-error.js";
-import { textResult } from "./tool-results.js";
 
 export { ToolAuthorizationError, ToolInputError };
 export { asNonArrayRecord as asToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
@@ -286,10 +282,15 @@ export function readStringArrayParam(
   key: string,
   options: StringParamOptions = {},
 ) {
-  const { required = false, label = key } = options;
+  const { required = false, label = key, allowEmpty = false } = options;
   const values = normalizeSingleOrTrimmedStringList(readSnakeCaseParamRaw(params, key));
   if (values.length > 0) {
     return values;
+  }
+  // Callers that replace a collection (for example Discord applied tags) need an
+  // explicit empty array to survive instead of collapsing to undefined.
+  if (allowEmpty && Array.isArray(readSnakeCaseParamRaw(params, key))) {
+    return [];
   }
   if (required) {
     throw new ToolInputError(`${label} required`);
@@ -322,32 +323,6 @@ export function readReactionParams(
     throw new ToolInputError(options.removeErrorMessage);
   }
   return { emoji, remove, isEmpty: !emoji };
-}
-
-function stringifyToolPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-  try {
-    const encoded = JSON.stringify(payload, null, 2);
-    if (typeof encoded === "string") {
-      return encoded;
-    }
-  } catch {
-    // Fall through to String(payload) for non-serializable values.
-  }
-  return String(payload);
-}
-
-export function failedTextResult<TDetails extends { status: "failed" }>(
-  text: string,
-  details: TDetails,
-): AgentToolResult<TDetails> {
-  return textResult(text, details);
-}
-
-export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
-  return textResult(stringifyToolPayload(payload), payload);
 }
 
 type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
@@ -390,44 +365,6 @@ export function scheduleToolProgress(
   }, delayMs);
   options.signal?.addEventListener("abort", clear, { once: true });
   return clear;
-}
-
-export async function imageResultFromFile(params: {
-  label: string;
-  path: string;
-  extraText?: string;
-  details?: Record<string, unknown>;
-  imageSanitization?: ImageSanitizationLimits;
-}): Promise<AgentToolResult<unknown>> {
-  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
-  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
-  const content: AgentToolResult<unknown>["content"] = [
-    ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
-    {
-      type: "image",
-      data: buf.toString("base64"),
-      mimeType,
-    },
-  ];
-  const detailsMedia =
-    params.details?.media &&
-    typeof params.details.media === "object" &&
-    !Array.isArray(params.details.media)
-      ? (params.details.media as Record<string, unknown>)
-      : undefined;
-  const result: AgentToolResult<unknown> = {
-    content,
-    details: {
-      path: params.path,
-      ...params.details,
-      media: {
-        ...detailsMedia,
-        mediaUrl: params.path,
-      },
-    },
-  };
-  const { sanitizeToolResultImages } = await import("../tool-images.runtime.js");
-  return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 
 type AvailableTag = {

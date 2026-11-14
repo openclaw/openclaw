@@ -41,7 +41,7 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
     [
       { name: "read", summary: "from…f", status: "failed" },
       true,
-      ["<b>📖 Read</b> from…f <i>failed</i>", "📖 Read from…f failed"],
+      ["📖 <b>Read</b> · from…f <i>failed</i>", "📖 Read · from…f failed"],
     ],
   ] as const)("renders item %j", (input, raw, expected) => {
     const line = lineFor(
@@ -56,6 +56,38 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
       expect(text).toBe(expected[Number(richMessages)]);
     }
   });
+
+  it.each([
+    ["running", " <i>running</i>", " running"],
+    ["completed", "", ""],
+    ["failed", " <i>failed</i>", " failed"],
+    [undefined, "", ""],
+  ] as const)(
+    "keeps tool icons separate from operation, context, and lifecycle (%s)",
+    (status, htmlStatus, textStatus) => {
+      const preview = render(
+        {
+          lines: [
+            {
+              kind: "tool",
+              toolName: "nodes",
+              icon: "🖥️",
+              label: "Find executables",
+              detail: "git, node, pnpm · Test node",
+              status,
+              text: "Nodes",
+            },
+          ],
+        },
+        120,
+      );
+      expect(preview.text).toBe(
+        richMessages
+          ? `🖥️ Find executables · git, node, pnpm · Test node${textStatus}`
+          : `🖥️ <b>Find executables</b> · git, node, pnpm · Test node${htmlStatus}`,
+      );
+    },
+  );
 
   it("budgets the complete raw command row", () => {
     for (const status of ["running", "completed"]) {
@@ -72,7 +104,7 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
       )!;
       const text = render({ lines: [line] }).text.replace(/<[^>]*>/g, "");
       expect(Array.from(text).length).toBeLessThanOrEqual(40);
-      expect(text).toContain("🛠️ Exec ");
+      expect(text).toContain("🛠️ Exec · ");
       expect(text).toContain("…");
       if (status === "running") {
         expect(text).toMatch(/ running$/);

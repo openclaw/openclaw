@@ -129,7 +129,7 @@ struct PairingRequestCardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(self.isOnlyRequest ? KeyboardShortcut(.return, modifiers: .command) : nil)
-                .help(self.isOnlyRequest ? "Approve this request (⌘Return)" : "Approve this request")
+                .help(self.isOnlyRequest ? "⌘↩" : "")
             }
             .controlSize(.large)
         }

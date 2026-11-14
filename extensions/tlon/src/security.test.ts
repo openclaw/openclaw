@@ -50,18 +50,18 @@ it.each([
   }
 });
 
+const zod = { ship: "~zod" };
 it.each([
-  ["@ALL uppercase", "~sampel-palnet", undefined, true],
-  ["~sampel-palnet-extra", "~sampel-palnet", undefined, false],
-  ["my~sampel-palnetfriend", "~sampel-palnet", undefined, false],
-  ["prenimbus", "~sampel-palnet", "nimbus", false],
-  ["nimbusy", "~sampel-palnet", "nimbus", false],
-  ["nimbus, hello", "~sampel-palnet", "nimbus", true],
-  ["", "~sampel-palnet", undefined, false],
-  ["test", "", undefined, false],
-  [null as unknown as string, "~sampel-palnet", undefined, false],
-] as const)("detects mentions in %j", (text, ship, nick, expected) => {
-  expect(isBotMentioned(text, ship, nick)).toBe(expected);
+  [[["@ALL uppercase"], [zod, ", hi"], [{ bold: [zod] }, " hi"], [{ strike: [zod] }, "?"]], true],
+  [[["nimbus, hello"], ["say ", { italics: [zod] }, "."], ["Are you there, ", zod, "?"]], true],
+  [[[{ "inline-code": "a`b" }, " ", zod, " hi ", { "inline-code": "c" }]], true],
+  [[["~zod-extra"], ["my~zodfriend"], [{ "inline-code": "ping ~zod, now" }], ["nimbusy"]], false],
+  [[["https://tlon.io/~zod"], ["prenimbus"], [], { block: { code: { code: "~zod, hi" } } }], false],
+] as const)("detects mentions in Story %j", (stories, expected) => {
+  for (const story of stories) {
+    const content = Array.isArray(story) ? [{ inline: story }] : [story];
+    expect(isBotMentioned(extractMessageText(content, true), "~zod", "nimbus")).toBe(expected);
+  }
 });
 
 it.each([false, true])("admits thread follow-up with explicit mention: %s", async (explicit) => {
@@ -76,7 +76,7 @@ it.each([false, true])("admits thread follow-up with explicit mention: %s", asyn
     isOwner: () => false,
     botShipName: "~zod",
     botNickname: null,
-    rawText: explicit ? "~zod follow up" : "follow up",
+    messageContent: [{ inline: [explicit ? "~zod follow up" : "follow up"] }],
     messageSeal: { "parent-id": "1234" },
     isThreadReply: true,
     hasParticipatedInThread: (parentId) => parentId === "1234",

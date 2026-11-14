@@ -1,4 +1,5 @@
 import type { SqlBool } from "kysely";
+import type { GitCoauthorIdentity } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
@@ -11,7 +12,13 @@ export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[numb
 
 export type UserProfile = Omit<
   UserProfileListItem,
-  "emails" | "githubIdentity" | "hasAvatar" | "effectiveRole" | "roleSource"
+  | "emails"
+  | "githubIdentity"
+  | "gitCoauthorAvailable"
+  | "gitCoauthorIdentity"
+  | "hasAvatar"
+  | "effectiveRole"
+  | "roleSource"
 >;
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
@@ -46,7 +53,13 @@ export type EnterpriseGitHubIdentity = StoredGitHubIdentity & {
 };
 export type UserProfileGitHubAttribution = Map<
   string,
-  StoredGitHubIdentity | EnterpriseGitHubIdentity | null
+  | StoredGitHubIdentity
+  | EnterpriseGitHubIdentity
+  | (GitCoauthorIdentity & {
+      accountId?: number;
+      githubLogin?: string;
+    })
+  | null
 >;
 
 export type UserProfileGitHubAttributionRead = {

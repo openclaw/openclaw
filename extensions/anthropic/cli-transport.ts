@@ -129,7 +129,8 @@ export async function createClaudeCliTransport(params: {
     inputFailure ??= Promise.resolve()
       .then(async () => {
         beginShutdown();
-        await exited;
+        // Owner loss rejects cleanup without emitting an exit event.
+        await Promise.race([exited, child.waitForExtinction?.() ?? child.wait()]);
         const failure = context?.abortSignal?.aborted
           ? context.abortSignal.reason
           : forcedExit
@@ -307,8 +308,22 @@ export async function createClaudeCliTransport(params: {
   return {
     close,
     waitForExit: async () => {
-      await exited;
-      await Promise.all([child.wait().catch(() => undefined), child.waitForExtinction?.()]);
+      const extinct = Promise.all([
+        child.wait().catch(() => undefined),
+        child.waitForExtinction?.(),
+      ]).then(
+        () => undefined,
+        (cause: unknown) => {
+          throw new Error(
+            "Claude CLI process cleanup could not be confirmed; retry the message. If it fails again, restart the Gateway.",
+            { cause },
+          );
+        },
+      );
+      // A lost process owner reports an error and never an exit event, so `exited` alone would
+      // wait forever. Its extinction outcome still settles; a rejection means closure is unconfirmed.
+      await Promise.race([exited, extinct]);
+      await extinct;
       child.dispose();
     },
     send,

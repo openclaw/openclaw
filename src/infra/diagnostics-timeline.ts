@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { hasObservedModelUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CommandQueueWait } from "../process/command-queue.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticBaseEvent } from "./diagnostic-event-snapshot.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
@@ -138,10 +139,40 @@ type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
 };
 
 const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
+/** Scalar phase facts live on the existing controller admission record. */
+export type AdmissionDiagnostics = {
+  phase?: "laneMs" | "writerMs" | "placementMs";
+  phaseStartedAt?: number;
+  laneMs?: number;
+  writerMs?: number;
+  placementMs?: number;
+  queueWait?: Readonly<CommandQueueWait>;
+};
+
+export function transitionAdmissionPhase(
+  state: AdmissionDiagnostics,
+  phase?: AdmissionDiagnostics["phase"],
+) {
+  const now = performance.now();
+  const previous = state.phase;
+  const elapsed = previous ? now - state.phaseStartedAt! : 0;
+  if (previous) {
+    state[previous] = (state[previous] ?? 0) + elapsed;
+  }
+  state.phase = phase;
+  state.phaseStartedAt = now;
+  try {
+    spanObserver.getStore()?.(previous ?? "agent.admission", undefined, elapsed, state);
+  } catch {
+    // Diagnostics cannot change admission.
+  }
+}
+
 type SpanObserver = (
   name: string,
   attributes: DiagnosticsTimelineAttributes | undefined,
   durationMs?: number,
+  admission?: AdmissionDiagnostics,
 ) => (() => void) | undefined;
 const spanObserver = new AsyncLocalStorage<SpanObserver>();
 

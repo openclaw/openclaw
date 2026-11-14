@@ -69,6 +69,20 @@ function expectOpen(isOpen: boolean, ...databases: Pick<DatabaseSync, "isOpen">[
     expect(database).toMatchObject({ isOpen });
   }
 }
+
+it("allocates from the current environment after its object is replaced", async () => {
+  const parent = await createFixture({ applyEnv: false });
+  const original = process.env;
+  os.tmpdir(); // Prime runtimes that capture the environment on their first call.
+  process.env = { ...original, TMPDIR: parent.root, TMP: parent.root, TEMP: parent.root };
+  try {
+    const state = await createFixture({ applyEnv: false });
+    expect(path.dirname(state.root)).toBe(parent.root);
+  } finally {
+    process.env = original;
+  }
+});
+
 it.each([
   ["realpath", "home", "default", true],
   ["environment", "home", "custom", true],

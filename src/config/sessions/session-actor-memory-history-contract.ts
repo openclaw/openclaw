@@ -14,12 +14,17 @@ import type {
   SessionActorMemoryAnchorReads,
 } from "./session-actor-memory-history-facts-contract.js";
 import type {
+  SessionContextSeedRequest,
   PreparedSessionTranscriptHydration,
   SessionModelContextLimits,
   SessionTranscriptModelContext,
   SessionTranscriptContextSnapshot,
   SessionTranscriptContextSelection,
 } from "./session-history-read.types.js";
+import type {
+  SessionTranscriptReplayGroup,
+  SessionTranscriptReplaySelection,
+} from "./session-transcript-replay.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type Target = { sessionId?: string; admission?: UserTurnTranscriptAdmissionReceipt };
@@ -33,12 +38,16 @@ type ProjectionReads = {
 export type SessionActorMemoryHistoryReads = ProjectionReads &
   SessionActorMemoryHistoryFactsReads &
   SessionActorMemoryAnchorReads & {
+    "session.history.replay-groups": {
+      input: Target & { selection: SessionTranscriptReplaySelection };
+      output: SessionTranscriptReplayGroup[];
+    };
     "session.history.hydrate": {
       input: Target & { limits?: SessionTranscriptContextSelection; maxEventBytes?: number };
       output: PreparedSessionTranscriptHydration;
     };
     "session.history.context-messages": {
-      input: Target;
+      input: Target & { seed?: SessionContextSeedRequest };
       output: SessionTranscriptContextSnapshot;
     };
     "session.history.context": {

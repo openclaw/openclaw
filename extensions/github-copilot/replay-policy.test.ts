@@ -13,7 +13,6 @@ describe("buildGithubCopilotReplayPolicy", () => {
   it("leaves transcript tool ids to the Copilot stream wrapper", () => {
     const policy = buildPolicy("anthropic-messages", "claude-opus-5");
     expect(policy).toMatchObject({
-      appendOnlyRuntimeContext: false,
       validateAnthropicTurns: true,
       sanitizeMode: "full",
       repairToolUseResultPairing: true,
@@ -21,6 +20,8 @@ describe("buildGithubCopilotReplayPolicy", () => {
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
     });
+    // Omission preserves the host default for retained runtime context.
+    expect(policy).not.toHaveProperty("appendOnlyRuntimeContext");
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });

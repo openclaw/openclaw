@@ -49,7 +49,6 @@ extension OpenClawChatComposer {
         }
         .pickerStyle(.menu)
         .controlSize(.small)
-        .help(String(localized: "Verbosity"))
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
@@ -75,45 +74,45 @@ extension OpenClawChatComposer {
         }
         .pickerStyle(.menu)
         .controlSize(.small)
-        .help(String(localized: "Fast responses"))
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
     var modelPicker: some View {
-        // Sections come from an O(n) recompute over the catalog; bind once per body eval.
-        let sections = self.viewModel.modelPickerSections
-        return Menu {
-            if self.viewModel.canSelectDefaultModel {
-                self.modelMenuOption(
-                    self.viewModel.defaultModelLabel,
-                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
-            }
-            if !sections.pinned.isEmpty {
-                Section {
-                    self.modelOptions(sections.pinned)
-                } header: {
-                    Text("Pinned")
-                        .font(OpenClawChatTypography.captionSemiBold)
+        Menu {
+            ChatDeferredContent {
+                let sections = self.viewModel.modelPickerSections
+                if self.viewModel.canSelectDefaultModel {
+                    self.modelMenuOption(
+                        self.viewModel.defaultModelLabel,
+                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
                 }
-            }
-            if !sections.recent.isEmpty {
-                Section {
-                    self.modelOptions(sections.recent)
-                } header: {
-                    Text("Recent")
-                        .font(OpenClawChatTypography.captionSemiBold)
+                if !sections.pinned.isEmpty {
+                    Section {
+                        self.modelOptions(sections.pinned)
+                    } header: {
+                        Text("Pinned")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
                 }
-            }
-            ForEach(sections.providers) { provider in
-                Section {
-                    self.modelOptions(provider.models)
-                } header: {
-                    HStack(spacing: 4) {
-                        Text(provider.displayName)
-                        if provider.isDefaultProvider {
-                            Text(String(localized: "Default"))
-                                .font(OpenClawChatTypography.caption)
-                                .foregroundStyle(.secondary)
+                if !sections.recent.isEmpty {
+                    Section {
+                        self.modelOptions(sections.recent)
+                    } header: {
+                        Text("Recent")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                ForEach(sections.providers) { provider in
+                    Section {
+                        self.modelOptions(provider.models)
+                    } header: {
+                        HStack(spacing: 4) {
+                            Text(provider.displayName)
+                            if provider.isDefaultProvider {
+                                Text(String(localized: "Default"))
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -126,7 +125,6 @@ extension OpenClawChatComposer {
         .accessibilityLabel("Model")
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
-        .help("Model")
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 

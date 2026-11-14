@@ -137,16 +137,47 @@ describe("isolated completion account and daemon ownership", () => {
     vi.unstubAllEnvs();
   });
 
-  it("refuses native API-key auth rather than substituting stored profile B", async () => {
-    await withTempDir("codex-isolated-auth-", async (root) => {
-      const boundary = createNativeBoundary("apiKey");
-      const pluginConfig = createPluginConfig(root, "user");
-      const pending = runCodexIsolatedCompletion(createParams(root), { pluginConfig });
-      await expect(pending).rejects.toThrow("requires ChatGPT auth in the native Codex home");
-      expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
-      expect(boundary.inferenceAccounts).toEqual([]);
-    });
-  });
+  it.each(["chatgpt", "apiKey", "identity-only-profile"])(
+    "keeps native %s authoritative over stored profile B",
+    async (mode) => {
+      const accountType = mode === "identity-only-profile" ? "chatgpt" : mode;
+      await withTempDir("codex-isolated-auth-", async (root) => {
+        const boundary = createNativeBoundary(accountType);
+        const pluginConfig = createPluginConfig(root, "user");
+        const params = createParams(root);
+        if (mode === "identity-only-profile" && params.authorization.owner === "harness") {
+          const credential = storedProfile.profiles["openai:stored-b"];
+          if (credential?.type !== "oauth") {
+            throw new Error("fixture");
+          }
+          params.authorization.authProfileStore = {
+            version: 1,
+            profiles: {
+              "openai:stored-b": {
+                ...credential,
+                authFlow: "chatgpt-identity",
+              },
+            },
+          };
+        }
+        const pending = runCodexIsolatedCompletion(params, { pluginConfig });
+        if (accountType === "apiKey") {
+          await expect(pending).rejects.toThrow("requires ChatGPT auth in the native Codex home");
+        } else {
+          expect((await pending).assistant.content).toEqual([
+            { type: "text", text: `Garden Planning (${nativeAccount})` },
+          ]);
+          expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
+          expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
+          expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
+        }
+        expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
+        expect(boundary.inferenceAccounts).toEqual(
+          accountType === "chatgpt" ? [nativeAccount] : [],
+        );
+      });
+    },
+  );
 
   it.each(["user", "agent"] as const)(
     "retains the configured stdio proxy and its %s authentication contract",

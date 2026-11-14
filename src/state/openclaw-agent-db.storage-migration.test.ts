@@ -291,7 +291,7 @@ it.each(["UTF-8", "UTF-16le"] as const)(
       const exec = db.exec.bind(db);
       const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
         exec(sql);
-        if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
+        if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`) {
           observedPublication = true;
           expect(legacySnapshot(reader)).toEqual(before);
         }
@@ -385,7 +385,7 @@ it("rolls every conversion back when maintenance authority is lost", async () =>
       const exec = db.exec.bind(db);
       vi.spyOn(db, "exec").mockImplementation((sql) => {
         exec(sql);
-        if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
+        if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`) {
           reachedPublication = true;
           runOpenClawStateWriteTransaction(
             ({ db: shared }) => {

@@ -265,6 +265,7 @@ import {
   OTEL_TEST_ENDPOINT,
   RUN_FIXTURE,
   SPAN_ID,
+  snapshotOtelEnv,
   startOtelService,
   stopStartedOtelServices,
   TOOL_SPAN_ID,
@@ -310,7 +311,7 @@ const OTEL_ENV_KEYS = [
     "TRACES_SAMPLER_ARG",
   ].map((field) => `OTEL_${field}`),
 ];
-const originalOtelEnv = new Map(OTEL_ENV_KEYS.map((key) => [key, process.env[key]]));
+const restoreOtelEnv = snapshotOtelEnv(OTEL_ENV_KEYS);
 
 function startedSpanCall(name: string, index = 0) {
   return telemetryState.tracer.startSpan.mock.calls.filter(([spanName]) => spanName === name)[
@@ -731,13 +732,7 @@ describe("diagnostics-otel service", () => {
   afterEach(async () => {
     await stopStartedOtelServices();
     resetDiagnosticEventsForTest();
-    for (const [key, value] of originalOtelEnv) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    restoreOtelEnv();
   });
 
   test("records message-flow metrics and spans", async () => {
@@ -2315,6 +2310,8 @@ describe("diagnostics-otel service", () => {
       "openclaw.runId",
       "openclaw.sessionKey",
       "openclaw.traceId",
+      "gen_ai.conversation.id",
+      "openclaw.session.id",
     );
     expect(runOptions?.startTime).toBeTypeOf("number");
 
@@ -2326,7 +2323,13 @@ describe("diagnostics-otel service", () => {
       "gen_ai.operation.name": "text_completion",
     });
     expectAbsent(modelOptions?.attributes, "gen_ai.provider.name", "openclaw.callId");
-    expectAbsent(modelOptions?.attributes, "openclaw.runId", "openclaw.sessionKey");
+    expectAbsent(
+      modelOptions?.attributes,
+      "openclaw.runId",
+      "openclaw.sessionKey",
+      "gen_ai.conversation.id",
+      "openclaw.session.id",
+    );
     expect(modelOptions?.startTime).toBeTypeOf("number");
     expect(modelOptions?.kind).toBe(2);
     expect(modelCall?.[2]).toBeUndefined();
@@ -2347,7 +2350,13 @@ describe("diagnostics-otel service", () => {
       "openclaw.harness.items.active": 1,
     });
     expectAbsent(harnessOptions?.attributes, "openclaw.runId", "openclaw.sessionId");
-    expectAbsent(harnessOptions?.attributes, "openclaw.sessionKey", "openclaw.traceId");
+    expectAbsent(
+      harnessOptions?.attributes,
+      "openclaw.sessionKey",
+      "openclaw.traceId",
+      "gen_ai.conversation.id",
+      "openclaw.session.id",
+    );
     expect(harnessOptions?.startTime).toBeTypeOf("number");
     expect(harnessCall?.[2]).toBeUndefined();
 
@@ -2366,6 +2375,8 @@ describe("diagnostics-otel service", () => {
       "openclaw.toolCallId",
       "openclaw.runId",
       "openclaw.sessionKey",
+      "gen_ai.conversation.id",
+      "openclaw.session.id",
     );
     expect(toolOptions?.startTime).toBe(6_980);
     expectAbsent(toolOptions, "kind");
@@ -2425,6 +2436,46 @@ describe("diagnostics-otel service", () => {
     expect(toolSpan?.setStatus).toHaveBeenCalledWith({ code: 2, message: "TypeError" });
     expect(firstSpanEndTime("openclaw.tool.execution")).toBe(7_000);
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+  });
+
+  test("exports session identity on run-scoped spans only when content capture is on", async () => {
+    await startServiceFixture(["traces"], { captureContent: true });
+
+    emitEvent("run.completed", {
+      sessionKey: "agent:forge:main",
+      sessionId: "session-1",
+      channel: "webchat",
+      trace: createTestTrace(SPAN_ID),
+    });
+    emitEvent("model.call.completed", {
+      sessionKey: "agent:forge:main",
+      sessionId: "session-1",
+      trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
+    });
+    await emitEventAndFlush("tool.execution.completed", {
+      sessionKey: "agent:forge:main",
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      trace: createTestTrace(TOOL_SPAN_ID, GRANDCHILD_SPAN_ID),
+    });
+
+    expect(startedSpanOptions("openclaw.run")?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "session-1",
+      "openclaw.session.id": "session-1",
+    });
+    expect(startedSpanOptions("openclaw.model.call")?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "session-1",
+      "openclaw.session.id": "session-1",
+    });
+    expect(startedSpanOptions("openclaw.tool.execution")?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "session-1",
+      "openclaw.session.id": "session-1",
+    });
+    // The session key is never exported, even with content capture on.
+    expect(startedSpanOptions("openclaw.run")?.attributes).not.toMatchObject({
+      "gen_ai.conversation.id": "agent:forge:main",
+    });
+    expectAbsent(startedSpanOptions("openclaw.run")?.attributes, "openclaw.sessionKey");
   });
 
   test("closes a tracked blocked tool span once without creating a duplicate", async () => {

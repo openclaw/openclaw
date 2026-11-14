@@ -25,6 +25,7 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
@@ -76,6 +77,7 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   applyAgentCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,
+    agentId: params.agentId,
     contextTokenBudget: params.contextTokenBudget,
   });
   // The embedded runner owns retries; session auto-retry could replay tool calls (#73781).

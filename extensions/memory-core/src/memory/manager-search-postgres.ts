@@ -24,8 +24,13 @@ import {
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
-import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
-import type { ExactPathSpecificity } from "./manager-search.js";
+import type {
+  BodyKeywordSearchResult,
+  ExactPathSpecificity,
+  MemoryKeywordWorkerQuery,
+  MemoryVectorWorkerQuery,
+  PathKeywordSearchResult,
+} from "./manager-search-types.js";
 
 type SearchDatabase = {
   memory_index_chunks: MemorySearchRow & { model: string; openclaw_search: unknown };
@@ -41,13 +46,6 @@ type VectorRow = MemorySearchRow & { dist: number };
 type KeywordRow = MemorySearchRow & { rank: number };
 type PathRow = KeywordRow & { specificity: ExactPathSpecificity };
 type KeywordBranchRow = PathRow & { branch: number };
-type BodyResult = SearchRowResult & { textScore: number; hasBodyMatch: true };
-type PathResult = SearchRowResult & {
-  textScore: 0;
-  pathScore: number;
-  exactPathSpecificity: ExactPathSpecificity;
-  hasBodyMatch: false;
-};
 
 function sessionExclusion(paths: readonly string[], alias?: string): RawBuilder<boolean> {
   const source = sql.ref(alias ? `${alias}.source` : "source");
@@ -197,7 +195,7 @@ function bodyStatement(
 function projectBodyRows(
   rows: KeywordRow[],
   query: MemoryKeywordWorkerQuery["body"],
-): BodyResult[] {
+): BodyKeywordSearchResult[] {
   // Native ranking stays engine-local; the manager keeps its shared hybrid weights.
   return rows.map((row) =>
     Object.assign(projectMemorySearchRow(row, query.snippetMaxChars, row.rank), {
@@ -211,7 +209,7 @@ function searchBody(
   database: EngineConnection,
   query: MemoryKeywordWorkerQuery["body"],
   matchAny = false,
-): BodyResult[] {
+): BodyKeywordSearchResult[] {
   const statement = bodyStatement(database, query, matchAny);
   return projectBodyRows(
     statement ? executeSqliteQuerySync<KeywordRow>(database, statement).rows : [],
@@ -391,10 +389,13 @@ function pathStatements(database: EngineConnection, query: MemoryKeywordWorkerQu
   );
 }
 
-function projectPathRows(rows: PathRow[], query: MemoryKeywordWorkerQuery["path"]): PathResult[] {
+function projectPathRows(
+  rows: PathRow[],
+  query: MemoryKeywordWorkerQuery["path"],
+): PathKeywordSearchResult[] {
   const exactLimit = Math.max(0, Math.floor(query.exactPathLimit ?? query.limit));
   return rows
-    .map((row): PathResult =>
+    .map((row): PathKeywordSearchResult =>
       Object.assign(projectMemorySearchRow(row, query.snippetMaxChars, row.rank), {
         textScore: 0 as const,
         pathScore: row.rank,
@@ -408,7 +409,7 @@ function projectPathRows(rows: PathRow[], query: MemoryKeywordWorkerQuery["path"
 function searchPaths(
   database: EngineConnection,
   query: MemoryKeywordWorkerQuery["path"],
-): PathResult[] {
+): PathKeywordSearchResult[] {
   return projectPathRows(
     pathStatements(database, query).flatMap(
       (statement) => executeSqliteQuerySync<PathRow>(database, statement).rows,
@@ -475,8 +476,8 @@ export async function searchPostgresMemoryKeyword(
     }
   };
   let result: {
-    body: { rows: BodyResult[]; error?: string };
-    path: { rows: PathResult[]; error?: string };
+    body: { rows: BodyKeywordSearchResult[]; error?: string };
+    path: { rows: PathKeywordSearchResult[]; error?: string };
   };
   try {
     return searchIndependentBranches(database, query);

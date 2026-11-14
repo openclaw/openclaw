@@ -89,7 +89,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.getByText("Here is the desktop screenshot.", { exact: true }).waitFor();
           if (running) {
-            await page.getByRole("button", { name: "Stop generating" }).waitFor();
+            await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
             const toolEvent = (seq: number, data: Record<string, unknown>) =>
               gateway.emitGatewayEvent("agent", {
                 sessionKey,
@@ -121,6 +121,18 @@ suite.define(() => {
               await result();
             }
           }
+          const screenshotSummary = page.locator("button.chat-tool-msg-summary", {
+            hasText: /^Computer\s*screenshot$/,
+          });
+          await expect.poll(() => screenshotSummary.count()).toBe(1);
+          await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("false");
+          const screenshotBody = page
+            .locator(".chat-tool-msg-collapse", { has: screenshotSummary })
+            .locator(".chat-tool-msg-body");
+          expect(await screenshotBody.count()).toBe(0);
+          await screenshotSummary.click();
+          await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("true");
+          await screenshotBody.waitFor({ state: "attached" });
           const screenshot = page.locator("img.chat-message-image");
           await screenshot.waitFor({ state: "visible" });
           expect(
@@ -135,10 +147,16 @@ suite.define(() => {
           await page.locator("openclaw-image-lightbox .image").waitFor({ state: "visible" });
           if (running) {
             await page.getByRole("button", { name: "Close image preview" }).click();
-            const stop = page.getByRole("button", { name: "Stop generating" });
+            const stop = page.getByRole("button", { name: "Stop", exact: true });
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();
+            await expect.poll(() => screenshotSummary.count()).toBe(1);
+            await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("false");
+            expect(await screenshotBody.count()).toBe(0);
+            await screenshotSummary.click();
+            await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("true");
+            await screenshotBody.waitFor({ state: "attached" });
             await page.locator("img.chat-message-image").waitFor({ state: "visible" });
             expect(await omitted.count()).toBe(0);
           }

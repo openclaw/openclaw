@@ -1,5 +1,3 @@
-@import "./composer-context-strip.css";
-
 .session-progress-card--composer,
 .session-progress-card__summary {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
@@ -13,7 +11,6 @@
 
   position: relative;
   display: block;
-  box-sizing: border-box;
   width: 100%;
   max-width: none;
   border: 1px solid var(--chat-composer-hairline);
@@ -52,7 +49,8 @@
   line-height: 1.25;
 }
 
-.agent-chat__goal-row {
+.agent-chat__goal-row,
+.chat-waiters__row {
   display: grid;
   grid-template-columns: var(--chat-stack-icon-size, 14px) minmax(0, 1fr) auto auto;
   align-items: center;
@@ -60,7 +58,8 @@
   column-gap: 8px;
 }
 
-.agent-chat__goal-icon {
+.agent-chat__goal-icon,
+.chat-waiters__icon {
   color: var(--chat-goal-status-color, var(--muted));
   display: inline-flex;
   align-items: center;
@@ -70,7 +69,8 @@
   flex-shrink: 0;
 }
 
-.agent-chat__goal-icon svg {
+.agent-chat__goal-icon svg,
+.chat-waiters__icon svg {
   width: var(--chat-stack-icon-size, 14px);
   height: var(--chat-stack-icon-size, 14px);
   stroke: currentColor;
@@ -112,7 +112,8 @@
   grid-template-columns: var(--chat-stack-icon-size, 14px) minmax(0, 1fr) auto;
 }
 
-.agent-chat__goal-elapsed {
+.agent-chat__goal-elapsed,
+.chat-waiters__elapsed {
   flex-shrink: 0;
   color: var(--muted);
   font-feature-settings: "tnum" 1;
@@ -123,7 +124,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 2px;
+  gap: 4px;
 }
 
 .agent-chat__goal-command-actions {
@@ -131,15 +132,38 @@
 }
 
 .agent-chat__goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--chat-stack-trailing-control-size);
   height: var(--chat-stack-trailing-control-size);
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.agent-chat__goal-action:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.agent-chat__goal-action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__goal-action-label {
   display: none;
 }
 
-.agent-chat__goal-resume {
+.agent-chat__goal-resume:not([aria-label]) {
   width: auto;
   gap: 5px;
   padding-inline: 7px;
@@ -147,7 +171,7 @@
   white-space: nowrap;
 }
 
-.agent-chat__goal-resume .agent-chat__goal-action-label {
+.agent-chat__goal-resume:not([aria-label]) .agent-chat__goal-action-label {
   display: inline;
 }
 
@@ -290,7 +314,6 @@
     padding-inline-end: 4px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
   }
 
   .agent-chat__goal[data-expanded="true"]
@@ -420,8 +443,8 @@
   width: 100%;
 }
 
-.agent-chat__goal-float .agent-chat__goal {
-  box-sizing: border-box;
+.agent-chat__goal-float .agent-chat__goal,
+.chat-waiters {
   width: 100%;
   max-width: none;
   margin: 0;
@@ -431,6 +454,63 @@
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
   backdrop-filter: blur(8px);
+}
+
+/* Background commands the idle chat waits on; shares the goal card shell above. */
+.chat-waiters {
+  display: grid;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-size: 13px;
+}
+
+.chat-waiters__row {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+button.chat-waiters__row {
+  cursor: var(--cursor-action);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -3px;
+  }
+}
+
+.chat-waiters__list {
+  border-top: 1px solid var(--chat-composer-hairline);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.chat-waiters__label {
+  display: flex;
+  gap: 0.3em;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-waiters__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+
+  &[data-scrollable="true"] {
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  }
 }
 
 .agent-chat__goal-float
@@ -445,6 +525,7 @@
 }
 
 .agent-chat__goal-float .agent-chat__goal-row,
+.chat-waiters__row,
 .session-progress-card__summary {
   /* The surrounding card supplies the two border pixels. */
   min-height: calc(var(--chat-stack-header-height, 40px) - 2px);
@@ -577,8 +658,6 @@
   display: block;
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
-  border-color: color-mix(in srgb, var(--muted) 24%, transparent);
-  border-top-color: var(--muted);
   animation-duration: 1.8s;
 }
 
@@ -608,7 +687,6 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;

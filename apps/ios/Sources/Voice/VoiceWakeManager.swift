@@ -229,7 +229,7 @@ final class VoiceWakeManager {
     private func startRecognition() throws {
         guard self.isEnabled, self.suppressionReasons.isEmpty else { return }
 
-        self.invalidatePendingCommand()
+        self.cancelPendingCommand()
         self.recognitionGeneration &+= 1
         let recognitionGeneration = self.recognitionGeneration
         self.recognitionTask?.cancel()
@@ -264,7 +264,7 @@ final class VoiceWakeManager {
         // Speech can deliver buffered results after cancellation. Retire the
         // callback owner before any task or audio teardown begins.
         self.recognitionGeneration &+= 1
-        self.invalidatePendingCommand()
+        self.cancelPendingCommand()
         let hadRecognitionPipeline = self.recognitionRequest != nil
 
         self.recognitionTask?.cancel()
@@ -365,7 +365,19 @@ final class VoiceWakeManager {
             self.suppressionReasons.isEmpty
     }
 
-    func invalidatePendingCommand() {
+    /// Tears down recognition and restarts active listening, beyond canceling a pending command.
+    func discardCaptureForRouteChange() {
+        // A route change also retires buffered recognition results. Canceling only
+        // the send task lets the old microphone capture dispatch into the new chat.
+        let wasListening = self.isListening
+        self.isListening = false
+        self.tearDownRecognitionPipeline()
+        if wasListening {
+            self.scheduleStart()
+        }
+    }
+
+    private func cancelPendingCommand() {
         self.commandTask?.cancel()
         self.commandTask = nil
     }

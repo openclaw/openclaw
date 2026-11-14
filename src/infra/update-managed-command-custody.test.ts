@@ -17,6 +17,7 @@ import {
 } from "../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processGroups from "../process/child-process-tree.js";
+import * as reservationCensus from "../process/command-reservation-census.js";
 import { runUtf8CommandWithTimeout } from "../process/exec-runner.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
@@ -195,6 +196,10 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
 
   it("retains every installation after helper death until the tracked group exits, including orphan rows", async () => {
     const f = fixture();
+    // A process born at reservation time may be the command its killed spawner started.
+    const candidates = vi
+      .spyOn(reservationCensus, "findCommandReservationCandidates")
+      .mockReturnValue([4242]);
     const binding = createManagedHandoffTestBinding(f.privateTmp);
     const childEnv = writePrivateUpdateHandoffChildGuard(f.databasePath, f.privateTmp);
     const env = childEnv({
@@ -284,6 +289,7 @@ process.kill(process.pid, "SIGKILL");
         throw new Error("Missing pending reservation");
       }
       expect(f.store.releaseCommandReservation(retained.lease)).toBe(false);
+      candidates.mockReturnValue([]);
 
       holder.kill("SIGKILL");
       await closed;
@@ -294,7 +300,7 @@ process.kill(process.pid, "SIGKILL");
           expect(f.store.release(acquired.lease)).toBe(true);
         }
       }
-      expect(f.store.acquire(pendingRoot, "next", { kind: "update" }).kind).toBe("busy");
+      expect(f.store.acquire(pendingRoot, "next", { kind: "update" }).kind).toBe("acquired");
     } finally {
       holder.kill("SIGKILL");
       await closed;

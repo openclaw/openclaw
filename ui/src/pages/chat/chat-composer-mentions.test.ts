@@ -34,7 +34,7 @@ it.each([
     "chat",
     "Review @Alex",
     [recipient],
-    history === "loading" ? "Loading chat" : undefined,
+    history === "loading" ? "Loading conversation…" : undefined,
   );
 
   view.edit(draft);
@@ -83,8 +83,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     expect(view.key("Tab").defaultPrevented).toBe(true);
     view.expectValue("@Alex ", [mention("profile-alex-offline")]);
     expect(view.send).not.toHaveBeenCalled();
-    expect(view.query('[role="status"]')?.textContent).toContain("Will notify");
-    expect(view.query('[role="status"]')?.textContent).not.toContain("@Alex");
+    expect(view.query<HTMLTextAreaElement>("textarea")!.value).toContain("@Alex");
     view.key("Enter");
     expect(view.send).toHaveBeenCalledWith(view.value());
   });
@@ -233,16 +232,16 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       if (position !== "typed name") {
         return;
       }
-      const status = view.query('[role="status"]')!;
-      expect(status.textContent).toContain("Will notify");
-      expect(status.textContent).toContain("Peter Steinberger");
-      expect(status.textContent).not.toContain("Will notify:");
-      expect(status.textContent).not.toContain("@Peter Steinberger");
-      expect(status.querySelector('[role="img"][aria-label="Peter Steinberger"]')).not.toBeNull();
-      expect(status.querySelector('[title="@Peter Steinberger"]')).not.toBeNull();
-      status.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
-      expect(view.container.textContent).not.toContain("Will notify");
-      view.expectValue("@Peter Steinberger ");
+      expect(view.query<HTMLTextAreaElement>("textarea")!.value).toContain("@Peter Steinberger");
+      expect(view.value().mentions).toEqual([{ profileId: "profile-peter", start: 0, end: 18 }]);
+      view.edit("Peter Steinberger ", {
+        start: 0,
+        end: 1,
+        caret: 0,
+        inputType: "deleteContentForward",
+        data: null,
+      });
+      view.expectValue("Peter Steinberger ", []);
       view.key("Enter");
       expect(view.send).toHaveBeenCalledWith(view.value());
     },
@@ -322,15 +321,27 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   );
 
   if (kind === "new-session") {
-    it.each(["`@Peter Steinberger", "```\n@Peter Steinberger", "/command @Peter Steinberger"])(
-      "keeps %j as plain text",
-      async (text) => {
-        const view = composerFixture(kind);
-        await view.search(text);
-        expect(view.request).not.toHaveBeenCalled();
-        expect(view.value().mentions).toEqual([]);
-      },
-    );
+    it.each([
+      "`@Peter Steinberger",
+      "```\n@Peter Steinberger",
+      "~~~ts\n@Peter Steinberger",
+      "    @Peter Steinberger",
+      "> @Peter Steinberger",
+      "/command @Peter Steinberger",
+    ])("keeps %j as plain text", async (text) => {
+      const view = composerFixture(kind);
+      await view.search(text);
+      expect(view.request).not.toHaveBeenCalled();
+      expect(view.value().mentions).toEqual([]);
+    });
+
+    it("keeps a mention inside a closed multi-backtick code span as text", async () => {
+      const view = composerFixture(kind);
+      const text = "Example ``code @Peter Steinberger``";
+      await view.search(text, { caret: text.length - 2 });
+      expect(view.request).not.toHaveBeenCalled();
+      expect(view.value().mentions).toEqual([]);
+    });
 
     it("sends a full name without recipients when no person was selected", async () => {
       const draft = "@Peter Steinberger";
@@ -349,13 +360,13 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   }
 });
 
-it("blocks unsupported sends until the operator explicitly removes selected mentions", () => {
+it("blocks unsupported sends until editing removes the selected mention binding", () => {
   const view = composerFixture("chat", "@Alex", [mention("alex")]);
   view.setUnsupported();
   view.key("Enter");
   expect(view.send).not.toHaveBeenCalled();
   expect(view.container.textContent).toContain("Human mentions are not available in this mode");
-  view.container.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')?.click();
+  view.edit("Alex", { start: 0, end: 1, caret: 0, inputType: "deleteContentForward", data: null });
   view.key("Enter");
-  expect(view.send).toHaveBeenCalledWith({ draft: "@Alex", mentions: [] });
+  expect(view.send).toHaveBeenCalledWith({ draft: "Alex", mentions: [] });
 });

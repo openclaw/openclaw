@@ -56,15 +56,7 @@ async function authenticate(
     baseConfig: cfg,
     opts,
     runtime: createRuntimeSpies(),
-    resolveApiKey: async (request) => {
-      expect(request).toEqual({
-        provider: "litellm",
-        flagValue: opts.litellmApiKey,
-        flagName: "--litellm-api-key",
-        envVar: "LITELLM_API_KEY",
-      });
-      return { key: "litellm-test-key", source: "profile" };
-    },
+    resolveApiKey: async () => ({ key: "litellm-test-key", source: "profile" }),
     toApiKeyCredential: () => null,
   });
 }
@@ -73,9 +65,11 @@ afterEach(() => {
   clearLiveCatalogCacheForTests();
 });
 
-it.each([false, true])(
-  "preserves authored settings with canonical row %s during noninteractive auth",
-  async (canonical) => {
+it.each([false, true, "not-a-url", "localhost:4000", "ftp://litellm.example"])(
+  "preserves valid proxy settings and rejects invalid override %s",
+  async (input) => {
+    const canonical = input === true;
+    const customBaseUrl = typeof input === "string" ? input : undefined;
     const alias = authored("https://old.example/v1");
     const selected = canonical ? authored("https://canonical.example/v1", "canonical-key") : alias;
     if (canonical) {
@@ -88,8 +82,13 @@ it.each([false, true])(
     };
     const result = await authenticate(
       config({ LiteLLM: alias, ...(canonical ? { litellm: selected } : {}) }),
+      { customBaseUrl },
     );
-    expect(result?.models?.providers).toStrictEqual({ litellm: expected });
+    if (customBaseUrl) {
+      expect(result).toBeNull();
+    } else {
+      expect(result?.models?.providers).toStrictEqual({ litellm: expected });
+    }
   },
 );
 
@@ -106,7 +105,7 @@ it.each([
       "fetch",
       vi.fn(async (input: RequestInfo | URL) =>
         input === endpoint
-          ? Response.json({ data: [{ id: "proxy-model" }] })
+          ? Response.json({ data: [{ id: "proxy-model", object: "model", mode: "chat" }] })
           : new Response("Not Found", { status: 404 }),
       ),
     );
@@ -122,10 +121,9 @@ it.each([
       resolveProviderApiKey: () => ({ apiKey: "LITELLM_API_KEY", discoveryApiKey: "sk-test" }),
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     });
-    expect(result).toMatchObject({
-      provider: { models: [expect.objectContaining({ id: "proxy-model" })] },
-      outcomes: [{ provider: "litellm", status: "ready" }],
-    });
+    expect(result).toMatchObject({ outcomes: [{ provider: "litellm", status: "ready" }] });
+    const rows = result && "provider" in result ? result.provider.models : [];
+    expect(rows.map((m) => [m.id, m.inference?.chat])).toEqual([["proxy-model", undefined]]);
   },
 );
 

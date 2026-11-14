@@ -1,4 +1,5 @@
 /** Live launchd job diagnostics shared by shallow and deep Gateway status. */
+import { resolveStateDir } from "../../config/paths.js";
 import {
   findForeignLaunchdJobs,
   type ForeignLaunchdJob,
@@ -9,9 +10,11 @@ import {
   type GatewayForcedRestartSummary,
 } from "../../daemon/restart-storm.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 
 type LaunchdJobDiagnostics = {
   staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
+  staleLaunchdInspectionError?: string;
   foreignLaunchdJobs?: ForeignLaunchdJob[];
   foreignLaunchdInspectionError?: string;
   forcedRestartSummary?: GatewayForcedRestartSummary;
@@ -22,13 +25,19 @@ export async function gatherLaunchdJobDiagnostics(
   deep: boolean,
 ): Promise<LaunchdJobDiagnostics> {
   const diagnostics: LaunchdJobDiagnostics = {};
-  const stale = deep
-    ? await import("../../daemon/launchd.js")
-        .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs(env))
-        .catch(() => [])
-    : [];
-  if (stale.length) {
-    diagnostics.staleUpdateLaunchdJobs = stale;
+  if (deep) {
+    try {
+      const { findStaleOpenClawUpdateLaunchdJobs } = await import("../../daemon/launchd.js");
+      const stale = await findStaleOpenClawUpdateLaunchdJobs(env);
+      if (stale.length) {
+        diagnostics.staleUpdateLaunchdJobs = stale;
+      }
+    } catch (error: unknown) {
+      diagnostics.staleLaunchdInspectionError = redactSupportDiagnosticLine(
+        formatErrorMessage(error),
+        { env, stateDir: resolveStateDir(env) },
+      );
+    }
   }
   try {
     const jobs = await findForeignLaunchdJobs(env);

@@ -1,6 +1,6 @@
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
-import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker-readers.js";
 import type {
+  SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerPreparedInput,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";

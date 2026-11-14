@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
@@ -21,6 +20,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import {
   backupCase,
   isolateBackupScratch,
@@ -343,6 +343,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
     "refuses a %s loop without publishing an archive",
     backupCase({ layout: "split", prefix: "backup-owned-link-" })(
       async (state, ownership: string) => {
+        await isolateBackupScratch(state);
         if (ownership === "declared plugin") {
           await declarePluginSqliteResources(state, "foreign");
         }
@@ -365,5 +366,131 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
         }
       },
     ),
+  );
+});
+
+describe("backup Doctor migration originals", () => {
+  it(
+    "keeps retained originals by default and omits only Doctor-named groups on request",
+    backupCase({ layout: "home", prefix: "backup-migration-originals-" })(async (state) => {
+      await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
+      const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env: state.env });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabase();
+      const statePath = resolveOpenClawStateSqlitePath(state.env);
+      const id = "0b6f3c1e-8f2a-4c1d-9e3b-5a7d2c4f6e81";
+      // Retained stores need no configured roster entry to be captured by a full backup.
+      const retiredPath = path.join(state.agentDir("retired"), "openclaw-agent.sqlite");
+      const registeredPath = state.statePath("registered-retired", "openclaw-agent.sqlite");
+      for (const target of [
+        { agentId: "retired", path: retiredPath },
+        { agentId: "registered-retired", path: registeredPath },
+      ]) {
+        openOpenClawAgentDatabase({ ...target, env: state.env });
+      }
+      closeOpenClawAgentDatabasesForTest();
+      unregisterOpenClawAgentDatabase({ agentId: "retired", path: retiredPath, env: state.env });
+      closeOpenClawStateDatabase();
+      // Doctor canonicalizes a file alias before naming its retained original.
+      const physicalPath = state.statePath("backing.sqlite");
+      const aliasPath = path.join(state.agentDir("aliased"), "openclaw-agent.sqlite");
+      openOpenClawAgentDatabase({ agentId: "aliased", path: physicalPath, env: state.env });
+      closeOpenClawAgentDatabasesForTest();
+      unregisterOpenClawAgentDatabase({ agentId: "aliased", path: physicalPath, env: state.env });
+      await fs.mkdir(path.dirname(aliasPath), { recursive: true });
+      await fs.symlink(physicalPath, aliasPath);
+      registerOpenClawAgentDatabase({ agentId: "aliased", path: aliasPath, env: state.env });
+      closeOpenClawStateDatabase();
+      // A PostgreSQL original is a directory: omitted whole and reported once.
+      const postgresOriginal = `${statePath}.pre-startup-migration-${id}.postgres.bak`;
+      const originals = [
+        `${agentPath}.pre-startup-migration-${id}.bak`,
+        `${agentPath}.pre-startup-migration-${id}.scoped.bak`,
+        `${agentPath}.pre-startup-migration-restart-recovery-${id}.bak`,
+        `${statePath}.pre-startup-migration-${id}.bak`,
+        postgresOriginal,
+        `${retiredPath}.pre-startup-migration-${id}.bak`,
+        `${registeredPath}.pre-startup-migration-${id}.bak`,
+        `${aliasPath}.pre-startup-migration-${id}.bak`,
+        `${physicalPath}.pre-startup-migration-${id}.bak`,
+      ];
+      // Similar names Doctor never writes stay ordinary agent files.
+      const neighbors = [
+        `${agentPath}.pre-startup-migration-notes.bak`,
+        `${agentPath}.pre-startup-migration-restart-recovery-notes.bak`,
+        `${statePath}.pre-startup-migration-notes.postgres.bak`,
+        path.join(state.agentDir(), "operator.bak"),
+      ];
+      const postgresDump = path.join(postgresOriginal, "dump", "toc.dat");
+      await fs.mkdir(path.dirname(postgresDump), { recursive: true });
+      await fs.writeFile(postgresDump, "synthetic original");
+      for (const file of [...originals, ...neighbors].filter((f) => f !== postgresOriginal)) {
+        await fs.writeFile(file, "synthetic original");
+      }
+      const archived = async (
+        archive: { archivePath: string; archiveRoot: string },
+        file: string,
+      ) => {
+        const member = buildBackupArchivePath(archive.archiveRoot, file).replaceAll("\\", "/");
+        return (await listArchiveEntries(archive.archivePath)).some(
+          (entry) => entry === member || entry.startsWith(`${member}/`),
+        );
+      };
+
+      const full = await createVerifiedBackup(state);
+      expect(full.verified).toBe(true);
+      for (const file of [...originals, ...neighbors]) {
+        expect(await archived(full, file)).toBe(true);
+      }
+
+      const lean = await createVerifiedBackup(state, {
+        output: state.path("lean.tar.gz"),
+        excludeMigrationBackups: true,
+      });
+      for (const file of originals) {
+        expect(await archived(lean, file)).toBe(false);
+      }
+      expect(lean).toMatchObject({ excludeMigrationBackups: true, verified: true });
+      for (const file of originals) {
+        expect(lean.skipped).toContainEqual(
+          expect.objectContaining({
+            kind: "migration backup",
+            sourcePath: file,
+            reason: "excluded",
+          }),
+        );
+      }
+      expect(lean.skipped.filter((s) => s.sourcePath.startsWith(postgresOriginal))).toHaveLength(1);
+      for (const file of [...originals.filter((f) => f !== postgresOriginal), postgresDump]) {
+        expect(await fs.readFile(file, "utf8")).toBe("synthetic original");
+      }
+      for (const file of neighbors) {
+        expect(await archived(lean, file)).toBe(true);
+      }
+      await expect(restoreBackup(state, lean)).resolves.toMatchObject({ ok: true });
+      const restoredAgent = path.join(
+        state.path("restored"),
+        buildBackupArchivePath(lean.archiveRoot, agentPath),
+      );
+      expectDatabaseRows(restoredAgent, "SELECT agent_id FROM schema_meta", [{ agent_id: "main" }]);
+      const manifest = JSON.parse(
+        await fs.readFile(
+          path.join(state.path("restored"), lean.archiveRoot, "manifest.json"),
+          "utf8",
+        ),
+      );
+      expect(manifest.skipped).toEqual(
+        expect.arrayContaining(
+          originals.map((file) =>
+            expect.objectContaining({
+              kind: "migration backup",
+              sourcePath: file,
+              reason: "excluded",
+            }),
+          ),
+        ),
+      );
+    }),
   );
 });

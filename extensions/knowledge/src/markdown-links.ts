@@ -93,6 +93,11 @@ function extractLinks(body: string): string[] {
   );
   const links = new Set<string>();
   void markdown.walkTokens(tokens, (token) => {
+    if (token.type === "image") {
+      // Marked visits children after this callback. Prune only these fresh
+      // extraction tokens to match the inert renderer and linkSpans.
+      token.tokens = [];
+    }
     if (token.type === "wikilink") {
       links.add(wikiHref(token.target));
     }
@@ -257,7 +262,9 @@ function resolveHref(
   }
   let target: string;
   try {
-    target = decodeURIComponent(wiki ? href.slice(6) : href).split("#")[0]!;
+    target = wiki
+      ? decodeURIComponent(href.slice(6)).split("#")[0]!
+      : decodeURIComponent(href.split("#")[0]!);
   } catch {
     target = "";
   }

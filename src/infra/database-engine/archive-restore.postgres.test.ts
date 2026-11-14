@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import "./database-suite-workers.test-support.js";
-import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,7 +9,6 @@ import { Client } from "pg";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
-import { buildBackupArchivePath } from "../../commands/backup-shared.js";
 import { verifyBackupArchive } from "../../commands/backup-verify.js";
 import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -28,6 +27,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildBackupArchivePath } from "../backup-archive-path-policy.js";
 import { createBackupArchive } from "../backup-create.js";
 import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
 import { runClientCredentialOperation } from "../client-credential-store.js";
@@ -62,15 +62,37 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
       scenario: "compatibility",
       name: "preserves unlisted legacy exports and cleans failed provider restores",
     },
+    {
+      scenario: "override",
+      name: "imports into the --postgres-connection-env server while the archived connection resolves elsewhere",
+    },
+    {
+      scenario: "override-alias",
+      name: "imports into the --postgres-connection-env server through the captured env provider alias",
+    },
+    {
+      scenario: "override-cleanup",
+      name: "cleans failed imports only on the --postgres-connection-env destination",
+    },
   ])(
     "$name",
     async ({ scenario }) => {
       const sqliteAgent = scenario === "mixed";
+      const override = scenario.startsWith("override");
+      const restoreConnection = override
+        ? { postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG" }
+        : {};
+      // A custom env default with no provider named "default"; its allowlist must still apply.
+      const envProvider = scenario === "override-alias" ? "primary" : "default";
       const clientIdentity =
         scenario === "credentials" ? generateStoredDeviceIdentity(23) : undefined;
       assert(connection);
       await withEnvAsync(
-        { OPENCLAW_ARCHIVE_TEST_PG: connection, OPENCLAW_INCLUDE_ROOTS: undefined },
+        {
+          OPENCLAW_ARCHIVE_TEST_PG: connection,
+          OPENCLAW_ARCHIVE_TEST_RECOVERY_PG: undefined,
+          OPENCLAW_INCLUDE_ROOTS: undefined,
+        },
         async () => {
           await withOpenClawTestState(
             { scenario: "minimal", prefix: "pg-archive-" },
@@ -84,6 +106,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
               const admin = new Client({ connectionString: connection });
               const client = new Client({ connectionString: isolated.href });
               const recovery = new Client({ connectionString: recoveryConnection.href });
+              const recoveryRows = async (sql: string) => (await recovery.query(sql)).rows;
               const namespaces = new Set<string>();
               const config: OpenClawConfig = {
                 database: {
@@ -92,11 +115,27 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   postgres: {
                     connection: {
                       source: "env",
-                      provider: "default",
+                      provider: envProvider,
                       id: "OPENCLAW_ARCHIVE_TEST_PG",
                     },
                   },
                 },
+                ...(envProvider === "primary"
+                  ? {
+                      secrets: {
+                        defaults: { env: "primary" },
+                        providers: {
+                          primary: {
+                            source: "env" as const,
+                            allowlist: [
+                              "OPENCLAW_ARCHIVE_TEST_PG",
+                              "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG",
+                            ],
+                          },
+                        },
+                      },
+                    }
+                  : {}),
                 agents: {
                   ...(sqliteAgent ? { defaults: { workspace: state.path("workspace") } } : {}),
                   entries: { main: {} },
@@ -353,7 +392,12 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 for (const store of stores) {
                   await fs.unlink(store.file);
                 }
-                process.env.OPENCLAW_ARCHIVE_TEST_PG = recoveryConnection.href;
+                // The override scenario keeps the archived connection on the source server.
+                if (override) {
+                  process.env.OPENCLAW_ARCHIVE_TEST_RECOVERY_PG = recoveryConnection.href;
+                } else {
+                  process.env.OPENCLAW_ARCHIVE_TEST_PG = recoveryConnection.href;
+                }
                 if (sqliteAgent) {
                   await fs.writeFile(
                     includePath,
@@ -364,7 +408,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 await state.writeConfig({ database: { engine: "sqlite" } });
                 resetDatabaseEngineSelectionForTest();
                 clearRuntimeConfigSnapshot();
-                if (scenario !== "compatibility") {
+                if (scenario !== "compatibility" && scenario !== "override-cleanup") {
                   const targetPath = state.path("restored");
                   const restoredConfig = path.join(
                     targetPath,
@@ -392,11 +436,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                           if (anchor.engine === "postgres") {
                             expect(namespaces.has(anchor.namespace)).toBe(false);
                             expect(
-                              (
-                                await recovery.query(
-                                  `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                                )
-                              ).rows,
+                              await recoveryRows(
+                                `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                              ),
                             ).toEqual([{ value: store.value }]);
                           }
                         }
@@ -409,6 +451,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     restored = await backupRestoreCommand(createTestRuntime(), {
                       archive: backup.archivePath,
                       target: targetPath,
+                      ...(override
+                        ? { postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG" }
+                        : {}),
                     });
                   } finally {
                     publication.mockRestore();
@@ -422,11 +467,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     ).toEqual(bytes);
                   }
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                    ),
                   ).toEqual([
                     {
                       count: stores.filter((store) => !sqliteAgent || store.family !== "agent")
@@ -465,11 +508,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     });
                     namespaces.add(anchor.namespace);
                     expect(
-                      (
-                        await recovery.query(
-                          `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
-                        )
-                      ).rows,
+                      await recoveryRows(
+                        `SELECT "${store.column}" AS value FROM "${anchor.namespace}"."${store.table}"`,
+                      ),
                     ).toEqual([{ value: store.value }]);
                     for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
                       await expect(
@@ -492,6 +533,12 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   ).toEqual([]);
 
                   expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
+                  if (override) {
+                    expect(restored).toMatchObject({
+                      postgresConnectionEnv: "OPENCLAW_ARCHIVE_TEST_RECOVERY_PG",
+                    });
+                    return;
+                  }
                   if (clientIdentity) {
                     const restoredEnv = {
                       ...state.env,
@@ -655,6 +702,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   const legacyResult = await backupRestoreCommand(createTestRuntime(), {
                     archive: legacyArchive,
                     target: legacyTarget,
+                    ...restoreConnection,
                   });
                   expect(legacyResult.warnings).toContainEqual(
                     expect.stringContaining("Re-run backup with this version"),
@@ -671,18 +719,14 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   );
                   assert(legacy.engine === "postgres");
                   expect(
-                    (
-                      await recovery.query(
-                        `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      `SELECT display_name FROM "${legacy.namespace}".user_profiles`,
+                    ),
                   ).toEqual([{ display_name: global.value }]);
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT count(*)::int AS count FROM pg_namespace WHERE nspname LIKE 'restore_%'",
+                    ),
                   ).toEqual([{ count: 1 }]);
 
                   // A later unavailable provider must clean namespaces already prepared for earlier stores.
@@ -718,26 +762,33 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [
                     backup.archiveRoot,
                   ]);
-                  const before = (
-                    await recovery.query(
-                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                    )
-                  ).rows;
+                  const before = await recoveryRows(
+                    "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                  );
                   resetDatabaseEngineSelectionForTest();
                   clearRuntimeConfigSnapshot();
                   await expect(
                     backupRestoreCommand(createTestRuntime(), {
                       archive: corruptArchive,
                       target: state.path("failed"),
+                      ...restoreConnection,
                     }),
-                  ).rejects.toThrow("incomplete target was cleaned");
+                  ).rejects.toThrow(/incomplete target was cleaned.*Unknown database family/s);
+                  expect(
+                    await recoveryRows(
+                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                    ),
+                  ).toEqual(before);
+                  await expect(fs.access(state.path("failed"))).rejects.toMatchObject({
+                    code: "ENOENT",
+                  });
                   expect(
                     (
-                      await recovery.query(
-                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                      await client.query(
+                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%'",
                       )
                     ).rows,
-                  ).toEqual(before);
+                  ).toEqual([]);
 
                   await fs.writeFile(corruptManifest, originalManifest);
                   lastCapture.manifestSha256 = originalHash;
@@ -759,14 +810,13 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     backupRestoreCommand(createTestRuntime(), {
                       archive: missingArchive,
                       target: state.path("missing-capsule"),
+                      ...restoreConnection,
                     }),
                   ).rejects.toThrow("manifest.json");
                   expect(
-                    (
-                      await recovery.query(
-                        "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
-                      )
-                    ).rows,
+                    await recoveryRows(
+                      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
+                    ),
                   ).toEqual(before);
                 }
               } finally {

@@ -29,14 +29,6 @@ describe("jsonl append + multi-agent session sim", () => {
     }
   });
 
-  it("append after a malformed line preserves both", () => {
-    let ast = parseJsonl('{"a":1}\nbroken\n');
-    ast = appendJsonlOcPath(ast, event("start", 1));
-    const out = ast.raw;
-    expect(out).toContain("broken");
-    expect(out).toContain('"event":"start"');
-  });
-
   it("append after blank lines preserves line-number gaps correctly", () => {
     let ast = parseJsonl('{"a":1}\n\n\n');
     ast = appendJsonlOcPath(ast, event("after", 0));

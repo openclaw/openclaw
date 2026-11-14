@@ -93,10 +93,15 @@ export function resolveNodeGatewayOptions(
     !pair ||
     (config?.gateway !== undefined &&
       nodeHostGatewaysShareOrigin(config.gateway, pair.candidates[0]!));
-  const cloudflareAccess =
-    (!endpointChanged && savedGatewayMatchesBaseline
-      ? config?.gateway?.cloudflareAccess
-      : undefined) ?? nodeHostCloudflareAccessConfigFromEnv(env);
+  const gatewayTarget =
+    !pair && !hasExplicitEndpoint && config?.gateway?.kind === "openclaw-id"
+      ? config.gateway
+      : undefined;
+  const cloudflareAccess = gatewayTarget
+    ? undefined
+    : ((!endpointChanged && savedGatewayMatchesBaseline
+        ? config?.gateway?.cloudflareAccess
+        : undefined) ?? nodeHostCloudflareAccessConfigFromEnv(env));
   const gatewayCandidates =
     pair && !hasExplicitEndpoint
       ? pair.candidates.map((candidate, index) =>
@@ -112,5 +117,6 @@ export function resolveNodeGatewayOptions(
     tlsFingerprint,
     cloudflareAccess,
     gatewayCandidates,
+    gatewayTarget,
   };
 }

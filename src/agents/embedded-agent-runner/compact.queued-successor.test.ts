@@ -20,7 +20,9 @@ import {
 import type { QueuedCompactionHostOptions } from "./compact.types.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
-const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();
+const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness({
+  durableSession: true,
+});
 // The harness resets modules. Load every real owner afterward so the manager
 // and queued compaction share the same private write context and database lifetime.
 const [
@@ -153,15 +155,11 @@ type BackendAppendOutcome = ReturnType<ReturnType<typeof createBackendAppend>>;
 type TranscriptRewrite = NonNullable<ContextEngineRuntimeContext["rewriteTranscriptEntries"]>;
 
 async function transcriptFixture() {
-  const { SessionManager } = await import("../sessions/index.js");
-  const openAsync = vi.spyOn(SessionManager, "openAsync");
-  const originalOpenAsync = expectDefined(
-    openAsync.getMockImplementation(),
-    "session-manager bridge",
-  );
+  const originalOpenAsync = PersistentSessionManager.openAsync.bind(PersistentSessionManager);
+  const openAsync = vi.spyOn(PersistentSessionManager, "openAsync");
   const hooks: { beforeBranchRead?: () => void } = {};
   openAsync.mockImplementation(async (...args) => {
-    const manager = await PersistentSessionManager.openAsync(...args);
+    const manager = await originalOpenAsync(...args);
     const getBranch = manager.getBranch.bind(manager);
     vi.spyOn(manager, "getBranch").mockImplementation((...branchArgs) => {
       hooks.beforeBranchRead?.();
@@ -169,7 +167,7 @@ async function transcriptFixture() {
     });
     return manager;
   });
-  restoreTranscriptBridge = () => openAsync.mockImplementation(originalOpenAsync);
+  restoreTranscriptBridge = () => openAsync.mockRestore();
   const manager = PersistentSessionManager.open(target(), workspaceDir);
   const entryId = manager.appendMessage({
     role: "user",

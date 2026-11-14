@@ -35,7 +35,7 @@ import {
 } from "./session-message-client.test-support.js";
 import { registerCronSessionCompletionEventTests } from "./session-message-cron.test-support.js";
 import { findWatchedPresenceEntry, getConnId } from "./session-message-presence.test-support.js";
-import { registerRecoveredSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
+import { registerTerminalSubagentSessionEventTest } from "./session-message-subagent.test-support.js";
 import { createWorkerFanoutFixture } from "./session-message-worker.test-support.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -268,24 +268,6 @@ function waitForSessionObserverEvent(ws: GatewayWs, runId: string, timeoutMs?: n
 
 function waitForSessionsChangedMessagePhase(ws: GatewayWs, sessionKey: string) {
   return onceMessage(ws, matchingEvent("sessions.changed", { phase: "message", sessionKey }));
-}
-
-async function emitTranscriptUpdateAndCollectMessageEvent(params: {
-  ws: GatewayWs;
-  sessionKey: string;
-  sessionFile: string;
-  message: Record<string, unknown>;
-  messageId: string;
-  agentId?: string;
-  messageSeq?: number;
-}) {
-  const messageEventPromise = waitForSessionMessageEvent(params.ws, params.sessionKey);
-
-  const { ws: _ws, ...update } = params;
-  emitSessionTranscriptUpdate(update);
-
-  const messageEvent = await messageEventPromise;
-  return { messageEvent };
 }
 
 async function expectNoMessageWithin(params: {
@@ -541,7 +523,7 @@ describe("session.message websocket events", () => {
     expect(downgrade.error?.message).toContain("dedicated paired device identity");
   });
 
-  registerRecoveredSubagentSessionEventTest({
+  registerTerminalSubagentSessionEventTest({
     createSessionStoreFile,
     withOperatorSessionSubscriber,
     expectNoMessageWithin,
@@ -773,16 +755,29 @@ describe("session.message websocket events", () => {
     const storePath = await createMainSessionStore();
     const blocked = { blockedBy: "policy-plugin", blockedAt: 1 };
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
-        ws,
-        sessionKey: "agent:main:main",
-        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
-        messageId: "blocked-message",
-        message: {
-          ...textMessage("The agent cannot read this message.", "user"),
-          __openclaw: { beforeAgentRunBlocked: blocked },
-        },
-      });
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      const [, messageEvent] = await Promise.all([
+        persistSessionTranscriptTurn(
+          { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath },
+          {
+            messages: [
+              {
+                eventId: "blocked-message",
+                message: {
+                  ...textMessage("The agent cannot read this message.", "user"),
+                  idempotencyKey: "hook-block:before_agent_run:user:blocked-run",
+                  __openclaw: { beforeAgentRunBlocked: blocked },
+                },
+              },
+            ],
+          },
+        ),
+        messageEventPromise,
+      ]);
+      expectRecordFields(messageEvent.payload, { messageId: "blocked-message" });
+      await expect(
+        fs.access(path.join(path.dirname(storePath), "sess-main.jsonl")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
       const message = eventMessage(messageEvent);
       expectRecordFields(message, {
         role: "user",
@@ -900,18 +895,16 @@ describe("session.message websocket events", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
     };
-    const message = textMessage("spawn and thread route snapshot");
-    await createSessionStore({ child: { sessionId: "sess-child", ...metadata } });
+    const storePath = await createSessionStore({ child: { sessionId: "sess-child", ...metadata } });
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
-        ws,
-        sessionKey: "agent:main:child",
-        sessionFile: "agent:main:child",
-        message,
-        messageId: "msg-spawn",
-      });
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:child");
+      const [appended, messageEvent] = await Promise.all([
+        appendAssistant(storePath, "agent:main:child", "spawn and thread route snapshot"),
+        messageEventPromise,
+      ]);
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:child",
+        messageId: appended.messageId,
         ...metadata,
         goal: { ...goal, tokenStartFresh: true },
       });

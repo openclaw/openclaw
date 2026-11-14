@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClawChatUI
 
@@ -62,6 +63,69 @@ private final class RecordingNowPlayingOwner: ChatMediaNowPlayingOwner {
 @MainActor
 @Suite("Chat media playback coordinator")
 struct ChatMediaPlaybackCoordinatorTests {
+    @Test func `delayed earlier attachment cannot interrupt a later playback intent`() async {
+        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: RecordingNowPlayingCenter())
+        let slow = RecordingMediaPlaybackOwner()
+        let fast = RecordingMediaPlaybackOwner()
+        let slowIntent = coordinator.claimPlaybackIntent()
+        var finishLoading: CheckedContinuation<Void, Never>?
+        let delayed = Task { @MainActor in
+            await withCheckedContinuation { finishLoading = $0 }
+            return coordinator.activate(slow, intent: slowIntent)
+        }
+        while finishLoading == nil { await Task.yield() }
+
+        let fastIntent = coordinator.claimPlaybackIntent()
+        #expect(coordinator.activate(fast, intent: fastIntent))
+        finishLoading?.resume()
+
+        #expect(await delayed.value == false)
+        #expect(coordinator.isActive(fast))
+        #expect(fast.interruptionCount == 0)
+    }
+
+    @Test func `direct playback supersedes a pending attachment even after release`() {
+        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: RecordingNowPlayingCenter())
+        let pending = RecordingMediaPlaybackOwner()
+        let direct = RecordingMediaPlaybackOwner()
+        let intent = coordinator.claimPlaybackIntent()
+
+        coordinator.activate(direct)
+        coordinator.release(direct)
+
+        #expect(!coordinator.activate(pending, intent: intent))
+        #expect(!coordinator.isActive(pending))
+    }
+
+    @Test func `pausing active playback supersedes a pending attachment`() {
+        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: RecordingNowPlayingCenter())
+        let active = RecordingMediaPlaybackOwner()
+        let pending = RecordingMediaPlaybackOwner()
+        coordinator.activate(active)
+        let intent = coordinator.claimPlaybackIntent()
+
+        coordinator.playbackDidPause(active)
+
+        #expect(!coordinator.activate(pending, intent: intent))
+        #expect(coordinator.isActive(active))
+        #expect(active.interruptionCount == 0)
+    }
+
+    @Test func `remote pause supersedes a pending attachment`() {
+        let center = RecordingNowPlayingCenter()
+        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: center)
+        let active = RecordingNowPlayingOwner()
+        let pending = RecordingMediaPlaybackOwner()
+        coordinator.activate(active)
+        let intent = coordinator.claimPlaybackIntent()
+
+        center.send(.pause)
+
+        #expect(!coordinator.activate(pending, intent: intent))
+        #expect(active.commands == [.pause])
+        #expect(coordinator.isActive(active))
+    }
+
     @Test func `new playback owner interrupts the previous owner exactly once`() {
         let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: RecordingNowPlayingCenter())
         let first = RecordingMediaPlaybackOwner()

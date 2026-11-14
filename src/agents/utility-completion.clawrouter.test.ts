@@ -32,7 +32,14 @@ const modelId = "openai/gpt-6-luna";
 const chatModelId = "openai/gpt-6.1-sol";
 const chatRow = { id: chatModelId, upstream: "gpt-6.1-sol", capabilities: ["llm.chat"] };
 const baseUrl = "https://clawrouter.openclaw.ai/v1";
-const unsupported = "Model clawrouter/openai/gpt-6-luna does not support chat inference";
+const unsupported = {
+  name: "FailoverError",
+  message: "This model doesn't support chat; pick another model.",
+  code: "model_chat_unsupported",
+  reason: "format",
+  provider: "clawrouter",
+  model: modelId,
+};
 
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
@@ -210,7 +217,6 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
         },
         workspaceFacts: {
           pluginMetadataSnapshot: lease.snapshot.metadataSnapshot,
-          inlineProviderModels: [],
         },
         templateModelRegistry: retainedRegistry,
         configuredRuntimeModels: [],
@@ -221,7 +227,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
           modelCatalog: retained.modelCatalog,
           createStores: () => ({ authStorage: retainedAuth, modelRegistry: retainedRegistry }),
         }),
-      ).resolves.toMatchObject({ error: unsupported });
+      ).rejects.toMatchObject(unsupported);
       expect(fetched).toEqual([]);
       for (const { key, route } of [
         { key: "synthetic-granted" },
@@ -288,7 +294,6 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
           },
           workspaceFacts: {
             pluginMetadataSnapshot: lease.snapshot.metadataSnapshot,
-            inlineProviderModels: [],
           },
           templateModelRegistry: registry,
           configuredRuntimeModels: [],
@@ -308,8 +313,9 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
             modelCatalog: catalog,
             createStores: () => ({ authStorage, modelRegistry: registry }),
           };
-          const prepared = await prepare(snapshot, config);
+          const preparing = prepare(snapshot, config);
           if (key === "synthetic-granted" && !route) {
+            const prepared = await preparing;
             expect(prepared).not.toHaveProperty("error");
             assertPrepared(prepared);
             if (catalog === captured) {
@@ -333,7 +339,7 @@ it("prepares granted Luna chat and Decisions without leaking grants across crede
               inference: { chat: true, decision: { protocol: "openai-decisions" } },
             });
           } else {
-            expect(prepared).toMatchObject({ error: unsupported });
+            await expect(preparing).rejects.toMatchObject(unsupported);
           }
           // A plain chat grant survives a configured route change; only typed rows are vetoed.
           if (key === "synthetic-granted") {

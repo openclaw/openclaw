@@ -4,9 +4,9 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   resolveMemorySessionTargetsAsync,
+  streamSessionEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
@@ -315,7 +315,8 @@ async function forgetWorkspaceMemory(
       (entry.artifactKind === "archive-artifact" &&
         (!entry.sessionKind || entry.sessionKind === "unknown"))
     ) {
-      const parsed = await buildSessionEntry(entry.sessionFile, {
+      // Summaries carry provenance and observe messages without retaining the export.
+      const parsed = await streamSessionEntry(entry.sessionFile, {
         generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
         generatedByCronRun: entry.generatedByCronRun === true,
         ...(entry.transcriptSource === "sqlite"

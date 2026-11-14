@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { retryAsync } from "../../packages/retry/src/index.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   CONTROL_UI_PLUGIN_MAX_ASSETS,
@@ -13,6 +16,7 @@ import { normalizeManifestControlUi } from "../plugins/manifest-control-ui.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
+import { readPluginAuthoringJson } from "./plugins-authoring-json.js";
 import { buildPluginBundle } from "./plugins-build-bundle.js";
 import { nameControlUiChunks } from "./plugins-control-ui-chunks.js";
 
@@ -28,7 +32,7 @@ export async function writePluginBuildManifest(
     content: `${JSON.stringify(manifest, null, 2)}\n`,
     mode: 0o666 & ~process.umask(),
     preserveExistingMode: true,
-    dirMode: (await fs.stat(realRootDir)).mode & 0o7777,
+    dirMode: "preserve",
     syncTempFile: true,
     syncParentDir: true,
     throwOnCleanupError: true,
@@ -39,17 +43,18 @@ export async function buildPluginControlUi(params: {
   rootDir: string;
   source: string;
   check?: boolean;
+  platform?: NodeJS.Platform;
 }): Promise<PluginManifestControlUi> {
   const rootDir = await fs.realpath(params.rootDir);
-  const manifestText = await fs
-    .readFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), "utf8")
-    .catch((error: unknown) => {
-      if (isRecord(error) && error.code === "ENOENT") {
-        return "{}";
-      }
+  let authored: unknown;
+  try {
+    authored = readPluginAuthoringJson(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), true);
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
       throw error;
-    });
-  const authored: unknown = JSON.parse(manifestText);
+    }
+    authored = {};
+  }
   const presentation = normalizeManifestControlUi(
     isRecord(authored) ? authored.controlUi : undefined,
     isRecord(authored) ? authored.channels : undefined,
@@ -97,6 +102,7 @@ export async function buildPluginControlUi(params: {
   const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
   const outputDir = path.join(rootDir, output);
   const declaration = {
+    ...(presentation.value?.panelIcon ? { panelIcon: presentation.value.panelIcon } : {}),
     ...(presentation.value?.activation ? { activation: presentation.value.activation } : {}),
     ...(presentation.value?.settingsViews
       ? { settingsViews: presentation.value.settingsViews }
@@ -128,12 +134,24 @@ export async function buildPluginControlUi(params: {
     }
     await normalizeGenerationPermissions(staging, files);
     try {
-      await fs.rename(staging, outputDir);
+      await retryAsync(() => fs.rename(staging, outputDir), {
+        attempts: 6,
+        minDelayMs: 100,
+        maxDelayMs: 1600,
+        sleep: sleepWithAbort,
+        // Scanners can hold a fresh Windows tree; an existing generation is a collision.
+        shouldRetry: (error) =>
+          (params.platform ?? process.platform) === "win32" &&
+          isRecord(error) &&
+          ["EPERM", "EBUSY", "EACCES"].some((code) => error.code === code) &&
+          !existsSync(outputDir),
+      });
     } catch (error) {
       // Windows reports an existing destination directory as EPERM; reuse still requires matching bytes.
       if (
         !isRecord(error) ||
-        (error.code !== "EEXIST" && error.code !== "ENOTEMPTY" && error.code !== "EPERM")
+        (error.code !== "EEXIST" && error.code !== "ENOTEMPTY" && error.code !== "EPERM") ||
+        !existsSync(outputDir)
       ) {
         throw error;
       }

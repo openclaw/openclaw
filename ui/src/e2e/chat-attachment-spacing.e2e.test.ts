@@ -147,8 +147,14 @@ suite.define(() => {
                 const reference = await gap(blocks.nth(1), blocks.nth(2));
                 expect(reference).toBeGreaterThan(0);
                 const expectedBefore = reference * (name === "heading" ? 1.5 : 1);
-                // Wide desktop tables reserve extra space after their compact toolbar/table block.
-                const expectedAfter = name === "table" && width === 1440 ? 24 : reference;
+                // A heading sits close to the block it introduces. Wide desktop tables
+                // reserve extra space after their compact toolbar/table block.
+                const expectedAfter =
+                  name === "heading"
+                    ? reference * 0.4
+                    : name === "table" && width === 1440
+                      ? 24
+                      : reference;
                 await expect
                   .poll(async () =>
                     Math.max(

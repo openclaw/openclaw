@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { after, test } from "node:test";
+import { after, test as nodeTest } from "node:test";
+
+const test = (name, fn) => nodeTest(name, { skip: process.platform !== "linux" && "requires real Linux procfs flock proof" }, fn);
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const pair = resolve(process.env.CUSTODY_PAIR ?? directory);
 const contractModule = resolve(process.env.CUSTODY_CONTRACT_MODULE ?? join(directory, "gateway-suspension-contract.mjs"));
 const contract = await import(pathToFileURL(contractModule).href);
 const materialized = mkdtempSync(join(tmpdir(), "team-custody-library-"));
+mkdirSync(join(materialized, "journal"), { mode: 0o700 });
+const lockFile = join(materialized, "deployment.lock");
+writeFileSync(lockFile, "", { mode: 0o600 });
 after(() => rmSync(materialized, { recursive: true, force: true }));
 let materialization = 0;
 function localLibrary(selectedPair, modulePath = contractModule) {
@@ -55,9 +60,16 @@ function status(state = "ready", custody = []) {
 }
 
 function proofAt(selectedLibrary, command, payload, ...args) {
-  return spawnSync(process.execPath, ["--no-warnings", selectedLibrary, command, "@stdin", ...args.map(String)], {
+  return spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"',
+    "custody-proof", process.execPath, "--no-warnings", selectedLibrary, command, "@stdin", ...args.map(String)], {
+    env: lockEnvironment(selectedLibrary),
     input: JSON.stringify(payload), encoding: "utf8", timeout: 10_000,
   });
+}
+function lockEnvironment(selectedLibrary) {
+  return { ...process.env, OPENCLAW_TEAM_LOCK_FILE: lockFile, OPENCLAW_TEAM_RELEASE_ROOT: materialized,
+    OPENCLAW_TEAM_ANCESTOR_BOUNDARY: materialized, OPENCLAW_TEAM_ROOT_UID: String(process.getuid()),
+    OPENCLAW_TEAM_ROOT_GID: String(process.getgid()), OPENCLAW_TEAM_RELEASE_LIB: selectedLibrary };
 }
 const proof = (command, payload, ...args) => proofAt(library, command, payload, ...args);
 
@@ -193,15 +205,16 @@ test("lease expiry and exact status expiry remain enforced", () => {
   assert.notEqual(parse("status", { ...ready, expiresAtMs: Date.now() + 1000 }).status, 0);
 });
 
-test("running, resume and handoff wire shapes stay unchanged", () => {
+test("running and resume remain strict; committed handoff outlives its lease", () => {
   assert.equal(proof("suspension-running", { status: "running" }).status, 0);
   assert.notEqual(proof("suspension-running", { status: "running", writeCustody: [] }).status, 0);
   assert.equal(proof("suspension-resume", { ok: true, status: "running", resumed: true }).status, 0);
   assert.notEqual(proof("suspension-resume", { ok: true, status: "running", resumed: true, writeCustody: [] }).status, 0);
-  const end = expiry();
-  const armed = { status: "armed", suspensionId: lease, expiresAtMs: end };
-  assert.equal(proof("suspension-handoff", armed, lease, end).status, 0);
-  assert.notEqual(proof("suspension-handoff", { ...armed, writeCustody: [] }, lease, end).status, 0);
+  const end = Date.now() - 1;
+  const committed = { status: "committed", suspensionId: lease, expiresAtMs: end };
+  assert.equal(proof("suspension-handoff", committed, lease, end).status, 0);
+  for (const extra of [{ status: "armed" }, { writeCustody: [] }, { expiresAtMs: end + 1 }])
+    assert.notEqual(proof("suspension-handoff", { ...committed, ...extra }, lease, end).status, 0);
 });
 
 function ownerRun(body, first, next = first, options = {}, bindings = {}) {
@@ -212,6 +225,8 @@ function ownerRun(body, first, next = first, options = {}, bindings = {}) {
     writeFileSync(join(root, "next.json"), JSON.stringify(next));
     writeFileSync(join(root, "calls"), "");
     const script = `
+exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"
+flock -n 9 || exit 75
 source "$FIXTURE/definitions.sh"
 node_bin="$TEST_NODE"
 release_lib="$TEST_LIBRARY"
@@ -222,6 +237,8 @@ run_gateway() {
     gateway.suspend.prepare) cat "$FIXTURE/first.json" ;;
     gateway.suspend.status) cat "$FIXTURE/next.json" ;;
     gateway.suspend.resume) printf '%s\\n' '{"ok":true,"status":"running","resumed":true}' ;;
+    gateway.suspend.handoff) [[ "$6" == *'"commit":true'* ]] || { echo 'handoff must commit shutdown' >&2; return 98; }
+      touch "$FIXTURE/fail-rpc"; printf '{"status":"committed","suspensionId":"fixture-owned-lease","expiresAtMs":%s}' "$suspension_expiry" ;;
     *) return 99 ;;
   esac
 }
@@ -233,6 +250,7 @@ suspension_scope=system
 suspension_release=fixture
 suspension_pid=42
 suspension_generation=123
+suspension_instance=fixture-instance
 held_suspension=fixture-owned-lease
 suspension_expiry="$EXPECTED_EXPIRY"
 interrupt_after_drain=1
@@ -241,22 +259,13 @@ ${body}
 `;
     const result = spawnSync("bash", ["-c", script], {
       encoding: "utf8", timeout: 10_000,
-      env: { ...process.env, OPENCLAW_TEAM_RUNTIME_UID: "1000", OPENCLAW_TEAM_DEPLOY_UID: "1001", OPENCLAW_TEAM_DEPLOY_GID: "1001", FIXTURE: root, TEST_NODE: process.execPath, TEST_LIBRARY: bindings.library ?? library, EXPECTED_EXPIRY: String(next.expiresAtMs ?? expiry()), GENERATION_CURRENT: "yes", ...options },
+      env: { ...lockEnvironment(bindings.library ?? library), OPENCLAW_TEAM_RUNTIME_UID: "1000", OPENCLAW_TEAM_DEPLOY_UID: "1001", OPENCLAW_TEAM_DEPLOY_GID: "1001", FIXTURE: root, TEST_NODE: process.execPath, TEST_LIBRARY: bindings.library ?? library, EXPECTED_EXPIRY: String(next.expiresAtMs ?? expiry()), GENERATION_CURRENT: "yes", ...options },
     });
     return { ...result, calls: readFileSync(join(root, "calls"), "utf8").trim().split("\n") };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
-
-test("owner allows ordinary bounded interruption for clear or unknown custody", () => {
-  for (const presence of ["clear", "unknown"]) {
-    const payload = status("draining");
-    if (presence === "unknown") delete payload.writeCustody;
-    const result = ownerRun("check_suspension", payload);
-    assert.equal(result.status, 0, result.stderr);
-  }
-});
 
 test("owner refuses positive write custody without treating it as malformed wire", () => {
   for (const phase of ["migration", "backup", "session-mutation", "terminal-persistence", "coordinator-write", "future-owner"]) {
@@ -285,8 +294,18 @@ test("native blockers retain final-write, safe-count and write-custody policy", 
     const unsafeCount = structuredClone(clear);
     unsafeCount.blockers[0].count = Number.MAX_SAFE_INTEGER + 1;
     assert.notEqual(parse("status", unsafeCount).status, 0);
-    assert.notEqual(parse("prepare", blockerPayload(kind, "ready")).status, 0);
+    const ready = blockerPayload(kind, "ready");
+    ready.activeCount = 1;
+    const admitted = parse("prepare", ready);
+    assert.equal(admitted.status, 0, admitted.stderr);
+    assert.match(admitted.stdout, new RegExp(`READY .*${kind}:1 clear`));
+    delete ready.writeCustody;
+    assert.notEqual(parse("prepare", ready).status, 0, "legacy readiness cannot prove clear write custody");
   }
+  const persistence = prepare();
+  persistence.activeCount = 1;
+  persistence.blockers = [{ kind: "terminal-persistence", count: 1, message: "pending final write" }];
+  assert.notEqual(parse("prepare", persistence).status, 0, "clear custody cannot waive terminal persistence");
 });
 
 test("late write custody overturns READY; fresh clearing permits the next check", () => {
@@ -329,14 +348,49 @@ check_suspension
   assert.match(result.stderr, /SUSPENSION_CHECK_FAILED stage=status/);
 });
 
-test("owner accepts modern preparation without altering existing lease binding", () => {
-  const payload = prepare("draining");
+for (const state of ["ready", "draining", "legacy"]) test(`owner commits ${state} shutdown without rechecking its retired lease`, () => {
+  const prepared = prepare(state === "legacy" ? "draining" : state);
+  if (state === "legacy") delete prepared.writeCustody;
+  const payload = { ...status(prepared.status), expiresAtMs: prepared.expiresAtMs };
+  if (state === "legacy") delete payload.writeCustody;
   const result = ownerRun(`
-held_suspension=""
-request_suspension fixture '{}'
-[[ "$held_suspension" == fixture-owned-lease && "$suspension_write_custody" == clear ]]
-`, payload);
+assert_protected_identity() { :; }; assert_policy() { :; }
+held_suspension=""; request_suspension fixture '{}'
+check_suspension && arm_suspension_handoff
+`, prepared, payload);
   assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls, ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.handoff"]);
+});
+
+test("handoff failure records only bounded terminal-persistence facts", () => {
+  const privateText = "private-fixture-do-not-log";
+  const terminalPersistence = { count: 10, oldestAgeMs: 30_000, runIds: ["fixture-run-a", "fixture-run-b"] };
+  const failure = (details) => JSON.stringify({ ok: false, error: {
+    type: "gateway_request_error", code: "UNAVAILABLE", message: privateText,
+    details: { terminalPersistence: details, privateText },
+  } });
+  for (const [payload, facts] of [
+    [failure({ ...terminalPersistence, privateText }), terminalPersistence],
+    [failure({ ...terminalPersistence, oldestAgeMs: null }), { ...terminalPersistence, oldestAgeMs: null }],
+    [failure({ ...terminalPersistence, runIds: Array(9).fill("fixture-run") }), null],
+    [failure({ ...terminalPersistence, runIds: ["x".repeat(257)] }), null],
+    [failure({ ...terminalPersistence, runIds: ["fixture\nforged-log"] }), null],
+    [failure({ ...terminalPersistence, count: -1 }), null],
+    [failure({ ...terminalPersistence, oldestAgeMs: -1 }), null],
+    [failure(terminalPersistence) + " ".repeat(20_000), null],
+    [privateText, null],
+  ]) {
+    const result = ownerRun(`
+assert_protected_identity() { :; }; assert_policy() { :; }
+run_gateway() { printf '%s' "$FAILURE"; return 1; }
+arm_suspension_handoff
+`, status(), status(), { FAILURE: payload });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, `SUSPENSION_HANDOFF_FAILED exit=1 details=${facts ? JSON.stringify({ terminalPersistence: facts }) : "unclassified"}\n`);
+    assert.doesNotMatch(result.stderr, new RegExp(privateText));
+  }
 });
 
 test("malformed preparation still retires its exact offered lease through existing exit owner", () => {

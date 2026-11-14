@@ -209,7 +209,7 @@ internal fun formatCronInterval(everyMs: Long): NativeText {
   val hours = minutes / 60L
   val days = hours / 24L
   return when {
-    days >= 1 && hours % 24L == 0L -> nativeText("Every \${days}d", days)
+    days >= 1 && minutes % (24L * 60L) == 0L -> nativeText("Every \${days}d", days)
     hours >= 1 && minutes % 60L == 0L -> nativeText("Every \${hours}h", hours)
     minutes >= 1 -> nativeText("Every \${minutes}m", minutes)
     else -> nativeText("Repeating")

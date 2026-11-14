@@ -13,9 +13,16 @@ import {
 } from "../../plugins/provider-auth-authority.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import { resolveSkillSnapshotExecutionFileHost } from "../../skills/runtime/skill-snapshot-provenance.js";
 import { resolveUserPath } from "../../utils.js";
+import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { describeFailoverError } from "../failover-error.js";
+import {
+  isCompactionSummaryRefusal,
+  type CompactionSummaryRefusalMode,
+} from "../compaction-summary-refusal.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
@@ -32,7 +39,7 @@ import { resolveSandboxContext } from "../sandbox/context.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
-import { classifyCompactionReason } from "./compact-reasons.js";
+import { classifyCompactionReason, describeCompactionFailure } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
@@ -49,7 +56,52 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
   requestedRouteResolution?: "resolved";
   seedCompaction?: CompactionAppendPersistenceAsync;
   sandbox?: SandboxContext | null;
+  summaryRefusal?: CompactionSummaryRefusalMode;
 };
+
+// Persistence intentionally drops runtime catalogs. Restore them before sandbox
+// selection and delivery, while already-prepared turns keep their exact snapshot.
+export async function hydratePersistedCompactionSkillsSnapshot(
+  params: CompactEmbeddedAgentSessionParams,
+  sessionAgentId: string,
+) {
+  const persistedSnapshot = params.skillsSnapshot;
+  if (
+    !persistedSnapshot ||
+    persistedSnapshot.resolvedSkills !== undefined ||
+    !(
+      persistedSnapshot.prompt.trim() ||
+      persistedSnapshot.discoverySkills?.length ||
+      persistedSnapshot.librarySelections?.length
+    )
+  ) {
+    return persistedSnapshot;
+  }
+  const skillRoots = persistedSnapshot.skillRoots;
+  const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
+    workspaceDir:
+      skillRoots?.agentWorkspaceDir ??
+      (params.config && hasAgentRosterProperty(params.config)
+        ? resolveAgentWorkspaceDir(params.config, sessionAgentId)
+        : (params.bootstrapWorkspaceDir ?? resolveUserPath(params.workspaceDir))),
+    executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+    executionWorkspaceFileHost: resolveSkillSnapshotExecutionFileHost(persistedSnapshot),
+    config: params.config ?? {},
+    agentId: sessionAgentId,
+    existingSnapshot: persistedSnapshot,
+    skillFilter: persistedSnapshot.skillFilter,
+    skillOverrides: persistedSnapshot.skillOverrides,
+    resolveEligibility: () => ({
+      nodeSkills: persistedSnapshot.nodeSkillsEligibility,
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: persistedSnapshot.nodeSkillsEligibility?.canExec === true,
+      }),
+    }),
+    watch: false,
+    assertCurrent: () => params.abortSignal?.throwIfAborted(),
+  });
+  return snapshot;
+}
 
 export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
@@ -114,7 +166,7 @@ export async function prepareDirectCompactionAttempt(
     explicitReasonClass?: "compaction_model_unresolved",
   ): EmbeddedAgentCompactResult => {
     const failureReason = explicitReasonClass ?? classifyCompactionReason(reason);
-    const failure = err ? describeFailoverError(err) : undefined;
+    const failure = err ? describeCompactionFailure(err) : undefined;
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -131,6 +183,7 @@ export async function prepareDirectCompactionAttempt(
             status: failure.status,
             code: failure.code,
             rawError: failure.rawError ?? failure.message,
+            ...(isCompactionSummaryRefusal(err) ? { summaryRefused: true as const } : {}),
           }
         : undefined,
     };
@@ -313,6 +366,8 @@ export async function prepareDirectCompactionAttempt(
   const sandboxAgentId =
     params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined);
   const assertCurrent = () => params.abortSignal?.throwIfAborted();
+  const skillsSnapshot = await hydratePersistedCompactionSkillsSnapshot(params, sessionAgentId);
+  assertCurrent();
   const sandbox =
     params.sandbox === undefined
       ? await withSandboxRuntimeStatusInWorker(
@@ -325,6 +380,7 @@ export async function prepareDirectCompactionAttempt(
               execOverrides: params.execOverrides,
               sessionKey: sandboxSessionKey,
               workspaceDir: resolvedWorkspace,
+              skillsSnapshot,
               assertCurrent,
               preparedRuntimeStatus,
             }),
@@ -353,7 +409,7 @@ export async function prepareDirectCompactionAttempt(
     return {
       ok: true as const,
       value: {
-        params,
+        params: { ...params, skillsSnapshot },
         diagId,
         trigger,
         attempt,

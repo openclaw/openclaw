@@ -42,7 +42,7 @@ suite.define(() => {
                 displayName: "Reconnect account",
                 type: "oauth",
                 status: "expired",
-                reasonCode: "expired",
+                reasonCode: "refresh_failed",
               },
             ],
           },
@@ -192,13 +192,14 @@ suite.define(() => {
         );
         expect(
           await selected.locator('[data-profile-id="example-selected:excluded"]').textContent(),
-        ).toContain("Sign in again");
+        ).toContain("Not signed in");
         const mixed = page.locator('[data-provider-id="example-mixed"]');
         expect((await mixed.locator(".provider-row__status").textContent())?.trim()).toBe(
           "Credentials rejected",
         );
         const excluded = mixed.locator('[data-profile-id="example-mixed:excluded"]');
-        expect(await excluded.textContent()).toContain("Sign-in unavailable");
+        // A refresh in progress settles on its own: no sign-in prompt.
+        expect(await excluded.textContent()).toContain("Refreshing");
         expect(await excluded.textContent()).not.toContain("Sign in again");
         const oauth = page.locator('[data-provider-id="example-oauth"]');
         expect((await oauth.locator(".provider-row__status").textContent())?.trim()).toBe("Ready");
@@ -210,11 +211,14 @@ suite.define(() => {
         expect(await reauth.locator(".provider-row__status").textContent()).toContain(
           "Credentials rejected",
         );
+        // The row's status already speaks for the provider's only account.
         expect(
-          await reauth.locator('[data-profile-id="example-reauth:account"]').textContent(),
-        ).toContain("Sign-in unavailable");
+          await reauth
+            .locator('[data-profile-id="example-reauth:account"] .model-providers__profile-status')
+            .textContent(),
+        ).toBe("");
         const quota = page.locator('[data-provider-id="example-quota"]');
-        expect(await quota.textContent()).toContain("Monthly quota is used up");
+        expect(await quota.textContent()).toContain("Monthly quota0% left");
         expect(await quota.textContent()).not.toContain("Sign in again");
         const rate = page.locator('[data-provider-id="example-rate"]');
         expect(await rate.textContent()).toContain("Temporary rate limit. Retry shortly.");

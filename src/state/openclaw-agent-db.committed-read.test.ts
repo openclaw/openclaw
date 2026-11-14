@@ -85,7 +85,8 @@ describe("committed agent database reads", () => {
     {
       version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
       expectedError: {
-        name: "SqliteSchemaMismatchError",
+        name: "StartupMaintenanceRequiredError",
+        kind: "state-migrations",
         message: expect.stringContaining(
           `uses schema version ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}; stop active agents and run openclaw doctor --fix to upgrade it to schema version ${OPENCLAW_AGENT_SCHEMA_VERSION} before using it.`,
         ),

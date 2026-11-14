@@ -1,5 +1,6 @@
 import { resolveModelServiceTierContextTokens } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -32,6 +33,7 @@ type OpenAIResponsesPayloadPolicy = {
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldCompleteInputStatus: boolean;
+  requiresStatelessCompactionReplay: boolean;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
@@ -163,6 +165,8 @@ function resolveOpenAIResponsesPayloadCapabilities(model: OpenAIResponsesPayload
       usesKnownNativeOpenAIEndpoint,
     endpointClass,
     explicitContinuationOptIn,
+    requiresStatelessCompactionReplay:
+      endpointClass === "openai-public" || (isOpenAIProvider && endpointClass === "default"),
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
@@ -408,6 +412,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldCompleteInputStatus: isArkResponsesRoute,
+    requiresStatelessCompactionReplay: capabilities.requiresStatelessCompactionReplay,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
     shouldStripPromptCache:
@@ -427,7 +432,15 @@ export function applyOpenAIResponsesPayloadPolicy(
   policy: OpenAIResponsesPayloadPolicy,
 ): void {
   if (policy.explicitStore !== undefined) {
-    payloadObj.store = policy.explicitStore;
+    // Storing a replayed checkpoint makes its next replay fail with item_conflict,
+    // even without item IDs. Stateless replay also recovers already-stored checkpoints.
+    payloadObj.store =
+      policy.explicitStore &&
+      !(
+        policy.requiresStatelessCompactionReplay &&
+        Array.isArray(payloadObj.input) &&
+        payloadObj.input.some((item) => isRecord(item) && item.type === "compaction")
+      );
   }
   if (policy.shouldStripStore) {
     delete payloadObj.store;

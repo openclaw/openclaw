@@ -1,0 +1,2 @@
+# Regression test that /commands page buttons stay within 64-byte callback_data for long agent ids.
+11

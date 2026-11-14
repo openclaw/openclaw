@@ -193,7 +193,6 @@ if (approvalPath) {
 }
 
 const checks = [
-  ["workflowName", "OpenClaw Release Publish"],
   ["headBranch", expectedBranch],
   ["event", "workflow_dispatch"],
 ];
@@ -214,14 +213,14 @@ if (expectedWorkflowSha && run.headSha !== expectedWorkflowSha) {
     `Referenced release publish run ${releasePublishRunId} must use tooling SHA ${expectedWorkflowSha}, got ${run.headSha ?? "<missing>"}.`,
   );
 }
-if (expectedWorkflowFullRef) {
-  const [workflowPath, workflowFullRef] = String(run.path ?? "").split("@", 2);
-  if (workflowPath !== ".github/workflows/openclaw-release-publish.yml") {
-    fail(`Referenced release publish run ${releasePublishRunId} has untrusted workflow path.`);
-  }
-  if (workflowFullRef && workflowFullRef !== expectedWorkflowFullRef) {
-    fail(`Referenced release publish run ${releasePublishRunId} has untrusted workflow full ref.`);
-  }
+// The Actions run name (also exposed as gh workflowName) can be the dynamic
+// run-name, not the workflow name. Bind authority to the exact workflow path.
+const [workflowPath, workflowFullRef] = String(run.path ?? "").split("@", 2);
+if (workflowPath !== ".github/workflows/openclaw-release-publish.yml") {
+  fail(`Referenced release publish run ${releasePublishRunId} has untrusted workflow path.`);
+}
+if (expectedWorkflowFullRef && workflowFullRef && workflowFullRef !== expectedWorkflowFullRef) {
+  fail(`Referenced release publish run ${releasePublishRunId} has untrusted workflow full ref.`);
 }
 
 if (expectedRunAttempt && run.runAttempt !== positiveRunAttempt(expectedRunAttempt)) {

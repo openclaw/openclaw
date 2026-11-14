@@ -38,7 +38,7 @@ async function seedSession(
 
 const tool = { name: "synthetic_read", description: "Read a synthetic document." };
 const complete = { systemPrompt: "Synthetic system prompt.", tools: [tool] };
-const oversized = { systemPrompt: "x".repeat(32_769), tools: [tool] };
+const oversized = { systemPrompt: "x".repeat(65_537), tools: [tool] };
 const cases: Array<
   [
     name: string,

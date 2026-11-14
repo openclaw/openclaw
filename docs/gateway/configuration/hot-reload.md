@@ -192,6 +192,41 @@ own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
 
+Auth-profile edits refresh credential facts without replacing unchanged plugin
+instances. A scheduled session event that has selected its model keeps running
+when another provider's auth profile changes. Changes to its own provider's auth
+policy still invalidate the captured policy. Before execution has started, the
+session-event owner can re-admit the same occurrence under current policy, with
+at most two retries. Once a hook, model, or delivery may have performed work, it
+does not replay the occurrence; a failed scheduled run remains visible in cron
+history and the next schedule is a separate run.
+
+Logging changes never revoke scheduled work. Plugin changes, including turning a
+plugin such as Advisor on or off, leave scheduled turns to the plugin reload:
+the turn hands over at its next step boundary or keeps its admitted plugin
+generation until it finishes, as interactive turns do. Once a scheduled turn selects its
+model, edits to another provider's model configuration also leave it running.
+Adding models to the allowlist preserves the turn while its selected model remains
+allowed; removing that permission or changing its provider's configuration still
+rechecks the occurrence under current policy. These unrelated edits do not consume
+the occurrence's bounded readmission attempts.
+
+Every session event, including a background command's completion follow-up,
+compares only the configuration its own agent uses: shared settings, agent
+defaults, and that agent's entry. Scheduled events compare the channels on their
+route and re-admit other message actions against current policy. Unscheduled
+events retain all channel configuration because their tools keep the captured
+configuration. Adding or editing another agent, including that agent's secret
+references, leaves a running
+event alone, and so do logging changes. A change to the event's own agent, the
+agent defaults, or shared settings still rechecks the occurrence under current
+policy. Only scheduled events narrow auth, model-provider, and MCP changes to
+their selected model; other session events treat any such change as relevant.
+
+Session detail and process-list reads that encounter a retired model-catalog
+callback refresh their catalog binding once before preparing the response.
+If the replacement is unavailable, the read reports a session-read error.
+
 After a transient connection failure, an in-flight turn using a directly configured
 provider can retry with an endpoint whose hot reload has completed. It keeps the same
 model, permissions, prompt, conversation history, and model limits while resolving
@@ -210,6 +245,13 @@ and degraded while the Gateway keeps serving. Healthy services can finish their
 reloads. The warning names the plugin and service; plugin health includes its service
 failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
 affected plugin. A slow service cleanup does not schedule a Gateway restart.
+
+If a failed replacement also cannot restore model/reply publication, the Gateway
+requests its normal work-draining recovery restart, including for explicit
+`plugins.reload`. The replacement still reports failure. Failed model-owner
+recovery backs off while that restart prepares, preserving queued replies' retry
+budget. Previously dead-lettered messages require manual resubmission through
+[Channels](/cli/channels#inbound-dead-letters).
 
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,
@@ -305,7 +347,7 @@ newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
-`experimental.claws`, and
+`experimental.templates`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and

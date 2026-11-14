@@ -33,7 +33,7 @@ export async function openPalette(page: import("playwright").Page) {
   });
   await page
     .locator("openclaw-command-palette")
-    .getByRole("textbox", { name: "Search or start a task…" })
+    .getByRole("textbox", { name: "Search…" })
     .waitFor();
 }
 

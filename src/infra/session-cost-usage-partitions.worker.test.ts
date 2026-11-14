@@ -270,7 +270,14 @@ it("pairs quarter rows with their partitions through refresh, rollback writes, a
     db.prepare(
       "UPDATE cache_entries SET updated_at = updated_at + 1 WHERE scope = ? AND key = ?",
     ).run(USAGE_COST_PARTITION_SCOPE, usageCostPartitionKey(first, "2026-09-01"));
-    // The read asks the refresh owner to derive the row from the partition, waits, and is exact.
+    // Report committed coverage immediately, then let the refresh owner repair the missing row.
+    expect(await overview()).toMatchObject({
+      rows: [null, { totalTokens: 5 }],
+      computing: [true, false],
+      summarizing: 1,
+      cacheStatus: { status: "refreshing" },
+    });
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first], waitForRefresh: true });
     expect(await overview()).toMatchObject({
       rows: [{ totalTokens: 5 }, { totalTokens: 5 }],
       computing: [false, false],

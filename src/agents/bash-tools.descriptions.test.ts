@@ -76,19 +76,19 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "automatic completion wake, when enabled, occurs only after exit; otherwise process confirms completion",
+      "When the running result says its exit wakes this conversation, end the turn instead of polling",
     );
     expect(processWithCron.description).toContain("completion without auto-wake");
     expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
     expect(execWithCron.description).toContain(
-      "No sleep loops for reminders/follow-ups; use automations.",
+      "A one-time wait in this conversation is one background command; saved, recurring or cross-session follow-ups use automations.",
     );
     expect(processWithCron.description).toContain(
       "No polling as timer/reminder; scheduled follow-up uses automations.",
     );
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
-    expect(execTool.description).toContain("otherwise process confirms completion");
+    expect(execTool.description).toContain("otherwise process poll collects the result");
     expect(processTool.description).toContain("completion without auto-wake");
     expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });

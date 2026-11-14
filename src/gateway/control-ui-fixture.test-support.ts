@@ -11,9 +11,15 @@ export async function readHttp(url: string, options: RequestOptions = {}) {
   });
   const body = await buffer(response);
   const text = new TextDecoder().decode(body);
+  const headers: Record<string, string | string[] | null | undefined> = {
+    etag: null,
+    "last-modified": null,
+    "content-length": null,
+    ...response.headers,
+  };
   return {
     status: response.statusCode,
-    headers: { etag: null, "last-modified": null, "content-length": null, ...response.headers },
+    headers,
     body,
     text,
     byteLength: body.byteLength,

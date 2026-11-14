@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  reportDoctorHealthFinding,
+  showDoctorHealthSummary,
+} from "../flows/doctor-health-contribution.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
   completeGatewayBootLifecycle,
   beginGatewayBootLifecycle,
+  readGatewayRecentCrashesAsync,
 } from "../infra/gateway-boot-lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -69,6 +74,49 @@ beforeEach(async () => {
 });
 
 describe("Doctor installation replacement diagnostics", () => {
+  it.each([
+    { ageMs: 0, count: 1, warns: true },
+    { ageMs: 8 * 24 * 60 * 60_000, count: 1, warns: false },
+    { ageMs: 2 * 24 * 60 * 60_000, count: 3, warns: true },
+    { ageMs: 0, count: 1, warns: true, remote: true },
+  ])(
+    "reports recent or repeated crashes without marking the successor unhealthy ($ageMs/$count)",
+    async ({ ageMs, count, warns, remote }) => {
+      const detectedAtMs = Date.now() - ageMs;
+      for (let index = 0; index < count; index++) {
+        await beginGatewayBootLifecycle(process.env, detectedAtMs + index);
+      }
+      const cfg: OpenClawConfig = remote
+        ? { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } }
+        : {};
+      if (remote) {
+        mocks.callGateway.mockResolvedValue({
+          recentCrashes: await readGatewayRecentCrashesAsync(),
+        });
+      }
+      const findings = await collectGatewayHealthFindings({ cfg, env: process.env });
+      const crashFindings = findings.filter((finding) =>
+        finding.message.startsWith("Gateway ended unexpectedly"),
+      );
+      expect(crashFindings).toHaveLength(warns ? 1 : 0);
+      if (warns) {
+        expect(crashFindings[0]).toMatchObject({ severity: "warning" });
+        const ctx = { runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } };
+        const result = await checkGatewayHealth({
+          cfg,
+          runtime: ctx.runtime,
+          onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
+        });
+        expect(result.healthOk).toBe(true);
+        showDoctorHealthSummary(ctx);
+        const output = ctx.runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain(`Gateway ended unexpectedly ${count} time(s)`);
+        expect(output).toContain("Inspect `openclaw gateway status`");
+        expect(ctx.runtime.error).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each(["normal", "lint"])(
     "reports unavailable history after cancellation without losing %s health results",
     async (mode) => {

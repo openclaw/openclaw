@@ -152,25 +152,50 @@ enum NativeExecPolicyOwner {
         guard result.authorized else { throw Unavailable(detail: "Owner denied execution") }
     }
 
-    private static func run<Response: Decodable>(
-        _ request: Request,
-        stateDirectory: URL) async throws -> Response
+    static func launch(
+        stateDirectory: URL,
+        bundle: Bundle = .main,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        profile: AppProfile = .current,
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) async throws -> MacNodeHostWorkerLaunch
     {
-        // Resolve the bundled CLI, never the configured remote Gateway endpoint.
-        let command = await CommandResolver.localOpenclawCommand(
-            subcommand: "approvals", extraArgs: ["native", "--stdin", "--json"])
-        try Task.checkCancellation()
-        guard let executable = command.first else { throw Unavailable(detail: "Local CLI is missing") }
-        var environment = ProcessInfo.processInfo.environment
+        var environment = environment
+        let command: [String]
+        // This private protocol must match the app, including on remote-only Macs with no Gateway seed.
+        if bundle.bundleURL.pathExtension == "app" {
+            let runtime = try BundledRuntime.resolve(bundle: bundle)
+            command = profile.localCLICommand(
+                prefix: runtime.cliCommand,
+                arguments: ["approvals", "native", "--stdin", "--json"])
+            environment.merge(runtime.environment) { _, bundled in bundled }
+        } else {
+            command = await CommandResolver.localOpenclawCommand(
+                subcommand: "approvals",
+                extraArgs: ["native", "--stdin", "--json"],
+                searchPaths: searchPaths,
+                projectRoot: projectRoot,
+                profile: profile)
+        }
         environment["OPENCLAW_STATE_DIR"] = stateDirectory.path
         if environment["OPENCLAW_CONFIG_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             environment["OPENCLAW_CONFIG_PATH"] = stateDirectory.appendingPathComponent("openclaw.json").path
         }
         environment["OPENCLAW_NO_BANNER"] = "1"
+        return MacNodeHostWorkerLaunch(command: command, environment: environment)
+    }
+
+    private static func run<Response: Decodable>(
+        _ request: Request,
+        stateDirectory: URL) async throws -> Response
+    {
+        let launch = try await self.launch(stateDirectory: stateDirectory)
+        try Task.checkCancellation()
+        guard let executable = launch.command.first else { throw Unavailable(detail: "Local CLI is missing") }
         let result = try await BoundedProcess.runCapturingError(
             path: executable,
-            arguments: Array(command.dropFirst()),
-            environment: environment,
+            arguments: Array(launch.command.dropFirst()),
+            environment: launch.environment,
             input: JSONEncoder().encode(request),
             outputLimit: 1024 * 1024,
             timeout: 60)

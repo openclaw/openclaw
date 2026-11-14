@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AcpGatewayAgent } from "./translator.js";
@@ -46,7 +46,7 @@ async function createHarness(
   params: {
     sessions?: string[];
     allowedDecisions?: string[];
-    requestPermission?: ReturnType<typeof vi.fn>;
+    requestPermission?: Mock;
     resolveApproval?: (params?: Record<string, unknown>) => unknown;
   } = {},
 ) {
@@ -148,6 +148,33 @@ it("relays raw approval requests once before the later agent approval event", as
       toolCallId: "exec:approval-raw",
       rawInput: { command: "echo hydrated" },
     },
+  });
+});
+
+it("routes an MCP approval to its ACP turn by run ID despite different tool IDs", async () => {
+  const h = await createHarness({ sessions: ["session-1", "session-2"] });
+  const secondRun = expectDefined(h.runIds[1], "second Gateway run id");
+  await h.send(tool(h.runId, "toolu_first"));
+  await h.send(tool(secondRun, "toolu_second"));
+  const send = (id: string, runId?: string, sessionKey = SESSION_KEY) =>
+    h.send({
+      type: "event",
+      event: "exec.approval.requested",
+      payload: {
+        id,
+        request: { sessionKey, runId, toolCallId: "mcp-exec", command: "echo actual" },
+      },
+    });
+
+  await send("no-run");
+  await send("stale-run", "finished");
+  await send("wrong-session", secondRun, "agent:main:elsewhere");
+  expect(h.requestPermission).not.toHaveBeenCalled();
+  await send("approval-mcp", secondRun);
+  await h.expectResolution("approval-mcp");
+  expectSingleCall(h.requestPermission, {
+    sessionId: "session-2",
+    toolCall: { toolCallId: "mcp-exec" },
   });
 });
 

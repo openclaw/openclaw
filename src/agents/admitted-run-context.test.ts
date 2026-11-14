@@ -3,6 +3,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as audit from "../audit/execution-identity-admission.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import {
+  bindSynchronousSessionSource,
+  withSessionSourceValidation,
+} from "../config/sessions/session-source-authority.js";
+import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
@@ -91,62 +95,10 @@ it.each([false, true])("binds frozen Gateway routing (audit=%s)", async (enabled
   expect(gateway.getGatewayContextResolver(admitted)).toBeUndefined();
 });
 
-it("consumes disabled recovery evidence so a reused run id cannot inherit it", async () => {
-  const token = audit.createExecutionIdentityAdmissionToken(facts.runId);
-  const recovery = run.createExecutionIdentityRecoveryAdmission({ retryOnly: true, token });
-
-  const disabled = await prepareRun({ recovery }).admit("embedded");
-  const laterEnabled = await prepareRun({ cfg: enabledConfig, recovery }).admit("embedded");
-
-  expect(disabled).not.toHaveProperty("executionIdentityToken");
-  expect(laterEnabled).not.toHaveProperty("executionIdentityToken");
-});
-
-it.each([false, true])("adopts exact retry evidence (bound=%s)", async (bound) => {
-  const token = audit.createExecutionIdentityAdmissionToken(bound ? "original-run" : facts.runId);
-  const sink = installSink();
-  const recovery = () =>
-    run.createExecutionIdentityRecoveryAdmission({
-      retryOnly: true,
-      token,
-      ...(bound ? { expectedOperationalRunId: facts.runId } : {}),
-    });
-  if (bound) {
-    const rejected = recovery();
-    expect([rejected.consume("other-operational-run"), rejected.consume(facts.runId)]).toEqual([
-      { accepted: false },
-      { accepted: false },
-    ]);
-  }
-  const admitted = await prepareRun({ cfg: enabledConfig, recovery: recovery() }).admit("embedded");
-  expect(admitted.executionIdentityToken).toBe(token);
-  expect(sink).toHaveBeenCalledExactlyOnceWith({ kind: "retry-reference", token });
-});
-
-it("keeps missing or mismatched recovery identity unbound", async () => {
-  const sink = installSink();
-  for (const recovery of [
-    run.createExecutionIdentityRecoveryAdmission({ retryOnly: true }),
-    run.createExecutionIdentityRecoveryAdmission({
-      retryOnly: true,
-      token: audit.createExecutionIdentityAdmissionToken("different-run"),
-    }),
-    {
-      retryOnly: false,
-      token: { ...audit.createExecutionIdentityAdmissionToken(facts.runId) },
-    } as never,
-  ]) {
-    const admitted = await prepareRun({ cfg: enabledConfig, recovery }).admit("embedded");
-    expect(admitted).not.toHaveProperty("executionIdentityToken");
-  }
-  expect(sink).not.toHaveBeenCalled();
-});
-
 it("allocates once and reuses the first runtime admission across fallback", async () => {
   const sink = installSink();
   const prepared = prepareRun({
     cfg: enabledConfig,
-    recovery: run.createExecutionIdentityRecoveryAdmission({ retryOnly: false }),
   });
 
   const [first, fallback] = await Promise.all([
@@ -201,32 +153,50 @@ it.each([undefined, "operator-schedule"] as const)("reuses source %s", async (ad
   expect(run.getAdmittedRunSource(authority)).toBe(admissionSource);
 });
 
-it.each(["replacement", "rotation", "abort"] as const)("revokes after %s", async (end) => {
-  const input = { runId: "source-lifetime", admissionSource: "operator-schedule" as const };
-  const original = prepareRun(input);
-  const replacement = prepareRun(input);
-  const admitted = await original.admit("embedded");
-  const authority = run.getAdmittedRunDelegatedAuthority(admitted);
-  const abort = new AbortController();
-  const assertActive = run.resolveAdmittedRunActiveAssertion(admitted, abort.signal);
-  expect(assertActive).toBeDefined();
-  expect(() => assertActive?.()).not.toThrow();
-  expect(run.getAdmittedRunSource(authority)).toBe("operator-schedule");
-  if (end === "replacement") {
-    await replacement.admit("embedded");
-  } else if (end === "rotation") {
-    rotateAgentRunRegistryLifecycleGeneration();
-  } else {
-    abort.abort();
-  }
-  expect(() => assertActive?.()).toThrow("no longer active");
-  if (end !== "abort") {
+it.each(["replacement", "rotation", "abort", "claim-loss"] as const)(
+  "revokes after %s",
+  async (end) => {
+    const assertSourceCurrent = vi.fn();
+    bindSynchronousSessionSource(assertSourceCurrent);
+    const input = {
+      runId: "source-lifetime",
+      admissionSource: "operator-schedule" as const,
+      assertSourceCurrent,
+    };
+    const original = prepareRun(input);
+    const replacement = prepareRun(input);
+    const admitted = await original.admit("embedded");
+    const authority = run.getAdmittedRunDelegatedAuthority(admitted);
+    const abort = new AbortController();
+    const assertActive = run.resolveAdmittedRunActiveAssertion(admitted, abort.signal);
+    expect(assertActive).toBeDefined();
+    expect(() =>
+      withSessionSourceValidation(() => {
+        assertActive?.();
+        assertActive?.();
+        expect(run.resolveAdmittedRunActiveAssertion({ ...admitted })).toBeUndefined();
+      }),
+    ).not.toThrow();
+    expect(run.getAdmittedRunSource(authority)).toBe("operator-schedule");
+    await Promise.resolve();
+    if (end === "replacement") {
+      await replacement.admit("embedded");
+    } else if (end === "rotation") {
+      rotateAgentRunRegistryLifecycleGeneration();
+    } else if (end === "abort") {
+      abort.abort();
+    } else {
+      run.closeAdmittedRunDelegatedAuthority(admitted);
+    }
+    expect(() => assertActive?.()).toThrow("no longer active");
+    if (end !== "abort") {
+      expect(run.getAdmittedRunSource(authority)).toBeUndefined();
+    }
+    original.close();
+    expect(() => assertActive?.()).toThrow("no longer active");
     expect(run.getAdmittedRunSource(authority)).toBeUndefined();
-  }
-  original.close();
-  expect(() => assertActive?.()).toThrow("no longer active");
-  expect(run.getAdmittedRunSource(authority)).toBeUndefined();
-});
+  },
+);
 
 it("retains the first source failure after revocation without reviving authority", async () => {
   const failure = new Error("Completed-turn transcript anchor changed");

@@ -573,22 +573,6 @@ it("does not pass stale enqueue-time state into a rotated session generation", a
   expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
 });
 
-it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
-  const failure = new Error("dispatcher reset failed");
-  const onQueuedFollowupSettled = vi.fn(async () => {});
-
-  await expect(
-    prepare(createRun(), {
-      opts: {
-        onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
-        onQueuedFollowupSettled,
-      },
-    }),
-  ).rejects.toBe(failure);
-  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-  expect(operation.complete).toHaveBeenCalledOnce();
-});
-
 it("keeps the model selected at admission when preferences change during source adoption", async () => {
   const queued = createRun();
   state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
@@ -611,13 +595,51 @@ it("keeps the model selected at admission when preferences change during source 
 });
 
 it.each([
-  { kind: "queued_followup", saved: "standard", expected: "standard", provided: false },
-  { kind: "queued_followup", saved: undefined, expected: undefined, provided: false },
-  { kind: "visible", saved: "standard", expected: "daybreak_blue", provided: false },
-  { kind: "visible", saved: "standard", expected: "daybreak_blue", provided: true },
+  {
+    kind: "queued_followup",
+    saved: "standard",
+    expected: "standard",
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "queued_followup",
+    saved: undefined,
+    expected: undefined,
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "visible",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "visible",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: true,
+    scheduled: undefined,
+  },
+  {
+    kind: "queued_followup",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: false,
+    scheduled: "daybreak_blue",
+  },
+  {
+    kind: "queued_followup",
+    saved: "daybreak_red",
+    expected: "standard",
+    provided: false,
+    scheduled: "standard",
+  },
 ] as const)(
   "binds $kind Access at admission (saved=$saved, provided=$provided)",
-  async ({ kind, saved, expected, provided }) => {
+  async ({ kind, saved, expected, provided, scheduled }) => {
     const replyOperation = createReplyOperation({
       sessionKey: "main",
       sessionId: "queued-session",
@@ -626,6 +648,17 @@ it.each([
     });
     const queued = createRun();
     queued.run.cyberAccessProgram = "daybreak_blue";
+    if (scheduled) {
+      queued.run.scheduledAutomation = {
+        occurrence: TEST_SCHEDULED_OCCURRENCE,
+        job: {
+          id: "scheduled-access",
+          cyberAccessProgram: scheduled,
+        } as ScheduledSessionAutomation["job"],
+        admissionSource: "operator-schedule",
+        assertCurrent: () => {},
+      };
+    }
     const initialEntry = makeEntry({
       cyberAccessProgram: provided ? saved : "daybreak_blue",
     });

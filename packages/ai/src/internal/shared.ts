@@ -17,4 +17,4 @@ export * from "../utils/sanitize-unicode.js";
 export * from "../utils/system-prompt-cache-boundary.js";
 export { projectCopilotRequestFacts } from "../providers/github-copilot-request-facts.js";
 
-export { preparedRequestSuffix } from "../provider-options.js";
+export { preparedRequestSuffix, uncachedSuffixMessage } from "../provider-options.js";

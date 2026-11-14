@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type ServerResponse } from "node:http";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { assert, expect, test } from "vitest";
 import {
+  extractCurrentRuntimeContextTexts,
+  isInternalRuntimeContextCarrierText,
   startQaMockOpenAiServer,
   type MockOpenAiRequestSnapshot,
 } from "../extensions/qa-lab/api.js";
@@ -18,6 +20,28 @@ import {
   respondJson,
 } from "./helpers/gateway-integration-fixtures.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+
+function historyWindow(raw: string): string {
+  const body = JSON.parse(raw) as {
+    input: Array<{ role?: string; content?: string | Array<{ text?: string }> }>;
+  };
+  // Earlier runtime snapshots stay in history. Check the transcript window and
+  // this turn's context without treating superseded snapshots as fresh history.
+  return JSON.stringify({
+    ...body,
+    input: body.input.filter((item) => {
+      if (item.role !== "user") {
+        return true;
+      }
+      const text =
+        typeof item.content === "string"
+          ? item.content
+          : (item.content?.map((part) => part.text ?? "").join("\n") ?? "");
+      return !isInternalRuntimeContextCarrierText(text);
+    }),
+    currentRuntimeContext: extractCurrentRuntimeContextTexts(body.input),
+  });
+}
 
 function expectHistory(
   text: string | undefined,
@@ -236,7 +260,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       )) as MockOpenAiRequestSnapshot[];
     const latestPrompt = async () =>
       (await requests()).findLast((request) => request.requestKind === "agent-initial")!;
-    expectHistory((await latestPrompt()).allInputText, [6], [1, 2]);
+    expectHistory(historyWindow((await latestPrompt()).raw), [6], [1, 2]);
     const listed = await client.request<{ sessions: Array<{ key: string; sessionId: string }> }>(
       "sessions.list",
       { limit: 20 },
@@ -268,7 +292,8 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     if (compactionMode === "server-endpoint") {
       expect(compacted.result?.kind).toBe("server-endpoint");
       expect(compactRequests).toHaveLength(1);
-      expectHistory(compactRequests[0], [5, 6], [1, 2]);
+      assert.isDefined(compactRequests[0]);
+      expectHistory(historyWindow(compactRequests[0]), [5, 6], [1, 2]);
       for (let generation = 1; generation <= 2; generation++) {
         const firstTurn = generation * 6 + 1;
         for (let turn = firstTurn; turn < firstTurn + 6; turn++) {
@@ -279,7 +304,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
           expect(checkpoints).toHaveLength(1);
           expect(hash(checkpoints)).toBe(hash([checkpoint(generation)]));
           if (turn === firstTurn + 5) {
-            expectHistory(replay.allInputText, [], [firstTurn, firstTurn + 1], ".");
+            expectHistory(historyWindow(replay.raw), [], [firstTurn, firstTurn + 1], ".");
           }
         }
         if (generation === 1) {
@@ -290,8 +315,9 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
           );
           expect(next.result?.kind).toBe("server-endpoint");
           expect(compactRequests).toHaveLength(2);
+          assert.isDefined(compactRequests[1]);
           expect(compactRequests[1]).toContain(checkpoint(1).encrypted_content);
-          expectHistory(compactRequests[1], [], [5, 6], ".");
+          expectHistory(historyWindow(compactRequests[1]), [], [5, 6], ".");
         }
       }
       return;
@@ -312,7 +338,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     const afterCompaction = await latestPrompt();
     expect(afterCompaction.allInputText).toContain(compacted.result!.summary);
     expectHistory(afterCompaction.allInputText, [12], []);
-    expectHistory(afterCompaction.allInputText, [], [7, 8], ".");
+    expectHistory(historyWindow(afterCompaction.raw), [], [7, 8], ".");
   } catch (error) {
     throw new Error(`${String(error)}\n${instance.logs()}`, { cause: error });
   } finally {

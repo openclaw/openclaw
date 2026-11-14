@@ -82,7 +82,6 @@ function parsePreviewResponse(
         ? value.coAuthorCount
         : undefined,
     createdAt: readNonBlankString(value.createdAt),
-    updatedAt: readNonBlankString(value.updatedAt),
     imageUrl: safePreviewImage(readNonBlankString(value.imageUrl)),
     metadata: Array.isArray(value.metadata)
       ? value.metadata.flatMap((entry) =>
@@ -373,7 +372,9 @@ const renderPreviewContent = createPreviewRenderer<{
 }>(
   (props) => {
     const preview = () => props.value.preview;
-    const timestamp = () => preview().updatedAt ?? preview().createdAt;
+    // Match the reader panel: show the badge event (merged/closed) or creation time, never the
+    // last activity time, which bot comments and CI keep bumping.
+    const timestamp = () => preview().badge?.timestamp ?? preview().createdAt;
     const authorHref = () => linkReaderAuthorHref(preview().authorUrl, preview().href);
     const author = () => (
       <>

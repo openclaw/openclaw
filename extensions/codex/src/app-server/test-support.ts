@@ -235,7 +235,7 @@ function readCodexInjectedDeveloperText(params: unknown): string | undefined {
 export function isCodexTurnContextHandoff(params: unknown): boolean {
   return (
     readCodexInjectedDeveloperText(params)?.startsWith(
-      "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
+      "## OpenClaw conversation instructions\n\n",
     ) === true
   );
 }
@@ -335,7 +335,7 @@ export function createClientHarness(
       }
     });
   });
-  const client = CodexAppServerClient.fromTransportForTests(process);
+  const client = CodexAppServerClient.fromTransport(process);
   return {
     client,
     process,

@@ -3,12 +3,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import {
   attachPluginInstallOwnerMigrations,
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import {
@@ -66,28 +66,6 @@ function primeTrackedPluginUpdate(pluginId: string, spec: string): OpenClawConfi
 
 function update(...args: string[]) {
   return runPluginsCommand(["plugins", "update", ...args]);
-}
-
-function createCapabilityConsentReview(): PluginCapabilityConsentReview {
-  return {
-    pluginId: "alpha",
-    name: "Alpha plugin",
-    version: "2.0.0",
-    source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
-    declared: createPluginDeclaredSurface({
-      tools: ["read", "write"],
-      contracts: ["gatewayMethodDispatch: alpha.run"],
-    }),
-    grants: {
-      hooks: {
-        allowPromptInjection: { effective: true },
-        allowConversationAccess: { effective: false },
-      },
-    },
-    widened: { tools: ["write"] },
-    trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
-    reviewToken: "reviewed-alpha-surface",
-  };
 }
 
 const offlineNotice = "Updates saved; they will load on the next Gateway start.";
@@ -155,20 +133,6 @@ function primePluginUpdate(
       ? attachPluginInstallOwnerMigrations(result, installOwnerMigrations)
       : result;
   });
-}
-
-function primeBraveRecords() {
-  const record = (version: string, installPath: string) => ({
-    source: "npm" as const,
-    spec: `@openclaw/brave-plugin@${version}`,
-    installPath,
-    resolvedName: "@openclaw/brave-plugin",
-    resolvedVersion: version,
-  });
-  const previousRecords = { brave: record("2026.6.11-beta.2", "/tmp/brave-beta") };
-  const nextRecords = { brave: record("2026.6.11", "/tmp/brave-stable") };
-  setInstalledPluginIndexInstallRecords(previousRecords);
-  return { previousRecords, nextRecords };
 }
 
 beforeEach(resetPluginsCliTestState);
@@ -487,7 +451,16 @@ it.each(["config changed", "include changed", "invalid config"])(
       },
       writeOptions,
     });
-    const { previousRecords, nextRecords } = primeBraveRecords();
+    const record = (version: string, installPath: string) => ({
+      source: "npm" as const,
+      spec: `@openclaw/brave-plugin@${version}`,
+      installPath,
+      resolvedName: "@openclaw/brave-plugin",
+      resolvedVersion: version,
+    });
+    const previousRecords = { brave: record("2026.6.11-beta.2", "/tmp/brave-beta") };
+    const nextRecords = { brave: record("2026.6.11", "/tmp/brave-stable") };
+    setInstalledPluginIndexInstallRecords(previousRecords);
     const rollback = vi.fn(async () => {});
     const commit = vi.fn(async () => {});
     primePluginUpdate(withRecords(cfg, nextRecords), [updated("brave")], true, [
@@ -637,9 +610,27 @@ it.each([true, false])(
     if (typeof consent !== "function") {
       throw new Error("expected plugin capability consent callback");
     }
-    await expect(consent(createCapabilityConsentReview())).resolves.toEqual({
-      reviewToken: "reviewed-alpha-surface",
-    });
+    await expect(
+      consent({
+        pluginId: "alpha",
+        name: "Alpha plugin",
+        version: "2.0.0",
+        source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
+        declared: createPluginDeclaredSurface({
+          tools: ["read", "write"],
+          contracts: ["gatewayMethodDispatch: alpha.run"],
+        }),
+        grants: {
+          hooks: {
+            allowPromptInjection: { effective: true },
+            allowConversationAccess: { effective: false },
+          },
+        },
+        widened: { tools: ["write"] },
+        trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
+        reviewToken: "reviewed-alpha-surface",
+      }),
+    ).resolves.toEqual({ reviewToken: "reviewed-alpha-surface" });
     if (explicit) {
       expect(params.pluginIds).toEqual(["alpha"]);
       expect(params).not.toHaveProperty("acknowledgeCapabilities");
@@ -674,10 +665,14 @@ it("shares invocation-wide install-policy acknowledgement across bulk plugin and
   });
   updateHooks.mockResolvedValue({ config, changed: false, outcomes: [] });
 
-  await update("--all", "--acknowledge-install-policy-warning");
+  const scope = new AsyncWorkScope();
+  await scope.run(() => update("--all", "--acknowledge-install-policy-warning"));
 
-  const pluginAcknowledgement = expectSingleCallParams(updatePlugins).onInstallPolicyWarning;
+  const { onInstallPolicyWarning: pluginAcknowledgement, signal } =
+    expectSingleCallParams(updatePlugins);
   const hookAcknowledgement = expectSingleCallParams(updateHooks).onInstallPolicyWarning;
+  expect(signal).toBe(scope.signal);
+  expect(expectSingleCallParams(updateHooks).signal).toBe(scope.signal);
   if (typeof pluginAcknowledgement !== "function") {
     throw new Error("expected plugin install-policy acknowledgement callback");
   }

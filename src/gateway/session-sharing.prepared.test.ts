@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -7,8 +8,13 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  createSessionSharingConsumption,
+  prepareSessionSharingProfiles,
+} from "./session-sharing-read.js";
 import { prepareProjectedSessionSharing, prepareSessionSharing } from "./session-sharing.js";
 import {
+  roleClient,
   sharingPolicyClient,
   sharingPolicyTarget,
   rolePolicyConfig,
@@ -16,13 +22,55 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("keeps retained policies isolated across memberships and current across authority changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const client = roleClient("view") as GatewayWsClient;
+    const identityId = client.authenticatedUserProfile!.profileId;
+    const profiles = await prepareSessionSharingProfiles(client);
+    const target = sharingPolicyTarget({ type: "human", id: "another-person" });
+    target.entry.visibility = "shared";
+    const [member, outsider] = Array.from({ length: 2 }, () =>
+      createSessionSharingConsumption({ client, sharing: undefined, getProfiles: () => profiles }),
+    );
+    const outer = member!.policy(cfg, [identityId])!;
+    expect(outer.roleForTarget(target)).toBe("member");
+    // Interleaved consumers reuse only their own current prepared facts.
+    expect(member!.policy(cfg, [identityId])).toBe(outer);
+    expect(outsider!.policy(cfg, [])!.roleForTarget(target)).toBe("viewer");
+    expect(member!.policy(cfg, [identityId])!.roleForTarget(target)).toBe("member");
+    member!.consume(undefined, () => {
+      expect(member!.policy(cfg, [])!.roleForTarget(target)).toBe("viewer");
+      expect(outsider!.policy(cfg, [identityId])!.roleForTarget(target)).toBe("member");
+    });
+    expect(outer.roleForTarget(target)).toBe("member");
+    expect(outsider!.policy(cfg, [])!.roleForTarget(target)).toBe("viewer");
+
+    const scopes = client.connect.scopes!;
+    scopes[0] = "operator.admin";
+    expect(member!.policy(cfg, [identityId])!.roleForTarget(target)).toBe("admin");
+    scopes[0] = "operator.read";
+    expect(member!.policy(cfg, [identityId])!.roleForTarget(target)).toBe("member");
+    cfg.gateway!.roles!.definitions.view!.sessions.others = "none";
+    setRuntimeConfigSnapshot(cfg);
+    const restricted = member!.policy(cfg, [identityId])!;
+    expect(restricted.roleForTarget(target)).toBe("viewer");
+    expect(restricted.canReadTarget(target)).toBe(false);
+
+    client.authenticatedUserProfile = undefined;
+    prepareGatewayRecipientProfile(client);
+    expect(() => member!.policy(cfg, [identityId])).toThrow("Gateway requester authority changed");
+    expect(() => outsider!.policy(cfg, [])).toThrow("Gateway requester authority changed");
+  });
+});
+
 it("reuses interleaved audience keys and copies scope snapshots without iteration", () => {
   const cfg = rolePolicyConfig();
-  let revision = {};
   const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));
   const key = (client: (typeof clients)[number]) =>
-    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
+    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey();
   const initial = clients.map(key);
+  expect(initial[0]).not.toBe(initial[1]);
   const scopes = clients[0]!.connect.scopes!;
   const iterate = vi.spyOn(scopes, Symbol.iterator);
   const sets = vi.spyOn(globalThis, "Set");
@@ -31,8 +79,8 @@ it("reuses interleaved audience keys and copies scope snapshots without iteratio
   sets.mockRestore();
   expect(reused).toEqual(initial);
   expect(allocations).toBe(0);
-  // A publication retires the keys; native array copying avoids iterable expansion.
-  revision = {};
+  // An access publication retires the facts; native array copying avoids iterable expansion.
+  setRuntimeConfigSnapshot(cfg);
   expect(clients.map(key)).toEqual(initial);
   expect(iterate).not.toHaveBeenCalled();
   iterate.mockRestore();
@@ -58,13 +106,17 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
     prepareGatewayRecipientProfile(client);
     const stop = onUserProfilesChanged(() => prepareGatewayRecipientProfile(client));
     const cfg = rolePolicyConfig();
-    let revision = {};
     const share = () => prepareProjectedSessionSharing({ cfg, client, isMember: () => false });
-    const key = () => share().getCacheKey(revision);
+    const key = () => share().getCacheKey();
     try {
       const initialKey = key();
       setUserProfileRole(source.id, "view");
       expect(client.preparedSessionProfile?.role).toBe("view");
+      expect(key()).toBe(initialKey);
+      setUserProfileRole(source.id, "none");
+      expect(key()).not.toBe(initialKey);
+      expect(share().sessionCap).toBe("none");
+      setUserProfileRole(source.id, "view");
       expect(key()).toBe(initialKey);
       setUserProfileRole(target.id, "none");
       linkEmail("source@example.test", target.id);
@@ -80,12 +132,12 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
       expect(key()).not.toBe(mergedKey);
       client.connect.scopes!.pop();
       expect(key()).toBe(mergedKey);
-      // The owner retires the revision when publishing same-object policy edits.
+      // The config owner publishes same-object policy edits before the next read.
       cfg.gateway!.roles!.definitions.none!.sessions.others = "view";
-      revision = {};
+      setRuntimeConfigSnapshot(cfg);
       expect(key()).not.toBe(mergedKey);
       cfg.gateway!.roles!.definitions.none!.sessions.others = "none";
-      revision = {};
+      setRuntimeConfigSnapshot(cfg);
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const sharing = share();
       expect(sharing.sessionCap).toBe("none");
@@ -122,12 +174,15 @@ it("uses fresh prepared caller, alias, role, and membership facts without queryi
       [new Set([owner.id]), "invited", false, "viewer", false],
       [new Set([owner.id]), "invited", true, "member", true],
     ] as const) {
+      const membership = vi.fn(() => member);
       const sharing = prepareSessionSharing(
         { cfg, client },
-        { aliases, sessionCap, isMember: () => member },
+        { aliases, sessionCap, isMember: membership },
       );
       expect(sharing.roleForTarget(target)).toBe(expectedRole);
+      membership.mockClear();
       expect(sharing.canReadTarget(target)).toBe(visible);
+      expect(membership).toHaveBeenCalledTimes(sessionCap === "invited" ? 1 : 0);
       expect(sharing.authorizeTarget(target) === null).toBe(visible);
     }
     client.authenticatedUserProfile!.profileId = oldOwner.id;

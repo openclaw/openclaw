@@ -33,6 +33,11 @@ export type WorkerEnvironmentAbandonment = {
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
+  resolveGatewayContext?: import("../server-methods/types.js").GatewayContextResolver;
+  waitForRetainedNode?: (
+    nodeId: string,
+    options: { signal: AbortSignal; assertCurrent: () => void },
+  ) => Promise<void>;
   getConfig: () => OpenClawConfig;
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareInstallation: (

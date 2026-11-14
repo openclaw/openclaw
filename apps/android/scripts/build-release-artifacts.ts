@@ -22,7 +22,6 @@ import {
   syncAndroidVersioning,
   resolveAndroidBuildVersion,
 } from "../../../scripts/lib/android-version.ts";
-import { renderMobileReleaseNotes } from "../../../scripts/lib/mobile-release-notes.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -376,17 +375,7 @@ function main() {
   }
 
   const version = resolveAndroidBuildVersion(rootDir);
-  if (process.env.OPENCLAW_ANDROID_RELEASE_PLAN) {
-    for (const audience of ["phone", "wear"] as const) {
-      renderMobileReleaseNotes({
-        rootDir,
-        platform: "android",
-        version: version.canonicalVersion,
-        build: String(version.versionCode),
-        audience,
-      });
-    }
-  } else {
+  if (!process.env.OPENCLAW_ANDROID_RELEASE_PLAN) {
     syncAndroidVersioning({ mode: "check", rootDir });
   }
   const buildMetadata = resolveAndroidBuildMetadata();

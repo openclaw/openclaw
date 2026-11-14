@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
@@ -35,7 +36,7 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
+import { resolveMemoryPromotionFileMaxChars } from "./memory-budget-config.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
@@ -160,7 +161,6 @@ export async function runMemorySearch(
     options: opts,
     requiresMemorySlot: true,
     purpose: "cli",
-    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const result = await searchMemoryForCli({
@@ -194,7 +194,12 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       dryRun: Boolean(opts.dryRun),
     });
     if (opts.json) {
-      defaultRuntime.writeJson(report);
+      // The sidecar notice goes to stderr; record it in the report scripts keep, as status --json does.
+      defaultRuntime.writeJson(
+        slotOwner
+          ? { ...report, provider: slotOwner, memoryCore: "consolidation-sidecar" }
+          : report,
+      );
       return;
     }
     const lines = [
@@ -259,14 +264,14 @@ function matchesPromotionSelector(
   },
   selector: string,
 ): boolean {
-  const trimmed = selector.trim().toLowerCase();
+  const trimmed = selector.trim().toLowerCase().normalize("NFC");
   if (!trimmed) {
     return false;
   }
   return (
-    candidate.key.toLowerCase().includes(trimmed) ||
-    candidate.path.toLowerCase().includes(trimmed) ||
-    candidate.snippet.toLowerCase().includes(trimmed)
+    candidate.key.toLowerCase().normalize("NFC").includes(trimmed) ||
+    candidate.path.toLowerCase().normalize("NFC").includes(trimmed) ||
+    candidate.snippet.toLowerCase().normalize("NFC").includes(trimmed)
   );
 }
 async function runMemoryPromotion(
@@ -373,6 +378,7 @@ async function runMemoryPromotion(
             agentId,
             workspaceAgentIds,
             workspaceDir,
+            workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
             candidates,
             limit: opts.limit,
             minScore: opts.minScore ?? dreaming.minScore,

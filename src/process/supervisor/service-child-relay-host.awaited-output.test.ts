@@ -258,14 +258,14 @@ it("reports native cleanup failure without waiting for output during shutdown", 
   const run = await f.ready();
   f.child.stdout?.emit("data", Buffer.from("retained root output"));
   f.emit({ type: "root-result", code: 23, signal: null });
+  const [cleanup, settled] = observeSettlement(f.supervisor.shutdown());
+  await nextTurn();
   // No closing receipt, and stdout/stderr intentionally never reach EOF until finally.
   f.control.destroy();
   f.lineage.end();
   f.disconnectMock();
   f.emitExit(0);
-  await nextTurn();
   expect(run.waitForExtinction).toBeTypeOf("function");
-  const [cleanup, settled] = observeSettlement(f.supervisor.shutdown());
   try {
     await nextTurn();
     const observed: unknown = settled.mock.calls[0]?.[0];

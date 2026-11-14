@@ -1,6 +1,8 @@
 import type { SessionTranscriptWorkerInput } from "./session-transcript-worker.types.js";
 
 const historyReadKinds = [
+  "agent-tool-usage",
+  "agent-tool-usage-import",
   "trajectory-events",
   "trajectory-retention",
   "board-snapshot",
@@ -17,11 +19,12 @@ const historyReadKinds = [
   "transcript-anchors",
   "transcript-raw-delta",
   "transcript-visible-delta",
+  "transcript-replay-groups",
   "transcript-latest-assistant",
   "session-memory-capture",
   "session-pending-input-receipts",
+  "session-pending-input-orphans",
   "session-pending-input-source",
-  "session-harness-completion-source",
 ] as const;
 const historyReadKindSet: ReadonlySet<string> = new Set(historyReadKinds);
 

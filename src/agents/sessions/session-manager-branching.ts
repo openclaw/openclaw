@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -108,6 +108,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         }
         // This is the selected path in a new session, not an inactive side branch.
         // Its navigation controls are omitted, so copied entries must advance the leaf.
+        this.ownTranscriptEntries([node.entry]);
         const branchEntry: SessionEntry = { ...node.entry, parentId: tailId };
         delete branchEntry.appendMode;
         entries.push(branchEntry);
@@ -117,6 +118,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       if (parseOpaqueLeafEntry(node.record)) {
         continue;
       }
+      this.ownTranscriptEntries([node.record]);
       opaqueEntries.push({
         index: entries.length + 1,
         record: { ...node.record, parentId: tailId },
@@ -135,6 +137,16 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       this.assertTranscriptWriteActive();
       const assertNavigation = this.captureTranscriptNavigationAssertion();
       const previousSessionId = this.sessionId;
+      // The source counts its active path, and its own inherited paths stay inherited;
+      // copied entries off both still count in the branch.
+      const countedIds = new Set(
+        [
+          ...this.getBranch(),
+          ...(this.getHeader()?.inheritedThrough ?? []).flatMap((id) =>
+            this.getEntry(id) ? this.getBranch(id) : [],
+          ),
+        ].map((entry) => entry.id),
+      );
       const branchPath = this.collectBranchedSessionPath(leafId);
       if (branchPath.entries.length === 0) {
         throw new Error(`Entry ${leafId} not found`);
@@ -151,6 +163,10 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         timestamp,
         cwd: this.cwd,
         parentSession: persistenceTarget ? previousSessionId : undefined,
+        inheritedThrough: branchPath.entries
+          .filter((entry) => countedIds.has(entry.id))
+          .slice(-1)
+          .map((entry) => entry.id),
       };
       const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
       const labelEntries: LabelEntry[] = [];
@@ -185,6 +201,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
         version?: SessionTranscriptContextVersion,
       ) => {
         this.fileEntries = branch.fileEntries;
+        this.pendingWritableTranscriptEntries = branch.pendingWritableTranscriptEntries;
         this.opaqueFileEntries = branch.opaqueFileEntries;
         this.sessionId = newSessionId;
         this.buildIndex();
@@ -219,7 +236,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
         }
         const reader = prepareSessionManagerHydration(persistenceTarget, {
-          lane: targetDiscoveryLane,
+          lane: sessionStoreLane,
         });
         const facts = await reader.readMaintenance({ operation: "version" });
         reader.assertCurrent();

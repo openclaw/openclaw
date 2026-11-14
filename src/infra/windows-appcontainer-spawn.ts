@@ -54,15 +54,8 @@ export function assertAppContainerSpawnSupported(stdio?: StdioOptions): void {
         unsupported = new AppContainerSpawnUnsupportedError(uv);
       }
     } catch (error) {
-      void import("../logging/subsystem.js")
-        .then(({ createSubsystemLogger }) => {
-          createSubsystemLogger("process").debug(
-            "AppContainer token probe failed; allowing spawn",
-            {
-              error: String(error),
-            },
-          );
-        })
+      void import("./windows-appcontainer-spawn-log.runtime.js")
+        .then(({ logAppContainerTokenProbeFailure }) => logAppContainerTokenProbeFailure(error))
         .catch(() => {});
     }
   }

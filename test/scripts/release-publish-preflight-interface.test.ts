@@ -41,7 +41,18 @@ it("parses exact tooling and selected plugin repair inputs", () => {
   });
 });
 
-it("rejects invalid selectors, publication booleans, and retired bypasses", () => {
+it("accepts the legacy full release run alias without allowing ambiguous selectors", () => {
+  expect(parse(`--workflow-ref ${toolingRef} --full-release-run 123`)).toMatchObject({
+    fullReleaseValidationRunId: "123",
+  });
+  expect(() =>
+    parse(
+      `--workflow-ref ${toolingRef} --full-release-validation-run-id 123 --full-release-run 456`,
+    ),
+  ).toThrow("do not combine");
+});
+
+it("rejects invalid selectors and publication booleans", () => {
   const rejects = (args: string, error?: string) => expect(() => parse(args)).toThrow(error);
   const selectorError = "--tag and exactly one of --workflow-ref or --workflow-sha are required.";
   rejects("", selectorError);
@@ -50,9 +61,6 @@ it("rejects invalid selectors, publication booleans, and retired bypasses", () =
     `--workflow-sha ${"A".repeat(12)}`,
     "--workflow-sha must be a lowercase 40-character commit SHA.",
   );
-  for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
-    rejects(`--workflow-ref main ${flag} approved`);
-  }
   rejects("--workflow-ref main --publish-openclaw-npm TRUE", "must be true or false");
 });
 
@@ -65,12 +73,19 @@ it.skipIf(process.platform === "win32")(
       tag: "v2026.9.5",
       npmDistTag: "latest",
       windowsNodeInstallerDigests: installerDigests,
+      retiredLinePublicationReason: installerDigests.replaceAll("\n", " "),
     };
+    expect(() => dispatch({ ...latest, retiredLinePublicationReason: installerDigests })).toThrow(
+      "single-line",
+    );
     const command = dispatch(latest, "2", "456");
     const args = execFileSync("/bin/sh", ["-c", `gh() { printf '%s\\0' "$@"; }\n${command}`], {
       cwd: dir,
       encoding: "utf8",
     }).split("\0");
+    expect(args).toContain(
+      `retired_line_publication_reason=${installerDigests.replaceAll("\n", " ")}`,
+    );
     expect(args).toContain(`windows_node_installer_digests=${installerDigests}`);
     expect(args).toContain("full_release_validation_run_attempt=2");
     expect(args).toContain("openclaw_npm_resume_run_id=456");

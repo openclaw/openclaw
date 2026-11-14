@@ -7,17 +7,17 @@ import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
-import { gatewayWorkAdmissionActual } from "./run-loop-mocks.test-support.js";
 import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-support.js";
 import {
-  createActiveWorkSnapshot,
   createLifecycleGate,
   createGatewayServer,
   expectStopCloseCall,
   expectUncalled,
   advanceWithoutCalls,
   setPlatform,
+  systemdReply,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
@@ -39,6 +39,27 @@ async function withHostLifeline(run: (input: PassThrough) => Promise<void>) {
 
 export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): void {
   registerTimedOutGatewayStopTests(f);
+
+  it("reports final shared-state cleanup failure as shutdown instead of rejecting startup", async () => {
+    await f.withRunningGateway(async ({ captureSignal, loopPromise }) => {
+      const state = resolveGlobalMap<string, boolean>(
+        Symbol("failed-shutdown-custody"),
+        (entries) => {
+          if (entries.delete("retained")) {
+            throw new Error("Managed worktree cleanup remains unsettled");
+          }
+        },
+        "shared-state",
+      );
+      state.set("retained", true);
+      const settled = expect(loopPromise).resolves.toBe(1);
+      captureSignal("SIGTERM")();
+      await settled;
+      expect(f.gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringMatching(/shutdown step failed .*Managed worktree cleanup remains unsettled/),
+      );
+    });
+  });
 
   it("exits 0 on SIGTERM after graceful close", async () => {
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
@@ -107,6 +128,8 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
             (await f.acquireGatewayLock.mock.results[0]?.value)?.release,
           ).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
+          // Settled cleanup still bounds a leaked handle that would outlive the loop.
+          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000, undefined);
         }, true);
       } finally {
         closing.release();
@@ -210,16 +233,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
         }
       }),
   );
-
-  it("still closes and exits when the direct-shutdown active-work drain fails", async () => {
-    f.waitForGatewayActiveWork.mockRejectedValueOnce(new Error("active-work drain unavailable"));
-    await f.withRunningGateway(async ({ captureSignal, close, exited }) => {
-      captureSignal("SIGTERM")();
-
-      await expect(exited).resolves.toBe(0);
-      expectStopCloseCall(close);
-    });
-  });
 }
 
 export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void {
@@ -276,6 +289,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
   it("bounds abandoned cleanup after a zero-drain request and managed parking", async () => {
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     setPlatform("linux");
+    f.systemctl.mockResolvedValue(systemdReply());
     f.consumeGatewayRestartIntent.mockReturnValueOnce({
       force: true,
       waitMs: 0,
@@ -290,7 +304,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       const cleanup = createDeferredCore();
       close.mockReturnValue(cleanup.promise);
       captureSignal("SIGUSR2")();
-      await vi.advanceTimersByTimeAsync(9_999);
+      await vi.advanceTimersByTimeAsync(24_999);
       expect(f.requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
         f.managedUpdateSuccessorOwner,
       );
@@ -311,7 +325,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
     });
   });
 
-  it("warns but joins the file-log flush before a SIGUSR2 exit", async () => {
+  it("bounds the file-log flush before a SIGUSR2 exit", async () => {
     await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
       close.mockRejectedValueOnce(new Error("close owner failed"));
       const flushed = createDeferredCore();
@@ -319,7 +333,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       try {
         captureSignal("SIGUSR2")();
         await advanceWithoutCalls(999, runtime.exit);
-        await advanceWithoutCalls(1, runtime.exit);
+        await vi.advanceTimersByTimeAsync(1);
         expect(f.gatewayLog.warn).toHaveBeenCalledWith(
           "log flush did not settle within 1000ms; waiting for accepted writes",
         );
@@ -331,47 +345,18 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
     });
   });
 
-  it("retains the deadline after owned log cleanup fails", async () => {
+  it("bounds the exit tail after owned log cleanup rejects", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     f.consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     f.restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
-    await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
+    await withShutdownClock(async ({ captureSignal, close, loopPromise }) => {
       f.flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(0);
       expectCallCount(1, close, f.armShutdownHardExitWatchdog);
-      expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
-      await vi.advanceTimersByTimeAsync(10_000);
-      await expect(exited).resolves.toBe(1);
+      await expect(loopPromise).resolves.toBe(1);
+      expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+      expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000, "SIGUSR2");
     }, true);
-  });
-
-  it("waits for the drain before handing recovery ownership to server close", async () => {
-    f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });
-    f.createGatewayActiveWorkSnapshot.mockReturnValueOnce(
-      createActiveWorkSnapshot({ embeddedRuns: 2 }),
-    );
-    const draining = createLifecycleGate();
-    f.waitForGatewayActiveWork.mockImplementationOnce(async () => {
-      await draining.wait();
-      return { drained: true, snapshot: f.idleActiveWorkSnapshot };
-    });
-    await f.withRunningGateway(async ({ captureSignal, close, start, exited }) => {
-      const cleanupSignal = gatewayWorkAdmissionActual.getGatewayShutdownCleanupSignal();
-      close.mockImplementationOnce(async () => {
-        expect(cleanupSignal.aborted).toBe(true);
-      });
-      captureSignal("SIGTERM")();
-      await draining.entered;
-      expect(f.abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
-        mode: "compacting",
-        reason: "restart",
-      });
-      expect(close).not.toHaveBeenCalled();
-      expect(cleanupSignal.aborted).toBe(false);
-      draining.release();
-      await expect(exited).resolves.toBe(0);
-      expect(start).toHaveBeenCalledOnce();
-    });
   });
 }

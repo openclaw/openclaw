@@ -53,7 +53,7 @@ export function CatalogBar(props: {
           class="new-session-page__trigger new-session-page__runtime"
           title={
             props.data?.startTerminal && props.data.catalogLabel
-              ? t("newSession.nativeTerminalHint")
+              ? t("newSession.nativeTerminalHintTooltip")
               : t("newSession.catalogUnavailable")
           }
         >

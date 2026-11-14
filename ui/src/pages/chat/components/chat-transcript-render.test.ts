@@ -5,13 +5,13 @@ import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/s
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
-import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { sessionListResult } from "../../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   interruptedChatHistory,
   interruptedChatCommentary,
+  interruptedChatSession,
 } from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
@@ -20,6 +20,7 @@ import { attachHistoryActivity } from "../chat-history-request.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderTranscriptSearch } from "../test-helpers/chat-transcript-native.tsx";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -29,13 +30,17 @@ import {
   toggleTranscriptSearch,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { transcriptContainer } from "./chat-transcript-fixture.test-support.tsx";
+import {
+  emitTranscriptResize,
+  transcriptContainer,
+} from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
   requireElement,
   resetTranscriptTestDom,
   threadProps,
+  transcriptSize,
   transcriptMessage as message,
 } from "./chat-transcript.test-support.ts";
 
@@ -151,6 +156,7 @@ describe("chat transcript rendering", () => {
         attachHistoryActivity(interruptedChatHistory()).messages,
       );
       props.showToolCalls = showTools;
+      props.selectedSession = { key: props.sessionKey, kind: "direct", ...interruptedChatSession };
       const { container } = await mountThread(props);
       for (const text of interruptedChatCommentary) {
         expect(container.textContent).toContain(text);
@@ -382,7 +388,7 @@ describe("chat transcript rendering", () => {
     expect(container.querySelector(".chat-compaction--active")).toBeNull();
   });
 
-  it("keeps exact-run usage visible through final event batching and later corrections", async () => {
+  it("shows output tokens only while working, not after completion or late usage updates", async () => {
     const runId = "watched-run";
     const sessionKey = "global";
     const host = createHost({ sessionKey, chatRunId: runId });
@@ -413,8 +419,10 @@ describe("chat transcript rendering", () => {
       props.runUsageById = host.chatRunUsageById;
       fixture.rerender();
     };
-    const expectRecap = (text: string) =>
-      expect(requireElement(container, ".chat-turn-recap").textContent).toContain(text);
+    const expectNoRecap = () => {
+      expect(container.querySelector(".chat-turn-recap")).toBeNull();
+      expect(container.textContent).not.toContain("output tokens");
+    };
     handleAgentEvent(
       host,
       agentEvent("sibling-run", 1, "usage", { outputTokens: 900 }, sessionKey),
@@ -429,7 +437,7 @@ describe("chat transcript rendering", () => {
     expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
       "6.9k output tokens",
     );
-    // Final usage and lifecycle can share one browser render; neither may discard the count.
+    // Batched final usage and lifecycle must not leave a token count below the reply.
     handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
     handleAgentEvent(host, agentEvent(runId, 3, "lifecycle", { phase: "end" }, sessionKey));
     rerender({
@@ -442,16 +450,16 @@ describe("chat transcript rendering", () => {
         runtimeMs: 14_000,
       },
     });
-    expectRecap("7k output tokens");
+    expectNoRecap();
     handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 7_094 }, sessionKey));
     rerender();
-    expectRecap("7.1k output tokens");
+    expectNoRecap();
     handleAgentEvent(
       host,
       agentEvent("sibling-run", 2, "usage", { outputTokens: 1_000 }, sessionKey),
     );
     rerender();
-    expectRecap("7.1k output tokens");
+    expectNoRecap();
     for (const replaceOwner of [
       () => {
         props.currentAgentId = "second";
@@ -463,11 +471,9 @@ describe("chat transcript rendering", () => {
       replaceOwner();
       rerender();
       expect(container.querySelector(".chat-turn-recap")).toBeNull();
-      rerender();
-      expect(container.querySelector(".chat-turn-recap")).toBeNull();
       rerender({ currentAgentId: "first", runId, runWorking: true });
       rerender({ runId: null, runWorking: false });
-      expectRecap("7.1k output tokens");
+      expectNoRecap();
     }
     props.messages = [
       ...props.messages,
@@ -477,7 +483,7 @@ describe("chat transcript rendering", () => {
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
-  it("keeps browser cards visible with capture limited to the active pane", async () => {
+  it("keeps completed browser output without cards or captures when expanded", async () => {
     const messages = [
       message("user", "Open the example", 1_000),
       message("toolResult", "Opened", 2_000, {
@@ -496,7 +502,6 @@ describe("chat transcript rendering", () => {
       message("assistant", "Done.", 3_000),
     ];
     const props = threadProps("pane-browser-work", "agent:main:dashboard:browser", messages, {
-      latestBrowserTabs: latestBrowserTabCards(messages, []),
       showToolCalls: true,
     });
     const capture = vi.fn(async () => {
@@ -509,22 +514,22 @@ describe("chat transcript rendering", () => {
     props.applicationContext = context;
     const { container } = await mountThread(props);
     expect(container.querySelector(".chat-work-group")).not.toBeNull();
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    expect(capture).not.toHaveBeenCalled();
+    requireElement(container, ".chat-work-group button").click();
     await waitForSolid(() =>
-      expect(container.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")).toHaveLength(1),
+      expect(requireElement(container, ".chat-tool-msg-summary").matches(":disabled")).toBe(false),
     );
-    await vi.waitFor(() =>
-      expect(capture).toHaveBeenCalledExactlyOnceWith(
-        "browser.request",
-        expect.objectContaining({
-          method: "POST",
-          path: "/screenshot",
-          body: { targetId: "tab-1", type: "png" },
-        }),
-      ),
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    requireElement(container, ".chat-tool-msg-summary").click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain("Opened"),
     );
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    expect(capture).not.toHaveBeenCalled();
   });
 
-  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
+  it("renders cached archive attribution in place and replaces it with differing live facts", async () => {
     const sessionKey = "agent:work:main";
     const archivedSession: GatewaySessionRow = {
       key: "global",
@@ -544,7 +549,8 @@ describe("chat transcript rendering", () => {
       sessionKey,
       [message("user", "Before archive", 1_000), message("assistant", "After archive", 3_000)],
       {
-        selectedSession: archivedSession,
+        transcriptMetadata: projectChatTranscriptMetadata(archivedSession),
+        mediaReadAllowed: false,
         sessions,
       },
     );
@@ -562,6 +568,7 @@ describe("chat transcript rendering", () => {
     ).toEqual(["message", "notice", "message"]);
 
     const variants: [Partial<GatewaySessionRow>, string | null][] = [
+      [{ archivedBy: { type: "human", id: "profile-bob", label: "Bob" } }, "Archived by Bob"],
       [{ archivedBy: { type: "human", id: "profile-bob" } }, "Archived by profile-bob"],
       [
         { archivedBy: undefined, archiveReason: "active-session-cap" },
@@ -570,6 +577,7 @@ describe("chat transcript rendering", () => {
       [{ archivedBy: undefined }, null],
       [{ archived: false, archivedAt: undefined, archivedBy: undefined }, null],
     ];
+    props.transcriptMetadata = undefined;
     for (const [changes, text] of variants) {
       sessions.sessions[0] = { ...archivedSession, ...changes };
       props.selectedSession = sessions.sessions[0];
@@ -579,6 +587,7 @@ describe("chat transcript rendering", () => {
       } else {
         expect(requireElement(container, ".chat-notice").textContent).toContain(text);
       }
+      expect(container.querySelectorAll(".chat-bubble")).toHaveLength(2);
     }
   });
 
@@ -699,6 +708,44 @@ describe("chat transcript rendering", () => {
     render(null, container);
   });
 
+  it("shows a search match above a tall live reply without waiting for history refresh", async () => {
+    const props = threadProps(
+      "search-above-live",
+      "agent:main:search-above-live",
+      [
+        message("user", "Find this checkpoint", 1_000),
+        message("assistant", "Earlier answer", 2_000),
+        message("user", "Continue the work", 3_000),
+      ],
+      { stream: "Unrelated live tail", streamStartedAt: 4_000 },
+    );
+    const fixture = threadFixture(props, createTestTranscript(), true);
+    fixture.rerender(true);
+    await flushDeferredRowPrune();
+    const thread = requireElement(fixture.container, ".chat-thread");
+    Object.defineProperty(thread, "scrollHeight", {
+      configurable: true,
+      get: () => transcriptSize(fixture.container),
+    });
+    const liveRow = [...thread.querySelectorAll<HTMLElement>(".chat-virtual-row")].find((row) =>
+      row.textContent?.includes("Unrelated live tail"),
+    );
+    expect(liveRow).toBeDefined();
+    emitTranscriptResize(liveRow!, 800, 12_000);
+    await flushDeferredRowPrune();
+    thread.scrollTop = thread.scrollHeight - thread.clientHeight;
+    thread.dispatchEvent(new Event("scroll"));
+    await flushDeferredRowPrune();
+    props.loading = true;
+    fixture.rerender();
+    toggleTranscriptSearch(props.paneId);
+    flush();
+    await searchFor(fixture.searchContainer, "Find this checkpoint");
+    await flushDeferredRowPrune();
+    expect(thread.scrollTop).toBe(0);
+    expect(thread.textContent).toContain("Find this checkpoint");
+  });
+
   it("keeps live metadata absent while revealing stored metadata within each transcript", async () => {
     const first = threadFixture(
       threadProps(
@@ -765,7 +812,12 @@ describe("chat transcript rendering", () => {
     });
     const answer = message("assistant", text, answeredAt, {
       stopReason: "stop",
-      __openclaw: { id: "timestamp-answer", runId, runTerminal: true },
+      __openclaw: {
+        id: "timestamp-answer",
+        runId,
+        runTerminal: true,
+        recordTimestampMs: startedAt - 1_000 + 35 * 60_000 + 17_000,
+      },
     });
     const call = { type: "toolCall", id: "ask", name: "ask_user", arguments: {} };
     const work = [
@@ -816,7 +868,9 @@ describe("chat transcript rendering", () => {
         expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
       );
       if (index === 1) {
-        expect(requireElement(group, ".chat-work-group").textContent).toContain("Worked");
+        expect(requireElement(group, ".chat-work-group").textContent).toContain(
+          "Worked for 35m 17s",
+        );
       }
       await vi.advanceTimersByTimeAsync(1_500);
       fixture.dispose();

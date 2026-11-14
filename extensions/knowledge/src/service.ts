@@ -5,13 +5,14 @@ import type {
   FeatureInvocationContext,
 } from "openclaw/plugin-sdk/feature-plugin";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Check } from "typebox/value";
-import { featurePrincipal, type VaultAccess } from "./access.js";
+import { featurePrincipal, toolGrant, type VaultAccess } from "./access.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
 import { SinceInput, LastSeenInput } from "./chronicle-contract.js";
 import { emptyChronicle } from "./chronicle.js";
-import { contract } from "./contract.js";
-import { buildKnowledgeLearnGuidance, KNOWLEDGE_LEARN_TOOL_NAMES } from "./learn-guidance.js";
+import { contract, type FullOutputContract } from "./contract.js";
+import { knowledgeLearnContribution } from "./learn-guidance.js";
 import {
   RECORD_MAX_BYTES,
   BODY_INPUT_MAX_CHARS,
@@ -25,7 +26,7 @@ import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { createKnowledgeMemoryRuntime } from "./memory-provider.js";
 import { locatePluginFiles } from "./plugin-files.js";
 import { queryFreshness } from "./query-freshness.js";
-import { searchDetail } from "./search-detail.js";
+import { registerRecallGateHook } from "./recall-gate-hook.js";
 import type { StorageOperations } from "./storage-host.js";
 import { createStoreOperations } from "./store-assignments.js";
 import type { StoreRuntime } from "./store-runtime.js";
@@ -33,7 +34,7 @@ import { parsePolicy } from "./stores-config.js";
 import type { StoreState } from "./stores-contract.js";
 import { Stores } from "./stores.js";
 
-type Handlers = FeatureHandlers<typeof contract>;
+type Handlers = FeatureHandlers<FullOutputContract>;
 // StorageClient.call with its per-operation input tuple erased, for calls made with a generic Op.
 type StorageCall<Op extends keyof StorageOperations> = (
   op: Op,
@@ -44,6 +45,7 @@ type StoreHandlers = Omit<
   Handlers,
   | "stores_snapshot"
   | "stores_change"
+  | "stores_grant"
   | "stores_change_status"
   | "agent_query"
   | "agent_action"
@@ -111,28 +113,33 @@ export function createKnowledgeService(
       providerRuntime: createKnowledgeMemoryRuntime(stores),
       recallToolNames: ["knowledge_grep", "knowledge_lookup", "knowledge_record"],
       // Every agent has an effective store, so every agent gets the guidance.
+      // A read-only owner grant keeps save guidance out of that conversation's
+      // prompt; its write tools still refuse. The session key only selects
+      // guidance here, never access.
       promptBuilder: (params) =>
         buildKnowledgeMemoryPrompt({
           ...params,
-          availableTools: policy.writesEnabled
-            ? params.availableTools
-            : new Set([...params.availableTools].filter((t) => !WRITE_TOOLS.has(t))),
+          availableTools:
+            policy.writesEnabled &&
+            !(params.agentSessionKey && stores.grantFor(params.agentSessionKey) === "read")
+              ? params.availableTools
+              : new Set([...params.availableTools].filter((t) => !WRITE_TOOLS.has(t))),
         }),
       // The selected provider owns persistence through the host-completed resolver;
       // write-disabled installs suppress Memory Core's append-only file plan with an explicit null.
       providerFlushPlanResolver: () =>
         policy.writesEnabled ? buildKnowledgeMemoryFlushPlan() : null,
-      // Write-disabled installs contribute no /learn guidance; Skill Workshop still can.
-      ...(policy.writesEnabled
-        ? {
-            learnToolNames: KNOWLEDGE_LEARN_TOOL_NAMES,
-            learnGuidanceBuilder: buildKnowledgeLearnGuidance,
-          }
-        : {}),
     });
+  }
+  // Write-disabled installs contribute no /learn guidance; Skill Workshop still can.
+  if (policy.writesEnabled && typeof api.registerLearnContribution === "function") {
+    api.registerLearnContribution(knowledgeLearnContribution);
   }
   if (typeof api.on === "function") {
     registerMemoryIndexHook(api, stores);
+    if (policy.recallGate) {
+      registerRecallGateHook(api, stores, policy.recallGate);
+    }
   }
   const maintenance = new Maintenance(stores, {
     info: (m) => api.logger?.info?.(m),
@@ -175,7 +182,13 @@ export function createKnowledgeService(
         throw new Error("Knowledge writes are disabled.");
       }
       const opened = await stores.open(
-        featurePrincipal(context, policy.operatorRead, write, agent ?? stores.defaultAgent()),
+        featurePrincipal(
+          context,
+          policy.operatorRead,
+          write,
+          agent ?? stores.defaultAgent(),
+          stores.grantFor,
+        ),
         { provision: context.source === "tool" },
         stores.incarnation,
       );
@@ -206,7 +219,7 @@ export function createKnowledgeService(
         work(opened.runtime, access),
       );
       if (write && opened.access.scope.visibility === "private") {
-        opened.runtime.live.invalidate();
+        opened.runtime.client.invalidate();
       }
       return result;
     };
@@ -360,26 +373,29 @@ export function createKnowledgeService(
       supersede: agentChange("supersede"),
       merge: agentChange("merge"),
       unmerge: agentChange("unmerge"),
-      recall: (input, context) => {
+      recall: async (input, context) => {
         if (context.source !== "tool") {
-          return Promise.reject(
-            new Error(
-              "Automatic recall approval is available only through an owner-private agent tool call; browser and operator actions are not allowed.",
-            ),
+          throw new Error(
+            "Automatic recall approval is available only through an agent tool call; browser and operator actions are not allowed.",
           );
         }
-        if (context.tool.memoryAudience?.kind !== "owner-private") {
-          return Promise.reject(
-            new Error(
-              "Automatic recall approval requires the owner's private memory audience; conversation audiences are not allowed.",
-            ),
+        // The owner's own conversations approve recall, and so do conversations
+        // the owner let save to private knowledge; a read-only grant refuses
+        // below like any other save. Grants load with the registry.
+        await stores.ensure();
+        if (
+          context.tool.memoryAudience?.kind !== "owner-private" &&
+          !toolGrant(context, stores.grantFor)
+        ) {
+          throw new Error(
+            "Automatic recall approval requires the owner's private memory audience or an owner grant to read and save private knowledge.",
           );
         }
         return use(context, true, (runtime, access) =>
           runtime.client.call("recall", access, input),
         );
       },
-      connections: call("connections"),
+      connections_detail: call("connections"),
       resume: (input, context) =>
         use(context, true, (runtime, access) =>
           runtime.client.call("resume", access, { requestId: input.requestId }),
@@ -395,7 +411,13 @@ export function createKnowledgeService(
       })),
       status: async (_, context) => {
         const opened = await stores.open(
-          featurePrincipal(context, policy.operatorRead, false, agent ?? stores.defaultAgent()),
+          featurePrincipal(
+            context,
+            policy.operatorRead,
+            false,
+            agent ?? stores.defaultAgent(),
+            stores.grantFor,
+          ),
           { provision: false },
           stores.incarnation,
         );
@@ -414,6 +436,16 @@ export function createKnowledgeService(
             recordResponseBytes: RECORD_RESPONSE_MAX_BYTES,
           },
         };
+        // Whether this caller may write here: the plugin gate plus its own grant.
+        const canWrite =
+          policy.writesEnabled &&
+          ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
+            (context.source === "session-action" &&
+              Boolean(
+                context.action.client?.scopes.some(
+                  (s: string) => s === "operator.write" || s === "operator.admin",
+                ),
+              )));
         const notReady = (
           agentId: string,
           store: Exclude<StoreState, "ready">,
@@ -425,7 +457,10 @@ export function createKnowledgeService(
           agent: agentId,
           store,
           scope: "private",
-          writesEnabled: false,
+          // A never-written store is created by the caller's first Knowledge tool
+          // call, so it reports the access that call will have. Any other
+          // non-ready store cannot take writes.
+          writesEnabled: store === "unprovisioned" && canWrite,
           live: "stopped" as const,
           records: 0,
           validRecords: 0,
@@ -433,7 +468,7 @@ export function createKnowledgeService(
           ontologyAvailable: false,
           ontologyFingerprint: "",
           issues: 0,
-          message: message.slice(0, 300),
+          message: truncateUtf16Safe(message, 300),
         });
         if (opened.kind !== "ready") {
           return notReady(opened.agentId, opened.kind, opened.message);
@@ -461,18 +496,6 @@ export function createKnowledgeService(
             `This store couldn't be opened. ${(e as Error).message}`,
           );
         }
-        if (scope === "private") {
-          runtime.live.ensureWatching();
-        }
-        const canWrite =
-          policy.writesEnabled &&
-          (context.source === "tool" ||
-            (context.source === "session-action" &&
-              Boolean(
-                context.action.client?.scopes.some(
-                  (s: string) => s === "operator.write" || s === "operator.admin",
-                ),
-              )));
         return {
           ...base,
           checkedAt: catalog.checkedAt,
@@ -481,7 +504,7 @@ export function createKnowledgeService(
           store: "ready" as const,
           scope,
           writesEnabled: canWrite,
-          live: scope === "private" ? runtime.live.state : "stopped",
+          live: scope === "private" ? runtime.client.liveState : "stopped",
           snapshot: catalog.snapshot,
           records: catalog.records,
           validRecords: catalog.records,
@@ -491,9 +514,9 @@ export function createKnowledgeService(
           issues: catalog.issues,
         };
       },
-      grep: searchDetail(call("search")),
-      lookup: searchDetail(call("lookup")),
-      records: call("records", false, () => ({
+      grep: call("search"),
+      lookup: call("lookup"),
+      records_detail: call("records", false, () => ({
         facets: { kinds: {}, origins: {} },
         records: [],
         total: 0,
@@ -501,7 +524,7 @@ export function createKnowledgeService(
         nextOffset: null,
         freshness: queryFreshness(now()),
       })),
-      record: call("record"),
+      record_detail: call("record"),
       ontology: call("ontology"),
       diagnostics: call("diagnostics", false, () => ({
         issues: [],

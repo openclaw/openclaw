@@ -290,10 +290,13 @@ export async function requirePersonalGitHubPublicationConfirmationAsync(
   assertCurrent?: () => void,
 ) {
   const scope = mutationScope();
-  await personalMutation(
-    scope,
-    { operation: "restart", instanceId },
+  await scope.mutate(
+    {
+      type: "githubPublications.personalRestart",
+      input: { operation: "restart", instanceId, operationId: randomUUID() },
+    },
     assertCurrent ?? scope.assertCurrent,
+    publish,
   );
 }
 
@@ -322,6 +325,41 @@ export async function listRepositoryGitHubPublicationsAsync(
 ) {
   const result = await read({ type: "githubPublications.repositoryList", input });
   return result?.type === "githubPublications.repositoryList" ? result.rows : [];
+}
+
+export async function readRepositoryGitHubPublicationInputAsync(
+  row: RepositoryGitHubPublicationRow,
+  headCommit?: string,
+): Promise<RepositoryGitHubPublicationRow | undefined> {
+  const result = await read({
+    type: "githubPublications.repositoryInput",
+    input: { row, headCommit },
+  });
+  return result?.type === "githubPublications.repositoryInput" ? result.row : undefined;
+}
+
+export async function reopenRepositoryGitHubPublicationAsync(
+  row: RepositoryGitHubPublicationRow,
+  source: GitHubPublicationSourceCapability,
+): Promise<RepositoryGitHubPublicationRow> {
+  const scope = mutationScope();
+  try {
+    const receipt = await scope.mutate(
+      {
+        type: "githubPublications.repository",
+        input: { operation: "reopen", row, operationId: randomUUID() },
+      },
+      scope.assertCurrent,
+      publish,
+      source,
+    );
+    if (receipt.kind !== "repository") {
+      throw new Error("Invalid repository publication retry receipt.");
+    }
+    return requireRow(receipt.rows);
+  } finally {
+    await scope.close();
+  }
 }
 
 export async function readRepositoryGitHubPublicationAsync(requestId: string) {

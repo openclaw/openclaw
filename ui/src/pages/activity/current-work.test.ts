@@ -277,7 +277,11 @@ it.each(["current", { personId: null, time: "all", query: "" }] as const)(
     await vi.advanceTimersByTimeAsync(59_999);
     expectRows([sample(active, 1_600, { label: "Revision 1500" })], { loading: false });
     expect(request).toHaveBeenCalledTimes(2);
-    await advance(5_001, 3);
+    await advance(5_001, query === "current" ? 2 : 3);
+    if (query === "current") {
+      await advance(10 * 60_000, 2);
+      expectRows([sample(active, 1_600, { label: "Revision 1500" })]);
+    }
   },
 );
 

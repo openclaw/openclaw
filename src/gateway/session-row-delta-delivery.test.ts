@@ -16,6 +16,7 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
   const stringify = JSON.stringify;
   const encodings = new Map<object, number>();
   let fullEnvelopeEncodings = 0;
+  let patchEncodings = 0;
   let fieldPreparations = 0;
   let deliveries = 0;
   const keys = Object.keys;
@@ -29,6 +30,9 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
     const value: unknown = args[0];
     if (value && typeof value === "object" && "full" in value && value.full === null) {
       fullEnvelopeEncodings++;
+    }
+    if (value && typeof value === "object" && "set" in value && "remove" in value) {
+      patchEncodings++;
     }
     if (value === first || value === replacement) {
       encodings.set(value, (encodings.get(value) ?? 0) + 1);
@@ -72,7 +76,7 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
             ...(event === 6 || (index === 1 && event === 7) ? { lastAssistantMessage } : {}),
           };
           expect(delivery.rows?.wire[0]).toMatchObject({ set, remove: [] });
-          expect(JSON.parse(delivery.rows!.encoded[0]!).set).toEqual(set);
+          expect(delivery.rows!.encoded[0]).toBe(stringify(delivery.rows!.wire[0]));
         }
         owner.deliver(delivery);
         deliveries++;
@@ -83,6 +87,7 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
     expect([...encodings.values()]).toEqual([1, 1]);
     // Only the large replacement needs exact sizing; small runtime patches are already smaller.
     expect(fullEnvelopeEncodings).toBe(audiences + 1);
+    expect(patchEncodings).toBe(11 * audiences + 1);
   } finally {
     encoding.mockRestore();
     preparing.mockRestore();

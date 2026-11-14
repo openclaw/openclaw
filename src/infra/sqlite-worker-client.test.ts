@@ -6,6 +6,7 @@ import {
   runSqliteWorkerClientOperation as runOperation,
 } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
+import { normalizeWorkerRequestClass } from "./sqlite-worker-request-class.js";
 
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
 type DiagnosticOperations = Record<string, { input: unknown; output: string }>;
@@ -57,13 +58,29 @@ it("attributes queued commands without changing wire bytes or exposing private c
     await expect(store.execute(command)).resolves.toBe("committed");
     expect(dispatch.mock.lastCall?.[0]).toEqual(serialize(command));
     expect(dispatch.mock.lastCall?.[5]).toBe(requestClass);
+    expect(normalizeWorkerRequestClass(dispatch.mock.lastCall?.[5])).toBe(requestClass);
   };
   const input = { value: "synthetic-private-payload" };
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
     ["worktrees.private-customer-123", "worktrees"],
     ["session.entry.read", "session.entry.read"],
+    ["session.entries.replace", "session.entries.replace"],
+    ["session.archivePruning.pruneRetention", "session.archivePruning.pruneRetention"],
+    ["session.lifecycle.delete", "session.lifecycle.delete"],
+    // Other families keep their established dashboard labels.
+    ["session.transcript.watermark.read", "transcripts"],
+    ["cron.schedulerTick", "cron"],
+    ["pluginState.executeOperation", "plugin_state"],
+    ["transcripts.append", "transcripts"],
     ["session.actor.private-customer-123", "sessions"],
+    ["session.archivePruning.pruneRetention.private-customer-123", "sessions"],
+    ["session.transcript.private-customer-123", "transcripts"],
+    ["session.history.private-customer-123", "transcript_read"],
+    ["trajectory.private-customer-123", "transcripts"],
+    ["transcripts.private-customer-123", "transcripts"],
+    ["cron.private-customer-123", "cron"],
+    ["pluginState.executeOperation.private-customer-123", "plugin_state"],
     ["pluginState.get", "plugin_state"],
     ["private-customer-123.execute", "execute"],
     ["unrecognized", "execute"],
@@ -78,10 +95,15 @@ it("attributes queued commands without changing wire bytes or exposing private c
     ["publish", js, "preflight", "transcript-projection.preflight"],
     ["publish", `${projectionModule}.ts`, "sweep", "transcript-projection.sweep"],
     ["publish", js, "private-customer-123", "domain_execute"],
-    ["publish", "file:///synthetic-private-root/another.worker.js", "claim", "domain_execute"],
-    ["publish", `${js}.private`, "claim", "domain_execute"],
-    ["execute", undefined, "claim", "domain_execute"],
+    ["publish", "file:///synthetic-private-root/another.worker.js", "claim", "claim"],
+    ["publish", `${js}.private`, "claim", "claim"],
+    ["execute", undefined, "claim", "claim"],
+    ["execute", undefined, "source.replace", "source.replace"],
+    ["execute", undefined, "source.replace.private-customer-123", "domain_execute"],
     ["execute", undefined, "transcript.prepare", "transcript.prepare"],
+    ["execute", undefined, "session.metadata.append", "session.metadata.append"],
+    ["publish", js, "session.transcript.lock.commit", "transcripts"],
+    ["execute", undefined, "session.metadata.append.private-customer-123", "sessions"],
   ] as const;
   for (const [type, moduleUrl, innerType, requestClass] of domainCases) {
     await check(

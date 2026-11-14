@@ -163,7 +163,6 @@ describe("typed in-process agent continuation authorization", () => {
                 client: principal,
                 context,
                 runId: request.idempotencyKey,
-                spawnedBy: fixture.target.sessionKey,
               });
               child.authority?.assertCurrent();
               io.emitAcceptance([

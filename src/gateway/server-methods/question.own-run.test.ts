@@ -6,7 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -401,8 +401,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -568,16 +568,29 @@ describe("own-run question admission", () => {
           storePath: resolveOpenClawAgentSqlitePath(sessionScope),
           factsInvalidated: true,
         });
-        const run = projectionLane.pool.run.bind(projectionLane.pool);
-        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
-          if (cause === "transient worker failure") {
-            throw failure;
-          }
-          const result = await run(...args);
-          entered.resolve();
-          await release.promise;
-          return result;
-        });
+        const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+        let intercepted = false;
+        const spy = vi
+          .spyOn(sessionStoreLane.pool, "run")
+          .mockImplementation(async (input, options) => {
+            let exact = false;
+            const result = await run(async () => {
+              const request = typeof input === "function" ? await input() : input;
+              exact = request.kind === "session-exact-entries" && !intercepted;
+              if (exact) {
+                intercepted = true;
+                if (cause === "transient worker failure") {
+                  throw failure;
+                }
+              }
+              return request;
+            }, options);
+            if (exact) {
+              entered.resolve();
+              await release.promise;
+            }
+            return result;
+          });
         const request = f.call(
           "question.get",
           { id },

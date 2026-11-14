@@ -661,8 +661,8 @@ async function main() {
       parent: true,
     });
     validateClawHubWorkflowRun(api(`actions/runs/${identity.runId}`), identity);
-    // Core npm publication and the exact package roster are immutable before
-    // this point; later parent work must not revoke these transactions.
+    // The approved release identity and exact package roster are immutable
+    // before this point; later parent work must not revoke these transactions.
     result = createClawHubParentAuthorization(transactions, "automated-sealed");
     appendFileSync(env.GITHUB_OUTPUT, `artifact_name=${clawHubParentArtifactName(identity)}\n`);
   } else if (positionals[0] === "recovery-approval") {

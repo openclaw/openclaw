@@ -15,10 +15,16 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
+import {
+  API_KEY_EXPIRED_ERROR_CODE,
+  ERROR_DETAILS_HINT,
+  ERROR_PREFIX_RE,
+} from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+  CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+  MODEL_CHAT_UNSUPPORTED_TEXT,
   type CliTimeoutContext,
   type FallbackAttemptRecord,
 } from "./error.js";
@@ -44,20 +50,24 @@ export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
-  code === "selected_auth_profile_unavailable"
-    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
-    : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
-      ? RATE_LIMIT_ERROR_USER_MESSAGE
-      : code === "refresh_contention"
-        ? OAUTH_REFRESH_CONTENTION_USER_TEXT
-        : undefined;
+  code === "model_chat_unsupported"
+    ? MODEL_CHAT_UNSUPPORTED_TEXT
+    : code === "selected_auth_profile_unavailable"
+      ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+      : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+        ? RATE_LIMIT_ERROR_USER_MESSAGE
+        : code === "refresh_contention"
+          ? OAUTH_REFRESH_CONTENTION_USER_TEXT
+          : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
+            ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
+            : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again (?:in|at)\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context (?:length|window) exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const PROVIDER_PROMPT_SIZE_LIMIT_RE =
@@ -148,12 +158,62 @@ export function renderRateLimitRecoveryStopped(retries: number): string {
   );
 }
 
+type RateLimitResetContext = {
+  rateLimitResetAt?: number;
+  provider?: string;
+  model?: string;
+  locale?: string;
+  timeZone?: string;
+  nowMs?: number;
+};
+
+/** Provider deadlines outrank generic retry advice; diagnostic bodies never become this copy. */
+export function renderRateLimitResetCopy(params: RateLimitResetContext): string | undefined {
+  const resetAt = params.rateLimitResetAt ?? 0;
+  const remainingMs = resetAt - (params.nowMs ?? Date.now());
+  if (remainingMs <= 60_000 || !Number.isFinite(remainingMs)) {
+    return undefined;
+  }
+  const unit = remainingMs >= 86_400_000 ? "day" : remainingMs >= 3_600_000 ? "hour" : "minute";
+  const divisor = unit === "day" ? 86_400_000 : unit === "hour" ? 3_600_000 : 60_000;
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone: params.timeZone,
+  };
+  let absolute: string;
+  let relative: string;
+  try {
+    absolute = new Intl.DateTimeFormat(params.locale, options).format(resetAt);
+    relative = new Intl.RelativeTimeFormat(params.locale).format(
+      Math.ceil(remainingMs / divisor),
+      unit,
+    );
+  } catch {
+    // Invalid saved display preferences must not hide the provider's reset.
+    absolute = new Date(resetAt).toISOString();
+    relative = new Intl.RelativeTimeFormat("en").format(Math.ceil(remainingMs / divisor), unit);
+  }
+  const route = [params.provider, params.model].filter(Boolean).join("/") || "This model";
+  return `⚠️ ${route} is rate-limited. The provider says to retry ${relative} (${absolute}). Choose another model in the model picker, or configure Model fallbacks in Settings (\`agents.defaults.model.fallbacks\`).`;
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
-export function renderRateLimitOrOverloadedCopy(params: {
-  reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
-  raw?: string;
-  rateLimitRetriesExhausted?: number;
-}): string {
+export function renderRateLimitOrOverloadedCopy(
+  params: RateLimitResetContext & {
+    reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
+    raw?: string;
+    rateLimitRetriesExhausted?: number;
+  },
+): string {
+  const resetCopy = params.reason === "rate_limit" ? renderRateLimitResetCopy(params) : undefined;
+  if (resetCopy) {
+    return resetCopy;
+  }
   const exhaustion =
     params.reason === "rate_limit"
       ? renderRateLimitRetryExhaustion(params.rateLimitRetriesExhausted)
@@ -353,11 +413,13 @@ function resolveProviderRequestFailureCode(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }): ProviderRequestErrorCode | undefined {
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
   if (reason === "auth" && params.status === 401) {
-    return "provider_authentication_error";
+    // An expired key cannot be fixed by signing in; its copy is rendered from the provider code.
+    return params.code === API_KEY_EXPIRED_ERROR_CODE ? undefined : "provider_authentication_error";
   }
   if (reason === "model_not_found") {
     return "provider_model_unavailable";
@@ -379,6 +441,7 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -393,18 +456,34 @@ export function resolveProviderRequestFailureCopy(params: {
 export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
-export function renderRateLimitReplyCopy(params: {
-  message: string;
-  reason?: FailoverReason;
-  provider?: string;
-  code?: string;
-  attempts?: readonly ReplyFallbackAttempt[];
-  rateLimitRetriesExhausted?: number;
-  cooldownExpiry?: number | null;
-  nowMs?: number;
-  sanitizeText?: (text: string) => string;
-}): string {
+export function renderRateLimitReplyCopy(
+  params: RateLimitResetContext & {
+    message: string;
+    reason?: FailoverReason;
+    code?: string;
+    attempts?: readonly ReplyFallbackAttempt[];
+    rateLimitRetriesExhausted?: number;
+    cooldownExpiry?: number | null;
+    sanitizeText?: (text: string) => string;
+  },
+): string {
   const attempts = params.attempts ?? [];
+  const limited = attempts.find(
+    (attempt) =>
+      attempt.reason === "rate_limit" &&
+      (attempt.rateLimitResetAt ?? 0) > (params.nowMs ?? Date.now()) + 60_000,
+  );
+  const resetCopy = renderRateLimitResetCopy(limited ? { ...params, ...limited } : params);
+  if (resetCopy && !attempts.some((attempt) => attempt.reason === "billing")) {
+    return resetCopy;
+  }
+  // Host-authored failures keep their own copy; cooldown copy below adds expiry detail.
+  const code = params.code ?? attempts.at(-1)?.code;
+  const codeCopy =
+    code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? undefined : renderFailoverCodeUserCopy(code);
+  if (codeCopy) {
+    return codeCopy;
+  }
   // Local cooldown diagnostics name the operator's saved login; only provider text becomes copy.
   const providerMessage = params.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? "" : params.message;
   if (params.reason === "rate_limit") {
@@ -620,6 +699,8 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `${provider} rejected the request — looks like a billing issue on the account.`,
   server_error: (provider: string) =>
     `${provider} is having issues right now. Please wait a moment before trying again.`,
+  route_unavailable: (provider: string) =>
+    `${provider} cannot serve this model right now. Choose another model.`,
   timeout: (provider: string) =>
     `${provider} hasn't been responding. Please wait a moment before trying again.`,
   tls_certificate: authProfileUnavailableCopy,

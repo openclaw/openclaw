@@ -14,6 +14,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
@@ -484,7 +485,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (
     cachedProbe?.pairingGeneration === probeOwner.pairingGeneration &&
     cachedProbe.signature === probeSignature &&
-    Date.now() < cachedProbe.nextProbeAfterMs
+    monotonicNow() < cachedProbe.nextProbeAfterMs
   ) {
     const node = remoteNodes.get(params.nodeId);
     if (
@@ -505,7 +506,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     phase?: "preflight" | "probe",
   ) => {
     const nodeId = params.nodeId;
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     if (!isCurrentRemoteNodeOwner(nodeId, probeOwner)) {
       return;
     }
@@ -601,7 +602,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     remoteNodeProbeStates.set(params.nodeId, {
       signature: probeSignature,
       pairingGeneration: probeOwner.pairingGeneration,
-      nextProbeAfterMs: Date.now() + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
+      nextProbeAfterMs: monotonicNow() + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
       failedProbeCount: 0,
       bins: nextBins,
     });

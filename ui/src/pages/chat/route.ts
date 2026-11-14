@@ -35,8 +35,7 @@ function sessionPage(face: BoardFace) {
     loader: (context: ApplicationContext, options) => {
       // Subscription acquisition owns errors and retries after this speculative load.
       void preloadSessionMessageSubscriptions().catch(() => undefined);
-      const creation = context.chatSubmissions.creation;
-      if (creation && !creation.admitted) {
+      if (context.chatSubmissions.creating) {
         const mainKey = resolveUiConfiguredMainKey({
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
@@ -53,31 +52,42 @@ function sessionPage(face: BoardFace) {
             : target?.kind === "literal"
               ? target.sessionKey
               : undefined;
-        if (target?.namespace === face && sessionKey === creation.sessionKey) {
+        const creation = sessionKey ? context.chatSubmissions.creationFor(sessionKey) : undefined;
+        if (target?.namespace === face && creation && !creation.admitted) {
           options.signal.throwIfAborted();
           const result = {
             kind: "session" as const,
-            sessionKey,
+            sessionKey: creation.sessionKey,
             agentId: target.agentId,
             ...sessionRouteHints(options.location),
             face,
             creation,
           };
-          // The agent menu has already loaded its pending view. Ordinary draft
-          // creation enters a literal route directly and retains its preview until ready.
-          return target.kind === "main"
-            ? result
-            : PendingSessionCreate.preload().then(() => {
-                options.signal.throwIfAborted();
-                return result;
-              });
+          // Template Add also enters a main-agent route; it has not mounted
+          // the agent menu preview. Keep the old page until pending chat is ready.
+          return PendingSessionCreate.preload().then(() => {
+            options.signal.throwIfAborted();
+            return result;
+          });
         }
       }
       return import("./route-loader.ts").then((module) =>
         module.loadSessionPage(context, face, options),
       );
     },
-    component: () => import("./route-entry.ts"),
+    component: () => {
+      const entry = import("./route-entry.ts");
+      if (face === "dashboard") {
+        // Each rendered boundary owns readiness and errors; preparation never holds the route.
+        void import("./chat-pane-sidebar-view.tsx")
+          .then(({ ChatSidebarRegion }) => ChatSidebarRegion.preload())
+          .catch(() => undefined);
+        void import("./board-session-surface.tsx")
+          .then(({ BoardView }) => BoardView.preload())
+          .catch(() => undefined);
+      }
+      return entry;
+    },
   });
 }
 

@@ -63,3 +63,18 @@ export async function runVitestPlans<T>(
     }
   }
 }
+
+/** Keep logical CI capacity when the physical runner has more CPUs. */
+export function resolveCiNodeTestResources(
+  resources: { logicalCpuCount: number; totalMemoryBytes: number },
+  cpuBudget: string | undefined,
+) {
+  if (!cpuBudget) {
+    return resources;
+  }
+  const budget = Number(cpuBudget);
+  if (!Number.isSafeInteger(budget) || budget < 1) {
+    throw new Error("Node test CPU budget must be a positive integer");
+  }
+  return { ...resources, logicalCpuCount: Math.min(resources.logicalCpuCount, budget) };
+}

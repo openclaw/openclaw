@@ -31,10 +31,7 @@ import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import { reserveWorkerEnvironmentNativePublication } from "./store-native-publication.js";
 
 type Moves = ReturnType<typeof createPlacementMoveOps>;
-type Operations = Omit<
-  WorkerOperations<typeof placementLifecycleOperations>,
-  "workerPlacements.clearLocalTurnClaims"
->;
+type Operations = WorkerOperations<typeof placementLifecycleOperations>;
 type Guard = { assertCurrent?: WorkerPlacementAuthorization };
 
 function isReceipt(value: unknown): value is PlacementLifecycleReceipt {

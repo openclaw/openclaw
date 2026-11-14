@@ -7,7 +7,7 @@ import {
   type BrowserContextOptions,
   type Page,
 } from "playwright";
-import { describe } from "vitest";
+import { describe, onTestFinished } from "vitest";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
@@ -526,9 +526,22 @@ async function captureScreenshot(
     artifactDir = createControlUiE2eArtifactDir("plugins");
     artifacts.set(page, artifactDir);
   }
-  await (target === "viewport" ? page : page.locator(".content")).screenshot({
+  const clip =
+    target === "content"
+      ? await page.locator(".content").evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return {
+            x: bounds.left + element.clientLeft,
+            y: bounds.top + element.clientTop,
+            width: element.clientWidth,
+            height: element.clientHeight,
+          };
+        })
+      : undefined;
+  await page.screenshot({
     animations: "disabled",
     caret: "hide",
+    clip,
     path: path.join(artifactDir, name),
   });
 }
@@ -646,6 +659,23 @@ function pluginMethodResponses() {
       ],
     },
   };
+}
+
+export async function setupPluginPage(
+  methodResponses: Record<string, unknown> = {},
+  options: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
+  viewport?: Parameters<typeof newContext>[0],
+  contextOptions?: Parameters<typeof newContext>[1],
+) {
+  const context = await newContext(viewport, contextOptions);
+  onTestFinished(() => context.close());
+  const page = await context.newPage();
+  const gateway = await installMockGateway(page, {
+    featureMethods: pluginMethods,
+    methodResponses: { ...pluginMethodResponses(), ...methodResponses },
+    ...options,
+  });
+  return { page, gateway, context };
 }
 
 export async function setupPluginsE2e(): Promise<void> {

@@ -6,12 +6,9 @@ import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-recei
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
+import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
-export type SessionSharingExpectedEntry = Pick<
-  SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
->;
 export type SessionMetadataExpectedEntry = SessionSharingExpectedEntry &
   Pick<SessionEntry, "lifecycleRevision">;
 export type SessionOwnerAssignParams = {
@@ -90,7 +87,16 @@ export type SessionInvolvementMutation = {
   profileIds: readonly string[];
   change:
     | { kind: "visibility"; hidden: boolean }
-    | { kind: "mention"; source: NonNullable<SessionProfileInvolvement["lastMention"]> };
+    | {
+        kind: "mention";
+        source: NonNullable<SessionProfileInvolvement["lastMention"]>;
+        /** Only the committed human-input owner supplies a revalidated sharing grant. */
+        invitation?: {
+          addedBy: string;
+          profileIds: readonly string[];
+          expectedEntry?: SessionSharingExpectedEntry;
+        };
+      };
 };
 
 export type SessionSharingWorkerOperations = {
@@ -100,7 +106,11 @@ export type SessionSharingWorkerOperations = {
       params: SessionInvolvementMutation;
       profiles: { profileId: string; aliases: string[] }[];
     };
-    output: { accepted: boolean; changed: boolean };
+    output: {
+      accepted: boolean;
+      changed: boolean;
+      memberFacts?: Extract<SessionRowFacts, { kind: "member" }>[];
+    };
   };
   "owner.assign": {
     input: { scope: SessionAccessScope; params: SessionOwnerAssignParams };

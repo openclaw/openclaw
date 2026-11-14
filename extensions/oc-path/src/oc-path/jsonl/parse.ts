@@ -25,7 +25,7 @@ export function parseJsonl(raw: string): JsonlAst {
   body = body.replace(/\r\n/g, "\n");
   const lines: JsonlLine[] = [];
 
-  if (body.length === 0) {
+  if (raw.length === 0) {
     return { kind: "jsonl", raw, lines, lineEnding };
   }
 

@@ -212,7 +212,7 @@ describe("resolveTranscriptPolicy", () => {
         model: { ...model, provider, api, baseUrl },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -230,7 +230,7 @@ describe("resolveTranscriptPolicy", () => {
         env: { ANTHROPIC_BASE_URL: baseUrl },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -253,7 +253,7 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin(provider),
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -269,6 +269,7 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin("anthropic", false),
       });
       expect(policy.inHistorySystemUpdates).toBe(directApiKey);
+      // An explicit provider opt-out holds unless in-history updates need retained carriers.
       expect(policy.appendOnlyRuntimeContext).toBe(directApiKey);
     },
   );
@@ -303,39 +304,39 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
-  it.each([
-    ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
-    ["claude-fable-5", false],
-  ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
-    const messages: AgentMessage[] = [
-      { role: "user", content: "First request", timestamp: 1 },
-      { role: "user", content: "Second request", timestamp: 2 },
-    ];
-    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
-      for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
-        const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
-        expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
-        const replay = validateAnthropicTurns(messages, {
-          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
-        });
-        expect(replay).toEqual(
-          appendOnly && modelApi === "anthropic-messages"
-            ? messages
-            : [
-                {
-                  role: "user",
-                  content: [
-                    { type: "text", text: "First request" },
-                    { type: "text", text: "Second request" },
-                  ],
-                  timestamp: 2,
-                },
-              ],
-        );
+  // Every route keeps earlier runtime context; only Bedrock Converse still merges consecutive turns.
+  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-fable-5"])(
+    "scopes persisted context and consecutive-turn merging for %s",
+    (modelId) => {
+      const messages: AgentMessage[] = [
+        { role: "user", content: "First request", timestamp: 1 },
+        { role: "user", content: "Second request", timestamp: 2 },
+      ];
+      for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
+        for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
+          const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
+          expect(policy.appendOnlyRuntimeContext).toBe(true);
+          const replay = validateAnthropicTurns(messages, {
+            mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
+          });
+          expect(replay).toEqual(
+            modelApi === "anthropic-messages"
+              ? messages
+              : [
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: "First request" },
+                      { type: "text", text: "Second request" },
+                    ],
+                    timestamp: 2,
+                  },
+                ],
+          );
+        }
       }
-    }
-  });
+    },
+  );
 
   it.each(["claude-fable-5-1", "claude-mythos-5-1"])(
     "uses canonical deployment identity for unowned %s replay",
@@ -346,7 +347,7 @@ describe("resolveTranscriptPolicy", () => {
         modelId: "deployment",
         model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
       });
-      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     },
   );
 

@@ -15,26 +15,6 @@ struct RootTabsSourceGuardTests {
         #expect(modelPhase.lowerBound < gatewayPhase.lowerBound)
     }
 
-    @Test func `local network permission has visible request paths`() throws {
-        let root = try Self.source("Sources/RootTabs.swift")
-        let onboarding = try Self.sources([
-            "Sources/Onboarding/OnboardingWizardView.swift",
-            "Sources/Onboarding/OnboardingWizardConnectionSections.swift",
-        ])
-        let settings = try Self.source("Sources/Design/SettingsProTabActions.swift")
-        let controller = try Self.sources([
-            "Sources/Gateway/GatewayConnectionController.swift",
-            "Sources/Gateway/GatewayConnectionController+Capabilities.swift",
-        ])
-
-        #expect(controller.contains("requestLocalNetworkAccess(reason: \"connect_manual\""))
-        #expect(controller.contains("requestLocalNetworkAccess(reason: \"connect_discovered_gateway\""))
-        #expect(root.contains("maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
-        #expect(root.contains("requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
-        #expect(onboarding.contains("onRequestLocalNetworkAccess(\"onboarding_continue\")"))
-        #expect(settings.contains("requestLocalNetworkAccess(reason: \"settings_preflight\")"))
-    }
-
     @Test func `scanner starts only while its view is visible`() throws {
         let source = try Self.source("Sources/Onboarding/QRScannerView.swift")
         let make = try Self.extract(source, from: "func makeUIViewController", to: "func updateUIViewController")
@@ -87,12 +67,40 @@ struct RootTabsSourceGuardTests {
             gatewayStableID: secondID).token == "second-token")
     }
 
-    private static func source(_ path: String) throws -> String {
-        try String(contentsOf: self.iOSRoot.appendingPathComponent(path), encoding: .utf8)
+    @Test @MainActor func `a credential typed after onboarding pairing saves to the active gateway`() {
+        let instanceID = "credential-active-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
+        let activeID = "manual|gateway.example.ts.net|443"
+        let registry = GatewaySettingsStore.GatewayRegistry(
+            activeStableID: activeID,
+            connectedStableIDs: [activeID],
+            entries: [GatewaySettingsStore.GatewayRegistryEntry(
+                stableID: activeID,
+                kind: .manual,
+                name: "gateway.example.ts.net:443",
+                host: "gateway.example.ts.net",
+                port: 443,
+                useTLS: true,
+                lastConnectedAtMs: nil)])
+        #expect(GatewaySettingsStore.saveGatewayCredentials(
+            token: "kept-token",
+            bootstrapToken: nil,
+            password: nil,
+            gatewayStableID: activeID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID))
+        // Onboarding pairing leaves Settings' manual host empty and the fields unbound.
+        let defaultTarget = SettingsProTab.defaultCredentialTargetStableID(manualStableID: nil, registry: registry)
+        var fields = GatewayConnectionController.ManualAuthOverride.Fields()
+        fields.edit(\.password, to: "rotated-password", instanceId: instanceID, defaultTarget: defaultTarget)
+
+        let saved = GatewaySettingsStore.loadGatewayCredentials(instanceId: instanceID, gatewayStableID: activeID)
+        #expect(saved.password == "rotated-password")
+        #expect(saved.token == "kept-token")
     }
 
-    private static func sources(_ paths: [String]) throws -> String {
-        try paths.map(self.source).joined(separator: "\n")
+    private static func source(_ path: String) throws -> String {
+        try String(contentsOf: self.iOSRoot.appendingPathComponent(path), encoding: .utf8)
     }
 
     private static var iOSRoot: URL {

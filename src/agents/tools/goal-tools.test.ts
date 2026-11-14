@@ -7,7 +7,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sqliteSchedulerClock } from "../../infra/sqlite-maintenance-fixture.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -79,13 +79,34 @@ describe("goal tools", () => {
     const { options, readGoal } = await createStoreConfig("global", {
       totalTokens: 125,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       goal: makeGoal({ tokenStart: 100, tokenBudget: 20 }),
     });
     const result = await createGetGoalTool(options).execute("call-1", {});
     expect(result.details).toMatchObject({ goal: { status: "budget_limited" } });
     expect(readGoal()?.status).toBe("active");
   });
+
+  it.each(["blocked", "paused", "complete", "budget_limited", "usage_limited"] as const)(
+    "keeps an inactive %s goal separate from current-turn authority",
+    async (status) => {
+      const { options, readGoal } = await createStoreConfig("global", {
+        goal: makeGoal({ status, lastStatusNote: "Waiting on an earlier prerequisite" }),
+      });
+      const before = readGoal();
+      const result = await createGetGoalTool(options).execute("call-inactive-goal", {});
+
+      expect(result.details).toMatchObject({
+        goal: { status },
+        nextAction: expect.stringContaining("Goal Resume is not a prerequisite for this turn"),
+      });
+      expect(result.details).toHaveProperty(
+        "nextAction",
+        expect.stringContaining("within its actual permissions"),
+      );
+      expect(readGoal()).toEqual(before);
+    },
+  );
 
   it.each([
     { sessionKey: "global", budget: 100, otherAgent: "main" },

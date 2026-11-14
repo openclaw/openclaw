@@ -73,7 +73,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
   });
   if (!isMainThread) {
     const { readSessionRuntimeTargetWorkerRequest } =
-      await import("./session-entry-read.worker.js");
+      await import("./session-runtime-target-read.worker.js");
     const database = toDatabaseOptions(resolveSqliteTranscriptReadScope(bound));
     return {
       ...readSessionRuntimeTargetWorkerRequest({
@@ -88,7 +88,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
       storePath,
     };
   }
-  const [{ withSessionStoreReaderInWorker }, { projectionLane }] = await Promise.all([
+  const [{ withSessionStoreReaderInWorker }, { sessionStoreLane }] = await Promise.all([
     import("./session-entry-read-runtime.js"),
     import("./session-transcript-worker-resources.js"),
   ]);
@@ -110,7 +110,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
       assertCurrent();
       return selected;
     },
-    { backing: true, lane: projectionLane, dataOnly: true },
+    { backing: true, lane: sessionStoreLane, dataOnly: true },
   );
   return { ...target, storePath };
 }

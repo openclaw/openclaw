@@ -15,9 +15,13 @@ import {
   assertSafeGitPublicationWorkspace,
   captureSettledGitHubPublicationWorkspaceSnapshot,
   createGitHubPublicationCommandRunner,
-  readGitHubPublicationBaseSha,
   requireGitHubPublicationCommit,
 } from "./github-publication-git-transport.js";
+import {
+  prepareManagedWorkspaceSource,
+  type VerifiedWorkspacePullRequestSource,
+  type VerifiedWorkspaceSource,
+} from "./github-publication-source-preparation.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import {
   prepareManagedWorkspaceReviewBase,
@@ -57,21 +61,12 @@ export function refreshManagedWorkspaceBase(
 /** Explicit sources come from current GitHub verification, never editable workspace remotes. */
 export async function integrateManagedWorkspaceSource(
   params: ManagedWorkspaceIntegrationParams & {
-    source?: {
-      repository: string;
-      branch: string;
-      commit: string;
-      githubHost: string;
-      review: { repository: string; commit: string };
-      initial: boolean;
-      reviewOnly: boolean;
-      emptySource: boolean;
-      resuming: boolean;
-      accept: () => Promise<void>;
-    };
+    verifiedBase?: VerifiedWorkspaceSource;
+    source?: VerifiedWorkspacePullRequestSource;
   },
 ): Promise<SessionGitHubBaseRefreshResult> {
   const { owner, identity, sandbox } = params;
+  const integrationSource = params.source ?? params.verifiedBase;
   const action = params.source ? "prepare_pr" : "refresh_base";
   const reviewPreparationError = `Source integration is saved, but sandbox review-base preparation failed. Resolve any pending sandbox Git merge or index lock, then retry ${action} before tests and Auto Review.`;
   const attribution = await prepareGitCoauthorAttribution({
@@ -98,29 +93,37 @@ export async function integrateManagedWorkspaceSource(
     ].join("\n");
   const { run } = createGitHubPublicationCommandRunner(assertCurrent);
   await assertSafeGitPublicationWorkspace(owner.worktree.path, run);
-  const target = params.source
+  const target = integrationSource
     ? {
-        repository: params.source.repository,
-        baseBranch: params.source.branch,
-        githubHost: params.source.githubHost,
+        repository: integrationSource.repository,
+        baseBranch: integrationSource.branch,
+        githubHost: integrationSource.githubHost,
       }
     : await prepareGitHubPublicationTarget({
         worktree: owner.worktree,
+        session: {
+          agentId: owner.agentId,
+          sessionKey: owner.sessionKey,
+          sessionId: owner.sessionId,
+          lifecycleRevision: owner.lifecycleRevision,
+        },
         identity,
         assertCurrent,
       });
   const initialImport = params.source?.initial === true;
+  const pristineError =
+    "This workspace has existing dirty, untracked, or unpublished work. Keep or finish that work separately before preparing this PR; no PR source was applied.";
+  const prepared = params.source?.reviewOnly
+    ? undefined
+    : await prepareManagedWorkspaceSource({ ...params, target, assertCurrent, pristineError });
   let guestHead: string | undefined;
   let guestDirty = false;
   let pendingStaged: { path: string; indexEntry?: string }[] = [];
   const stagedError =
     "Commit the staged changes in files that also have unstaged changes before refreshing this PR; its existing files and index were preserved.";
-  if (params.source && !params.source.reviewOnly) {
-    if (params.source.resuming) {
-      // An accepted transfer may retain a paused runtime. Recover it through its
-      // owner before asking that runtime to execute the workspace check.
-      await withLocalWorkspaceProjection({ ...owner, assertCurrent }, (state) => state.settle());
-    }
+  if (integrationSource && !params.source?.reviewOnly) {
+    // Remote permission checks can also be slow; observe the guest index afterward.
+    await integrationSource.verify();
     const observed = await readManagedSandboxGitState({
       sandbox,
       signal: params.signal,
@@ -129,7 +132,7 @@ export async function integrateManagedWorkspaceSource(
     guestHead = observed.head;
     guestDirty = observed.dirty;
     if (!initialImport && observed.partiallyStaged.length) {
-      if (!params.source.resuming) {
+      if (!integrationSource.resuming) {
         throw new Error(stagedError);
       }
       // Checked against the pending integration below.
@@ -182,7 +185,7 @@ export async function integrateManagedWorkspaceSource(
             policy.require(cwd, args, { env, input, beforeRun: check });
           const probe = (args: string[]) => policy.run(cwd, args, { env, beforeRun: check });
           if (
-            params.source &&
+            integrationSource &&
             (await git(["symbolic-ref", "--quiet", "--short", "HEAD"])) !== owner.worktree.branch
           ) {
             throw new Error("The managed workspace branch changed; existing work was preserved.");
@@ -190,6 +193,19 @@ export async function integrateManagedWorkspaceSource(
           const stagedRef = localWorkspaceBaseRefreshRef(
             createHash("sha256").update(owner.worktree.id).digest("hex"),
           );
+          const { baseCommit, initialHead, continuingIntegration, recoveredImport } = prepared!;
+          const pending = await probe(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
+          if (
+            (await git(["rev-parse", "HEAD"])) !== initialHead ||
+            state.current().base_commit !== prepared!.previousBase ||
+            (continuingIntegration
+              ? pending.code !== 0 || pending.stdout.trim() !== baseCommit
+              : pending.code !== 1)
+          ) {
+            throw new Error(
+              `The workspace changed during source preparation; retry ${action}. Saved work was preserved.`,
+            );
+          }
           // Settlement above finishes reserved transfers. The lease owns this one
           // remaining, unreserved slot; its payload must use the current baseline.
           await deleteStagedWorkerWorkspaceResult({
@@ -197,28 +213,6 @@ export async function integrateManagedWorkspaceSource(
             stagedResultRef: stagedRef,
             assertCurrent: check,
           });
-          const pending = await probe(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
-          if (pending.code !== 0 && pending.code !== 1) {
-            throw new Error("Workspace base integration state is unavailable.");
-          }
-          let baseCommit = pending.code === 0 ? pending.stdout.trim() : undefined;
-          if (baseCommit && params.source && baseCommit !== params.source.commit) {
-            throw new Error(
-              "Another source integration is pending. Finish it before preparing this PR; saved work was preserved.",
-            );
-          }
-          if (baseCommit && state.current().base_commit !== baseCommit) {
-            // Settlement above finishes reserved transfers. Native-only preparation has
-            // applied no source bytes; restart it so later guest edits enter the snapshot.
-            await git(["merge", "--quit"]);
-            baseCommit = undefined;
-          }
-          if (params.conflictsResolved && (!baseCommit || params.baseCommit !== baseCommit)) {
-            throw new Error(
-              `The pending source integration changed; call ${action} again and resolve its returned conflicts.`,
-            );
-          }
-          const continuingIntegration = Boolean(baseCommit);
           // A refresh rewrites working files before the guest index is restaged, so a refreshed file
           // stays staged at its pre-refresh entry, which ORIG_HEAD records until the next source is
           // admitted. Any other staged-only entry is guest work that completion would replace.
@@ -236,48 +230,8 @@ export async function integrateManagedWorkspaceSource(
               throw new Error(stagedError);
             }
           }
-          if (!baseCommit) {
-            if (params.baseCommit) {
-              throw new Error(
-                `The expected commit acknowledges an existing conflict; it cannot select a source.`,
-              );
-            }
-            baseCommit =
-              params.source?.commit ??
-              (await readGitHubPublicationBaseSha(
-                run,
-                target.repository,
-                target.baseBranch,
-                target.githubHost,
-                identity.env,
-              ));
-          }
-          const initialHead = await git(["rev-parse", "HEAD"]);
-          const recoveredImport =
-            initialImport &&
-            params.source?.resuming === true &&
-            (continuingIntegration ||
-              (initialHead === baseCommit && state.current().base_commit === baseCommit));
-          const prepareContents = (commit: string, commitPresent: boolean) =>
-            requireGitHubPublicationCommit(
-              run,
-              target.repository,
-              commit,
-              target.githubHost,
-              cwd,
-              {
-                ...identity.env,
-                GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-                GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-              },
-              `The selected repository base contents could not be fetched; retry ${action}.`,
-              { contents: true, commitPresent },
-            );
-          await prepareContents(baseCommit, continuingIntegration);
           if (initialImport && !recoveredImport) {
             const source = params.source!;
-            const pristineError =
-              "This workspace has existing dirty, untracked, or unpublished work. Keep or finish that work separately before preparing this PR; no PR source was applied.";
             const admittedPaths = await state.canonicalPaths();
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
               { cwd, assertCurrent: check },
@@ -295,38 +249,9 @@ export async function integrateManagedWorkspaceSource(
               throw new Error(pristineError);
             }
             // A projection may first be captured after unrelated commits already exist.
-            // Only verified PR/base history or the immutable empty source is disposable.
+            // Only verified published history or the immutable empty source is disposable.
             if (source.emptySource) {
               if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
-                throw new Error(pristineError);
-              }
-            } else {
-              await requireGitHubPublicationCommit(
-                run,
-                source.review.repository,
-                source.review.commit,
-                target.githubHost,
-                cwd,
-                {
-                  ...identity.env,
-                  GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-                  GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-                },
-                `The selected PR base ancestry could not be fetched; retry ${action}.`,
-              );
-              const fromBase = await probe([
-                "merge-base",
-                "--is-ancestor",
-                initialHead,
-                source.review.commit,
-              ]);
-              const fromHead = await probe([
-                "merge-base",
-                "--is-ancestor",
-                initialHead,
-                baseCommit,
-              ]);
-              if (fromBase.code !== 0 && fromHead.code !== 0) {
                 throw new Error(pristineError);
               }
             }
@@ -356,45 +281,13 @@ export async function integrateManagedWorkspaceSource(
               throw new Error(pristineError);
             }
           }
-          const mergeBases = async (left: string, right: string) => {
-            const bases = await probe(["merge-base", "--all", left, right]);
-            if (bases.code === 1) {
-              return [];
-            }
-            if (bases.code !== 0) {
-              throw new Error("The selected base ancestry could not be verified.");
-            }
-            return bases.stdout.trim().split(/\s+/u);
-          };
-          const inputs = initialImport ? [] : await mergeBases("HEAD", baseCommit);
-          if (!initialImport && !inputs.length) {
-            throw new Error("The selected base could not be integrated; saved work was preserved.");
-          }
-          const discovered = new Set([baseCommit, ...inputs]);
-          // Git combines multiple merge bases using their own common ancestors.
-          // Prepare that closure of trees without fetching every historical file version.
-          for (let index = 0; index < inputs.length; index++) {
-            const input = inputs[index]!;
-            if (input !== baseCommit) {
-              await prepareContents(input, true);
-            }
-            for (let previous = 0; previous < index; previous++) {
-              for (const ancestor of await mergeBases(input, inputs[previous]!)) {
-                if (!discovered.has(ancestor)) {
-                  discovered.add(ancestor);
-                  inputs.push(ancestor);
-                }
-              }
-            }
-          }
-          // Do not reserve a source that cannot be integrated or whose ancestry is unavailable.
-          await params.source?.accept();
-          check();
           if (!continuingIntegration) {
             await state.synchronize("canonical");
             await state.synchronize("projection");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
+              await integrationSource?.accept();
+              check();
               return {
                 status: "current",
                 repository: target.repository,
@@ -430,6 +323,8 @@ export async function integrateManagedWorkspaceSource(
           }
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
           if (integrated.code === 0 && (!initialImport || initialHead === baseCommit)) {
+            await integrationSource?.accept();
+            check();
             // A native commit may have moved HEAD before its merge-state cleanup completed.
             await git(["merge", "--quit"]);
             return {
@@ -527,13 +422,17 @@ export async function integrateManagedWorkspaceSource(
             } finally {
               await fs.rm(temporary, { recursive: true, force: true });
             }
+            // Reserve only an admitted payload. A rejected source must not pin retries
+            // to its old PR head after the author removes generated output.
+            await integrationSource?.accept();
+            check();
             // The retained source payload precedes native merge state and all file effects.
             if (!baseCommit || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {
               throw new Error("Invalid pending base commit.");
             }
             // MERGE_HEAD is a native pseudoref; Git rejects updating it through update-ref.
             const mergeHead = await resolveGitMetadataPath(cwd, "MERGE_HEAD", { beforeRun: check });
-            if (params.source && !continuingIntegration) {
+            if (integrationSource && !continuingIntegration) {
               await git(["update-ref", "ORIG_HEAD", sourceHead]);
             }
             check();
@@ -546,6 +445,8 @@ export async function integrateManagedWorkspaceSource(
             await state.applyBaseRefresh(stagedRef);
             await git(["read-tree", tree]);
           } else {
+            await integrationSource?.accept();
+            check();
             await state.synchronize("canonical");
           }
           if (conflictPaths.length && !params.conflictsResolved) {
@@ -628,7 +529,7 @@ export async function integrateManagedWorkspaceSource(
         GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       },
       reviewPreparationError,
-      { contents: true },
+      { contents: true, baseBranch: target.baseBranch },
     );
     // Importing an older PR head does not merge the current base tip into its files.
     // Review its changes from their common ancestor, not as deletions of newer base work.
@@ -637,7 +538,7 @@ export async function integrateManagedWorkspaceSource(
       true,
       { beforeRun: assertCurrent },
       (git) =>
-        git.require(owner.worktree.path, ["merge-base", source.commit, source.review.commit], {
+        git.require(owner.worktree.path, ["merge-base", "HEAD", source.review.commit], {
           beforeRun: assertCurrent,
         }),
     );
@@ -668,6 +569,7 @@ export async function integrateManagedWorkspaceSource(
   });
   if (params.source?.reviewOnly) {
     // Keep the old binding retryable until its new comparison is installed.
+    await params.source.verify();
     await params.source.accept();
   }
   return { ...result, review };

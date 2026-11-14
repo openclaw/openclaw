@@ -21,7 +21,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
-import { IDLE_GC_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -157,6 +157,28 @@ const expectCleanupState = (state: ReturnType<typeof policy.readOwnerState>) =>
   policy.withOwnerCleanup(cleanupRecord, async () => expectState(state));
 const emitRemoval = (sessionKey: string) =>
   sessionChanges.emit({ sessionKey, scope: "session-entry", facts: { kind: "removed" } });
+
+it("skips owner reads when the census has no live session owners", async () => {
+  const listPlacements = vi.fn(emptyPlacementService.listAsync);
+  mocks.placementService.mockReturnValue({ ...emptyPlacementService, listAsync: listPlacements });
+  for (const records of [
+    [],
+    [
+      { ...cleanupRecord, removedAt: 2 },
+      { ...cleanupRecord, ownerKind: "manual" as const },
+    ],
+  ]) {
+    const census = await policy.prepareOwners(records);
+    expect(census.readOwnerState?.("session", key)).toBe("active");
+    expect(census.readOwnerState?.("manual", key)).toBe("other");
+  }
+  expect(readOwners).not.toHaveBeenCalled();
+  expect(listPlacements).not.toHaveBeenCalled();
+
+  const populated = await policy.prepareOwners([cleanupRecord]);
+  expect(populated.readOwnerState?.("session", key)).toBe("retired");
+  expect(listPlacements).toHaveBeenCalledOnce();
+});
 
 it("uses the worker for cleanup facts and invalidates them after an in-process write", async () => {
   const stateDir = tempDirs.make("worktree-owner-worker-");

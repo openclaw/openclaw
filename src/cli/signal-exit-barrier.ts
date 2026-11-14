@@ -34,16 +34,33 @@ const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
 );
 const activeGates = resolveGlobalSet<{
   finished: Promise<void>;
-  interrupt?: (signal?: CliExitSignal) => void;
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void;
 }>(Symbol.for("openclaw.signalExitGates"), "close-and-restart");
 const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
   "close-and-restart",
 );
+const signalObservers = resolveGlobalSet<unknown>(
+  Symbol.for("openclaw.signalExitObservers"),
+  "close-and-restart",
+);
+
+/** SIGINT/SIGTERM listeners added by `start` only redraw; the CLI owner keeps the exit. */
+export function startSignalObserver(start: () => void): () => void {
+  const before = new Set([...process.listeners("SIGINT"), ...process.listeners("SIGTERM")]);
+  start();
+  const added = [...process.listeners("SIGINT"), ...process.listeners("SIGTERM")].filter(
+    (listener) => !before.has(listener),
+  );
+  for (const listener of added) {
+    signalObservers.add(listener);
+  }
+  return () => added.forEach((listener) => signalObservers.delete(listener));
+}
 
 export function registerSignalExitGate(
   finished: Promise<void>,
-  interrupt?: (signal?: CliExitSignal) => void,
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void,
 ): () => void {
   const gate = { finished, interrupt };
   activeGates.add(gate);
@@ -78,7 +95,7 @@ export function exitAfterSignalExitBarriers(code: number | string, reason?: stri
     pendingProcessExit = Promise.resolve(code);
     return;
   }
-  pendingProcessExit = waitForSignalExitBarriers()
+  pendingProcessExit = waitForSignalExitBarriers(undefined, reason)
     .then(() => code)
     // The output stream may itself be broken; cleanup owners report their own failures.
     .catch(() => (code === 0 || code === "0" ? 1 : code))
@@ -95,8 +112,9 @@ export function exitAfterSignalExitBarriers(code: number | string, reason?: stri
     });
 }
 
-export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
-  pendingSignalExitDrain ??= drainSignalExitBarriers(signal).finally(() => {
+export function waitForSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
+  // The first drain owns cancellation's cause; a later signal can still own the exit code.
+  pendingSignalExitDrain ??= drainSignalExitBarriers(signal, reason).finally(() => {
     pendingSignalExitDrain = undefined;
   });
   if (signal && !cliSignalExit) {
@@ -111,10 +129,10 @@ export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void>
   return pendingSignalExitDrain;
 }
 
-async function drainSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
+async function drainSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
   const gates = [...activeGates];
   for (const gate of gates) {
-    gate.interrupt?.(signal);
+    gate.interrupt?.(signal, reason);
   }
   const gateResults = await Promise.allSettled(gates.map((gate) => gate.finished));
   const barrierResults = await Promise.allSettled(
@@ -141,7 +159,9 @@ function handleCliSignal(signal: CliExitSignal): void {
   }
   if (
     !cliDoctorSignalOwner &&
-    process.listeners(signal).some((existing) => existing !== cliSignalListeners[signal])
+    process
+      .listeners(signal)
+      .some((existing) => existing !== cliSignalListeners[signal] && !signalObservers.has(existing))
   ) {
     // Run first and relinquish the fallback synchronously: signal-exit observers
     // must see their original listener count, and custom owners retain their drain.
@@ -149,6 +169,9 @@ function handleCliSignal(signal: CliExitSignal): void {
     return;
   }
   process.stderr.write(`Command interrupted by ${signal}. Waiting for cleanup before exiting.\n`);
+  if (cliDoctorSignalOwner) {
+    process.exitCode = cliSignalExitCodes[signal];
+  }
   cliSignalExit = waitForSignalExitBarriers(signal)
     .catch(() => {
       process.stderr.write(
@@ -172,7 +195,7 @@ const cliSignalListeners = {
 const onCliSigpipe = () => {};
 const onCliOutputError = (error: NodeJS.ErrnoException) => {
   if (error.code === "EPIPE" && cliSignalOwners > 0) {
-    exitAfterSignalExitBarriers(141);
+    exitAfterSignalExitBarriers(141, "output pipe closed (EPIPE)");
   }
 };
 

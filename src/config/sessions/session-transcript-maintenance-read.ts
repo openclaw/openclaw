@@ -1,10 +1,21 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  CODE_MODE_STORE_CUSTOM_TYPE,
+  collectCodeModeStoreWrites,
+} from "../../agents/code-mode-session-store-replay.js";
+import {
+  jsonExtractText,
+  jsonLastStringValue,
+  jsonPathValue,
+  jsonType,
+} from "../../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionEntryIdentity } from "./session-accessor.sqlite-entry-read.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -20,6 +31,7 @@ import type {
   SessionTranscriptMaintenanceRead,
   SessionTranscriptMaintenanceFacts,
 } from "./session-transcript-hydration.types.js";
+import { selectTranscriptMaintenanceSuffix } from "./session-transcript-maintenance-suffix.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   readTranscriptReportEvent,
@@ -32,22 +44,72 @@ export function readSessionTranscriptMaintenance(
   target: SessionTranscriptRuntimeTarget,
   request: SessionTranscriptMaintenanceRead,
 ): SessionTranscriptMaintenanceFacts {
-  if (request.operation === "custom-branch") {
+  if (request.operation === "custom-branch" || request.operation === "code-mode-store") {
     return readWithCanonicalSessionAdmission(database, () =>
       runSqliteReadSnapshotSync(database.db, () => {
         const fence = resolveSqliteSessionTranscriptReadFence({ database, ...target });
         assertSessionTranscriptHot(database.db, target.sessionId);
-        const navigation = readTranscriptReportNavigation(
-          database,
-          target.sessionId,
-          fence?.beforeRawSeq,
-        );
+        const version = readTranscriptContextVersionInTransaction(database, target.sessionId);
+        if (request.operation === "code-mode-store" && fence && version.rawSeq !== null) {
+          version.rawSeq = Math.min(version.rawSeq, fence.beforeRawSeq - 1);
+        }
+        const customType =
+          request.operation === "code-mode-store"
+            ? CODE_MODE_STORE_CUSTOM_TYPE
+            : request.customType;
+        const checkpoint = request.operation === "code-mode-store" ? request.checkpoint : undefined;
+        let events: Iterable<Record<string, unknown>> | undefined;
+        if (
+          checkpoint &&
+          checkpoint.generation === version.generation &&
+          checkpoint.rawSeq <= (version.rawSeq ?? -1)
+        ) {
+          const rows = iterateSqliteQuerySync(
+            database.db,
+            getSessionKysely(database.db)
+              .selectFrom("transcript_events")
+              .select(transcriptEventJsonSql(database.db).as("event_json"))
+              .where("session_id", "=", target.sessionId)
+              .where("seq", ">", checkpoint.rawSeq)
+              .where("seq", "<=", version.rawSeq!)
+              .orderBy("seq", "asc")
+              .limit(257),
+          );
+          events = selectTranscriptMaintenanceSuffix(
+            (function* () {
+              for (const row of rows) {
+                yield {
+                  event: JSON.parse(row.event_json) as unknown,
+                  bytes: row.event_json.length * 2,
+                };
+              }
+            })(),
+            checkpoint,
+            request.leafEntryId,
+            customType,
+          );
+        }
+        const incremental = events !== undefined;
+        if (!events) {
+          const navigation = readTranscriptReportNavigation(
+            database,
+            target.sessionId,
+            fence?.beforeRawSeq,
+          );
+          events = navigation.readCustomBranch(request.leafEntryId, customType, (seq) =>
+            readTranscriptReportEvent(database, target.sessionId, seq),
+          );
+        }
         return {
           kind: "transcript-maintenance" as const,
-          version: readTranscriptContextVersionInTransaction(database, target.sessionId),
-          events: navigation.readCustomBranch(request.leafEntryId, request.customType, (seq) =>
-            readTranscriptReportEvent(database, target.sessionId, seq),
-          ),
+          version,
+          ...(request.operation === "code-mode-store"
+            ? {
+                store: events
+                  ? { writes: collectCodeModeStoreWrites(events, incremental), incremental }
+                  : undefined,
+              }
+            : { events: events && [...events] }),
         };
       }),
     );
@@ -97,6 +159,45 @@ export function readSessionTranscriptMaintenance(
             .where("session_id", "=", target.sessionId)
             .where("seq", ">=", first.seq)
             .where("seq", "<=", last.seq)
+            .$if(!isPostgresSqlConnection(database.db), (query) =>
+              query.where((eb) => {
+                const metadata = eb.ref("navigation_json");
+                const navigation = jsonExtractText(database.db, metadata, "navigation");
+                const model = jsonExtractText(database.db, metadata, "model");
+                const members = getSessionKysely(database.db)
+                  .fn<{ key: string }>("json_each", [navigation])
+                  .as("member");
+                const envelopeMembers = getSessionKysely(database.db)
+                  .selectFrom(members)
+                  .select((member) => member.fn.countAll<number>().as("count"))
+                  .where("member.key", "in", ["type", "message"]);
+                // Stored model facts are safe only for an unambiguous message envelope.
+                // Retain legacy/exceptional bodies and malformed activity for caller validation.
+                return eb
+                  .case()
+                  .when(
+                    eb.and([
+                      eb("event_json", "is", null),
+                      eb("navigation_json", "is not", null),
+                      eb(envelopeMembers, "=", 2),
+                      eb(jsonPathValue(database.db, navigation, eb.val("$.type")), "=", "message"),
+                      eb(jsonType(database.db, navigation, eb.val("$.message")), "=", "object"),
+                    ]),
+                  )
+                  .then(
+                    eb(
+                      jsonLastStringValue(database.db, eb.fn.coalesce(model, eb.val("{}")), [
+                        "message",
+                        "customType",
+                      ]),
+                      "=",
+                      NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,
+                    ),
+                  )
+                  .else(true)
+                  .end();
+              }),
+            )
             .orderBy("seq", "asc"),
         );
         const events: TranscriptEvent[] = [];
@@ -127,8 +228,8 @@ export function readSessionTranscriptMaintenance(
           : {
               kind: "transcript-maintenance",
               version: readTranscriptContextVersionInTransaction(database, target.sessionId),
-              lifecycleRevision: readSessionEntryRow(database, target.sessionKey)?.entry
-                .lifecycleRevision,
+              lifecycleRevision: readSessionEntryIdentity(database, target.sessionKey)
+                ?.lifecycleRevision,
               appendParentId: resolveTranscriptMessageAppendParent(database, target.sessionId, {}),
             },
       { databaseLabel: database.path, operationLabel: "session transcript maintenance read" },

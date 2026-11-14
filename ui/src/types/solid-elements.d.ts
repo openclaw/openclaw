@@ -94,12 +94,12 @@ declare module "@solidjs/web" {
       "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
       "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
       "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
-      "openclaw-claws-explore": HTMLAttributes<HTMLElement> & {
+      "openclaw-templates-explore": HTMLAttributes<HTMLElement> & {
         "prop:onSelect"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+          entry: import("../pages/agents-home/templates-catalog-client.ts").TemplateCatalogEntry,
         ) => void;
       };
-      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement>;
+      "openclaw-templates-catalog-dialog": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;
@@ -121,9 +121,7 @@ declare module "@solidjs/web" {
           "prop:replacementCompanion"?: unknown;
           "prop:presented": boolean;
         };
-      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
-        compact?: boolean;
-      };
+      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement>;
       "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
         "prop:recommendation"?: ClawHubRecommendation;
         "prop:agentId"?: string;
@@ -173,6 +171,7 @@ declare module "@solidjs/web" {
             | "excludeIdentities"
             | "totalCount"
             | "maxVisible"
+            | "overflowInSlots"
             | "personActivity"
           >
         > & { variant?: "session" };
@@ -199,7 +198,6 @@ declare module "@solidjs/web" {
           >
         >;
       "openclaw-chat-pdf-preview": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-pane-versions-menu": HTMLAttributes<HTMLElement>;
       "openclaw-chat-skill-learned-notice": HTMLAttributes<HTMLElement>;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;

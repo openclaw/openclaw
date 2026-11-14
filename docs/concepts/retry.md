@@ -41,7 +41,7 @@ On HTTP 429 responses without an explicit retry time, an exhausted bucket's rese
 
 The same provider timing is the only source of cross-turn auth-profile rate-limit cooldowns. Separately, the shared TPM admission gate remembers saturation per endpoint, account, and model until one minute after its latest retry floor. New fallback chains route around saturated models when another eligible candidate is available; when all are saturated, the candidate with the earliest retry time waits in its shared gate. See [Model failover](/concepts/model-failover).
 
-Recovery continues the existing transcript with an instruction to preserve completed work and inspect interrupted actions before deciding whether to repeat them. It can recover a throttle after tool activity or partial output without resubmitting the original user request. The run shows one transient retry indicator while waiting and remains cancellable. Recovered attempts do not leave persisted assistant errors; only terminal failure retains one error. Billing failures, authentication errors, and provider refusals do not use this transient retry budget.
+Recovery continues the existing transcript with an instruction to preserve completed work and the original request's constraints. Recorded tool results determine what completed; only actions with unknown outcomes need inspection before retrying. If the recorded results satisfy the remaining request, the agent reports them without more tool calls. Recovery does not override an instruction to stop or not retry. It can recover a throttle after tool activity or partial output without resubmitting the original user request. The run shows one transient retry indicator while waiting and remains cancellable. Recovered attempts do not leave persisted assistant errors; only terminal failure retains one error. Billing failures, authentication errors, and provider refusals do not use this transient retry budget.
 
 An empty error body does not make a permanent HTTP client error retryable. Bodyless `400` and `422` responses surface without silent-error resubmission; client errors with recognized transient retry evidence still follow the existing recovery policy. Empty successful responses retain their separate response-repair retries.
 
@@ -57,7 +57,7 @@ Completed Responses replies are delivered immediately, even if the provider has 
 
 If a Responses request reaches its output-token limit while generating a tool call, the embedded runner also continues automatically from recorded results after admitted tools settle. It keeps the same model and account, preserves completed actions, and never executes partial arguments. This continuation shares the retry-count budget and existing timeout controls, but not the 90-second outage window: generating a full response can take longer than that. Its separate one-continuation limit applies to the whole run and is not reset by successful model responses. Cancellation, pending approval, active asynchronous work, and intentional tool termination still stop continuation. Provider refusals and unknown incomplete-response reasons do not qualify.
 
-Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait up to the saved `retry.provider.maxRetryDelayMs` (default 60 seconds). For replay-safe attempts, a rate-limit floor longer than that cap stops same-profile retries and follows the existing auth-profile rotation and model-fallback policy, even when no model fallback is configured. If no eligible profile or model remains, OpenClaw surfaces the rate-limit error instead of waiting out the floor. Profile pins still restrict credential selection. Replay-unsafe attempts continue to honor the floor; `maxRetryDelayMs: 0` disables the cap.
+Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait up to the saved `retry.provider.maxRetryDelayMs` (default 60 seconds). For replay-safe attempts, a rate-limit floor longer than that cap stops same-profile retries and follows the existing auth-profile rotation and model-fallback policy, even when no model fallback is configured. If no eligible profile or model remains, OpenClaw surfaces the rate-limit error instead of waiting out the floor. Profile pins still restrict credential selection. Replay-unsafe attempts also stop waiting when the floor exceeds the cap and surface the existing rate-limit error without replaying tool actions or switching accounts or models; `maxRetryDelayMs: 0` disables the cap.
 
 The [model failover controller](/concepts/model-failover#model-fallback) owns this recovery budget. Once it is exhausted, OpenClaw follows eligible auth-profile or model fallback paths, or surfaces the final failure. Terminal rate-limit errors explain how many automatic retries were exhausted without a completed model response rather than showing only the provider's last retry-delay hint. Native harnesses may retry individual requests internally before returning a terminal failure to OpenClaw; those internal retries are separate from OpenClaw's continuation budget.
 
@@ -100,7 +100,9 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 - These text sends could create duplicates, so they retry only when Telegram rejects the request with flood control (429) or the transport proves the request did not start. A reset, timeout, or lost response after sending remains ambiguous and is not replayed.
 - Operations safe to repeat, including preview edits, can retry transient network failures and HTTP 5xx responses without replacing the existing message.
 - Uses `retry_after` when available, otherwise exponential backoff.
+- A reply, delete, or reaction held by flood control has a five-minute retry budget, counted from its first attempt and including time spent queued or waiting on Telegram's response. Once another flood wait would pass that budget, it stops waiting; an attempt already in flight can still finish after the five minutes. A final reply that Telegram refused this way is not dropped: it stays in the delivery queue and is sent again later, up to the queue's retry limit, and no "please ask again" notice is sent for it. A reply split into several messages stops at the refused part.
 - HTML/Markdown parse errors are not retried; they fall back to plain text on the first attempt.
+- When durable final-reply recovery stops after an unconfirmed send or exhausted retries, the Gateway hands the existing uncertainty notice to lifecycle delivery without waiting for another incoming message. The ambiguous answer is not resent. Notice delivery uses the same bounded durable queue and can itself fail if the channel remains unavailable.
 
 ## Configuration
 
@@ -143,6 +145,9 @@ waits until its last lease expires.
 Lease expiry does not erase evidence that a send already started. Those entries
 still require reconciliation before replay, and an unreplaced owner can record a
 late result without authorizing another send.
+The same rule applies when heartbeat renewal fails: new sends stop, but a concrete
+receipt from an already-started send can settle its unchanged claim. A replacement
+claim still rejects the old producer, and a partial batch remains with recovery.
 
 ## Related
 

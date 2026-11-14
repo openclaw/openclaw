@@ -379,6 +379,22 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("User: Actual user text");
   });
 
+  it("keeps current and historical exec completion notices out of memory", async () => {
+    const filePath = writeMessages("exec-notices-session.jsonl", [
+      makeUserMessage("Exec completed (abcd1234, code 0) :: historical output", 1),
+      makeUserMessage("Exec completed (abcd1234, code 0, 4m2s) with no output.", 2),
+      makeUserMessage("Exec failed (abcd1234, signal SIGKILL, 3ms):\nlast line\n\nmore", 3),
+      makeUserMessage(
+        "Exec completed (abcd1234, code 0, 1h2m), last 2000 of 300000 output chars (process log keeps the last 200000; earlier output was discarded):\ntail",
+        4,
+      ),
+      makeUserMessage("Actual user text", 5),
+    ]);
+
+    const entry = await buildEntry(filePath);
+    expect(entry.content).toBe("User: Actual user text");
+  });
+
   it("drops Date-invalid numeric message timestamps", async () => {
     const filePath = writeMessages("invalid-timestamp-session.jsonl", [
       makeUserMessage("Hello", 8_640_000_000_000_001),

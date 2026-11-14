@@ -49,6 +49,7 @@ async function mountContext(request: GatewayRequestHandler = vi.fn(async () => (
   );
   flush();
   await waitForSolid(() => expect(strip.textContent).toContain("Hex bolt"));
+  expect(strip.textContent).not.toContain("App context");
   return {
     client,
     strip,

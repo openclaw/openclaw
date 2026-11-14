@@ -269,13 +269,32 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
-At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+Slow chat startup diagnostics break `detail.attempt.system-prompt`
 into sandbox policy,
 tool catalog text, session entry, runtime facts, reference paths, provider
 contributions, memory and watched-session context, project memory, TTS preferences,
 rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
 elapsed preparation time, including awaited work, without recording prompt content.
 The parent and nested phase totals overlap; do not add them together as CPU time.
+
+`detail.attempt.bundle-tools.*` separates core normalization, MCP configuration,
+runtime acquisition and materialization, LSP startup, policy filtering, bundled
+normalization, final projection, and cleanup after failure. These fixed phases
+appear in the existing `slow chat send` record without trace logging or timeline
+configuration. Workspace bootstrap reads and skill preparation belong to the
+separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
+run in `attempt.tool-base`.
+
+Dependency builder retirement appears under
+`detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire`.
+Its fixed sub-stages separate registry lookup, builder processing, lock acquisition,
+retirement claim, engine target validation, identity inspection, `kill`, `wait`,
+and terminal-state `verify`. Physical `remove` belongs to housekeeping.
+`verify.attempts` counts verification calls in that report window; it is a count,
+not milliseconds. Each call performs one inspect, with no OpenClaw polling or
+backoff. Engine-internal polling and cleanup waits remain inside their command's
+elapsed time. These fields use the existing slow-send line without enabling
+timeline logging; parent and child durations overlap.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
@@ -426,36 +445,67 @@ starts, so do not add them to the AOT launch configuration.
 
 ## CPU profile
 
-An operator with `operator.admin` can request one in-memory profile of the Gateway's
+An operator with `operator.admin` can request a CPU profile of the Gateway's
 main JavaScript isolate:
 
 ```bash
 openclaw gateway call diagnostics.cpuProfile --params '{}' --timeout 30000 --json
 ```
 
-The RPC supports Node and OpenClaw's Bun runtime. It requests five seconds of sampling at a 10 ms interval and opens
-no debugger port and sends no process signal. A disconnected caller or Gateway
-shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
-instead of queuing. No profile is written to disk or included in diagnostics exports.
+To collect consecutive windows with one profiler start and stop, request a batch:
 
-The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
+```bash
+openclaw gateway call diagnostics.cpuProfile --params '{"windows":12,"windowMs":5000}' --timeout 90000 --json
+```
+
+The optional integer `windows` is 1–30 (default 1); `windowMs` is 100–5000
+(default 5000), so the maximum requested duration is 150 seconds. Empty params
+keep the existing five-second capture and inline response for small profiles. A batch returns only after
+all windows finish; set the RPC timeout above the total duration plus startup and
+cleanup overhead. The same busy refusal, disconnect cancellation, and shutdown
+cleanup apply to the whole batch. No profiler stays warm between requests.
+
+A batch writes the full, redacted V8 profile to
+`<state>/diagnostics/cpu-<timestamp>.cpuprofile` and returns `path`, `sizeBytes`,
+`summary` (`nodeCount` and `sampleCount`), and `windowBoundariesMicros`, an array of
+`windows + 1` timestamps in the profile's monotonic microsecond clock. The first
+boundary is `profile.startTime`; interior boundaries are spaced by `windowMs`;
+the final boundary is `profile.endTime`, including any startup, stop, or timer
+overrun. Windows are start-inclusive/end-exclusive, except the last includes its
+end. Reconstruct each sample timestamp by accumulating `timeDeltas` from
+`profile.startTime`, then assign it to its window. Preserve signed deltas:
+timestamps can move backward across a boundary. The node graph and its hit
+counts describe the entire capture; count selected samples for per-window work.
+The file preserves the timeline intact, without duplicated graphs or rebased samples.
+
+Artifacts are limited to 64 MiB; the RPC response remains within 1 MiB. Batch
+admission checks the requested duration, writable destination, and 64 MiB of
+available disk space before starting the profiler. Invalid duration or a failed
+file preflight therefore costs no profiler-start pause. Disk space can change
+during capture, and the future call graph cannot be sized before sampling:
+an artifact exceeding 64 MiB still returns `profile-too-large` after capture.
+Encoding and writes yield in chunks instead of serializing the whole file at once.
+Node 24 batches use the inspector's 10 ms
+interval because its native profiling API ignores interval options. This
+amortizes the initial heap scan over the batch; it does not remove that first
+main-thread pause. Node 26 retains its shared native profiler.
+
+The RPC supports Node and OpenClaw's Bun runtime. With empty params it requests
+five seconds of sampling at a 10 ms interval. It opens no debugger port and sends
+no process signal. A disconnected caller or Gateway
+shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
+instead of queuing. Profiles are not included in diagnostics exports.
+
+Small inline results contain `profile` in V8 CPU-profile format, `requestedDurationMs`,
 `actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
 `sampleLossCount: null` because the native profilers do not expose an explicit lost-sample count.
 Node samples V8; Bun samples JavaScriptCore and returns the same profile format.
-The complete result is limited to 1 MiB. When the full graph exceeds that limit,
-the result contains `summary` instead of `profile`, with `truncated: true`,
-`originalNodeCount`, `sampleCount`, and `omittedSampleCount`. Each summary row
-contains a leaf-first `stack` of up to eight frames and its recorded `sampleCount`.
-If those frames contain no OpenClaw code, the nearest `openclaw:` caller toward
-the root is appended when available, for at most nine frames. `elidedFrameCount`
-counts frames skipped between the first eight frames and that appended caller;
-it is zero when there is no gap. Stacks with identical frames and elision counts
-are combined; the most sampled stacks come first, with at most
-128 rows within the same byte limit. These counts are samples, not exact CPU time.
-This preserves useful attribution during busy startup windows, when deep stacks
-and V8 deoptimization samples can enlarge the graph despite the sampling interval.
-The input limits of 16,384 nodes and 65,536 samples still apply; captures exceeding
-either limit remain unavailable to bound processing work.
+Single profiles exceeding 1 MiB, 16,384 nodes, or 65,536 samples use the same file
+response as batches, including two window boundaries, instead of losing the full
+timeline to a summary or refusal. File responses retain the capture measurements
+listed above. Files have owner-only permissions and share heap snapshots' manual
+retention: successful files remain until deleted after analysis. Failed captures
+remove partial files when possible; `cleanupFailed` reports cleanup failures.
 Code locations inside the OpenClaw package use `openclaw:` paths;
 Node builtin locations use `node:` paths. External paths, eval labels, and other
 unrecognized names are redacted. Bounded code-symbol names at recognized locations
@@ -463,6 +513,11 @@ are retained; their syntax does not prove that a computed name is public. Review
 the profile before sharing it. Full profiles retain graph edges, native signed script IDs, and sample order. V8 can
 emit samples out of timestamp order, so signed time deltas are preserved for profile
 viewers to reconstruct timestamps and order samples.
+
+`actualDurationMs` uses a monotonic clock from requesting profiler startup until
+profiler stop completes. It includes `startBlockedMs` and asynchronous startup and
+stop overhead. Native `profile.startTime` and `profile.endTime` remain unchanged
+and can describe a shorter sampling interval.
 
 Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound the runtime's internal allocation during that delay. Profile
@@ -700,8 +755,10 @@ installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, an
 `openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
 workspace packages. Paths outside the installation root are not OpenClaw code.
 Profiles label dependency frames as `[dep:<pkg>]` with URL
-`node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
-versions, filenames, and absolute paths stay hidden. URLs with query or fragment
+`node_modules/<pkg>`, including scoped packages and pnpm layouts. First-party
+`@openclaw/*` packages retain safe function symbols, including private method
+names such as `#prepare`; third-party symbols stay hidden. Versions, filenames,
+and absolute paths stay hidden for all dependencies. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
 an empty URL, and a negative line number use `[native]`, except for known V8
 engine labels such as `(root)`, `(V8 API)`, `(GC)`, and `(PARSER)`. Preserving those
@@ -719,8 +776,11 @@ when such references are omitted or a size-capped summary replaces the tree.
 
 The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
 `truncated` is true and `summary` replaces `profile`. Summary entries combine
-identical call stacks, retain up to eight frames in leaf-first order, and contain
-`selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
+identical call stacks and retain up to 32 frames in leaf-first order. Repeated
+recursive runs that fit those slots are collapsed, with `×N` on the last frame of
+the repeated run. Longer stacks retain the allocating leaf, the nearest omitted
+OpenClaw caller, and its outermost OpenClaw owner; `[...]` marks skipped frames.
+Entries contain `selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
 at those sites, not an exact object count). Entries are ordered by `totalBytes`,
 then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive totals
 overlap across callers, so do not add them together. Start with large `selfBytes`
@@ -782,8 +842,13 @@ at 90%. The main thread's V8 `heap_size_limit` is the primary signal
 limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
 includes every worker and native allocation, so `rss_threshold` uses the smaller of
 physical RAM and the process/cgroup memory constraint, independently of V8 heap
-limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
-as a V8 limit. RSS growth alone does not indicate pressure.
+limits. On Node/Linux with a positive process constraint below physical RAM,
+`process_memory_threshold` also checks the remaining constrained allowance using
+`process.availableMemory()`. Its `usedBytes` is the constraint minus that remaining
+allowance, not process RSS: cgroup charges can exhaust headroom before RSS reaches
+the same 80%/90% thresholds. This signal follows heap and RSS priority within each
+severity. Unknown limits are omitted; Bun's compatibility heap metadata is not
+treated as a V8 limit. RSS growth alone does not indicate pressure.
 
 Warning and critical journal lines and diagnostic events retain the measured
 `usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
@@ -858,8 +923,10 @@ include that delay; coverage and heap counters describe acquisition. These field
 are not an atomic process snapshot.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Warnings do not retire
-workers. Retirement requests are asynchronous, skip active work, and keep native
+including when diagnostic event collection is disabled. On constrained Node/Linux
+hosts, process memory usage at 80% of the limit also triggers retirement without
+changing diagnostic severity. Other warnings do not retire workers.
+Retirement requests are asynchronous, skip active work, and keep native
 close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
@@ -1042,7 +1109,10 @@ reads do not count; an empty conditional row list is still a baseline. Its bound
 causes are `projection-revision`, `config`, `identity`, `selection-reset`,
 `view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
 order at 512 cache slots or 32 MiB estimated retention per projection; each view
-retains at most 32 prior row generations.
+retains at most 32 prior row generations. Under byte pressure, older generations
+are retired before whole views, preserving each view's newest comparison baseline
+where the budget permits. Retention gauges report the coalesced state after these
+retirements, so samples can remain below the cap while evictions occur.
 For invalidations observed together on a read, config wins over identity, then
 projection revision; selection resets count where they clear the cache.
 
@@ -1056,6 +1126,31 @@ shared responses, without adding wire fields or inspecting rows again. Both
 counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
 names are `openclaw.sessions.list.baseline_retirements` and
 `openclaw.sessions.list.base_misses`, with the same labels.
+
+`openclaw_session_projection_rows_retained_entries` counts the actual resident
+entries in the Gateway's session-row projection maps. This inventory supports
+session selection, sharing, and display; it is separate from connection event
+baselines and diagnostic session activity states. `openclaw_session_projection_owners`
+counts live projection owners. Both gauges have no labels or session identities.
+
+`openclaw_session_projection_rows_retained_bytes` estimates plain data reachable
+from those rows, deduplicating shared objects within each projection. Entry counts
+follow existing memory samples (normally every 30 seconds during diagnostic
+activity). Byte and truncation estimates refresh on the first sample and at most
+once every five minutes afterward, with a fixed 100,000-visit and 64-depth budget
+per projection; between refreshes they retain the last estimate. The estimator
+never serializes contents, invokes getters, reads SQLite, or walks data on writes
+or Prometheus scrapes. `openclaw_session_projection_rows_estimate_truncated`
+counts owners whose estimate hit that budget or unsupported data; a nonzero value
+means the byte estimate covers only part of the graph. Even an untruncated estimate
+excludes closure captures and native storage and is not V8 retained-size attribution.
+Use exact entry counts to distinguish inventory growth from increasing bytes per
+row; use heap snapshots to attribute references hidden inside closures.
+
+Owners unregister on disposal and subtract their last sample, returning these
+gauges to zero when the last projection closes. OpenTelemetry uses the same names
+with the `openclaw.` prefix in place of `openclaw_`. The diagnostic event is
+`sessions.projection.retention`, carrying only aggregate numeric fields.
 
 `openclaw_session_event_rows_retained_entries` and
 `openclaw_session_event_rows_retained_bytes` report aggregate count and estimated

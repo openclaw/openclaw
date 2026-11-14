@@ -66,7 +66,7 @@ import { withRequiredSessionPlacement } from "../session-placement-admission.js"
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import { captureSessionSuspension, type SessionSuspensionParams } from "../session-suspension.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { redactRunIdentifier } from "../workspace-run.js";
+import { redactRunIdentifier, resolveRunBootstrapWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { resolveGlobalLane } from "./lanes.js";
@@ -74,6 +74,7 @@ import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
+import { publishClaimedSessionWriter } from "./run/compaction-accounting-bridge.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -192,6 +193,7 @@ async function runEmbeddedAgentForSession(
         // Native preparation must consume the claim's postimage, not the pre-queue row.
         sessionAdmission = { ...sessionAdmission, entry };
       }
+      publishClaimedSessionWriter(params.onCompactionAccounting, runSessionTarget, entry);
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
@@ -555,7 +557,7 @@ async function runEmbeddedAgentForSession(
                 agentDir,
                 workspaceResolution,
                 workspaceDir: resolvedWorkspace,
-                bootstrapWorkspaceDir: canonicalWorkspace,
+                bootstrapWorkspaceDir: resolveRunBootstrapWorkspaceDir(params, canonicalWorkspace),
                 isCanonicalWorkspace,
                 globalLane,
                 hookRunner,
@@ -575,10 +577,12 @@ async function runEmbeddedAgentForSession(
               });
             };
             const runWithPreparedRuntime = () =>
-              withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-                context = AsyncLocalStorage.snapshot();
-                return runPrepared();
-              });
+              preparedModelRuntimeLease.run(() =>
+                withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+                  context = AsyncLocalStorage.snapshot();
+                  return runPrepared();
+                }),
+              );
             return params.pluginGeneration
               ? await withPreparedModelRuntimePluginGenerationScope(
                   preparedModelRuntimeLease.pluginGeneration,
@@ -647,10 +651,10 @@ async function runEmbeddedAgentForSession(
               : run());
             const continuation = refresh.takeContinuation();
             if (refreshed || continuation) {
-              mergeCompletedAgentUsage({
+              await mergeCompletedAgentUsage({
                 usage,
                 diagnosticUsage,
-                agentMeta: result.meta.agentMeta,
+                agentMetas: [result.meta.agentMeta],
                 config: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                 agentDir: params.agentDir,
               });

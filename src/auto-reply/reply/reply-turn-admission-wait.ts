@@ -1,4 +1,5 @@
 import { racePromiseWithAbortSignal, raceWithTimeout } from "../../../packages/retry/src/index.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type {
   SessionControllerEntry,
   SessionControllerInput,
@@ -23,6 +24,11 @@ export function createReplyTurnAdmissionWaiter(
         | { phase: "successor-barrier"; timeoutMs: number | null | undefined }
       ),
     ) {
+      using _ = observeDiagnosticsTimelinePhases(
+        wait.phase === "followup-barrier"
+          ? "reply.admission.followup_barrier_wait"
+          : "reply.admission.successor_barrier_wait",
+      );
       const logBarrier = createSessionControllerPhaseLogger(wait.phase, {
         sessionKey: params.sessionKey,
         sessionId: wait.sessionId,
@@ -44,6 +50,7 @@ export function createReplyTurnAdmissionWaiter(
       deadline: number | undefined,
       observedInputs?: readonly SessionControllerInput[],
     ): Promise<boolean> {
+      using _ = observeDiagnosticsTimelinePhases("reply.admission.inputs_wait");
       // Raw preparation can own the mailbox before an active operation exists.
       // Fencing may admit a successor while the old producer retains cleanup custody.
       const changed = lifecycle(controller).changed.promise;

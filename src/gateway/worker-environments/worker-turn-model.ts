@@ -1,15 +1,32 @@
 import type { WorkerInferenceModelRef } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import {
   loadManifestModelCatalog,
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
+import type { PreparedModelRuntimeLeaseOptions } from "../../agents/prepared-model-runtime.types.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveProviderThinkingLevel } from "../../auto-reply/thinking.js";
 import { resolveApprovedWorkerLocalModel, resolveApprovedWorkerModel } from "./inference-model.js";
 import { executePreparedWorkerInference } from "./inference-runtime.js";
 import { boundedWorkerError } from "./worker-error.js";
+import { assertSupportedTurn } from "./worker-turn-payload.js";
+
+/** Reacquires the admitted runtime, which may be a generation derived for this turn's model. */
+export function workerTurnRuntimeLeaseOptions(
+  turn: SessionPlacementTurnParams,
+): PreparedModelRuntimeLeaseOptions {
+  return {
+    pluginGeneration: turn.pluginGeneration,
+    abortSignal: turn.abortSignal,
+    deriveRuntimePluginSelections: ({ config }) => {
+      const { provider, model } = assertSupportedTurn({ ...turn, config });
+      return [{ provider, modelId: model, runtime: OPENCLAW_AGENT_RUNTIME_ID }];
+    },
+  };
+}
 
 export async function prepareWorkerTurnModel(params: {
   target: BoundAgentRunSessionTarget;

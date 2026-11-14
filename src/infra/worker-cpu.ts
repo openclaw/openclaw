@@ -12,6 +12,7 @@ import type {
 } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
+import * as sqliteReaderMetrics from "./sqlite-reader-metrics.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
   canObserveWorkerMessages,
@@ -22,8 +23,7 @@ import {
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import {
   collectPostgresBridgeCounters,
-  countPostgresBridges,
-  countPostgresPoolSelfRoots,
+  summarizePostgresBridgeCounters,
   readPostgresBridgeCounters,
   type PostgresBridgeCounter,
 } from "./worker-postgres-bridge-census.js";
@@ -125,6 +125,10 @@ export function trackNativeWorkerForCpu(
     }
     source.script = script;
   }
+  if (source.script === "sqlite-store.worker.js") {
+    // Broker workers share GC totals without claiming the pool's task-reply protocol.
+    attributeWorkerMetrics(source, "writer");
+  }
   if (source.script === "code-mode-node.worker.js" && source.workerSlot === undefined) {
     // Reuse slots only after native exit; overflow keeps the script-level attribution.
     const occupied = new Set([...trackedWorkers.workers.values()].map((entry) => entry.workerSlot));
@@ -179,14 +183,6 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   publishPostgresBridgeCounters();
 }
 
-function getTrackedPostgresPoolCounts() {
-  const counters = getTrackedPostgresBridgeCounters();
-  return {
-    postgresBridgeCount: countPostgresBridges(counters),
-    postgresPoolSelfRootCount: countPostgresPoolSelfRoots(counters),
-  };
-}
-
 /** Pool identity follows its live Workers without retaining the pool itself. */
 export function attributeWorkerToPool(
   worker: WorkerCpuHandle,
@@ -203,6 +199,14 @@ export function attributeWorkerToPool(
     trackedWorkers.poolIds.set(pool, poolId);
   }
   source.poolId = poolId;
+  attributeWorkerMetrics(source, workerClass, 0);
+}
+
+function attributeWorkerMetrics(
+  source: WorkerSource,
+  workerClass: WorkerPoolClass | undefined,
+  tasksCompleted?: number,
+): void {
   // SDK callers can provide arbitrary runtime strings despite the typed class contract.
   const boundedClass =
     workerClass === "reader" ||
@@ -218,7 +222,7 @@ export function attributeWorkerToPool(
     metrics = {
       workerClass: boundedClass,
       script: source.script,
-      tasksCompleted: 0,
+      tasksCompleted,
       heapUsedHighWaterBytes: 0,
       gc: [],
     };
@@ -244,7 +248,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
-    ...getTrackedPostgresPoolCounts(),
+    ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -264,6 +268,7 @@ function forgetWorker(worker: WorkerCpuHandle): void {
     Atomics.sub(trackedWorkers.postgresBridgeCount, 0, 1);
   }
   source.memoryFlush?.resolve();
+  sqliteReaderMetrics.retire(source);
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
   trackedWorkers.revision++;
@@ -447,6 +452,12 @@ function getTrackedWorkerCpuRevision(): number {
   return trackedWorkers.revision;
 }
 
+function recordWorkerHeap({ taskMetrics }: WorkerSource, heapUsed: number): void {
+  if (taskMetrics) {
+    taskMetrics.heapUsedHighWaterBytes = Math.max(taskMetrics.heapUsedHighWaterBytes, heapUsed);
+  }
+}
+
 async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource): Promise<void> {
   source.heapPending = true;
   const previous = source.heap;
@@ -454,12 +465,7 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
     const heap = await worker.getHeapStatistics();
     // A late native interrupt must not replace a newer, complete port sample.
     if (source.heap === previous) {
-      if (source.taskMetrics) {
-        source.taskMetrics.heapUsedHighWaterBytes = Math.max(
-          source.taskMetrics.heapUsedHighWaterBytes,
-          heap.used_heap_size,
-        );
-      }
+      recordWorkerHeap(source, heap.used_heap_size);
       source.heap = {
         value: {
           heapUsed: heap.used_heap_size,
@@ -541,7 +547,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     message.diagnostics === true
   ) {
     const source = trackedWorkers.workers.get(worker);
-    if (source?.taskMetrics) {
+    if (source?.taskMetrics?.tasksCompleted !== undefined) {
       // Host telemetry is attached by the served worker, never taken from the task result.
       source.taskMetrics.tasksCompleted++;
     }
@@ -575,8 +581,14 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         | { gc: GcSample[] }
         | { gcStorm: WorkerGcStorm }
         | { postgresBridgeCounters: PostgresBridgeCounter[] }
+        | { sqliteReaderCounter: sqliteReaderMetrics.SqliteReaderCounter }
         | { retireWorkerId: string },
     ) => {
+      if ("sqliteReaderCounter" in record) {
+        sqliteReaderMetrics.receive(source, record.sqliteReaderCounter);
+        recordWorkerMessage("memory", "from_worker", 16);
+        return;
+      }
       if ("postgresBridgeCounters" in record) {
         receivePostgresBridgeCounters(source, record.postgresBridgeCounters);
         recordWorkerMessage("memory", "from_worker");
@@ -584,12 +596,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       }
       if ("flushed" in record) {
         recordWorkerMessage("memory", "from_worker", 8);
-        if (source.taskMetrics) {
-          source.taskMetrics.heapUsedHighWaterBytes = Math.max(
-            source.taskMetrics.heapUsedHighWaterBytes,
-            record.heapUsed,
-          );
-        }
+        recordWorkerHeap(source, record.heapUsed);
         source.memoryFlush?.resolve();
         return;
       }
@@ -643,12 +650,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       if (!("heapUsed" in record)) {
         return;
       }
-      if (source.taskMetrics) {
-        source.taskMetrics.heapUsedHighWaterBytes = Math.max(
-          source.taskMetrics.heapUsedHighWaterBytes,
-          record.heapUsed,
-        );
-      }
+      recordWorkerHeap(source, record.heapUsed);
       // The private producer supplies native counters; retain the cloned sample as-is.
       delete record.gc;
       source.heap = {
@@ -674,7 +676,8 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
-    ...getTrackedPostgresPoolCounts(),
+    sqliteReaderMetrics: sqliteReaderMetrics.snapshotSqliteReaderMetrics(),
+    ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,

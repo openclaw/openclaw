@@ -47,7 +47,7 @@ import {
   requireApiKey,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
-import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
+import { createDiscoveredAgentModelNormalizer } from "./model-discovery-normalize.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
@@ -1726,7 +1726,7 @@ describeLive("live models (profile keys)", () => {
             continue;
           }
           candidates.push({
-            model: normalizeDiscoveredAgentModel(model, agentDir, { config: cfg }),
+            model: createDiscoveredAgentModelNormalizer(agentDir, { config: cfg })(model),
             apiKeyInfo,
           });
         } catch (err) {

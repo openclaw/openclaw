@@ -41,6 +41,21 @@ export function registerBackupCommand(program: Command) {
     .option("--json", "Output JSON", false)
     .option("--dry-run", "Print the backup plan without writing the archive", false)
     .option("--verify", "Verify the archive after writing it", false)
+    .option(
+      "--local-companion",
+      "Local restart checkpoint without PostgreSQL rows; not disaster recovery",
+      false,
+    )
+    .option(
+      "--exclude-worktree-templates",
+      "Omit registered regenerable worktree templates, not live checkouts",
+      false,
+    )
+    .option(
+      "--exclude-migration-backups",
+      "Omit Doctor's retained pre-migration database originals",
+      false,
+    )
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
     .addHelpText(
@@ -80,9 +95,18 @@ export function registerBackupCommand(program: Command) {
       .option("--from <location>", "Read a backup key or latest from a storage location")
       .option("--namespace <name>", "Backup namespace (default: sanitized hostname)");
     if (restore) {
+      command.option(
+        "--local-companion",
+        "Require a local-companion checkpoint; never import PostgreSQL rows",
+        false,
+      );
       command.requiredOption(
         "--target <dir>",
         "Fresh target directory; non-empty directories are refused",
+      );
+      command.option(
+        "--postgres-connection-env <name>",
+        "Import PostgreSQL stores through the DSN in this environment variable, not the archived connection",
       );
     }
     command
@@ -96,6 +120,10 @@ export function registerBackupCommand(program: Command) {
                   [
                     "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
                     "Verify, then extract the whole archive into a fresh staging directory.",
+                  ],
+                  [
+                    "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --postgres-connection-env STAGING_PG_DSN",
+                    "Rehearse a restore: import PostgreSQL stores into the server in $STAGING_PG_DSN.",
                   ],
                   [
                     "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",

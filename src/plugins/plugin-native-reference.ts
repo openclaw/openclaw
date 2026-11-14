@@ -25,12 +25,12 @@ export type NativeReferenceProgress = { pluginId: string; completed: number };
 export const nativeReferenceProgress = channel("openclaw.plugin-native-reference");
 let verifiedMembers = 0;
 
-/** A hardlink needs the owner's complete-directory check before the generation is exposed. */
+/** A hardlink or copy needs the owner's complete-directory check before exposing the generation. */
 export function linkPluginNativeReference(
   source: string,
   target: string,
   fact: PluginNativeArtifactFact,
-): "symlink" | "hardlink" {
+): "symlink" | "hardlink" | "copy" {
   try {
     fs.symlinkSync(fact.capturedPath, target, "file");
     return "symlink";
@@ -40,7 +40,7 @@ export function linkPluginNativeReference(
     }
   }
   const boundary = path.dirname(fact.capturedPath);
-  linkPluginSourceFile(fact.capturedPath, boundary, target);
+  const linked = linkPluginSourceFile(fact.capturedPath, boundary, target);
   if (fact.contentHash) {
     const content = hashPluginSourceFile(fact.capturedPath, boundary);
     if (content.contentHash !== fact.contentHash || content.sizeBytes !== fact.sizeBytes) {
@@ -61,7 +61,7 @@ export function linkPluginNativeReference(
   }
   fact.sourceIdentity = identity;
   fact.capturedIdentity = pluginSourceStatIdentity(captured);
-  return "hardlink";
+  return linked ? "hardlink" : "copy";
 }
 
 function resolveNativeHost(filename: string): string | undefined {
@@ -98,7 +98,7 @@ export function createPluginNativeReferenceValidator(boundary: string, pluginId:
           admitted.set(namespace, verdict);
         }
         const admittedMembers = verdict.members;
-        // Hardlinks keep bytes but not realpath parents; only a coherent captured directory can use them.
+        // Hardlinks and copies keep bytes but not realpath parents; require a coherent directory.
         nativeReferenceProgress.publish({
           pluginId,
           completed: verifiedMembers,

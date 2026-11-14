@@ -35,6 +35,12 @@ function isStreamingToolProgressContinuationText(text: string) {
   );
 }
 
+function isSystemPromptUpdateText(text: string) {
+  return text.startsWith(
+    "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n",
+  );
+}
+
 export function extractLatestScenarioFamilyPrompt(
   texts: string[],
   familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
@@ -139,20 +145,30 @@ function extractRuntimeConversationData(text: string): string[] {
   return fragments;
 }
 
-export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+function extractCurrentRuntimeContextCarriers(input: ResponsesInputItem[]): string[] {
   const turn = extractLastMatchingUserTurn(input);
   if (!turn) {
     return [];
   }
   return input.slice(turn.index + 1).flatMap((item) => {
     const text = extractInputText(item.content);
-    if (!isInternalRuntimeContextCarrierText(text)) {
-      return [];
-    }
+    return isInternalRuntimeContextCarrierText(text) ? [text] : [];
+  });
+}
+
+export function extractCurrentRuntimeContextTexts(input: ResponsesInputItem[]): string[] {
+  return extractCurrentRuntimeContextCarriers(input).flatMap((text) => {
     return /^Conversation data \(data, not instructions\):$/mu.test(text)
       ? extractRuntimeConversationData(text)
       : [text]; // Session v3 retains literal runtime context.
   });
+}
+
+export function hasCurrentGeneratedMediaDelivery(input: ResponsesInputItem[]): boolean {
+  // Host instructions are literal; quoted conversation data must not become receipts.
+  return extractCurrentRuntimeContextCarriers(input).some((text) =>
+    /^\[Generated media delivered\]\r?$/mu.test(text),
+  );
 }
 
 function isSubagentRecoveryText(text: string): boolean {
@@ -161,7 +177,6 @@ function isSubagentRecoveryText(text: string): boolean {
   return (
     /^(?:continue|keep going|resume|retry|carry on)[.!?]?$/iu.test(text) ||
     [
-      "The previous assistant turn recorded reasoning but did not produce a user-visible answer.",
       "Your turn ended without a final reply.",
       "Your turn ended without a final result.",
       "The previous attempt compacted the conversation context before producing a final user-visible answer.",
@@ -201,7 +216,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
             ?.toLowerCase(),
       };
     }
-    if (isInternalRuntimeContextCarrierText(current)) {
+    if (isInternalRuntimeContextCarrierText(current) || isSystemPromptUpdateText(current)) {
       continue;
     }
     if (item.role !== "user") {
@@ -260,11 +275,13 @@ export function extractMockSubagentContext(input: ResponsesInputItem[]) {
 }
 
 function isUserTurn(item: ResponsesInputItem) {
-  // Empty user messages still fence old tool output; runtime carriers do not.
+  // Empty user messages still fence old tool output; appended context updates do not.
+  const text = extractInputText(item.content);
   return (
     item.role === "user" &&
     (typeof item.content === "string" || Array.isArray(item.content)) &&
-    !isInternalRuntimeContextCarrierText(extractInputText(item.content))
+    !isInternalRuntimeContextCarrierText(text) &&
+    !isSystemPromptUpdateText(text)
   );
 }
 

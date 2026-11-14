@@ -27,6 +27,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import * as memoryStorage from "../../config/sessions/session-actor-memory-storage.js";
 import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import {
@@ -443,19 +444,22 @@ it.each(
 );
 
 it.each([
-  { kind: "incognito", incognito: true },
-  { kind: "ordinary", incognito: false },
+  { kind: "incognito", incognito: true, visibility: "draft" },
+  { kind: "ordinary", incognito: false, visibility: "draft" },
   { kind: "repository", incognito: false },
   { kind: "repository-changed", incognito: false },
-  { kind: "local-project", incognito: false },
+  { kind: "local-project", incognito: false, visibility: "shared" },
 ])(
   "preserves source and child storage ownership during $kind fork preparation",
-  async ({ kind, incognito }) => {
+  async ({ kind, incognito, visibility }) => {
     await withStorage(async (testState) => {
       if (kind === "repository-changed") {
         openOpenClawAgentDatabase({ agentId: "main" });
       }
       const sourceScope = await seedMessageCutSource(incognito);
+      if (visibility === "draft" || visibility === "shared") {
+        await upsertSessionEntryCore(sourceScope, { visibility });
+      }
       const { sessionKey } = sourceScope;
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository = kind.startsWith("repository")
@@ -584,6 +588,7 @@ it.each([
       expect(child.incognito === true).toBe(incognito);
       expect(child.sessionId).not.toBe(sourceScope.sessionId);
       expect(child.parentSessionKey).toBe(sessionKey);
+      expect(child.visibility ?? "shared").toBe(visibility === "draft" ? "draft" : "shared");
       if (kind === "local-project") {
         expect(child).toMatchObject(projectEntry);
       }
@@ -692,6 +697,69 @@ it.each(
   },
 );
 
+it.each([false, true].flatMap((incognito) => [false, true].map((late) => ({ incognito, late }))))(
+  "refuses new Draft copies when disabled (memory=$incognito, late=$late)",
+  async ({ incognito, late }) => {
+    await withStorage(async () => {
+      const scope = await seedMessageCutSource(incognito);
+      await upsertSessionEntryCore(scope, { visibility: "draft" });
+      const before = await readMutationStorage(scope);
+      let enabled = late;
+      const requestContext = context();
+      requestContext.getCommittedRuntimeConfig = () =>
+        enabled ? cfg : { ...cfg, session: { sharing: { drafts: false } } };
+      const run = async () => {
+        const mutation = invokeMessageCut("sessions.fork", scope, { context: requestContext });
+        const error = await mutation.error;
+        expect(enabled).toBe(false);
+        expect(error).toMatchObject({
+          error: {
+            code: ErrorCodes.INVALID_REQUEST,
+            message: expect.stringContaining("Continue in this conversation"),
+            details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+          },
+        });
+        expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        expect(await readMutationStorage(scope)).toEqual(before);
+      };
+      if (late && incognito) {
+        const createStorage = memoryStorage.createSessionActorMemoryStorage;
+        vi.spyOn(memoryStorage, "createSessionActorMemoryStorage").mockImplementation((options) => {
+          const storage = createStorage(options);
+          const mutate = storage.mutate.bind(storage);
+          storage.mutate = (command, guard, observer) =>
+            mutate(command, guard, {
+              ...observer,
+              async beforeCommit(receipt) {
+                await observer?.beforeCommit?.(receipt);
+                if (command.type === "session.messageCut") {
+                  enabled = false;
+                }
+              },
+            });
+          return storage;
+        });
+        await run();
+      } else {
+        if (late) {
+          probe.admission(workerAdmission, (request, grant, callback) => {
+            if (
+              request.stage === "commit" &&
+              isRecord(request.facts) &&
+              isRecord(request.facts.publication) &&
+              request.facts.publication.kind === "session-entry-patch-committed"
+            ) {
+              enabled = false;
+            }
+            callback(request, grant);
+          });
+        }
+        await run();
+      }
+    });
+  },
+);
+
 it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as const)(
   "sessions.fork revalidates source participation after %s",
   async (revocation) => {
@@ -721,15 +789,9 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
       });
       expect.soft(await readMutationStorage(scope)).toEqual(before);
       expect(await mutation.error).toBeInstanceOf(SessionMutationAuthorizationChangedError);
+      // Retained facts survive the broad catalog notification; the commit guard rereads membership.
       expect(await mutation.error).toMatchObject({
-        error: {
-          details: {
-            code:
-              revocation === "public lifecycle predecessor"
-                ? "SESSION_MUTATION_AUTHORIZATION_CHANGED"
-                : "SESSION_PARTICIPATION_REQUIRED",
-          },
-        },
+        error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
       });
       expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
     }, true);

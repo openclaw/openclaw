@@ -1,4 +1,5 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction-recovery-lifecycle-error.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { isContextOverflowError } from "../../agents/failover/context-overflow.js";
 import {
@@ -44,12 +45,6 @@ export async function settleAgentFallbackCycle(params: {
       ? cycle.state.pendingLifecycleTerminal.backstop
       : undefined;
   cycle.state.pendingLifecycleTerminal = undefined;
-  if (
-    !resolveReplyOperationAbortReason(turn.replyOperation) &&
-    (await turn.isRestartRecoveryArmed?.())
-  ) {
-    turn.replyOperation?.abortForRestart();
-  }
   const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
   if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
@@ -76,8 +71,13 @@ export async function settleAgentFallbackCycle(params: {
   const hostMissingReplyError = isHostMissingReplyNoticeText(embeddedError?.message)
     ? embeddedError?.message
     : undefined;
+  const compactionRecoveryError = resolveCompactionRecoveryLifecycleError(
+    runResult,
+    deferredLifecycleError,
+  );
   // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
+    compactionRecoveryError ??
     deferredLifecycleError ??
     (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
     hostMissingReplyError ??
@@ -170,7 +170,13 @@ export async function settleAgentFallbackCycle(params: {
     ) {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
-    emitSettledLifecycleError(terminalError, terminalMetadata);
+    emitSettledLifecycleError(
+      terminalError,
+      compactionRecoveryError
+        ? // The precheck's overflow observation no longer describes this failure.
+          { ...terminalMetadata, errorNotice: compactionRecoveryError, errorObservation: undefined }
+        : terminalMetadata,
+    );
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {

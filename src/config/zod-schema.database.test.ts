@@ -64,6 +64,19 @@ describe("database config", () => {
       engine: "postgres",
       families: familyEngines(["sqlite", "sqlite", "postgres", "sqlite", "postgres"]),
     },
+    { engine: "sqlite", postgres: { ownership: "state-directory" } },
+    { engine: "postgres", postgres: { ownership: "installation" } },
+    { engine: "postgres", postgres: { ownership: "installation", recoveryCaptures: "server" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "state-directory", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation" },
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
+    },
   ])("preserves optional database config %j for runtime admission", (database) => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
   });
@@ -78,6 +91,23 @@ describe("database config", () => {
     { families: { state: { engine: "unknown" } } },
     { families: { state: { engine: "postgres", postgres: { schemaPrefix: "state" } } } },
     { families: { quarantine: { engine: "sqlite" } } },
+    { postgres: { ownership: "installation" } },
+    { engine: "sqlite", postgres: { ownership: "installation" } },
+    {
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
+      postgres: { ownership: "installation" },
+    },
+    { engine: "postgres", postgres: { ownership: "none" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation" },
+      families: familyEngines(["postgres", "postgres", "postgres", "postgres", "sqlite"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
   });

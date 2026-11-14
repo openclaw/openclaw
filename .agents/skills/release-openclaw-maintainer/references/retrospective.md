@@ -1,10 +1,12 @@
 # Release retrospective
 
 Every beta, stable, and extended-stable release ends with a retrospective in
-`openclaw/maintainers`. It is a closeout step, not optional polish: the release
+`openclaw/tideclaw`. It is a closeout step, not optional polish: the release
 is not done until the retrospective PR is open and its ledger update passes.
-Write it after publication, platform assets, and main closeout are terminal, or
-when execution hands off to another operator (a frozen Part 1 snapshot).
+Write it after core publication, platform assets, and main closeout are terminal,
+or when execution hands off to another operator (a frozen Part 1 snapshot).
+ClawHub never delays this PR: record pending or failed ClawHub work with its
+owner, exact run/attempt, evidence, and next action; append its outcome later.
 
 ## Collect while releasing
 
@@ -39,8 +41,9 @@ costs, run ledger, timeline, numbered findings (evidence, cost, improvements),
 **operator nudges that should be defaults** (time, quote, default to encode,
 owner), what worked, prioritized follow-up, and evidence and limits.
 
-## Deliver to openclaw/maintainers
+## Deliver to openclaw/tideclaw
 
+- Read the target repository’s root and release-scoped AGENTS.md first.
 - Path: `release/retrospectives/<version>.md`, with an archive row (newest
   first) in `release/retrospectives/README.md`.
 - If the file exists (a handoff snapshot or an earlier part), append
@@ -65,10 +68,11 @@ owner), what worked, prioritized follow-up, and evidence and limits.
    every anchor's text, unique contiguous IDs, and count sums. A conflict with a
    concurrent retrospective means rebuilding on `main` and rerunning the script.
 
-Validate with `python3 scripts/check-skill-sources.py`,
-`node scripts/render-maintainer-docs.mjs` (restore unrelated render changes),
-`node --test test/maintainer-docs.node-test.mjs`, and `git diff --check`. The PR
-body follows the problem, impact, change, and evidence shape.
+Validate in `openclaw/tideclaw` with the campaign's `--check` script and
+`git diff --check`, following `release/AGENTS.md`. Keep reports and their
+line-number anchors intact; do not run the old repository's skill-source
+or website-rendering checks here. The PR body follows the problem, impact,
+change, and evidence shape.
 
 ## Follow through
 

@@ -84,6 +84,7 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
+// mock-isolation: BTW fixtures supply model/auth snapshots and release tracking without published-runtime owners.
 vi.mock("./prepared-model-runtime.js", () => {
   const loadSnapshot = async (params: {
     agentId?: string;
@@ -127,6 +128,7 @@ vi.mock("./prepared-model-runtime.js", () => {
       const snapshot = await loadSnapshot(params);
       return {
         snapshot,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: snapshotResources.acquire?.().release ?? (async () => {}),
       };
     },
@@ -265,7 +267,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 // Provider ownership and public-surface loading have dedicated owner suites. BTW stubs those
 // boundaries so its orchestration tests do not rediscover every plugin.
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
   resolveProviderRefOwnership: () => ({ status: "unowned" as const }),
 }));
 

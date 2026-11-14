@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { isWorkerIdleForPressure } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -56,6 +58,7 @@ function createSharedStateWorkerOwner() {
       entry.actor ? active.actor === entry.actor : active === entry,
     );
   const clearIdleRetirement = (entry: Entry) => {
+    entry.idleSince = undefined;
     clearTimeout(entry.idleTimer);
     entry.idleTimer = undefined;
   };
@@ -107,6 +110,7 @@ function createSharedStateWorkerOwner() {
     ) {
       return;
     }
+    entry.idleSince = performance.now();
     const timer: IdleTimer = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         if (entry.idleTimer !== timer || entry.activeOperations !== 0 || !stores.has(entry)) {
@@ -216,7 +220,7 @@ function createSharedStateWorkerOwner() {
       throw new AggregateError(errors, "Failed to close shared-state SQLite workers");
     }
   }
-  registerOpenClawStateDatabaseAsyncResource({ close });
+  registerOpenClawStateDatabaseAsyncResource({ phase: "after-resources", close });
   registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind !== "opened") {
       // Synchronous error eviction cannot await, but actor retirement remains
@@ -229,8 +233,11 @@ function createSharedStateWorkerOwner() {
       });
     }
   });
-  function retireIdleWorkers() {
+  function retireIdleWorkers(critical: boolean) {
     for (const entry of stores) {
+      if (!isWorkerIdleForPressure(entry.idleSince, critical)) {
+        continue;
+      }
       void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
         log.warn("Idle shared-state worker retirement failed", {
           path: entry.context.admission.databasePath,
@@ -334,9 +341,22 @@ function createSharedStateWorkerOwner() {
         if (
           stores.has(candidate) &&
           (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
+            !isDeepStrictEqual(
+              candidate.context.gatewayServiceInstallation,
+              context.gatewayServiceInstallation,
+            ) ||
             candidate.source.moduleUrl.href !== source.moduleUrl.href)
         ) {
-          await wait(retire(candidate));
+          // A nested caller cannot join closure of the client scope retaining its
+          // outer lease. Preserve policy refusal without waiting on that scope.
+          if (hasActiveActorOperations(candidate)) {
+            throw new Error(
+              "Shared-state worker policy changed while its actor is in use; close its leases first",
+            );
+          }
+          // Cleanup clients can still retain the actor after this entry closes.
+          // Retire every client before reopening under the new policy.
+          await wait(candidate.actor ? retireActor(candidate.actor) : retire(candidate));
           assertAdmission();
         }
       }
@@ -345,6 +365,11 @@ function createSharedStateWorkerOwner() {
           matches(retiringEntry, admission.identity) &&
           retiringEntry.context.maintenanceScope === context.maintenanceScope
         ) {
+          if (hasActiveActorOperations(retiringEntry)) {
+            throw new Error(
+              "Shared-state worker is retiring while its actor is in use; close its leases first",
+            );
+          }
           if (!attempt.pending) {
             // Another retained owner may have completed the failed admission's cleanup.
             if (!hasPendingCleanup(retiringEntry)) {
@@ -371,7 +396,11 @@ function createSharedStateWorkerOwner() {
         (candidate) =>
           matches(candidate, admission.identity) &&
           candidate.context.maintenanceScope === context.maintenanceScope &&
-          candidate.context.existingSchemaPath === context.existingSchemaPath,
+          candidate.context.existingSchemaPath === context.existingSchemaPath &&
+          isDeepStrictEqual(
+            candidate.context.gatewayServiceInstallation,
+            context.gatewayServiceInstallation,
+          ),
       );
       const ownsOpening = !entry;
       if (!entry) {
@@ -491,7 +520,5 @@ export function getOpenClawStateWorkerOwner() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sharedStateWorkerOwner"),
     createSharedStateWorkerOwner,
-    (sharedOwner) => sharedOwner.close(),
-    "shared-state",
   );
 }

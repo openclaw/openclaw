@@ -30,6 +30,27 @@ const SessionsSendDeliverySchema = Type.Object(
 export const SessionsSendOutputSchema = Type.Union([
   Type.Object(
     {
+      status: Type.Literal("started"),
+      async: Type.Literal(true),
+      runId: Type.String(),
+      sessionKey: Type.String(),
+      mode: Type.Union([Type.Literal("resume"), Type.Literal("followup")]),
+      retained: Type.Object(
+        {
+          acceptance: Type.Literal("not_accepted"),
+          reason: Type.Literal("plugin_reload_self_hold"),
+          plugins: Type.Array(Type.String()),
+          durability: Type.Literal("process"),
+          continuation: Type.Literal("after_turn"),
+        },
+        { additionalProperties: false },
+      ),
+      message: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
       status: Type.Literal("accepted"),
       mode: Type.Literal("resume"),
       runId: Type.String(),
@@ -54,6 +75,17 @@ export const SessionsSendOutputSchema = Type.Union([
       runId: Type.String(),
       status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
       error: Type.String(),
+      selfHold: Type.Optional(
+        Type.Object(
+          {
+            retained: Type.Literal(false),
+            acceptance: Type.Union([Type.Literal("not_accepted"), Type.Literal("uncertain")]),
+            plugins: Type.Array(Type.String()),
+            why: Type.String(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
       sessionKey: Type.Optional(Type.String()),
       sentBeforeError: Type.Optional(Type.Literal(true)),
       watched: Type.Optional(Type.Boolean()),

@@ -62,6 +62,9 @@ export function UpdatesPage(props: {
       onAutomaticUpdatesChange={(enabled) =>
         props.context.runtimeConfig.patchForm(["update", "auto", "enabled"], enabled)
       }
+      onAutomaticScheduleChange={(expression) =>
+        props.context.runtimeConfig.patchForm(["update", "auto", "schedule"], expression)
+      }
       onUpdateNow={() => {
         const context = props.context;
         const update = overlays().read();

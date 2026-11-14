@@ -8,7 +8,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
+import { readPreparedActivity } from "../../lib/chat/prepared-activity.ts";
 import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 
 type ToolMessageRef = {

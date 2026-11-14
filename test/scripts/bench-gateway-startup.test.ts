@@ -4,6 +4,7 @@ import { createServer, type RequestListener } from "node:http";
 import type { HeapProfiler } from "node:inspector";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
@@ -14,6 +15,7 @@ import {
   createGatewayBenchEnv,
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "../../scripts/lib/gateway-startup-module-counts.mjs";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -25,6 +27,33 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("counts unique loaded files across repeated module evaluations", async ({ signal }) => {
+  const root = tempDirs.make("openclaw-startup-module-counts-");
+  const output = path.join(root, "counts.jsonl");
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(path.join(root, "dependency.mjs"), "export const value = 1;");
+  fs.writeFileSync(
+    entry,
+    'await import("./dependency.mjs"); await import("./dependency.mjs?generation=2");',
+  );
+  const result = await runNodeScript(
+    [
+      "--import",
+      pathToFileURL(path.resolve("scripts/lib/gateway-startup-module-counts.mjs")).href,
+      entry,
+    ],
+    { ...process.env, OPENCLAW_BENCH_MODULE_COUNTS: output },
+    undefined,
+    { signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(summarizeGatewayModuleLoads(fs.readFileSync(output, "utf8"))).toEqual({
+    files: 2,
+    groups: { core: 2 },
+  });
+});
+
 it("runs startup benchmark help through a symlinked script directory", async ({ signal }) => {
   const root = tempDirs.make("openclaw-bench-symlink-");
   const scripts = path.join(root, "scripts");
@@ -120,6 +149,7 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     signal: null,
     startupTrace: {},
     startupTraceLines: [],
+    pluginMigration: { total: 0, completed: 0, warnings: 0 },
     ...overrides,
   };
 }
@@ -139,6 +169,33 @@ async function listenOnLoopback(handler: RequestListener) {
 }
 
 describe("gateway startup benchmark script", () => {
+  it("captures startup allocations and CPU when the Gateway exits before readiness", async ({
+    signal,
+  }) => {
+    const root = tempDirs.make("openclaw-startup-fatal-heap-");
+    const outputPath = path.join(root, "fatal.heapprofile");
+    const exitCode = await runManagedCommand({
+      bin: resolveTestNodeExecPath(),
+      args: [
+        "--import",
+        path.resolve("scripts/lib/gateway-startup-heap-profile.mjs"),
+        "--eval",
+        "globalThis.fixture = Array.from({ length: 4096 }, (_, index) => new Array(128).fill(index)); process.exit(78);",
+      ],
+      env: { ...process.env, OPENCLAW_BENCH_HEAP_EXIT_PATH: outputPath },
+      signal,
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    });
+    expect(exitCode).toBe(78);
+    const profile = JSON.parse(
+      fs.readFileSync(outputPath, "utf8"),
+    ) as HeapProfiler.SamplingHeapProfile & { cpuUsage: NodeJS.CpuUsage };
+    const sampledAllocationBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocationBytes(child), 0);
+    expect(sampledAllocationBytes(profile.head)).toBeGreaterThan(0);
+    expect(profile.cpuUsage.user + profile.cpuUsage.system).toBeGreaterThan(0);
+  });
+
   it("samples collected startup allocations and stops before post-ready work", async ({
     signal,
   }) => {
@@ -379,13 +436,19 @@ server.listen(port, "127.0.0.1", () => {
   console.log("[gateway] ready (0 plugins, 0.0s)");
   console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
   console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
+  console.log("startup trace: post-ready.startup-maintenance 1.0ms total=1.0ms");
+  const terminalPhase = gatewayConfig.gateway?.controlUi?.enabled === false ? "memory-search" : "plugins";
+  console.log("startup trace: post-ready.gateway-data." + terminalPhase + " 1.0ms total=1.0ms");
+  if (teamBoot) console.log("startup trace: plugins.runtime-post-bind 1.0ms total=1.0ms");
 });
 `,
         );
         const result = await runStartup(root, signal, [
           "--entry",
           entry,
-          ..."--case default --runs 2 --warmup 0 --output".split(" "),
+          ..."--case default --runs 2 --warmup 0 --exit-listeners --timeout-ms 5000 --output".split(
+            " ",
+          ),
           reportPath,
         ]);
         expect(result.error).toBeUndefined();
@@ -424,7 +487,7 @@ server.listen(port, "127.0.0.1", () => {
             attempts: 2,
           });
           expect(sample.firstSessionRpc.connectMs).toBeLessThan(sample.firstSessionRpc.ms);
-          expect(sample.startupTraceLines).toHaveLength(2);
+          expect(sample.startupTraceLines).toHaveLength(4);
         }
         expect(report.results[0].summary.startupTrace).toMatchObject({
           "sidecars.model-runtime-build.agentCount": { p50: 11.5, avg: 11.5, min: 11, max: 12 },
@@ -465,7 +528,7 @@ server.listen(port, "127.0.0.1", () => {
             bundledPluginFixturePath,
             "--fixture-root",
             teamRoot,
-            ..."--runs 1 --warmup 0 --output".split(" "),
+            ..."--runs 1 --warmup 0 --exit-listeners --timeout-ms 5000 --output".split(" "),
             reportPath,
           ]);
         for (const shutdownExitCode of [0, 23]) {
@@ -546,6 +609,7 @@ server.listen(port, "127.0.0.1", () => {
     for (const flag of [
       "--cpu-prof-dir",
       "--heap-prof-dir",
+      "--log-file",
       "--gateway-runtime",
       "--gateway-cpus",
     ]) {
@@ -562,6 +626,12 @@ server.listen(port, "127.0.0.1", () => {
       output: "startup.json",
       runs: 2,
     });
+    const defaultLogging = resolveBenchCase("default").config.logging;
+    const logCase = parseOptions("--case default --log-file logs/isolated.log").cases[0]!;
+    expect(readConfig(tempDirs.make("openclaw-bench-logfile-"), logCase).logging?.file).toBe(
+      path.resolve("logs/isolated.log"),
+    );
+    expect(resolveBenchCase("default").config.logging).toEqual(defaultLogging);
     if (process.platform === "win32") {
       expect(() => parseOptions("--case teamBoot --publication-api-delay-ms 500")).toThrow("POSIX");
       return;
@@ -699,7 +769,7 @@ server.listen(port, "127.0.0.1", () => {
     { fast: 5, slow: 9, errors: 0, valid: false },
     { fast: 5, slow: 11, errors: 1, valid: false },
   ])(
-    "enforces independent slow-agent recovery (fast=$fast, slow=$slow, errors=$errors)",
+    "enforces independent slow-agent database admission (fast=$fast, slow=$slow, errors=$errors)",
     ({ fast, slow, errors, valid }) => {
       const result = testing.summarizeCase(
         { config: {}, id: "slowAgentDatabase", name: "slow agent database" },

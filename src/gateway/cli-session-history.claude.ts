@@ -330,6 +330,12 @@ export function parseClaudeCliHistoryEntry(
   if ((type !== "user" && type !== "assistant") || role !== type) {
     return null;
   }
+  // Claude Code writes assistant-shaped lifecycle rows (aborted turns, harness
+  // errors) with a synthetic model marker. They are not replies: importing them
+  // renders them as assistant answers and feeds them back into resumed sessions.
+  if (type === "assistant" && entry.message.model === "<synthetic>") {
+    return null;
+  }
 
   const timestamp = parseDateStringTimestampMs(entry.timestamp);
   const externalId = normalizeOptionalString(entry.uuid);
@@ -456,13 +462,14 @@ export function parseClaudeCliHistoryEntry(
 
 export async function resolveClaudeCliSessionFilePathAsync(params: {
   cliSessionId: string;
-  homeDir?: string;
+  /** Resolved by the caller when this process lacks the Gateway environment (history workers). */
+  projectsDir?: string;
 }): Promise<string | undefined> {
   const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
   if (!sessionId) {
     return undefined;
   }
-  const projectsDir = resolveClaudeCliProjectsDir(params.homeDir);
+  const projectsDir = params.projectsDir ?? resolveClaudeCliProjectsDir();
   let projectEntries: fs.Dirent[];
   try {
     projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
@@ -508,7 +515,7 @@ export type ClaudeCliFallbackSeed = {
 
 export async function readClaudeCliFallbackSeed(params: {
   cliSessionId: string;
-  homeDir?: string;
+  projectsDir?: string;
 }): Promise<ClaudeCliFallbackSeed | undefined> {
   const filePath = await resolveClaudeCliSessionFilePathAsync(params);
   if (!filePath) {

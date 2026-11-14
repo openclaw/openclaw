@@ -122,3 +122,43 @@ describe("openai responses payload policy", () => {
     expect(payload.store).toBe(false);
   });
 });
+
+it.each([
+  ["https://api.openai.com/v1", "openai", false],
+  ["https://api.openai.com/v1", "custom", false],
+  ["https://example.openai.azure.com/openai/v1", "azure-openai", true],
+  ["https://responses.example.test/v1", "custom", true],
+] as const)(
+  "replays compacted windows without conflicting stored records on %s",
+  (baseUrl, provider, store) => {
+    const resolved = resolve({
+      api: "openai-responses",
+      provider,
+      baseUrl,
+      compat: { supportsResponsesContinuation: true },
+    });
+    const input = [
+      {
+        type: "message",
+        role: "user",
+        id: "msg_retained",
+        content: [{ type: "input_text", text: "Keep this context." }],
+      },
+      {
+        type: "compaction",
+        id: "cmp_checkpoint",
+        encrypted_content: "synthetic-opaque-checkpoint",
+      },
+    ];
+    const before = JSON.stringify(input);
+    const request = { input, store: true };
+    apply(request, resolved);
+    expect(request.store).toBe(store);
+    expect(JSON.stringify(request.input)).toBe(before);
+    apply(request, resolved);
+    expect(request.store).toBe(store);
+    const ordinary = { input: [input[0]], store: true };
+    apply(ordinary, resolved);
+    expect(ordinary.store).toBe(true);
+  },
+);

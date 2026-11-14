@@ -23,7 +23,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.engine":
-    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" / "kitesurf" for external CDP browsing. External engines require an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and expose only their supported operations. Lightpanda has no screenshots; Kitesurf renders experimental screenshots.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
@@ -88,6 +88,14 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Web-tool policy grouping for search/fetch providers, limits, and fallback behavior tuning. Keep enabled settings aligned with API key availability and outbound networking policy.",
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
+  "tools.openclaw":
+    "Approval policy for persistent changes delegated to the OpenClaw system agent.",
+  "tools.openclaw.autoApproveChanges":
+    "Standing authorization for permitted delegated administration, including configuration that can execute code on the Gateway host. True authorizes changes without individual approval, even when direct execution tools are denied; false always requires approval. Omitted uses explicit Full Access or independently proven unrestricted Gateway execution. Filesystem, sandbox, operation, and current-run restrictions still apply.",
+  "agents.entries.*.tools.openclaw":
+    "Per-agent approval policy for changes delegated to the OpenClaw system agent.",
+  "agents.entries.*.tools.openclaw.autoApproveChanges":
+    "Overrides tools.openclaw.autoApproveChanges for this agent. True is a standing delegated-administration grant that can enable Gateway-host code execution; false requires individual approval, including in Full Access. Omitted inherits the global setting, then the requesting run's effective authority. Filesystem, sandbox, and operation restrictions still apply.",
   "tools.github":
     "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
   "tools.github.profileId":
@@ -226,7 +234,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Control UI experiments and retained advanced overrides. Experiments are disabled by default unless their setting documents otherwise.",
   "gateway.controlUi.experimental.customPlugins":
     "Allow enabled user-installed plugins to execute native JavaScript in the Control UI (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Bundled plugin views are unaffected. Native UI shares the signed-in operator's Gateway permissions; install only trusted plugins. Changes apply without a Gateway restart. After disabling, reload open Control UI pages to clear previously loaded plugin code.",
-  "gateway.controlUi.experimental.claws":
+  "gateway.controlUi.experimental.templates":
     "Enable ClawHub discovery and one-way Add through the Control UI and Gateway (default: false). Existing agents keep running while this is off.",
   "gateway.controlUi.experimental.chatBubbles":
     "Enable experimental speech bubbles in the Control UI (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
@@ -251,7 +259,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowExternalEmbedUrls":
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
-    "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
+    "Fetch link favicons and external-link page previews through the Gateway (default on). Page previews load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
@@ -452,7 +460,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
-    "Restrict apply_patch paths to the workspace directory. Defaults to false in the personal preset and true in corporate; explicit settings and required roots still apply.",
+    "Restrict host apply_patch paths to the workspace directory (default: false). Set true for workspace-only access; required roots and session restrictions still apply.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
@@ -460,7 +468,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a follow-up for the originating session.",
   "tools.exec.notifyOnExitEmptySuccess":
-    "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
+    "When true (default), successful backgrounded exec exits with empty output still wake the originating session, so a silent waiter reports back. Set false to keep silent successes quiet; the agent then collects them with process poll.",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
@@ -479,7 +487,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
-    "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+    'Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy. exec.mode sets a restrict-only host exec ceiling for turns on that provider or provider/model (it never drops mandatory approvals or loosens a stricter mode), so mode "auto" puts only that model\'s exec misses behind the exec reviewer.',
   "agents.entries.*.tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.entries.*.tools.alsoAllow":
@@ -551,10 +559,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
     "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
-  "skills.workshop.autonomous.mode":
-    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "propose" saves what background reviews would change as drafts instead; review them with /learn drafts. "off" disables background learning. Default: "auto".',
-  "skills.workshop.autonomous.channelNotices":
-    'Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying "undo" works either way.',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

@@ -65,6 +65,14 @@ function prependEnvPath(current, next) {
   return `${next}${path.delimiter}${current}`;
 }
 
+// A missing, empty or option-shaped value must not fall back to a default path.
+function optionValue(value) {
+  if (!value || value.startsWith("--")) {
+    usage();
+  }
+  return value;
+}
+
 const args = process.argv.slice(2);
 let runtimeDir = "";
 let modelDir = "";
@@ -77,32 +85,32 @@ const textParts = [];
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i];
   if (arg === "--runtime-dir") {
-    runtimeDir = args[i + 1] || "";
+    runtimeDir = optionValue(args[i + 1]);
     i += 1;
     continue;
   }
   if (arg === "--model-dir") {
-    modelDir = args[i + 1] || "";
+    modelDir = optionValue(args[i + 1]);
     i += 1;
     continue;
   }
   if (arg === "--model-file") {
-    modelFile = args[i + 1] || "";
+    modelFile = optionValue(args[i + 1]);
     i += 1;
     continue;
   }
   if (arg === "--tokens-file") {
-    tokensFile = args[i + 1] || "";
+    tokensFile = optionValue(args[i + 1]);
     i += 1;
     continue;
   }
   if (arg === "--data-dir") {
-    dataDir = args[i + 1] || "";
+    dataDir = optionValue(args[i + 1]);
     i += 1;
     continue;
   }
   if (arg === "-o" || arg === "--output") {
-    output = args[i + 1] || output;
+    output = optionValue(args[i + 1]);
     i += 1;
     continue;
   }

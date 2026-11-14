@@ -20,6 +20,7 @@ import {
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
@@ -31,9 +32,11 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { estimateTranscriptUsageCost } from "../../infra/session-cost-usage-pricing.js";
 import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
@@ -128,8 +131,40 @@ export async function persistApprovedCliUserTurnTranscript(
 /**
  * Only a backend that reports its turn total separately from the latest call gets a context
  * marker. Other backends keep unmarked counters, which context readers do not treat as fresh.
+ * The counters carry the backend model's API-rate cost (via its `priceAs` provider), so a
+ * subscription turn records what the API would charge instead of a $0 placeholder.
  */
-function buildCliAssistantTranscriptUsage(
+export async function buildCliAssistantTranscriptUsage(params: {
+  runParams: Pick<RunCliAgentParams, "provider" | "config">;
+  modelId: string;
+  agentDir?: string;
+  /** Latest model-call usage. */
+  usage?: CliUsage;
+  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
+  turnUsage?: CliUsage;
+}): Promise<{ usage: Usage; costUsd?: number }> {
+  const counters = buildCliTranscriptCounters(params.usage, params.turnUsage);
+  // Text-output backends report no counters; their zero placeholders measure nothing.
+  const reported = params.turnUsage ?? params.usage;
+  if (
+    !reported ||
+    [reported.input, reported.output, reported.cacheRead, reported.cacheWrite].every(
+      (count) => count === undefined,
+    )
+  ) {
+    return { usage: counters };
+  }
+  const rates = await resolveModelCostConfig({
+    provider: params.runParams.provider,
+    model: params.modelId,
+    config: params.runParams.config,
+    agentDir: params.agentDir,
+  });
+  const cost = rates ? estimateTranscriptUsageCost(counters, rates) : undefined;
+  return cost ? { usage: { ...counters, cost }, costUsd: cost.total } : { usage: counters };
+}
+
+function buildCliTranscriptCounters(
   lastCallUsage: CliUsage | undefined,
   turnUsage: CliUsage | undefined,
 ): Usage {
@@ -153,10 +188,8 @@ export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  /** Latest model-call usage. */
-  usage?: CliUsage;
-  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
-  turnUsage?: CliUsage;
+  /** Priced turn counters from `buildCliAssistantTranscriptUsage`. */
+  usage?: Usage;
   stopReason: StopReason;
   yielded?: true;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
@@ -229,7 +262,7 @@ export async function persistCliAssistantTranscript(params: {
           },
           content: [{ type: "text", text: params.text }],
           stopReason: params.stopReason,
-          usage: buildCliAssistantTranscriptUsage(params.usage, params.turnUsage),
+          usage: params.usage ?? buildUsageWithNoCost({}),
         }),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.
@@ -493,7 +526,9 @@ export async function persistCliRunBlock(
           write.readScope,
           write.assertCurrent,
           async () => {
-            const manager = await SessionManager.openAsync(write.readScope);
+            const manager = await withSessionTranscriptHydrationCaller("cli-context", () =>
+              SessionManager.openAsync(write.readScope),
+            );
             write.assertCurrent();
             await manager.appendMessageAsync(redactedUserMessage);
           },

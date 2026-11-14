@@ -26,10 +26,7 @@ export async function revealSidebarTarget(
       }
       await viewport.evaluate((element) => {
         const bottom = Math.max(0, element.scrollHeight - element.clientHeight);
-        element.scrollTop =
-          element.scrollTop >= bottom
-            ? 0
-            : Math.min(bottom, element.scrollTop + element.clientHeight * 0.75);
+        element.scrollTop = Math.min(bottom, element.scrollTop + element.clientHeight * 0.75);
       });
       // Scroll publication and measured-height reconciliation occupy separate frames.
       await commit();

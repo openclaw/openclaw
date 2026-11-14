@@ -9,14 +9,16 @@ import type { MediaGenerationTaskHandle } from "./tools/media-generate-backgroun
 
 /** Literal completion handles in transport tests still need real native admission. */
 export function admitMediaHandle<
-  T extends Omit<MediaGenerationTaskHandle, "detach"> & { detach?: boolean },
+  T extends Omit<MediaGenerationTaskHandle, "detach" | "acceptedOperation"> & { detach?: boolean },
 >(
   handle: T,
 ): T & {
   detach: boolean;
   requesterTranscript: NonNullable<MediaGenerationTaskHandle["requesterTranscript"]>;
+  acceptedOperation: MediaGenerationTaskHandle["acceptedOperation"];
 } {
-  if (!findMediaGenerationOperation(handle.runId)) {
+  const acceptedOperation =
+    findMediaGenerationOperation(handle.runId) ??
     createMediaGenerationOperation({
       taskId: handle.taskId,
       runId: handle.runId,
@@ -26,12 +28,12 @@ export function admitMediaHandle<
       task: handle.taskLabel,
       status: "running",
     });
-  }
   const agentId =
     handle.requesterAgentId ?? resolveAgentIdFromSessionKey(handle.requesterSessionKey);
   return {
     ...handle,
     detach: handle.detach ?? true,
+    acceptedOperation,
     requesterTranscript: handle.requesterTranscript ?? {
       ...captureSessionTranscriptTargetBinding({
         agentId,

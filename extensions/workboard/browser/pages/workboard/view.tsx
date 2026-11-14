@@ -142,7 +142,11 @@ export function WorkboardView(
   const view = createMemo(() => {
     const current = state();
     const agentOptions = buildAgentFilterOptions(props.agentsList, current.cards);
-    const boardOptions = buildBoardFilterOptions(current.boards, current.cards);
+    const boardOptions = buildBoardFilterOptions(
+      current.boards,
+      current.cards,
+      !current.nextCursor,
+    );
     // A deleted board keeps its route filter instead of exposing every board.
     const activeBoardFilter = current.boardFilter;
     const scopedCards = current.cards
@@ -372,10 +376,7 @@ export function WorkboardView(
                     {t("workboard.newBoard")}
                   </button>
                 ) : null}
-                <span
-                  class="workboard-refresh-control"
-                  title={view().refreshStatus || t("common.refresh")}
-                >
+                <span class="workboard-refresh-control" title={view().refreshStatus || undefined}>
                   <button
                     class={[
                       "btn btn--icon btn--ghost workboard-refresh",

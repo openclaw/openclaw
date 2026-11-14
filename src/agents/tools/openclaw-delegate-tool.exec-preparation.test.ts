@@ -39,6 +39,7 @@ function construct(assertCurrent?: () => void) {
           config: shared.config,
           sessionAgentId: "main",
           runSessionKey: "agent:main:delegate-preparation",
+          delegationExecAuthority: () => "gateway-host",
         },
         shared,
       ),

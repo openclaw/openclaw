@@ -10,15 +10,20 @@ import type {
 } from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
+import { sleep } from "../utils/sleep.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
+  CommandReservationCandidatesError,
   createManagedCommandProcessCustody,
   type ManagedCommandProcessAuthority,
 } from "./update-managed-command-custody.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+// Outlast the census window, so a poller's next short-lived child cannot refuse settlement.
+const RESERVATION_SETTLEMENT_ATTEMPTS = 20;
 
 const receiptSchema = z.object({
   nonce: z.string(),
@@ -287,6 +292,8 @@ export async function createUpdateDoctorProcessCustody(
       const admitted =
         (rootExtinct && (receipt !== undefined || legacyCompletion)) || inputWithheld;
       let diagnostics: string[] = [];
+      // Native settlement accounts for every durable reservation; a slot without one retired.
+      let reservationsResolved = pending === 0;
       const cleanup = (async () => {
         const pids = [...identities.map((identity) => identity.pid), ...(pid ? [pid] : [])];
         if (!admitted || pid === undefined) {
@@ -298,10 +305,27 @@ export async function createUpdateDoctorProcessCustody(
         }
         try {
           // Snapshot exact native handles before joining; mutable IPC never selects this namespace.
-          const prepared = nativeCustody?.prepareSettlement(pid, identities);
+          let prepared:
+            | ReturnType<NonNullable<typeof nativeCustody>["prepareSettlement"]>
+            | undefined;
+          for (let attempt = 1; ; attempt++) {
+            try {
+              prepared = nativeCustody?.prepareSettlement(pid, identities);
+              break;
+            } catch (error) {
+              if (
+                !(error instanceof CommandReservationCandidatesError) ||
+                attempt >= RESERVATION_SETTLEMENT_ATTEMPTS
+              ) {
+                throw error;
+              }
+              await sleep(1_000);
+            }
+          }
           diagnostics = prepared?.diagnostics ?? [];
+          reservationsResolved ||= prepared !== undefined;
           const groups = await settleCommandProcessGroups(identities);
-          if (groups.settled && pending === 0) {
+          if (groups.settled && reservationsResolved) {
             prepared?.retire();
           }
           return groups;
@@ -310,10 +334,10 @@ export async function createUpdateDoctorProcessCustody(
         }
       })();
       retainCommandProcessCleanup(
-        cleanup.then((groups) => (groups.settled && pending === 0 ? "normal" : "uncertain")),
+        cleanup.then((groups) => (groups.settled && reservationsResolved ? "normal" : "uncertain")),
       );
       const groups = await cleanup;
-      const settled = admitted && pending === 0 && groups.settled;
+      const settled = admitted && reservationsResolved && groups.settled;
       mayRemove = settled;
       const step: UpdateStepResult = {
         name: "doctor process settlement",
@@ -338,7 +362,7 @@ export async function createUpdateDoctorProcessCustody(
       ];
       const message = settled
         ? "Doctor did not finish normally, but every tracked process group stopped. Preserving migrated state; run `openclaw update repair` to finish deferred maintenance."
-        : `Doctor processes remain unsettled, data-at-risk. PIDs/process groups: ${pids.join(", ") || "unavailable"}; ${!receipt ? "custody receipt unavailable" : pending > 0 ? `${pending} spawn reservations lack a process identity` : (groups.reason ?? "process extinction could not be proven")}. Keep the Gateway stopped and preserve ${descriptor.path}; resolve retained process custody before retrying \`openclaw update repair\`. Repeating repair alone cannot clear unknown reservations.`;
+        : `Doctor processes remain unsettled, data-at-risk. PIDs/process groups: ${pids.join(", ") || "unavailable"}; ${!receipt ? "custody receipt unavailable" : (groups.reason ?? (pending > 0 ? `${pending} spawn reservations lack a process identity` : "process extinction could not be proven"))}. Keep the Gateway stopped and preserve ${descriptor.path}; stop those processes, then run \`openclaw update repair\` to settle custody.`;
       return {
         ...step,
         ...(settled

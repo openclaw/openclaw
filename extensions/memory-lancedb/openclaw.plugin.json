@@ -197,5 +197,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether LanceDB memory is ready and explain its capture and recall options.",
+    "Find matching facts in this agent’s LanceDB memory without changing them."
+  ]
 }

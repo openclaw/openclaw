@@ -31,7 +31,7 @@ import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/type
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { registerAgentHarness } from "./registry.js";
 
-const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
+const agents = ["opencode", "qwen", "pi", "kilocode", "grok-build", "qoder"] as const;
 export function useNativeProcessFixture() {
   let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
   let lifetime: ReturnType<typeof createFixtureLifetime>;
@@ -110,7 +110,10 @@ export async function registerNative(
     }),
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
     registerService: (registered) => {
-      assert(registered.apiVersion !== 2, "Expected ACPX service API version 1");
+      assert(
+        registered.apiVersion !== 2 && registered.apiVersion !== 3,
+        "Expected ACPX service API version 1",
+      );
       service = registered;
     },
   });

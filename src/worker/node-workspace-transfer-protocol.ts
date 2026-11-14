@@ -65,7 +65,15 @@ function reportFailure(error) {
 
 export const NODE_WORKSPACE_TRANSFER_ERROR_CODE = "WORKSPACE_TRANSFER_FAILED";
 
-export type NodeWorkerWorkspaceTransferOperation = "download" | "upload";
+export const NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE = "PUBLICATION_CONFLICT";
+export class NodeWorkerPublicationConflictError extends Error {
+  readonly code = NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE;
+  constructor() {
+    super("The accepted checkpoint conflicts with the current publication base.");
+  }
+}
+
+export type NodeWorkerWorkspaceTransferOperation = "download" | "upload" | "publication";
 export type NodeWorkerWorkspaceTransferStage =
   | "recover"
   | "manifest"
@@ -124,6 +132,18 @@ const TransferToken = z
   .max(1_024)
   .refine((value) => !value.includes("\0"));
 export const NodeWorkerWorkspaceTransferInputSchema = z.union([
+  workerProtocolObject({
+    direction: z.literal("publication"),
+    token: TransferToken,
+    inputToken: TransferToken,
+    inputManifestRef: ManifestRef,
+    inputDigest: ManifestRef,
+    sourceUrl: z.string().url(),
+    targetUrl: z.string().url(),
+    targetCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+    gitToken: TransferToken,
+    checkpointGitHistory: WorkerWorkspaceGitHistorySchema.optional(),
+  }),
   workerProtocolObject({
     direction: z.literal("download"),
     token: TransferToken,

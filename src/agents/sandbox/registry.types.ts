@@ -15,6 +15,8 @@ export type SandboxRegistryEntry = {
   workspaceDir?: string;
   /** Allocation-owned classification used when recovering managed projection writes. */
   workspaceSource?: "managed-worktree";
+  /** Last-use stamp whose container was stopped; later admissions invalidate this fact. */
+  idleStoppedAtLastUsedMs?: number;
   /** Provisioning and removal state for backends that retain unfinished allocations. */
   runtimeState?: "pending" | "ready" | "removing" | "removing-pending";
 };

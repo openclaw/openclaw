@@ -34,6 +34,7 @@ import type {
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
 } from "./session-pending-input.types.js";
+import type { SessionMentionInvitation } from "./session-sharing-authority.types.js";
 import type {
   InitialSessionTranscriptWriter,
   SessionTranscriptWriterFence,
@@ -66,6 +67,7 @@ export type InitialSessionEntryCommit = {
 };
 
 export type SessionMetadataMessageControl = {
+  mentionInvitation?: SessionMentionInvitation;
   pendingInput?: { facts: SessionPendingInputWorkerFacts; relocation?: string };
   freshMessageCheck?: true;
 };

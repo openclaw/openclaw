@@ -121,6 +121,37 @@ describe("createChildAdapter", () => {
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
   });
 
+  it.each([false, true])(
+    "waits for target preparation before a direct spawn (refused=%s)",
+    async (refused) => {
+      setPlatform("darwin");
+      const gate = createDeferred();
+      const preparing = createDeferred();
+      const failure = new Error("saved credential removed");
+      const stub = createStubChild();
+      spawnMock.mockResolvedValue(stub.child);
+      const starting = start({
+        argv: ["synthetic-command"],
+        prepareTargetSpawn: async () => {
+          preparing.resolve();
+          await gate.promise;
+          if (refused) {
+            throw failure;
+          }
+        },
+      });
+      const outcome = refused ? expect(starting).rejects.toBe(failure) : starting;
+      await preparing.promise;
+      expect(spawnMock).not.toHaveBeenCalled();
+      gate.resolve();
+      await outcome;
+      expect(spawnMock).toHaveBeenCalledTimes(refused ? 0 : 1);
+      if (!refused) {
+        (await starting).dispose();
+      }
+    },
+  );
+
   it("joins worker exit, closed pipes and the queued IPC disconnect", async () => {
     const { adapter, child, disconnectMock, emitExit } = await setupTimed("darwin", {
       ownedWorker: true,
@@ -289,14 +320,55 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
-  it("passes the exact child environment without an OOM shell wrapper", async () => {
-    setPlatform("linux");
-    const argv = ["/usr/bin/node", "worker"];
-    const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
-    await setup({ argv, exactEnv: true, env });
-    expect(spawnArgs().argv).toEqual(argv);
-    expect(spawnArgs().options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
-  });
+  it.each(["event", "exitCode", "signalCode"] as const)(
+    "does not signal an exited Windows fallback root with held output (%s)",
+    async (observation) => {
+      const { adapter, child, emitExit, killMock } = await setupTimed("win32");
+      const settled = watch(adapter.wait());
+      const cleanup = watch(adapter.waitForExtinction!());
+      try {
+        adapter.kill("SIGTERM");
+        if (observation === "event") {
+          emitExit(0);
+        } else if (observation === "exitCode") {
+          Object.defineProperty(child, "exitCode", { value: 0 });
+        } else {
+          Object.defineProperty(child, "signalCode", { value: "SIGTERM" });
+        }
+        adapter.kill("SIGKILL");
+        expect(signalMock).toHaveBeenCalledExactlyOnceWith(
+          child.pid,
+          "SIGTERM",
+          expect.objectContaining({ detached: false }),
+        );
+        expect(killMock).not.toHaveBeenCalled();
+        await advancePending(settled, 3_999);
+        expect(cleanup).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toHaveBeenCalledExactlyOnceWith({ code: null, signal: "SIGKILL" });
+        expect(cleanup).toHaveBeenCalledExactlyOnceWith(
+          new Error("child cleanup could not be confirmed before the kill deadline"),
+        );
+      } finally {
+        adapter.dispose();
+      }
+    },
+  );
+
+  it.each([undefined, true] as const)(
+    "preserves the exact environment for application and owned workers (%s)",
+    async (ownedWorker) => {
+      setPlatform("linux");
+      const argv = ["/usr/bin/node", "worker"];
+      const env = { HOME: "/worker-home", PATH: "/usr/bin", DROP_ME: undefined };
+      await setup({ argv, exactEnv: true, env, ownedWorker });
+      expect(spawnArgs().argv).toEqual(argv);
+      expect(spawnArgs().options?.env).toEqual({
+        HOME: "/worker-home",
+        PATH: "/usr/bin",
+      });
+    },
+  );
 
   it("retains the cleanup deadline after out-of-order close and disposal", async () => {
     const { adapter, emitClose } = await setupTimed(process.platform, {

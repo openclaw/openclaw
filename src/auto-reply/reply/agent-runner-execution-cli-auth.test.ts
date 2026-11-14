@@ -52,9 +52,20 @@ describe("executeAgentTurn: CLI credential selection", () => {
       expected: managedProfile,
     },
     {
-      name: "rejects an incompatible explicit account before CLI execution",
+      name: "selects CLI credentials after the configured primary account fails over",
       selected: primaryProfile,
       source: "user",
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      expected: managedProfile,
+    },
+    {
+      name: "rejects an incompatible session-pinned account before CLI execution",
+      selected: primaryProfile,
+      source: "user",
+      pinned: true,
       primary: "openai",
       provider: "claude-cli",
       backend: "claude-cli",
@@ -163,7 +174,17 @@ describe("executeAgentTurn: CLI credential selection", () => {
     );
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    const entry: SessionEntry = {
+      sessionId: followupRun.run.sessionId,
+      updatedAt: 1,
+      ...("pinned" in testCase
+        ? { authProfileOverride: testCase.selected, authProfileOverrideSource: "user" }
+        : {}),
+    };
+    const result = executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => entry,
+    });
     if ("error" in testCase) {
       expect(await result).toMatchObject({ kind: "final", payload: { isError: true } });
       expect(state.runCliAgentMock).not.toHaveBeenCalled();

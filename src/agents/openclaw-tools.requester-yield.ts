@@ -12,6 +12,17 @@ import type {
 const SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR =
   "Collector runs cannot use sessions_yield because their results are collected explicitly instead of announced. Finish this turn so the collected result is recorded for whoever waits on this run.";
 
+/** Automation turns end on yield; the scheduler, not a requester continuation, owns child output. */
+export function isSchedulerOwnedRequesterYield(params: {
+  requesterSessionKey?: string;
+  scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
+}): boolean {
+  return (
+    isCronSessionKey(params.requesterSessionKey) ||
+    params.scheduledToolTargets?.placement !== undefined
+  );
+}
+
 type YieldCompletionClaim = (
   intent?: SessionsYieldIntent,
 ) => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
@@ -33,10 +44,7 @@ export function createRequesterYieldCallback(params: {
   }
   // The scheduler owns child output and delivery for every automation placement.
   // End the model turn without arming an interactive requester continuation.
-  if (
-    isCronSessionKey(params.requesterSessionKey) ||
-    params.scheduledToolTargets?.placement !== undefined
-  ) {
+  if (isSchedulerOwnedRequesterYield(params)) {
     return () => ({ schedulerOwned: true });
   }
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;

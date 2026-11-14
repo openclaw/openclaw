@@ -14,6 +14,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
+import { loadAgentToolUsageOperations } from "./openclaw-agent-execution-tool-usage.worker.js";
 import {
   initializeReplacementTranscript,
   loadAgentTranscriptOperations,
@@ -31,14 +32,21 @@ import type {
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
 
 async function loadAgentReplacementOperations() {
-  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers, predicates] =
-    await Promise.all([
-      import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-      import("../config/sessions/session-entry-publication-source.js"),
-      import("../config/sessions/session-native-binding.worker.js"),
-      import("../config/sessions/session-entry-patch.worker.js"),
-      import("../config/sessions/session-source-predicate.worker.js"),
-    ]);
+  const [
+    kernel,
+    publications,
+    { sealSessionEntryPublicationSource },
+    nativeBindings,
+    transfers,
+    predicates,
+  ] = await Promise.all([
+    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+    import("../config/sessions/session-accessor.sqlite-replacement-publication.js"),
+    import("../config/sessions/session-entry-publication-source.js"),
+    import("../config/sessions/session-native-binding.worker.js"),
+    import("../config/sessions/session-entry-patch.worker.js"),
+    import("../config/sessions/session-source-predicate.worker.js"),
+  ]);
   return {
     "session.entries.replace": (
       input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
@@ -69,15 +77,19 @@ async function loadAgentReplacementOperations() {
           undefined,
           postimages,
         );
-        const publication = kernel.prepareSessionEntryReplacementPublication(result, current, {
-          captureFullFacts: true,
-          postimages,
-        });
+        const publication = publications.prepareSessionEntryReplacementPublication(
+          result,
+          current,
+          {
+            captureFullFacts: true,
+            postimages,
+          },
+        );
         const candidate = { maintenancePlans: result.maintenancePlans, publication };
         if (publication.source && publication.fullEntries?.size) {
           sealSessionEntryPublicationSource(publication.source);
         }
-        kernel.boundSessionEntryReplacementPublication(publication, candidate);
+        publications.boundSessionEntryReplacementPublication(publication, candidate);
         return candidate;
       };
       if (input.nativeBindings) {
@@ -114,25 +126,6 @@ async function loadAgentReplacementOperations() {
         },
       );
     },
-  } satisfies Handlers;
-}
-
-async function loadAgentRestartRecoveryOperations() {
-  const kernel = await import("../config/sessions/session-accessor.sqlite-recovery.worker.js");
-  return {
-    "session.restart.recover": (
-      input: Parameters<typeof kernel.recoverRestartTombstoneInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session.lifecycle.recover-tombstone", "Session recovery", (current) => {
-        const result = kernel.recoverRestartTombstoneInDatabase(current, input);
-        deferSqliteWorkerCommitReceipt(
-          current.db,
-          result.publication ?? { kind: "session-restart-recovery-unchanged" },
-        );
-        admit("commit", result.publication);
-        return result;
-      }),
   } satisfies Handlers;
 }
 
@@ -359,7 +352,6 @@ async function loadAgentReactionOperations() {
 async function loadAgentPendingInputOperations() {
   const pending = await import("../config/sessions/session-pending-input-operations.kernel.js");
   const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
-  const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
     "session.pendingInputs.read": (
       input: Parameters<typeof pending.readPendingInput>[1],
@@ -369,19 +361,6 @@ async function loadAgentPendingInputOperations() {
       input: Parameters<typeof pending.mutatePendingInput>[0],
       context,
     ) => void pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
-    "session.pendingInputs.interruptHistory": (
-      input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
-      { open, options, admit },
-    ) => {
-      const database = open();
-      return history.interruptPendingInputHistoryInDatabase(
-        database,
-        options,
-        input,
-        admit,
-        (receipt) => deferSqliteWorkerCommitReceipt(database.db, receipt),
-      );
-    },
     "session.pendingInputs.withdraw": (
       input: Parameters<typeof kernel.discardSessionPendingInputInWorker>[2],
       { open, options, admit },
@@ -546,11 +525,11 @@ export function createAgentWorkerOperationLoaders(
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
     "session.transcript.visibleDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.replayGroups.read": loadAgentTranscriptReadOperations,
     "session.transcript.memoryCapture.read": loadAgentTranscriptReadOperations,
     "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
     "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,
     "session.entries.replace": loadAgentReplacementOperations,
-    "session.restart.recover": loadAgentRestartRecoveryOperations,
     "session.entry.acp": loadAgentAcpOperations,
     "session.providerReview.compare": loadAgentProviderReviewOperations,
     "session.reaction.set": loadAgentReactionOperations,
@@ -561,13 +540,16 @@ export function createAgentWorkerOperationLoaders(
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
     "session.pendingInputs.read": loadAgentPendingInputOperations,
     "session.pendingInputs.mutate": loadAgentPendingInputOperations,
-    "session.pendingInputs.interruptHistory": loadAgentPendingInputOperations,
     "session.archivePruning.deletePublished": loadAgentArchivePruningOperations,
     "session.archivePruning.pruneRetention": loadAgentArchivePruningOperations,
     "session.archivePruning.removeLegacy": loadAgentArchivePruningOperations,
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
+    "toolUsage.prune": loadAgentToolUsageOperations,
+    "toolUsage.flush": loadAgentToolUsageOperations,
+    "toolUsage.reset": loadAgentToolUsageOperations,
+    "toolUsage.import": loadAgentToolUsageOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,

@@ -134,6 +134,58 @@ function retained(id: number, name: string, bytes: number, edge?: string) {
   };
 }
 
+it("unions requested dominator subtrees without counting nested, shared or unreachable nodes twice", () => {
+  const contents = snapshot([
+    [1, "Object", 0, [...refs(1, 2), [1, 6]]],
+    [3, "Object", 10, refs(3, 5)],
+    [5, "Object", 50, refs(5)],
+    [7, "Object", 20, refs(4)],
+    [9, "Object", 30],
+    [11, "Object", 40],
+    [13, "Object", 70],
+  ]);
+  const groupsFile = path.join(tempDirs.make("heap-node-groups-"), "groups.json");
+  writeFileSync(
+    groupsFile,
+    JSON.stringify({
+      nested: [3, 7, 9, 3],
+      disjoint: [3, 5, 7],
+      overlappingGroup: [5, 7],
+      unavailable: [13, 999],
+      whole: [1, 3],
+      empty: [],
+    }),
+  );
+  const result = run([contents], ["--node-groups", groupsFile]);
+  expect(result.retainedBytes).toBe(150);
+  expect(
+    Object.keys(result.nodeGroups).map((name) => {
+      const group = result.nodeGroups[name];
+      return [
+        name,
+        group.requestedCount,
+        group.uniqueRequestedCount,
+        group.matchedCount,
+        group.missingCount,
+        group.reachableCount,
+        group.unreachableCount,
+        group.subtreeRoots,
+        group.shallowBytes,
+        group.retainedUnionBytes,
+      ];
+    }),
+  ).toEqual([
+    // name, requested, unique, matched, missing, reachable, unreachable, roots, shallow, retained
+    ["nested", 4, 3, 3, 0, 3, 0, 1, 60, 60],
+    // The 40-byte shared child is dominated by root, not by either selected owner.
+    ["disjoint", 3, 3, 3, 0, 3, 0, 2, 80, 110],
+    ["overlappingGroup", 2, 2, 2, 0, 2, 0, 2, 70, 100],
+    ["unavailable", 2, 2, 1, 1, 0, 1, 0, 0, 0],
+    ["whole", 2, 2, 2, 0, 2, 0, 1, 10, 150],
+    ["empty", 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  ]);
+});
+
 function retainedPath(
   depth: number,
   omittedAncestors: number,

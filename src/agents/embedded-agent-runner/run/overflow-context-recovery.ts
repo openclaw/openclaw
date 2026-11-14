@@ -13,7 +13,9 @@ import {
 } from "../../embedded-agent-helpers/context-overflow-observation.js";
 import { isLikelyContextOverflowError } from "../../failover/context-overflow.js";
 import { isProviderRequestSizeCeilingError } from "../../failover/message-patterns.js";
-import type { FailoverClassification } from "../../failover/signal.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import type { FailoverClassification, FailoverReason } from "../../failover/signal.js";
+import { sessionManagerReadToolResultProjectionEntries } from "../../sessions/session-manager-view-types.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { classifyCompactionReason, isBenignCompactionSkipResult } from "../compact-reasons.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -39,6 +41,13 @@ import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
+
+const TRANSIENT_COMPACTION_FAILURE_REASONS = [
+  "rate_limit",
+  "overloaded",
+  "server_error",
+  "timeout",
+] as const satisfies readonly FailoverReason[];
 
 function renderRecoverySideEffectCaution(
   attempt: EmbeddedRunCompactionRecoveryInput["attempt"],
@@ -72,6 +81,13 @@ export async function recoverEmbeddedRunOverflow(
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
     markOwnedTranscriptRetry: () => void;
+    /** Waits out a transient provider failure; false when the retry policy declines. */
+    retryTransientCompactionFailure: (failure: {
+      reason: FailoverReason;
+      code?: string;
+      message?: string;
+      retryAfterMs?: number;
+    }) => Promise<boolean>;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const assistant = input.assistantOverflowCandidate?.message;
@@ -192,7 +208,7 @@ export async function recoverEmbeddedRunOverflow(
       const projectionState = promptState.state.toolResults;
       restoreCacheTtlToolResultProjections(
         projectionState,
-        sessionManager.getToolResultProjectionEntries(),
+        sessionManager[sessionManagerReadToolResultProjectionEntries](),
       );
       const result = await truncateOversizedToolResultsInSessionManager({
         sessionManager,
@@ -262,6 +278,7 @@ export async function recoverEmbeddedRunOverflow(
   let parkedWorkBlocksContinuation = false;
   let failedCompactionReason: string | undefined;
   let compactionSkippedBenignly = false;
+  let providerUnavailable = false;
   if (
     !isCompactionFailure &&
     input.attemptCompactionCount > 0 &&
@@ -399,6 +416,27 @@ export async function recoverEmbeddedRunOverflow(
       log.warn(
         `auto-compaction failed for ${input.modelSelection.provider}/${input.modelSelection.model}: ${failedCompactionReason}`,
       );
+      const failure = compactResult.failure;
+      const transientReason =
+        classifyCompactionReason(failedCompactionReason) === "timeout"
+          ? undefined // A compaction watchdog timeout already used its whole budget.
+          : TRANSIENT_COMPACTION_FAILURE_REASONS.find((reason) => reason === failure?.reason);
+      providerUnavailable = transientReason !== undefined;
+      if (
+        transientReason &&
+        (await input.retryTransientCompactionFailure({
+          reason: transientReason,
+          code: failure?.code,
+          message: failure?.rawError ?? failedCompactionReason,
+          retryAfterMs: resolveRetryAfterMs(failure?.rawError, Date.now()),
+        }))
+      ) {
+        input.assertRecoveryActive();
+        // The failed summary compacted nothing, so it does not use up an overflow attempt.
+        input.state.overflowCompactionAttempts -= 1;
+        input.markOwnedTranscriptRetry();
+        return retryCurrentTranscript();
+      }
     }
   }
 
@@ -447,7 +485,7 @@ export async function recoverEmbeddedRunOverflow(
   const userText = unshrinkableRequest
     ? `${failedCompactionReason}` + renderRecoverySideEffectCaution(input.attempt)
     : recoveryCompactionFailed
-      ? `${reasonClass === "timeout" ? "Auto-compaction timed out" : "Auto-compaction failed"} ${failurePhase}. Try again or run /compact.` +
+      ? `${reasonClass === "timeout" ? "Auto-compaction timed out" : providerUnavailable ? "Auto-compaction could not reach the model provider" : "Auto-compaction failed"} ${failurePhase}. Try again or run /compact.` +
         renderRecoverySideEffectCaution(input.attempt)
       : CONTEXT_OVERFLOW_ERROR_MESSAGE + renderRecoverySideEffectCaution(input.attempt);
   log.warn(

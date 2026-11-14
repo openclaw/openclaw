@@ -446,7 +446,7 @@ it.each([
   ],
   ["expired", null, undefined, undefined, "⏱️ OpenClaw change expired. No change was made."],
 ] as const)(
-  "returns the %s terminal result from a root approval card to the originating topic",
+  "keeps the %s terminal result on the originating private topic",
   async (name, decision, applicationStatus, terminalStatus, text) => {
     sendTyping.mockResolvedValue(undefined);
     sendMessage.mockResolvedValue({ chatId: "1234", messageId: "m1" });
@@ -474,11 +474,17 @@ it.each([
     const request = systemRequest(`system-agent:terminal-${name}`, {
       turnSourceChannel: "telegram",
       turnSourceTo: "1234",
+      turnSourceAccountId: "default",
       turnSourceThreadId: 42,
     });
     try {
       await handler.handleRequested(request);
       expect(sendMessage).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledWith(
+        "1234",
+        expect.any(String),
+        expect.objectContaining({ messageThreadId: 42 }),
+      );
       sendMessage.mockClear();
       if (decision === null) {
         await handler.handleExpired(request.id);
@@ -491,14 +497,106 @@ it.each([
           ts: 1,
         });
       }
-      expect(editMessage).toHaveBeenCalledOnce();
-      expect(sendMessage).toHaveBeenCalledExactlyOnceWith("1234", text, {
-        cfg: expect.any(Object),
-        token: "tg-token",
-        accountId: "default",
-        textMode: "html",
-        messageThreadId: 42,
-      });
+      expect(editMessage).toHaveBeenCalledExactlyOnceWith(
+        "1234",
+        "m1",
+        text,
+        expect.objectContaining({ buttons: [] }),
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await handler.stop();
+    }
+  },
+);
+
+it.each([
+  ["requester first", ["1234", "5678"], false, "resolved"],
+  ["requester second", ["5678", "1234"], false, "resolved"],
+  ["requester second on expiry", ["5678", "1234"], false, "expired"],
+  ["requester first edit fails", ["1234", "5678"], true, "resolved"],
+  ["requester second edit fails", ["5678", "1234"], true, "resolved"],
+  ["requester second edit fails on expiry", ["5678", "1234"], true, "expired"],
+] as const)(
+  "finalizes all approver cards without duplicate topic results: %s",
+  async (_name, approvers, originEditFails, phase) => {
+    sendTyping.mockResolvedValue(undefined);
+    sendMessage.mockImplementation(async (chatId: string) => ({
+      chatId,
+      messageId: `message-${chatId}`,
+    }));
+    editMessage.mockImplementation(async (chatId: string) => {
+      if (originEditFails && chatId === "1234") {
+        throw new Error("message was deleted");
+      }
+      return { ok: true };
+    });
+    const handler = await createChannelApprovalHandlerFromCapability({
+      ...base,
+      capability: telegramApprovalCapability,
+      label: "telegram/approvals",
+      clientDisplayName: "Telegram approvals",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "tg-token",
+            execApprovals: { enabled: true, approvers: [...approvers], target: "dm" },
+          },
+        },
+      },
+      nowMs: () => 0,
+    });
+    if (!handler) {
+      throw new Error("Expected a Telegram approval handler");
+    }
+    const request = systemRequest(`system-agent:fanout-${_name}`, {
+      turnSourceChannel: "telegram",
+      turnSourceTo: "1234",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: 42,
+    });
+    try {
+      await handler.handleRequested(request);
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(sendMessage).toHaveBeenCalledWith(
+        "1234",
+        expect.any(String),
+        expect.objectContaining({ messageThreadId: 42 }),
+      );
+      expect(sendMessage).toHaveBeenCalledWith(
+        "5678",
+        expect.any(String),
+        expect.not.objectContaining({ messageThreadId: 42 }),
+      );
+      sendMessage.mockClear();
+      if (phase === "expired") {
+        await handler.handleExpired(request.id);
+      } else {
+        await handler.handleResolved({ id: request.id, decision: "deny", ts: 1 });
+      }
+      expect(editMessage.mock.calls.map(([chatId]) => chatId)).toEqual([...approvers]);
+      expect(editMessage).toHaveBeenCalledWith(
+        "1234",
+        "message-1234",
+        expect.any(String),
+        expect.objectContaining({ buttons: [] }),
+      );
+      expect(editMessage).toHaveBeenCalledWith(
+        "5678",
+        "message-5678",
+        expect.any(String),
+        expect.objectContaining({ buttons: [] }),
+      );
+      expect(sendMessage).toHaveBeenCalledTimes(originEditFails ? 1 : 0);
+      if (originEditFails) {
+        expect(sendMessage).toHaveBeenCalledWith(
+          "1234",
+          expect.any(String),
+          expect.objectContaining({ messageThreadId: 42 }),
+        );
+      }
     } finally {
       await handler.stop();
     }

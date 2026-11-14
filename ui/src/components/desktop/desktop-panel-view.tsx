@@ -79,13 +79,15 @@ export function DesktopPanelView(props: {
           <div class="rail-header__title bp-title">{t("desktop.title")}</div>
           <div class="rail-header__actions bp-actions">
             <PanelIconButton
-              class={["rail-header__action bp-icon", { "is-active": props.dock === "bottom" }]}
+              class="rail-header__action bp-icon"
+              pressed={props.dock === "bottom"}
               label={t("desktop.dockBottom")}
               icon={<Icon name="panelBottomOpen" />}
               onClick={() => props.onDock("bottom")}
             />
             <PanelIconButton
-              class={["rail-header__action bp-icon", { "is-active": props.dock === "right" }]}
+              class="rail-header__action bp-icon"
+              pressed={props.dock === "right"}
               label={t("desktop.dockRight")}
               icon={<Icon name="panelRightOpen" />}
               onClick={() => props.onDock("right")}
@@ -93,6 +95,7 @@ export function DesktopPanelView(props: {
             <PanelIconButton
               class="rail-header__action bp-icon bp-open-window"
               label={t("desktop.openWindow")}
+              title={t("desktop.openWindowTooltip")}
               icon={<Icon name="externalLink" />}
               onClick={props.onOpenWindow}
             />
@@ -100,6 +103,7 @@ export function DesktopPanelView(props: {
             <PanelIconButton
               class="rail-header__action bp-icon"
               label={t("desktop.hide")}
+              title={false}
               icon={<Icon name="x" />}
               onClick={props.onClose}
             />
@@ -130,6 +134,7 @@ export function DesktopPanelView(props: {
                   <PanelIconButton
                     class="desktop-toolbar-action"
                     label={t("desktop.openWindow")}
+                    title={t("desktop.openWindowTooltip")}
                     icon={<Icon name="externalLink" />}
                     onClick={props.onOpenWindow}
                   />
@@ -311,9 +316,9 @@ export function DesktopPicker(props: {
                   heading={t("desktop.emptyTitle")}
                   description={t("desktop.empty")}
                 />
-              ) : (
+              ) : props.genuineEmpty ? (
                 <div class="desktop-status">{t("desktop.empty")}</div>
-              )
+              ) : null
             ) : (
               <For each={props.environments} keyed={(environment) => environment.id}>
                 {(environment) => (
@@ -388,6 +393,7 @@ export function DesktopCredentials(props: {
             <PanelIconButton
               class="desktop-toolbar-action"
               label={t("desktop.back")}
+              title={false}
               icon={<Icon name="chevronLeft" />}
               onClick={props.onBack}
             />

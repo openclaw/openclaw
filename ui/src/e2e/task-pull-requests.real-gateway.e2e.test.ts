@@ -29,6 +29,7 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { cleanupSessionStateForTest } from "../../../src/test-utils/session-state-cleanup.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
@@ -52,6 +53,7 @@ const suite = createControlUiE2eSuite({
 });
 
 async function seedTask(state: OpenClawTestState, profileId: string) {
+  let publishLastReceipt = () => {};
   const createdActor = { type: "human", source: "profile", id: profileId } as const;
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: selectedKey },
@@ -156,9 +158,13 @@ async function seedTask(state: OpenClawTestState, profileId: string) {
       updated_at_ms: 1000 + index,
     };
     row.request_digest = repositoryGitHubPublicationDigest(row);
-    // Seed the canonical publication transaction before the Gateway takes custody.
-    insertRepositoryGitHubPublicationFixture(row, () => {});
+    if (index === numbers.length - 1) {
+      publishLastReceipt = () => insertRepositoryGitHubPublicationFixture(row, () => {});
+    } else {
+      insertRepositoryGitHubPublicationFixture(row, () => {});
+    }
   }
+  return publishLastReceipt;
 }
 
 suite.define(() => {
@@ -239,7 +245,8 @@ suite.define(() => {
             controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
           },
         });
-        await seedTask(state, viewer.id);
+        const publishLastReceipt = await seedTask(state, viewer.id);
+        let merged = false;
         const githubRequests: string[] = [];
         {
           const realFetch = globalThis.fetch;
@@ -276,9 +283,9 @@ suite.define(() => {
                 number,
                 title: "Delegated repair " + (numbers.indexOf(number) + 1),
                 html_url: "https://github.com/" + repository + "/pull/" + number,
-                state: "open",
+                state: merged ? "closed" : "open",
                 draft: false,
-                merged_at: null,
+                merged_at: merged ? "2026-11-01T00:00:00Z" : null,
                 head: { ref: "proof/repair-" + numbers.indexOf(number), sha: "a".repeat(40) },
                 base: { ref: "main", repo: { name: "openclaw", owner: { login: "openclaw" } } },
                 additions: 12,
@@ -431,6 +438,10 @@ suite.define(() => {
                 await expect
                   .poll(() => row.locator(".session-row-badge--pull-request").isVisible())
                   .toBe(true);
+                if (stage === "initial") {
+                  await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(2);
+                  publishLastReceipt();
+                }
                 await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
                 expect(githubRequests.length).toBe(requestsBeforeStage);
                 await activate();
@@ -460,9 +471,6 @@ suite.define(() => {
                 await expect
                   .poll(() => row.locator(".session-row-badge--pull-request").count())
                   .toBe(1);
-                expect(
-                  await card.getByRole("link", { name: "Create PR for " + branch }).count(),
-                ).toBe(1);
                 for (const number of numbers) {
                   expect(
                     await card
@@ -471,6 +479,38 @@ suite.define(() => {
                       )
                       .count(),
                   ).toBe(1);
+                }
+                if (!live && stage === "initial") {
+                  merged = true;
+                  // Forced GitHub metadata refreshes still honor the ten-second quota window.
+                  const realNow = Date.now.bind(Date);
+                  const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 10_001);
+                  test.onTestFinished(() => clock.mockRestore());
+                  await evaluateControlUiContext(
+                    page,
+                    async (context, key) => {
+                      await context.gateway.snapshot.client!.request(
+                        "controlUi.sessionPullRequests.subscribe",
+                        {
+                          sessionKeys: [key],
+                          refreshSessionKeys: [key],
+                        },
+                      );
+                    },
+                    parentKey,
+                  );
+                  await expect
+                    .poll(() =>
+                      row
+                        .locator(".session-row-badge--pull-request")
+                        .getAttribute("data-pull-request-state"),
+                    )
+                    .toBe("merged");
+                  await expect
+                    .poll(() =>
+                      card.locator('.session-hovercard__pr-state-icon[title^="Merged"]').count(),
+                    )
+                    .toBe(3);
                 }
               } catch (error) {
                 diagnostics.capture(page, stage);
@@ -555,6 +595,33 @@ suite.define(() => {
             },
           );
           if (stage === "initial") {
+            // A reopened sidebar (new socket, passive row) keeps the state the Gateway already verified.
+            const requestsBeforeReopen = githubRequests.length;
+            await suite.withPage(
+              { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+              async ({ page }) => {
+                await page.addInitScript(() =>
+                  localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]"),
+                );
+                const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
+                url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
+                await page.goto(url.href);
+                await page
+                  .locator("openclaw-gateway-url-confirmation")
+                  .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
+                  .click();
+                await waitForControlUiRoute(page, { routeId: "chat" });
+                const badge = page.locator(
+                  '.sidebar-recent-session[data-session-key="' +
+                    parentKey +
+                    '"] .session-row-badge--pull-request',
+                );
+                await expect
+                  .poll(() => badge.getAttribute("data-pull-request-state"))
+                  .toMatch(/^(open|draft|merged|closed)$/);
+                expect(githubRequests.length).toBe(requestsBeforeReopen);
+              },
+            );
             await gateway.close({ reason: "task PR persistence proof restart" });
             // Reopen persisted rows, not this process's retained projection/database handles.
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });

@@ -4,7 +4,6 @@ import {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
-import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
@@ -23,38 +22,6 @@ type SessionMessageApplySource =
   | { kind: "history-delta" }
   | { kind: "live"; activeRunId: string | null };
 
-/**
- * The run this pane is finishing. A terminal chat event clears the local run
- * before its persisted reply row arrives, so match producer-owned rows to the
- * active run or its exact terminal tombstone. Legacy rows without producer
- * ownership may use that tombstone only when their projected reply matches.
- */
-function finishingChatRunId(
-  state: ChatState,
-  source: SessionMessageApplySource,
-  message: unknown,
-  scope: SessionProjectionScope,
-  producerRunId: string | null,
-): string | null {
-  if (source.kind !== "live") {
-    return null;
-  }
-  if (source.activeRunId) {
-    return producerRunId && producerRunId !== source.activeRunId ? null : source.activeRunId;
-  }
-  const recent = state.lastLocalTerminalReconcile;
-  const runId = recent?.sessionKey === state.sessionKey ? recent.runId : null;
-  if (!runId) {
-    return null;
-  }
-  if (producerRunId) {
-    return producerRunId === runId ? runId : null;
-  }
-  const projected = getChatSessionProjection(state, scope).runs[runId]?.message;
-  const projectedText = extractText(projected)?.trim();
-  return projectedText && projectedText === extractText(message)?.trim() ? runId : null;
-}
-
 /** Apply one durable session.message payload through the pane-owned transcript reducer. */
 export function applySessionMessagePayload(
   state: ChatState,
@@ -70,50 +37,74 @@ export function applySessionMessagePayload(
   if (!incoming) {
     return;
   }
+  const isAssistant = incoming.role === "assistant";
   const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
-  const isPreviousRunAssistant = Boolean(
-    incoming.role === "assistant" &&
-    incoming.sequence !== null &&
-    incoming.runId &&
-    source.kind === "live" &&
-    source.activeRunId &&
-    incoming.runId !== source.activeRunId,
-  );
-  // Interim tool-use rows retain producer ownership in transcript metadata;
-  // the outer run ID is only published for terminal assistant rows.
-  // Client correlation keys cannot establish ownership, nor override a conflict.
-  const explicitRunId = normalizeSessionProjectionRunId(event.runId ?? sourceMetadata.runId);
-  const producerRunId = incoming.runId === explicitRunId ? incoming.runId : null;
-  const assistantOwnerRunId =
-    incoming.role === "assistant" &&
-    incoming.id &&
-    !incoming.isImported &&
-    (producerRunId || (!incoming.runId && runActive !== true))
-      ? finishingChatRunId(state, source, sourceMessage, scope, producerRunId)
+  // Producer ownership cannot come from a client correlation key or override a conflict.
+  const producerRunId =
+    incoming.runId === normalizeSessionProjectionRunId(event.runId ?? sourceMetadata.runId)
+      ? incoming.runId
       : null;
-  const toolImageOwnerRunId =
-    normalizeRoleForGrouping(incoming.role) === "tool" &&
-    incoming.id &&
-    incoming.sequence !== null &&
-    !incoming.isImported &&
-    producerRunId &&
-    Array.isArray(sourceRecord.content) &&
-    sourceRecord.content.some((part) => {
-      const block = asNonArrayRecord(part);
-      return (
-        block.type === "image" && typeof block.artifactId === "string" && block.artifactId.trim()
-      );
-    })
-      ? finishingChatRunId(state, source, sourceMessage, scope, producerRunId)
-      : null;
-  if (
-    source.kind === "live" &&
-    incoming.role !== "user" &&
-    !isPreviousRunAssistant &&
-    !assistantOwnerRunId &&
-    !toolImageOwnerRunId
-  ) {
-    return;
+  let assistantOwnerRunId: string | null = null;
+  if (source.kind === "live" && incoming.role !== "user") {
+    const isPreviousRunAssistant =
+      isAssistant &&
+      incoming.sequence !== null &&
+      incoming.runId &&
+      source.activeRunId &&
+      incoming.runId !== source.activeRunId;
+    if (!isPreviousRunAssistant) {
+      const ownedMessage = incoming.id && !incoming.isImported;
+      const ownedProducer = ownedMessage && incoming.sequence !== null && producerRunId;
+      let ownerRunId: string | null = null;
+      if (
+        ownedMessage &&
+        (isAssistant
+          ? producerRunId || (!incoming.runId && runActive !== true)
+          : ownedProducer &&
+            normalizeRoleForGrouping(incoming.role) === "tool" &&
+            Array.isArray(sourceRecord.content) &&
+            sourceRecord.content.some((part) => {
+              const block = asNonArrayRecord(part);
+              return (
+                block.type === "image" &&
+                typeof block.artifactId === "string" &&
+                block.artifactId.trim()
+              );
+            }))
+      ) {
+        // Persisted replies can follow terminal delivery. Only an exact producer
+        // or the matching legacy reply may reuse the pane's terminal tombstone.
+        const recent = state.lastLocalTerminalReconcile;
+        ownerRunId =
+          source.activeRunId || (recent?.sessionKey === state.sessionKey ? recent.runId : null);
+        if (producerRunId) {
+          if (producerRunId !== ownerRunId) {
+            ownerRunId = null;
+          }
+        } else if (ownerRunId && !source.activeRunId) {
+          const projectedText = extractText(
+            getChatSessionProjection(state, scope).runs[ownerRunId]?.message,
+          )?.trim();
+          if (!projectedText || projectedText !== extractText(sourceMessage)?.trim()) {
+            ownerRunId = null;
+          }
+        }
+      }
+      assistantOwnerRunId = isAssistant ? ownerRunId : null;
+      if (!ownerRunId) {
+        const deliveryMirror = asNonArrayRecord(sourceRecord.openclawDeliveryMirror);
+        // Unadopted setup replies own display, never an unrelated assistant stream.
+        if (
+          !isAssistant ||
+          source.activeRunId ||
+          !ownedProducer ||
+          deliveryMirror.kind !== "message-tool-source-reply" ||
+          deliveryMirror.final !== false
+        ) {
+          return;
+        }
+      }
+    }
   }
   // Partial import provenance cannot turn an envelope position into durable
   // transcript identity; only the persisted row can prove its source order.
@@ -146,14 +137,14 @@ export function applySessionMessagePayload(
     },
     { scope, runActive },
   );
-  if (incoming.role === "assistant" && projection.messages.includes(message)) {
+  if (isAssistant && projection.messages.includes(message)) {
     prunePersistedAssistantStreamSegments(state, message);
-    // Terminal persistence can precede the run's final event. Keyed commentary
-    // replaces only its segment, so it must leave a later reply stream intact.
+    // Terminal rows replace the live tail; keyed commentary replaces only its segment.
     if (
       assistantOwnerRunId &&
       (runActive === false ||
-        (normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId &&
+        ((normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId ||
+          incoming.idempotencyKey === `cli-assistant:${assistantOwnerRunId}`) &&
           !readAssistantStreamSegmentIdentity(message)))
     ) {
       state.chatStream = null;

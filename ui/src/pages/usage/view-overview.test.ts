@@ -6,7 +6,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { CostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import {
@@ -56,8 +56,8 @@ describe("UsageInsights", () => {
     expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
     expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
-    expect(buttons).toHaveLength(9);
-    expect(tooltips).toHaveLength(9);
+    expect(buttons).toHaveLength(5);
+    expect(tooltips).toHaveLength(5);
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -93,24 +93,15 @@ describe("UsageInsights", () => {
       messages: { ...current.messages, total: 8 },
     }));
     flush();
-    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(container.querySelector("#usage-summary-hint-throughput")).toBe(button);
     expect(button.closest("openclaw-tooltip")).toBe(tooltip);
     expect(tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]")).toBe(popup);
     expect(document.activeElement).toBe(button);
-    expect(text(button.closest(".usage-summary-card"), ".usage-summary-value")).toBe("8");
-  });
-  it("hides cost shares while the overall total is a lower bound", () => {
-    const complete = { ...totals, totalCost: 10 };
-    const partialTotals = { ...complete, usageReport: { state: "unavailable" as const } };
-    const { container } = mountInsights(
-      () => partialTotals,
-      () => ({ ...aggregates, byProvider: [{ provider: "openai", count: 1, totals: complete }] }),
+    const messagesCard = [...container.querySelectorAll(".usage-summary-card")].find(
+      (card) => card.querySelector(".usage-summary-title")?.textContent === "Messages",
     );
-    // A complete provider's share of an incomplete total is unknown, not 100%.
-    expect(container.textContent).toContain("OpenAI");
-    expect(container.textContent).not.toContain("of cost");
+    expect(text(messagesCard ?? null, ".usage-summary-value")).toBe("8");
   });
-
   it("labels usage without a known price as unpriced, never free", () => {
     const unpriced = { ...totals, totalCost: 0, missingCostEntries: 3 };
     const { container } = mountInsights(
@@ -158,17 +149,15 @@ describe("UsageInsights", () => {
 
 it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
   const onClearDays = vi.fn();
-  const onClearHours = vi.fn();
   const onClearSessions = vi.fn();
   const props = usageFixture(
     {},
     {
       selectedDays: ["2026-08-01"],
-      selectedHours: [8],
       selectedSessions: ["agent:main:usage"],
     },
   );
-  Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
+  Object.assign(props.callbacks.filters, { onClearDays, onClearSessions });
   const { container } = mountView(() =>
     renderFilterChips(
       [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
@@ -179,38 +168,44 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
   expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
     "Remove days filter",
-    "Remove hours filter",
     "Remove session filter",
   ]);
-  expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, null, "Usage thread"]);
+  expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, "Usage thread"]);
   chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
   expect(onClearDays).toHaveBeenCalledOnce();
-  expect(onClearHours).toHaveBeenCalledOnce();
   expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "cost windows preserve sub-cent totals and daily completeness (partial: %s)",
-  (partial) => {
-    const day = dailyEntry("2026-07-01", 300, 0.003);
-    if (partial) {
-      day.usageReport = { state: "unavailable" };
-    }
-    const { container } = mountView(() =>
-      renderCostWindowComparison([day], "2026-06-02", "2026-07-01", "local"),
-    );
+it("cost windows preserve sub-cent totals and day columns across refreshes", () => {
+  const day = dailyEntry("2026-07-01", 300, 0.003);
+  const [daily, setDaily] = createSignal([day]);
+  const { container } = mountView(() =>
+    CostWindowComparison({
+      get daily() {
+        return daily();
+      },
+      rangeStartDate: "2026-06-02",
+      rangeEndDate: "2026-07-01",
+      timeZone: "local",
+    }),
+  );
 
-    const range = container.querySelector(".cost-window--range");
-    const prefix = partial ? "≥ " : "";
-    expect(text(range, ".cost-window__value")?.trim()).toBe(`${prefix}$0.0030`);
-    expect(text(range, ".cost-window__meta")).toContain(`${prefix}$0.0001 / day`);
-    range!
-      .querySelector(".usage-bars__bar:last-of-type")!
-      .dispatchEvent(new MouseEvent("pointerenter"));
-    flush();
-    expect(text(range, ".usage-bars__tip")).toBe(`Jul 1 · ${prefix}$0.0030`);
-  },
-);
+  const range = container.querySelector(".cost-window--range");
+  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0030");
+  expect(text(range, ".cost-window__meta")).toContain("$0.0001 / day");
+  const column = range!.querySelector(".usage-bars__bar--current")!;
+  column.dispatchEvent(new MouseEvent("pointerenter"));
+  flush();
+  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0030");
+
+  setDaily([dailyEntry("2026-07-01", 600, 0.006)]);
+  flush();
+  expect(container.querySelector(".cost-window--range")).toBe(range);
+  expect(range!.querySelector(".usage-bars__bar--current")).toBe(column);
+  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0060");
+  expect(text(range, ".cost-window__meta")).toContain("$0.0002 / day");
+  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0060");
+});
 
 describe("SessionsCard", () => {
   const session = (key: string, tokens = 100): UsageSessionEntry => ({
@@ -230,33 +225,14 @@ describe("SessionsCard", () => {
         get sessions() {
           return sessions();
         },
+        get selectedRows() {
+          return usage.data.overview?.selectedRows ?? [];
+        },
         usage,
         totalSessions,
         overview,
       }),
     );
-
-  it("exposes the selected session view to assistive technology", () => {
-    const { usage, onChange } = usageState();
-    const view = mountSessions(() => [], usage, 0);
-
-    const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
-    const recent = view.getByRole<HTMLButtonElement>("button", {
-      name: "Recently viewed",
-      pressed: false,
-    });
-    recent.click();
-    flush();
-    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "recent" });
-    expect(view.getByRole("button", { name: "Recently viewed", pressed: true })).toBe(recent);
-    expect(view.getByRole("button", { name: "All", pressed: false })).toBe(all);
-
-    all.click();
-    flush();
-    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "all" });
-    expect(view.getByRole("button", { name: "All", pressed: true })).toBe(all);
-    expect(view.getByRole("button", { name: "Recently viewed", pressed: false })).toBe(recent);
-  });
 
   it("preserves sort focus while waiting for the server to reorder rows", () => {
     const { usage, onChange } = usageState();
@@ -310,12 +286,11 @@ describe("SessionsCard", () => {
     expect(onSelectSession).toHaveBeenLastCalledWith("Alpha", true, ["Beta", "Alpha"]);
   });
 
-  it("keeps metadata and lower-bound usage labels localized without replacing a row", async () => {
+  it("keeps metadata and usage labels localized without replacing a row", async () => {
     const restoreI18n = captureI18nStateForTesting();
     const entry = session("Alpha");
     const sessionUsage = entry.usage!;
     sessionUsage.durationMs = 60_000;
-    sessionUsage.usageReport = { state: "unavailable" };
     const { base, usage, setDisplay } = usageState();
     const overview = createUsageOverview({
       total: 1,
@@ -324,20 +299,17 @@ describe("SessionsCard", () => {
         tokens: sessionUsage.totalTokens,
         cost: sessionUsage.totalCost,
         errors: 0,
-        usageReport: sessionUsage.usageReport,
       },
     });
     try {
       await i18n.setLocale("en");
       const { container } = mountView(() =>
-        SessionsCard({ sessions: [entry], usage, overview, totalSessions: 1 }),
+        SessionsCard({ sessions: [entry], selectedRows: [], usage, overview, totalSessions: 1 }),
       );
       const row = container.querySelector(".session-bar-row");
       const value = () => text(row, ".session-bar-value");
       const average = () => text(container, ".sessions-card-stats > span");
       expect(text(row, ".session-bar-meta")).toContain("1m");
-      expect(value()).toMatch(/^≥ \d/);
-      expect(average()).toMatch(/^≥ /);
       const englishValue = value();
       await i18n.setLocale("de");
       flush();
@@ -349,36 +321,48 @@ describe("SessionsCard", () => {
       }).format(1);
       expect(text(row, ".session-bar-meta")).toContain(germanMinute);
       expect(value()).toBe(englishValue);
-      expect(average()).toMatch(/^≥ /);
       setDisplay({ ...base.display, chartMode: "cost" });
       flush();
-      expect(value()).toBe("≥ $0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       await i18n.setLocale("en");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
-      expect(value()).toBe("≥ $0.00");
-      expect(average()).toBe("≥ $0.00 avg");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
+      expect(average()).toBe("$0.00 avg");
     } finally {
       await restoreI18n();
     }
   });
 
-  it("renders the server recent roster without changing its all-roster average", () => {
+  it("renders a server page without changing its full-roster average", () => {
     const overview = createUsageOverview({
       total: 2,
       tableSessionCount: 100,
       tableTotals: { tokens: 50000, cost: 100, errors: 7 },
     });
-    const usage = usageFixture(
-      { overview },
-      {},
-      {
-        sessionsTab: "recent",
-        recentSessions: ["A", "missing"],
-      },
-    );
+    const usage = usageFixture({ overview });
     const { container } = mountView(() =>
-      SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
+      SessionsCard({
+        sessions: [session("B"), session("A")],
+        selectedRows: [],
+        usage,
+        overview,
+        totalSessions: 2,
+      }),
     );
     expect(texts(container, ".session-bar-title", false)).toEqual(["B", "A"]);
     expect(text(container, ".sessions-card-stats")).toContain("500 avg");

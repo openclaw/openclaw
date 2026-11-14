@@ -4,6 +4,8 @@
 // --built --build-dir <checkout> measures shipped dist without a TypeScript loader in workers.
 // --worker <name> selects one owner. --compare-build-dir <base> alternates base/candidate
 // order per sample against --build-dir <candidate>, reporting both arms for each worker.
+// --prewarm-history measures foreground transcript workers' eager presentation imports.
+// --transcript-task prewarm includes explicit history presentation preparation in the first task.
 // Example: node --import ./scripts/tsx.mjs scripts/perf/worker-spawn-measure.mjs --built --build-dir . --samples 5 --output .local/spawn/built.json
 // Run arms in alternating order. Every sample owns a fresh isolate; one unmeasured preparation
 // isolate per owner caches transpiled source bytes in source mode. Built mode uses the shipped
@@ -72,6 +74,7 @@ function summarize(rows) {
             2,
           min: sorted[0],
           max: sorted.at(-1),
+          p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
         },
       ];
     }),
@@ -139,6 +142,8 @@ if (!isMainThread) {
       // Census runs only after both measured intervals, so debugger allocations do not enter them.
       const inspector = new Session();
       inspector.connect();
+      await inspector.post("HeapProfiler.collectGarbage");
+      const retainedHeapBytes = getHeapStatistics().used_heap_size;
       const evaluated = new Map();
       inspector.on("Debugger.scriptParsed", ({ params }) => {
         if (params.url.startsWith("file:") && params.url !== import.meta.url) {
@@ -160,6 +165,7 @@ if (!isMainThread) {
           firstTask,
           evaluatedModules: new Set(evaluated.values()).size,
           parsedSourceBytes,
+          retainedHeapBytes,
           overlays: [...overlays],
         },
         [],
@@ -180,6 +186,8 @@ if (!isMainThread) {
       output: { type: "string" },
       samples: { type: "string", default: "10" },
       worker: { type: "string" },
+      "prewarm-history": { type: "boolean" },
+      "transcript-task": { type: "string", default: "sqlite-target" },
       "baseline-dir": { type: "string" },
       built: { type: "boolean" },
       "build-dir": { type: "string" },
@@ -195,6 +203,15 @@ if (!isMainThread) {
   const samples = Number(values.samples);
   assert(Number.isSafeInteger(samples) && samples > 0, "--samples must be positive");
   assert(!values.worker || Object.hasOwn(entries, values.worker), "Unknown --worker");
+  assert(
+    !values["prewarm-history"] || values.worker === "session-transcript",
+    "--prewarm-history requires --worker session-transcript",
+  );
+  assert(
+    ["sqlite-target", "prewarm"].includes(values["transcript-task"]) &&
+      (values["transcript-task"] === "sqlite-target" || values.worker === "session-transcript"),
+    "--transcript-task prewarm requires --worker session-transcript",
+  );
   const baselineDir = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
   // Keep this parent-only directory walker outside the measured worker import graph.
   const { listDirectoryTreeStrictSync } = await import("../../src/infra/directory-walk.js");
@@ -339,6 +356,13 @@ if (!isMainThread) {
       };
     }
     if (name === "session-transcript") {
+      if (values["transcript-task"] === "prewarm") {
+        return {
+          kind: "prewarm",
+          database: { agentId: "benchmark", path: path.join(state, "agent.sqlite") },
+          env: environment,
+        };
+      }
       return {
         kind: "sqlite-target",
         storePath: path.join(state, "agents", "benchmark", "sessions", "sessions.json"),
@@ -416,6 +440,8 @@ if (!isMainThread) {
         assert.equal(reply.type, "admit");
       } else if (name === "git-operation") {
         assert.equal(reply.value.headBranch, "main");
+      } else if (name === "session-transcript" && values["transcript-task"] === "prewarm") {
+        assert.equal(reply.value.kind, "prewarm");
       } else {
         assert.equal(reply.value.target.agentId, "benchmark");
       }
@@ -506,6 +532,7 @@ if (!isMainThread) {
           ),
         ).href,
         built: values.built,
+        prewarmHistory: values["prewarm-history"] === true,
         cache,
         prepare,
         baselineFiles: prepare ? baselineFiles : undefined,
@@ -606,6 +633,7 @@ if (!isMainThread) {
         spawnToFirstReplyMs: spawnToReadyMs + firstRoundTripMs,
         evaluatedModules: result.evaluatedModules,
         parsedSourceBytes: result.parsedSourceBytes,
+        retainedHeapBytes: result.retainedHeapBytes,
         overlays: result.overlays,
         hostLoad: os.loadavg(),
       };
@@ -623,6 +651,8 @@ if (!isMainThread) {
     samples,
     baselineDir: values["baseline-dir"] ?? null,
     built: values.built === true,
+    prewarmHistory: values["prewarm-history"] === true,
+    transcriptTask: values["transcript-task"],
     buildRoot: values.built ? buildRoot : null,
     comparisonRoot: comparisonRoot ?? null,
     order: comparisonRoot ? "AB/BA per sample: base then candidate on even indices" : "single arm",
@@ -669,6 +699,8 @@ if (!isMainThread) {
             spawnToFirstReplyMs: summarize(rows.map((row) => ({ value: row.spawnToFirstReplyMs })))
               .value,
             parsedSourceBytes: rows.map((row) => row.parsedSourceBytes),
+            retainedHeapBytes: summarize(rows.map((row) => ({ value: row.retainedHeapBytes })))
+              .value,
             evaluatedModules: rows.map((row) => row.evaluatedModules),
             rows,
           },

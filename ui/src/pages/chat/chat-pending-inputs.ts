@@ -1,40 +1,37 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type {
   ChatInputReceipts,
-  ChatPendingInputsDismissResult,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
-import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
-import {
-  readDeliveredQueuedChatSendForRun,
-  removeDeliveredQueuedChatSendForRun,
-  removeQueuedMessage,
-} from "./chat-queue.ts";
+import type {
+  ChatPendingInputAction,
+  ChatPendingInputView,
+  PendingInputRequest,
+} from "./chat-pending-inputs.types.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { projectChatSystemNotice } from "./chat-system-notice.ts";
-import { buildMessageItems } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
 } from "./history-merge.ts";
-import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
-function reconcileQueuedInputs(
+export type { PendingSteer } from "./chat-pending-input-display.ts";
+export { buildPendingInputQueueItems } from "./chat-pending-input-presentation.ts";
+
+export function isPendingInputDismissHidden(view: ChatPendingInputView, id: string): boolean {
+  return Boolean(view.dismissing?.has(id) || view.dismissed?.has(id));
+}
+
+export function reconcileQueuedInputs(
   queued: ChatPendingInputsPage["items"],
   page: ChatPendingInputsPage,
   receipts?: ChatInputReceipts,
@@ -62,105 +59,6 @@ function reconcileQueuedInputs(
       ? receipt.state === "pending" && receipt.queued
       : !input.runId || !queried.has(input.runId);
   });
-}
-
-function describePendingInputMessage(message: unknown): string {
-  const normalized = normalizeMessage(message);
-  const attachmentLabels = normalized.content.flatMap((part) =>
-    part.type === "attachment" || part.type === "attachment_error"
-      ? [part.attachment.label]
-      : part.type === "image"
-        ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
-        : [],
-  );
-  const imageCount = normalized.content.filter((part) => part.type === "image").length;
-  return (
-    extractText(message) ||
-    attachmentLabels.join(", ") ||
-    (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : "")
-  );
-}
-
-export function buildPendingInputQueueItems(
-  inputs: ChatPendingInputsPage["items"],
-): ChatQueueDisplayItem[] {
-  return inputs
-    .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
-    .filter((input) => input.queued && input.state === "queued" && input.runId)
-    .map<ChatQueueDisplayItem>((input) => ({
-      id: `pending-input:${input.id}`,
-      text: describePendingInputMessage(input.message),
-      createdAt: input.acceptedAt,
-      pendingRunId: input.runId,
-      serverQueued: true,
-      sender: normalizeMessage(input.message).sender ?? undefined,
-    }));
-}
-
-const PENDING_INPUT_PREVIEW_MAX_CHARS = 60;
-
-function describePendingInputPreview(message: unknown): string {
-  const compact = describePendingInputMessage(message).replace(/\s+/gu, " ").trim();
-  if (!compact) {
-    return t("chat.pendingInputs.untitledInput");
-  }
-  return compact.length > PENDING_INPUT_PREVIEW_MAX_CHARS
-    ? `${truncateUtf16Safe(compact, PENDING_INPUT_PREVIEW_MAX_CHARS - 1)}…`
-    : compact;
-}
-
-function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
-  return (
-    !input.queued &&
-    (input.state === "interrupted" || input.state === "cancelled") &&
-    asNullableRecord(input.message)?.display !== false
-  );
-}
-
-export function isPendingInputDismissHidden(view: ChatPendingInputView, id: string): boolean {
-  return Boolean(view.dismissing?.has(id) || view.dismissed?.has(id));
-}
-
-export function buildPendingInputItems(
-  inputs: ChatPendingInputsPage["items"],
-  workspaceSyncPendingRunIds: readonly string[] = [],
-  workerSetupPending = false,
-): ChatItem[] {
-  // Custody records stay outside active-run ordering until the writer promotes them.
-  const items: ChatItem[] = [];
-  for (const input of inputs) {
-    let pendingStatus: PendingInputStatus =
-      input.state === "queued" || input.state === "cancelled" ? input.state : "interrupted";
-    if (
-      input.state === "queued" &&
-      input.runId &&
-      (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
-    ) {
-      pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
-    }
-    const retired = isDismissablePendingInput(input)
-      ? {
-          id: input.id,
-          status: input.state === "interrupted" ? ("interrupted" as const) : ("cancelled" as const),
-          preview: describePendingInputPreview(input.message),
-        }
-      : undefined;
-    // Custody keeps submission correlation outside the message; use it for
-    // presentation without inventing transcript or execution identity.
-    items.push(
-      ...buildMessageItems([input.message], () =>
-        input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
-      ).flatMap((item) =>
-        projectChatSystemNotice({ ...item, startsTurn: true }, undefined, {
-          status: pendingStatus,
-          key: `pending-input:${input.id}:state`,
-          timestamp: input.acceptedAt,
-          ...(retired ? { retired } : {}),
-        }),
-      ),
-    );
-  }
-  return items;
 }
 
 export function getChatPendingInputs(state: ChatState): ChatPendingInputView | undefined {
@@ -191,19 +89,15 @@ function collectChatInputRunIds(state: ChatState): string[] {
   const current = new Set(
     runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
   );
-  return [
-    ...new Set([
-      ...(getChatPendingInputs(state)?.receiptRunIds.filter((id) => current.has(id)) ?? []),
-      ...current,
-    ]),
-  ];
+  const retained = getChatPendingInputs(state)?.receiptRunIds.filter((id) => current.delete(id));
+  return [...(retained ?? []), ...current];
 }
 
 export function readChatInputRunIds(state: ChatState): string[] {
   return collectChatInputRunIds(state).slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS).toSorted();
 }
 
-function rotateInputReceipts(
+export function rotateInputReceipts(
   state: ChatState,
   view: ChatPendingInputView,
   queriedRunIds: readonly string[] = [],
@@ -215,7 +109,7 @@ function rotateInputReceipts(
   );
 }
 
-function reconcilePendingInputPage(
+export function reconcilePendingInputPage(
   state: ChatState,
   page: ChatPendingInputsPage | undefined,
   receipts?: ChatInputReceipts,
@@ -315,7 +209,7 @@ export function applyChatPendingInputs(
   chatRunPresentation(state).publish();
 }
 
-async function requestPendingInputPage(
+export async function requestPendingInputPage(
   state: ChatState,
   before: number | undefined,
   kind: PendingInputRequest["kind"],
@@ -340,48 +234,8 @@ async function requestPendingInputPage(
   }
   const current = () => ownsPendingInputRequest(state, view, request);
   try {
-    while (current()) {
-      const inputRunIds = readChatInputRunIds(state);
-      const result = await client.request<{
-        sessionId?: string;
-        pendingInputs?: ChatPendingInputsPage;
-        inputReceipts?: ChatInputReceipts;
-      }>("chat.history", {
-        sessionKey: view.sessionKey,
-        toolResultMaxChars: 2_000,
-        agentId: view.agentId,
-        limit: 20,
-        ...(inputRunIds.length ? { inputRunIds } : {}),
-        ...(request.before === undefined ? {} : { pendingBefore: request.before }),
-      });
-      if (!current() || result.sessionId !== view.sessionId) {
-        return;
-      }
-      // An overlapping live update may leave this page briefly behind; the next
-      // ordinary refresh catches it up without restarting navigation reads.
-      const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
-      view.queuedInputs = reconcileQueuedInputs(
-        view.queuedInputs,
-        page,
-        result.inputReceipts,
-        inputRunIds,
-      );
-      view.queuedCount = page.queuedCount ?? view.queuedCount;
-      rotateInputReceipts(state, view, inputRunIds);
-      if (request.kind !== "discovery") {
-        view.page = page;
-        view.before = request.before;
-      }
-      if (request.kind === "discovery" || request.before === undefined) {
-        view.queueBefore = page.nextBefore;
-      }
-      if (view.queuedInputs.length < view.queuedCount && view.queueBefore !== undefined) {
-        request.kind = "discovery";
-        request.before = view.queueBefore;
-        continue;
-      }
-      return;
-    }
+    const { fetchPendingInputPage } = await import("./chat-pending-inputs.runtime.ts");
+    await fetchPendingInputPage(state, view, request, current);
   } catch (error) {
     if (current()) {
       view.error = formatUiError(error);
@@ -400,73 +254,48 @@ export function loadChatPendingInputs(state: ChatState, before?: number): Promis
   return requestPendingInputPage(state, before, "navigation");
 }
 
-/** Retired inputs on the displayed page that are not already being dismissed. */
-export function listDismissablePendingInputs(
-  view: ChatPendingInputView,
-): ChatPendingInputsPage["items"] {
-  return view.page.items.filter(
-    (input) => isDismissablePendingInput(input) && !isPendingInputDismissHidden(view, input.id),
-  );
-}
-
-/** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */
-export async function dismissChatPendingInputs(
+export async function mutateChatPendingInput(
   state: ChatState,
-  inputIds: readonly string[],
+  action: ChatPendingInputAction,
 ): Promise<void> {
   const view = getChatPendingInputs(state);
   const client = state.client;
   const sessionId = view?.sessionId;
-  if (!view || !sessionId || !client || !state.connected || !inputIds.length) {
+  if (!view || !sessionId || !client || !state.connected) {
     return;
   }
-  const owner = {};
   const connectionIsCurrent = captureChatConnectionOwner(state, false);
-  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
-  view.dismissing = new Map([
-    ...(view.dismissing ?? []),
-    ...inputIds.map((id) => [id, owner] as const),
-  ]);
-  view.error = undefined;
-  chatRunPresentation(state).publish();
+  const current = () => connectionIsCurrent() && getChatPendingInputs(state) === view;
+  // Keep dismissal immediate while its mutation implementation loads on demand.
+  if (action.kind === "dismiss") {
+    (view.dismissing ??= new Map()).set(action.inputId, current);
+    view.error = undefined;
+    chatRunPresentation(state).publish();
+  }
   try {
-    const result = await client.request<ChatPendingInputsDismissResult>(
-      "chat.pendingInputs.dismiss",
-      {
-        sessionKey: view.sessionKey,
-        ...(view.agentId ? { agentId: view.agentId } : {}),
-        sessionId,
-        inputIds: [...inputIds],
-      },
-    );
-    // Route changes retain this connection's custody; a replacement Gateway owns its own copies.
-    if (connectionIsCurrent()) {
-      const scope = { sessionKey: view.sessionKey, agentId: view.agentId };
-      for (const runId of result.runIds) {
-        const copy = readDeliveredQueuedChatSendForRun(state, runId, scope);
-        if (copy && (!copy.sessionId || copy.sessionId === sessionId)) {
-          removeDeliveredQueuedChatSendForRun(state, runId, scope);
-        }
-      }
+    const { executePendingInputAction } = await import("./chat-pending-inputs.runtime.ts");
+    if (current()) {
+      await executePendingInputAction(
+        { state, view, client, sessionId, current, connectionIsCurrent },
+        action,
+      );
     }
+  } catch (error) {
     if (!current()) {
       return;
     }
-    view.dismissed = new Set([
-      ...(view.dismissed ?? []),
-      ...result.dismissedIds,
-      ...result.missingIds,
-    ]);
-    void requestPendingInputPage(state, view.before, "refresh");
-  } catch (error) {
-    if (current()) {
+    if (action.kind === "steer") {
+      // A refused Send now is not a user-facing error: the steer stays queued and
+      // still reaches the next model turn. Refresh so its row shows current state.
+      void requestPendingInputPage(state, view.before, "refresh");
+    } else {
       view.error = formatUiError(error);
     }
   } finally {
     if (getChatPendingInputs(state) === view) {
-      view.dismissing = new Map(
-        [...(view.dismissing ?? [])].filter(([, request]) => request !== owner),
-      );
+      if (action.kind === "dismiss" && view.dismissing?.get(action.inputId) === current) {
+        view.dismissing.delete(action.inputId);
+      }
       chatRunPresentation(state).publish();
     }
   }

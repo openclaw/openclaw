@@ -14,13 +14,10 @@ import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
   it("paginates each expanded section independently", async () => {
-    const threadKeys = Array.from({ length: 12 }, (_, index) => `agent:main:thread-${index}`);
-    const categoryKeys = Array.from({ length: 12 }, (_, index) => `agent:main:alpha-${index}`);
+    const threadKeys = Array.from({ length: 17 }, (_, index) => `agent:main:thread-${index}`);
+    const categoryKeys = Array.from({ length: 17 }, (_, index) => `agent:main:alpha-${index}`);
     const sessions = createSessionsHarness("main", [...threadKeys, ...categoryKeys]);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list fixture");
-    }
+    const result = sessions.result;
     for (const row of result.sessions) {
       if (categoryKeys.includes(row.key)) {
         row.category = "Alpha";
@@ -32,8 +29,8 @@ describe("AppSidebar session section visibility", () => {
     const category = sidebar.querySelector('[data-session-section="category:Alpha"]');
     const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
+    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
     expect(threads?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
       "Other",
     );
@@ -44,8 +41,8 @@ describe("AppSidebar session section visibility", () => {
     threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
     await settleLitElement(sidebar);
 
-    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
-    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(12);
+    expect(category?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
+    expect(threads?.querySelectorAll(".sidebar-recent-session")).toHaveLength(17);
     expect(category?.querySelector('[aria-label="Show more"]')).not.toBeNull();
     expect(threads?.querySelector('[aria-label="Show more"]')).toBeNull();
   });
@@ -56,10 +53,7 @@ describe("AppSidebar session section visibility", () => {
       "agent:main:research",
       "agent:main:operations",
     ]);
-    const result = harness.sessions.state.result;
-    if (!result) {
-      throw new Error("expected categorized session fixtures");
-    }
+    const result = harness.result;
     for (const row of result.sessions) {
       if (row.key === "agent:main:research") {
         row.category = "Research";
@@ -79,13 +73,11 @@ describe("AppSidebar session section visibility", () => {
     expect(threads).toBeNull();
 
     const toolbar = sidebar.querySelector(".sidebar-session-toolbar");
-    expect(toolbar?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
-      "Sessions",
-    );
+    expect(toolbar?.querySelector(".sidebar-panel-header__title")?.textContent).toBe("Sessions");
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");
-    expect(sidebar.querySelector('.sidebar-rail [aria-label="New conversation"]')).not.toBeNull();
+    expect(sidebar.querySelector('.sidebar-rail [aria-label="New session"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
@@ -125,11 +117,7 @@ describe("AppSidebar session section visibility", () => {
 
   it("hides empty Other at rest but keeps empty categories and the drag drop target", async () => {
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
-    const result = harness.sessions.state.result;
-    const alpha = result?.sessions.find((row) => row.key === "agent:main:alpha");
-    if (!alpha) {
-      throw new Error("expected Alpha session fixture");
-    }
+    const alpha = harness.row("agent:main:alpha");
     alpha.category = "Alpha";
     alpha.pinned = true;
     harness.publish({ groups: ["Empty", "Alpha"] });

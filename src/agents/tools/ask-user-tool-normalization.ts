@@ -10,6 +10,8 @@ import { questionShapeError } from "../../gateway/question-validation.js";
 import { ToolInputError } from "./common.js";
 
 export const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
+export const REQUIRED_ACTION_READY = "Ready to recheck";
+const REQUIRED_ACTION_STOP = "Stop this task";
 export const QUESTION_RPC_GRACE_MS = 10_000;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
@@ -21,17 +23,45 @@ export function normalizeAskUserParams(value: unknown) {
   if (!Value.Check(AskUserToolSchema, value)) {
     throw new ToolInputError("ask_user arguments do not match the model-facing question contract");
   }
-  const questions: QuestionRequestQuestion[] = value.questions.map((question) => ({
-    questionId: question.id.trim(),
-    header: truncateUtf16Safe(question.header.trim(), 12),
-    question: question.question.trim(),
-    options: question.options.map((option) => ({
-      label: option.label.trim(),
-      ...(option.description?.trim() ? { description: option.description.trim() } : {}),
-    })),
-    ...(question.multiSelect === true ? { multiSelect: true } : {}),
-    isOther: true,
-  }));
+  const questions: QuestionRequestQuestion[] = [];
+  const action = value.requiredAction;
+  if (action) {
+    if (value.questions) {
+      throw new ToolInputError("ask_user accepts questions or requiredAction, not both");
+    }
+    if (!action.reason.trim() || !action.instructions.trim()) {
+      throw new ToolInputError("requiredAction needs a specific blocker and supported manual step");
+    }
+    questions.push({
+      questionId: "required_action",
+      header: "Manual step",
+      question: [
+        action.reason.trim(),
+        action.instructions.trim(),
+        ...(action.url ? [action.url] : []),
+      ].join("\n\n"),
+      ...(action.url ? { url: action.url } : {}),
+      options: [{ label: REQUIRED_ACTION_READY }, { label: REQUIRED_ACTION_STOP }],
+      isOther: false,
+    });
+  } else {
+    if (!value.questions) {
+      throw new ToolInputError("ask_user requires questions or requiredAction");
+    }
+    questions.push(
+      ...value.questions.map((question) => ({
+        questionId: question.id.trim(),
+        header: truncateUtf16Safe(question.header.trim(), 12),
+        question: question.question.trim(),
+        options: question.options.map((option) => ({
+          label: option.label.trim(),
+          ...(option.description?.trim() ? { description: option.description.trim() } : {}),
+        })),
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
+        isOther: true,
+      })),
+    );
+  }
 
   if (!questions.every((question) => Value.Check(QuestionRequestQuestionSchema, question))) {
     throw new ToolInputError("ask_user questions do not match the required question format");
@@ -51,7 +81,11 @@ export function normalizeAskUserParams(value: unknown) {
     throw new ToolInputError(semanticError);
   }
 
-  return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds) };
+  return {
+    questions,
+    timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds),
+    ...(action ? { requiredAction: true as const } : {}),
+  };
 }
 
 /** Shared human-question wait contract, including credential entry and harness watchdogs. */
@@ -104,7 +138,31 @@ const AskUserQuestionSchema = Type.Object(
 
 export const AskUserToolSchema = Type.Object(
   {
-    questions: Type.Array(AskUserQuestionSchema, { minItems: 1, maxItems: 3 }),
+    questions: Type.Optional(Type.Array(AskUserQuestionSchema, { minItems: 1, maxItems: 3 })),
+    requiredAction: Type.Optional(
+      Type.Object(
+        {
+          reason: Type.String({
+            minLength: 1,
+            maxLength: 500,
+            description:
+              "Observed external blocker, not an assumed policy denial or inactive Goal status.",
+          }),
+          instructions: Type.String({
+            minLength: 1,
+            maxLength: 2000,
+            description:
+              "External human-only step that can finish while this run waits. Never Goal Resume, an idle-session control, or approval of already authorized work.",
+          }),
+          url: Type.Optional({
+            ...QuestionRequestQuestionSchema.properties.url,
+            description:
+              "Optional verified HTTP(S) destination. Opening it is not completion or authorization.",
+          }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     timeoutSeconds: Type.Optional(
       Type.Integer({
         description:

@@ -68,7 +68,7 @@ function isProgressCardStaleForRun(card: ProgressCard, startedAt?: number): bool
 }
 
 /** A session outcome only describes a plan written during that same run. */
-export function progressCardRunOutcome(
+function progressCardRunOutcome(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
@@ -135,37 +135,16 @@ export function progressCardNoteSummary(sanitizedHtml: string): string {
   return template.content.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-export function promoteFirstProgressBar(sanitizedHtml: string): string {
+/** Commentary-only surfaces keep the note copy and drop its progress bars. */
+export function removeProgressBars(sanitizedHtml: string): string {
   const { template, bars } = parseProgressMarkup(sanitizedHtml);
-  const progress = bars[0];
-  if (!progress) {
-    return sanitizedHtml;
+  for (const bar of bars) {
+    const parent = bar.parentElement;
+    bar.remove();
+    if (parent?.tagName === "P" && parent.children.length === 0 && !parent.textContent?.trim()) {
+      parent.remove();
+    }
   }
-  const value = progress.getAttribute("value")?.trim();
-  const max = progress.getAttribute("max")?.trim();
-  const label =
-    progress.getAttribute("aria-label")?.trim() ||
-    (value && max
-      ? `${t("sessionProgressCard.title")} · ${value}/${max}`
-      : t("sessionProgressCard.title"));
-  progress.setAttribute("aria-label", label);
-  const originalParent = progress.parentElement;
-  const wrapper = document.createElement("div");
-  wrapper.className = "session-progress-card__progress";
-  const visibleLabel = document.createElement("span");
-  visibleLabel.className = "session-progress-card__progress-label";
-  visibleLabel.textContent = label;
-  wrapper.append(visibleLabel, progress);
-  if (
-    originalParent?.tagName === "P" &&
-    originalParent.children.length === 0 &&
-    !originalParent.textContent?.trim()
-  ) {
-    originalParent.remove();
-  }
-  // Reorder only the already-sanitized tree; generated copy uses textContent so
-  // promoting a bar cannot reintroduce authored markup or event handlers.
-  template.content.prepend(wrapper);
   return template.innerHTML;
 }
 

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { onSettled } from "solid-js";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { flush, onSettled } from "solid-js";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -29,6 +29,9 @@ function expectRect(element: HTMLElement, ...values: number[]) {
     values.map((value) => `${value}px`),
   );
 }
+
+// The menu body is lazy; a cold transform on a loaded CI shard can outlast waitForSolid.
+beforeAll(() => import("./chat-composer-plus-menu-content.tsx"));
 
 beforeEach(() => {
   restoreDialog = installDialogPolyfill();
@@ -250,4 +253,64 @@ it("keeps mounted picker refs scoped and refreshes their anchor rectangle on eve
   expect(clickFirst).toHaveBeenCalledOnce();
   expect(clickPhoto).toHaveBeenCalledOnce();
   expect(clickSecond).toHaveBeenCalledOnce();
+});
+
+it("rejects stale or cancelled attachment returns and admits a fresh reopened selection", async () => {
+  const draft = createAttachmentDraft({ maxBytes: 1024, maxImageBytes: 1024, maxBatchBytes: 4096 });
+  onTestFinished(draft.dispose);
+  const firstScope = new AbortController().signal;
+  const currentScope = new AbortController().signal;
+  const view = mountInputs({ ...draft.props, readSignal: firstScope });
+  const file = new File(["synthetic"], "qa.txt", { type: "text/plain" });
+  const selectAndExpect = async (expectedFileNames: string[]) => {
+    Object.defineProperty(view.file, "files", { configurable: true, value: [file] });
+    view.file.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForSolid(() => expect(draft.reads.pendingReads).toBe(0));
+    expect(draft.attachments().map((entry) => entry.fileName)).toEqual(expectedFileNames);
+  };
+  view.file.click();
+  await view.draw({ ...draft.props, readSignal: currentScope });
+  flush();
+  await selectAndExpect([]);
+  await selectAndExpect([]);
+  view.file.click();
+  view.file.dispatchEvent(new Event("cancel", { bubbles: true }));
+  await selectAndExpect([]);
+  view.file.click();
+  await selectAndExpect(["qa.txt"]);
+});
+
+it("respects a close veto before synchronously activating the retained input", async () => {
+  const handle = createChatAttachmentInputHandle();
+  mountSolid(
+    () => (
+      <>
+        <ChatAttachmentInputs inputHandle={handle} />
+        <ChatComposerPlusMenu
+          menu={makeMenu({
+            open: true,
+            inputHandle: handle,
+          })}
+        />
+      </>
+    ),
+    {},
+    host,
+  );
+  await waitForSolid(() => expect(host.querySelector('[data-value="file"]')).not.toBeNull());
+  const action = host.querySelector<HTMLButtonElement>('[data-value="file"]')!;
+  const surface = action.closest<HTMLElement>('[role="menu"]')!;
+  const picker = input("file");
+  const parent = picker.parentNode;
+  const activation = vi.spyOn(picker, "click").mockImplementation(() => {
+    expect(surface.matches(":popover-open")).toBe(false);
+    expect(picker.parentNode).toBe(parent);
+  });
+  surface.addEventListener("overlay-hide", (event) => event.preventDefault(), { once: true });
+  action.click();
+  expect(activation).not.toHaveBeenCalled();
+  expect(surface.matches(":popover-open")).toBe(true);
+  action.click();
+  expect(activation).toHaveBeenCalledOnce();
+  expect(surface.style.getPropertyValue("--oc-overlay-hide-duration")).toBe("");
 });

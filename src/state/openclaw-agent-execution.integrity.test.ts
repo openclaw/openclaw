@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -26,8 +27,10 @@ import {
   revokeSqliteDatabaseAdmissionsForPath,
   readSqliteDatabaseIntegrityVerification,
   readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
 import type { FixtureOperations } from "../infra/sqlite-worker-store.test-support.js";
 import {
@@ -74,7 +77,9 @@ import {
   getPendingOpenClawAgentDatabasePreparation,
   prepareOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
+import { registerRestartRecoveryAdmissionTests } from "./openclaw-agent-restart-recovery.test-support.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -87,7 +92,7 @@ import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 const counter = vi.hoisted(() => ({
   path: "",
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2),
-  gate: undefined as SharedArrayBuffer | undefined,
+  workers: new Set<Worker>(),
 }));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-cpu.js")>();
@@ -102,12 +107,6 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
           statement[method] = (...args) => {
-            if (workerData.testIntegrityGate) {
-              const gate = new Int32Array(workerData.testIntegrityGate);
-              Atomics.store(gate, 1, 1);
-              Atomics.notify(gate, 1);
-              while (Atomics.load(gate, 0) === 1) Atomics.wait(gate, 0, 1);
-            }
             Atomics.add(new Int32Array(workerData.testIntegrityChecks),
               match[1].toLowerCase() === "integrity_check" ? 0 : 1, 1);
             return execute(...args);
@@ -123,7 +122,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      return actual.createCpuTrackedWorker(filename, {
+      const worker = actual.createCpuTrackedWorker(filename, {
         ...options,
         execArgv: [
           ...(options?.execArgv ?? []),
@@ -134,9 +133,13 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
           ...options?.workerData,
           testIntegrityPath: counter.path,
           testIntegrityChecks: counter.checks,
-          testIntegrityGate: counter.gate,
         },
       });
+      if (String(filename).includes("sqlite-store.worker")) {
+        counter.workers.add(worker);
+        worker.once("exit", () => counter.workers.delete(worker));
+      }
+      return worker;
     },
   };
 });
@@ -157,6 +160,12 @@ const makeEnv = (prefix: string) => ({
   OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make(prefix)),
 });
 const checks = () => Array.from(new Int32Array(counter.checks));
+const openPlugin = (env: NodeJS.ProcessEnv, index: number) =>
+  sqliteWorkerStore.openSqliteWorkerStore<FixtureOperations>({
+    moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
+    databasePath: `${env.OPENCLAW_STATE_DIR}/plugin-${index}.sqlite`,
+    input: undefined,
+  });
 const initialized = (scope: AgentDatabaseExecutionScope, sessionId: string, agentId = "main") =>
   scope.execute({
     type: "session.transcript.initialize",
@@ -164,16 +173,38 @@ const initialized = (scope: AgentDatabaseExecutionScope, sessionId: string, agen
   });
 
 function holdIntegrity(pathname: string) {
-  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
-  Atomics.store(gate, 0, 1);
+  const directory = tempDirs.make("startup-integrity-gate-");
+  const entered = `${directory}/entered`,
+    released = `${directory}/released`;
+  const preload = `${directory}/pause.cjs`;
+  const waiting = new AbortController();
+  fs.writeFileSync(
+    preload,
+    `
+const fs = require('node:fs'), { DatabaseSync } = require('node:sqlite');
+const { isMainThread } = require('node:worker_threads');
+const prepare = DatabaseSync.prototype.prepare;
+DatabaseSync.prototype.prepare = function(sql) {
+  if ((!isMainThread || process.argv[1]?.includes('sqlite-integrity.worker')) &&
+      this.location() === ${JSON.stringify(pathname)} && /^PRAGMA integrity_check/i.test(sql)) {
+    fs.writeFileSync(${JSON.stringify(entered)}, 'entered');
+    const gate = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(${JSON.stringify(released)})) Atomics.wait(gate, 0, 0, 10);
+  }
+  return prepare.call(this, sql);
+};`,
+  );
+  const env = sqliteWorkerPreloadEnv(preload);
+  for (const [key, value] of Object.entries(env)) {
+    vi.stubEnv(key, value);
+  }
   counter.path = pathname;
-  counter.gate = gate.buffer;
   return {
-    entered: () => Promise.resolve(Atomics.waitAsync(gate, 1, 0).value),
+    env,
+    entered: () => waitForFile(entered, waiting.signal),
     release() {
-      Atomics.store(gate, 0, 0);
-      Atomics.notify(gate, 0);
-      counter.gate = undefined;
+      fs.writeFileSync(released, "release");
+      waiting.abort();
     },
   };
 }
@@ -201,23 +232,31 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
     }
     invalidateValidation(pathname);
     revokeSqliteDatabaseAdmissionsForPath(pathname);
+    const integrity = holdIntegrity(pathname);
+    Object.assign(env, integrity.env);
     await withAgentDatabaseStartupAdmission(async (admission) => {
       await withOpenClawStateDatabaseReadSnapshot(
         () => assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" }),
         { env },
       );
       const owner = admission.adopt();
-      const integrity = holdIntegrity(pathname);
       let current = true;
       const assertWrite = captureAgentDatabaseAdmission("main", { env });
       let publicationWrite = assertWrite;
       const phases: string[] = [];
+      const plugins: sqliteWorkerStore.SqliteWorkerStore<FixtureOperations>[] = [];
       try {
+        for (const index of contents === "valid" ? [0, 1] : []) {
+          plugins.push(await openPlugin(env, index));
+        }
         admission.activate({
           isCurrent: () => current,
           preparationReady: Promise.resolve(),
           captureReadAdmission: ({ assertCurrent }) => assertCurrent,
           openAgent: ({ assertCurrent, signal: openingSignal }) => {
+            // Read snapshots are admitted; missing uniqueness still requires full writer admission.
+            using pendingSchema = openNodeSqliteDatabase(pathname);
+            pendingSchema.exec("DROP INDEX idx_agent_conversations_identity");
             phases.push("open");
             return prepareOpenClawAgentDatabaseExecution(scope, assertCurrent, openingSignal);
           },
@@ -241,6 +280,14 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           },
         });
         await withinTest(integrity.entered(), signal);
+        if (contents === "failed") {
+          plugins.push(await withinTest(openPlugin(env, 0), signal));
+        }
+        for (const plugin of plugins) {
+          expect(
+            await withinTest(plugin.execute({ type: "read", input: undefined }), signal),
+          ).toEqual([]);
+        }
         using projection =
           contents === "failed"
             ? await createTestProjection({ cfg: config, modelCatalog: [] })
@@ -252,10 +299,9 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         expect(publicationWrite).toThrow("startup inspection");
         expect(isAgentDatabaseStartupReadReady(`${pathname}.other`, { env })).toBe(false);
         const writeSettled = vi.fn();
-        const writing = Promise.resolve(admission.waitForAgentPreparation("main", { env })).then(
-          writeSettled,
-          writeSettled,
-        );
+        const writing = Promise.resolve(
+          admission.waitForAgentPreparation("main", { env, forInput: true }),
+        ).then(writeSettled, writeSettled);
         if (contents !== "missing-index") {
           const read = withinTest(
             withEntry(scope.sessionKey, scope, (row) => row.entry),
@@ -291,6 +337,14 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           }
         }
         expect(writeSettled).not.toHaveBeenCalled();
+        if (contents === "valid") {
+          await expect(
+            admission.waitForAgentPreparation("main", { env, forWrite: true }),
+          ).rejects.toThrow("Agent database verification and preparation in progress");
+          // The caller's retryable response must not cancel or replace the original writer.
+          expect(writeSettled).not.toHaveBeenCalled();
+          expect(phases).not.toContain("migration");
+        }
         if (contents === "superseded") {
           current = false;
         }
@@ -318,9 +372,15 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
               ? ["publication", "open"]
               : ["publication", "open", "migration"],
         );
+        if (stopping) {
+          // Admission stops observing cleanup; the execution owner still joins native retirement.
+          await closeOpenClawAgentDatabasesAsync();
+        }
+        expect(counter.workers.size).toBe(plugins.length);
       } finally {
         integrity.release();
         await owner.stop();
+        await Promise.all(plugins.map((plugin) => plugin.close()));
       }
     });
   },
@@ -336,6 +396,8 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
     openOpenClawStateDatabase({ env })
       .db.prepare("UPDATE agent_database_leases SET owner_start_time = -1 WHERE lease_id = ?")
       .run(stale);
+    // A noncanonical unique index, rather than owner death, still requires full admission.
+    database.db.exec("DROP INDEX idx_agent_conversations_identity");
     closeAgent(database.path);
     invalidateValidation(database.path);
     revokeSqliteDatabaseAdmissionsForPath(database.path);
@@ -435,13 +497,14 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
   },
 );
 
-it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
+it.for(["warm", "cold", "peer"] as const)(
   "serves independent stores and prepares peers while agent integrity is held (%s)",
   { timeout: 30_000 },
   async (workload, { signal }) => {
     const env = makeEnv("agent-preparation-isolation-");
     const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
     const integrity = holdIntegrity(databases[0]!.path);
+    databases[0]!.db.exec("DROP INDEX idx_agent_conversations_identity");
     invalidateValidation(databases[0]!.path);
     const executions = databases.map((database) =>
       capture({ agentId: database.agentId, path: database.path, env }),
@@ -453,21 +516,7 @@ it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
     });
     const pending: Promise<void>[] = [];
     let slowPrepared = false;
-    const plugins: Promise<sqliteWorkerStore.SqliteWorkerStore<FixtureOperations>>[] = [];
-    const openPlugin = () => {
-      const opening = sqliteWorkerStore.openSqliteWorkerStore<FixtureOperations>({
-        moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: `${env.OPENCLAW_STATE_DIR}/plugin-${plugins.length}.sqlite`,
-        input: undefined,
-      });
-      plugins.push(opening);
-      return opening;
-    };
     try {
-      if (workload === "plugin-warm") {
-        await openPlugin();
-        await openPlugin();
-      }
       if (workload === "warm") {
         await queue.enqueue("before", { text: "before preparation" });
       }
@@ -480,20 +529,7 @@ it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
       pending.push(preparing);
       void preparing.catch(() => {});
       await withinTest(integrity.entered(), signal);
-      if (workload.startsWith("plugin-")) {
-        if (workload === "plugin-cold") {
-          void openPlugin();
-        }
-        await withinTest(
-          Promise.all(
-            plugins.map(async (opening) => {
-              const store = await opening;
-              expect(await store.execute({ type: "read", input: undefined })).toEqual([]);
-            }),
-          ),
-          signal,
-        );
-      } else if (workload === "peer") {
+      if (workload === "peer") {
         for (const execution of executions.slice(1)) {
           const preparingPeer = execution.prepare(source);
           pending.push(preparingPeer);
@@ -509,7 +545,6 @@ it.for(["warm", "cold", "peer", "plugin-warm", "plugin-cold"] as const)(
     } finally {
       integrity.release();
       await Promise.allSettled(pending);
-      await Promise.all(plugins.map(async (opening) => (await opening).close()));
       await Promise.all(executions.map((execution) => execution.release()));
     }
     expect(slowPrepared).toBe(true);
@@ -635,22 +670,22 @@ it.each([
   ["verified", 0],
   ["two-leases", 0],
   ["two-leases-missing-metadata", 0],
-  ["two-leases-stale", 1],
+  ["two-leases-stale", 0],
   ["two-leases-unknown-owner", 0],
-  ["two-leases-unclean", 1],
+  ["two-leases-unclean", 0],
   ["prepared-existing", 0],
-  ["invalidated", 1],
+  ["invalidated", 0],
   ["failed", 0],
-  ["revoked-before-grant", 1],
-  ["revoked-after-verification-admission", 1],
-  ["missing-metadata", 1],
+  ["revoked-before-grant", 0],
+  ["revoked-after-verification-admission", 0],
+  ["missing-metadata", 0],
   ["closed-host", 0],
   ["closed-host-blocked", 0],
   ["closed-host-blocked-last", 0],
-  ["closed-host-revoked", 1],
-  ["closed-host-replaced", 1],
-  ["closed-host-no-receipt", 1],
-  ["closed-host-no-receipt-rollback", 1],
+  ["closed-host-revoked", 0],
+  ["closed-host-replaced", 0],
+  ["closed-host-no-receipt", 0],
+  ["closed-host-no-receipt-rollback", 0],
 ] as const)(
   "native execution borrows only current host integrity proof (%s)",
   async (proof, expectedChecks) => {
@@ -777,137 +812,137 @@ it.each([
   },
 );
 
-it.runIf(process.platform === "linux")(
-  "fully verifies killed owners before writing, regardless of WAL state or lease provenance",
-  async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
-    const cases = [
-      "same-boot",
-      "checkpointed-wal",
-      "foreign-boot",
-      "legacy-lease",
-      "pid-reused",
-      "dirty-receipt",
-      "corrupt-page",
-      "interrupted-admission",
-    ];
-    const childUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabaseCrash);
-    const child = fork(fileURLToPath(childUrl), cases, {
-      execArgv: resolveRuntimeWorkerArgv(childUrl).slice(0, -1),
-      env: { ...process.env, ...env },
-      silent: true,
-    });
-    let stderr = "";
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    type Fixture = { agentId: string; path: string; corruptionOffset: number };
-    let fixtures: Fixture[];
-    try {
-      fixtures = await new Promise<Fixture[]>((resolve, reject) => {
-        const failed = () => reject(new Error(`Crash fixture exited before opening: ${stderr}`));
-        child.once("error", reject);
-        child.once("exit", failed);
-        child.once("message", (message) => {
-          child.off("exit", failed);
-          resolve(message as Fixture[]);
-        });
+it("recovers killed owners without scans and leaves corruption verification to explicit maintenance", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-process-death-") };
+  const cases = [
+    "same-boot",
+    "checkpointed-wal",
+    "foreign-boot",
+    "legacy-lease",
+    "pid-reused",
+    "lease-less-unclean",
+    "corrupt-page",
+    "interrupted-admission",
+  ];
+  const childUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabaseCrash);
+  const child = fork(fileURLToPath(childUrl), cases, {
+    execArgv: resolveRuntimeWorkerArgv(childUrl).slice(0, -1),
+    env: { ...process.env, ...env },
+    silent: true,
+  });
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  type Fixture = { agentId: string; path: string; corruptionOffset: number };
+  let fixtures: Fixture[];
+  try {
+    fixtures = await new Promise<Fixture[]>((resolve, reject) => {
+      const failed = () => reject(new Error(`Crash fixture exited before opening: ${stderr}`));
+      child.once("error", reject);
+      child.once("exit", failed);
+      child.once("message", (message) => {
+        child.off("exit", failed);
+        resolve(message as Fixture[]);
       });
-    } finally {
-      await stopChildProcess(child, 5_000, { force: true });
+    });
+  } finally {
+    await stopChildProcess(child, 5_000, { force: true });
+  }
+  expect(child.signalCode).toBe("SIGKILL");
+  expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
+  const shared = openOpenClawStateDatabase({ env });
+  for (const fixture of fixtures) {
+    const { agentId, path: pathname } = fixture;
+    const held = shared.db
+      .prepare("SELECT * FROM agent_database_leases WHERE path=?")
+      .get(pathname);
+    expect(held).toMatchObject({ owner_pid: child.pid, owner_start_time: expect.any(Number) });
+    if (agentId === "interrupted-admission") {
+      expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+    } else {
+      expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
     }
-    expect(child.signalCode).toBe("SIGKILL");
-    expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
-    const shared = openOpenClawStateDatabase({ env });
-    for (const fixture of fixtures) {
-      const { agentId, path: pathname } = fixture;
-      const held = shared.db
-        .prepare(
-          "SELECT lease_id, provenance, owner_pid, owner_start_time FROM agent_database_leases WHERE path=?",
-        )
-        .get(pathname);
-      expect(held).toMatchObject({
-        lease_id: expect.stringMatching(/^[a-f0-9-]+$/u),
-        provenance: expect.stringMatching(/^process-v1:[a-f0-9]{64}$/u),
-        owner_pid: child.pid,
-        owner_start_time: expect.any(Number),
-      });
-      if (agentId === "interrupted-admission") {
-        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
-      } else {
-        expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
+    if (agentId === "checkpointed-wal") {
+      expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+    } else {
+      expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
+    }
+    if (agentId === "foreign-boot") {
+      shared.db
+        .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
+        .run(`process-v1:${"0".repeat(64)}`, pathname);
+    } else if (agentId === "legacy-lease") {
+      shared.db
+        .prepare("UPDATE agent_database_leases SET provenance=NULL WHERE path=?")
+        .run(pathname);
+    } else if (agentId === "pid-reused") {
+      shared.db
+        .prepare("UPDATE agent_database_leases SET owner_pid=?, owner_start_time=-1 WHERE path=?")
+        .run(process.pid, pathname);
+    } else if (agentId === "lease-less-unclean") {
+      shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
+    }
+    if (agentId === "corrupt-page") {
+      const file = fs.openSync(pathname, "r+");
+      try {
+        // This checkpointed table has no newer WAL image to hide the invalid btree page.
+        fs.writeSync(file, Buffer.from([0]), 0, 1, fixture.corruptionOffset);
+      } finally {
+        fs.closeSync(file);
       }
-      if (agentId === "checkpointed-wal") {
-        expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
-      } else {
-        expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
-      }
-      if (agentId === "foreign-boot" || agentId === "corrupt-page") {
-        shared.db
-          .prepare("UPDATE agent_database_leases SET provenance=? WHERE path=?")
-          .run(`process-v1:${"0".repeat(64)}`, pathname);
-      } else if (agentId === "legacy-lease") {
-        shared.db
-          .prepare("UPDATE agent_database_leases SET provenance=NULL WHERE path=?")
-          .run(pathname);
-      } else if (agentId === "pid-reused") {
-        shared.db
-          .prepare("UPDATE agent_database_leases SET owner_pid=?, owner_start_time=-1 WHERE path=?")
-          .run(process.pid, pathname);
-      } else if (agentId === "dirty-receipt") {
-        shared.db.prepare("DELETE FROM agent_database_leases WHERE path=?").run(pathname);
-      }
-      if (agentId === "corrupt-page") {
-        const file = fs.openSync(pathname, "r+");
-        try {
-          // This checkpointed table has no newer WAL image to hide the invalid btree page.
-          fs.writeSync(file, Buffer.from([0]), 0, 1, fixture.corruptionOffset);
-        } finally {
-          fs.closeSync(file);
-        }
-      }
+    }
 
-      counter.path = pathname;
-      counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
-      const context = workerContext({ env });
-      const assertCurrent = () => {
-        context.admission.assertCurrent();
-        assertAgentDatabaseAdmitted(agentId, { env });
-      };
-      const source = sourceFor(assertCurrent);
-      await using generation = nativeGeneration(fixture, context, assertCurrent, () =>
-        context.admission.assertCurrent(),
-      );
-      if (agentId === "corrupt-page") {
-        await expect(generation.run(source, async () => "opened")).rejects.toThrow(
+    if (agentId === "corrupt-page") {
+      const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+      try {
+        expect(() => maintenance.run(() => openAgent({ agentId, path: pathname, env }))).toThrow(
           /integrity|malformed|corrupt/i,
         );
-        expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
-        continue;
+      } finally {
+        await maintenance.close();
       }
-      const sessionKey = `agent:${agentId}:after-crash`;
-      await expect(
-        generation.run(source, (scope) => {
-          expect(checks(), agentId).toEqual([1, 1]);
-          return initialized(scope, "after-crash", agentId);
-        }),
-      ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
-      expect(checks(), agentId).toEqual([1, 1]);
-      expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
-        verifiedAt: expect.any(Number),
-      });
-      await generation.close();
-      expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
-      using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
-        { store_json: '{"ok":true}' },
-      ]);
-      expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual([
-        { state_key: "committed-wal" },
-      ]);
+      continue;
     }
-  },
-);
+    counter.path = pathname;
+    counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const context = workerContext({ env });
+    const assertCurrent = () => {
+      context.admission.assertCurrent();
+      assertAgentDatabaseAdmitted(agentId, { env });
+    };
+    const source = sourceFor(assertCurrent);
+    await using generation = nativeGeneration(fixture, context, assertCurrent, () =>
+      context.admission.assertCurrent(),
+    );
+    const expectedChecks = [0, 0];
+    const sessionKey = `agent:${agentId}:after-crash`;
+    await expect(
+      generation.run(source, (scope) => {
+        expect(checks(), agentId).toEqual(expectedChecks);
+        return initialized(scope, "after-crash", agentId);
+      }),
+    ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+    await generation.close();
+    expect(readSqliteDatabaseIntegrityVerification(pathname)?.verifiedAt).toBeUndefined();
+    expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
+    clearOpenClawAgentDatabaseValidationCache(pathname);
+    retireSqliteDatabaseAdmissionForPath(pathname);
+    await using restart = nativeGeneration(fixture, context, assertCurrent);
+    await expect(restart.run(source, async () => "reopened")).resolves.toBe("reopened");
+    expect(checks(), agentId).toEqual(expectedChecks);
+    await restart.close();
+    expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+    expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
+    using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
+    expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
+      { store_json: '{"ok":true}' },
+    ]);
+    expect(reopened.prepare("SELECT state_key FROM auth_profile_state").all()).toEqual([
+      { state_key: "committed-wal" },
+    ]);
+  }
+});
 
 it("settles peer native leases when close revokes a shared worker's opening executor", async () => {
   const options = Array.from({ length: 5 }, () => ({
@@ -962,3 +997,5 @@ it("settles peer native leases when close revokes a shared worker's opening exec
     ]);
   }
 });
+
+registerRestartRecoveryAdmissionTests({ makeEnv });

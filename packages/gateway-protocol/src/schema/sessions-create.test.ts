@@ -21,6 +21,15 @@ describe("sessions.create schema", () => {
     expect(SESSION_CREATE_IDEMPOTENCY_RETENTION_MS).toBeGreaterThan(SESSION_CREATE_RETRY_WINDOW_MS);
   });
 
+  it("rejects the cron-only scheduled memory parent receipt", () => {
+    const scheduledMemoryParent = {
+      sessionKey: "agent:main:dashboard:parent",
+      sessionId: "2f1d2a4e-5c6b-4d7e-8f90-1a2b3c4d5e6f",
+      senderIsOwner: true,
+    };
+    expect(validateSessionsCreateParams({ agentId: "main", scheduledMemoryParent })).toBe(false);
+  });
+
   it("rejects unknown permission modes", () => {
     expect(validateSessionsCreateParams({ agentId: "main", permissionMode: "unrestricted" })).toBe(
       false,

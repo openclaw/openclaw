@@ -5,7 +5,7 @@ import {
   raceWithTimeoutResult,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
+import { listActiveSessionRunKeys } from "../../sessions/session-controller.queries.js";
 import * as controllerWait from "../../sessions/session-controller.wait.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
@@ -84,7 +84,7 @@ function commandFixture(source: "text" | "native", target: boolean) {
     start,
     close: async () => {
       await Promise.all(pending);
-      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+      expect(listActiveSessionRunKeys()).toEqual([]);
     },
   };
 }

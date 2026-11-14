@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelAuthStatusResult } from "../../api/types.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
@@ -41,7 +41,6 @@ import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
-import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
@@ -51,8 +50,10 @@ describe("chat account selection", () => {
   function mountAccountControl(
     request: GatewayRequestHandler,
     selection: ChatAccountSelection | null,
+    modelAuthStatusResult?: ModelAuthStatusResult,
   ) {
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => container.remove());
     let current = true;
     const state = projectChatFields<Pick<ChatPageHost, "client" | "chatAccountSelection">>({
       client: createTestGatewayClient(request),
@@ -64,6 +65,7 @@ describe("chat account selection", () => {
       () => {
         const section = createMemo(() =>
           renderChatModelAccountControl({
+            modelAuthStatusResult,
             owner: state,
             client: state.client,
             selection: state.chatAccountSelection,
@@ -91,16 +93,36 @@ describe("chat account selection", () => {
       retire: () => {
         current = false;
       },
-      open: () =>
-        container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")?.click(),
+      open: () => {
+        container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")?.click();
+        flush();
+      },
       select: (value: string) => {
         container
           .querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)
           ?.click();
-        return container.querySelector("[data-chat-account-group-toggle]")?.textContent?.trim();
+        return container.querySelector(".chat-controls__account-trigger")?.textContent?.trim();
       },
     };
   }
+
+  it("labels automatic selection concisely without changing its account choices", async () => {
+    const request = vi.fn().mockResolvedValue({ profileId: "owner", links: [], accounts: [] });
+    const view = mountAccountControl(request, {
+      kind: "automatic",
+      label: "Automatic account selection",
+    });
+    expect(
+      view.container.querySelector(".chat-controls__account-trigger")?.textContent?.trim(),
+    ).toBe("Account: Auto");
+    view.open();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("users.listModelAccounts", {}));
+    expect(
+      view.container.querySelector('[data-chat-account-option="current"]')?.textContent?.trim(),
+    ).toBe("Automatic");
+    view.select("manage");
+    expect(view.onManage).toHaveBeenCalledOnce();
+  });
 
   it("keeps the current chat choice separate from a saved default for new chats", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -139,12 +161,12 @@ describe("chat account selection", () => {
     expect(request).not.toHaveBeenCalled();
     expect(
       view.container
-        .querySelector("[data-chat-account-group-toggle]")
+        .querySelector(".chat-controls__account-trigger")
         ?.getAttribute("aria-expanded"),
     ).toBe("false");
     view.open();
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
-    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Personal workspace",
     );
     expect(view.container.textContent).not.toContain("Claude account");
@@ -152,7 +174,7 @@ describe("chat account selection", () => {
     expect(view.onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: "openai:work", label: "Work workspace" }),
     );
-    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Personal workspace",
     );
     expect(request.mock.calls.map(([method]) => method)).toEqual(["users.listModelAccounts"]);
@@ -164,7 +186,7 @@ describe("chat account selection", () => {
       source: "user",
     };
     flush();
-    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Work workspace",
     );
     view.select("manage");
@@ -205,6 +227,82 @@ describe("chat account selection", () => {
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows account names and emails without provider usage", async () => {
+    const request = vi.fn().mockResolvedValue({
+      profileId: "owner",
+      links: [],
+      accounts: [
+        {
+          provider: "openai",
+          authProfileId: "openai:work",
+          label: "Work",
+          authType: "oauth",
+          selected: false,
+        },
+      ],
+    } satisfies UsersListModelAccountsResult);
+    const view = mountAccountControl(
+      request,
+      {
+        kind: "personal",
+        label: "Personal",
+        authProfileId: "openai:personal",
+        source: "user",
+      },
+      {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [
+              {
+                profileId: "openai:personal",
+                type: "oauth",
+                status: "ok",
+                email: "personal@example.com",
+              },
+              { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
+            ],
+            usage: {
+              providerId: "openai",
+              accountEmail: "personal@example.com",
+              windows: [
+                { label: "5h", usedPercent: 38 },
+                { label: "Week", usedPercent: 91 },
+              ],
+            },
+          },
+        ],
+      },
+    );
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
+      "Personal",
+    );
+    view.open();
+    await vi.waitFor(() =>
+      expect(
+        view.container.querySelector('[data-chat-account-option="account:openai:work"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      view.container.querySelector('[data-chat-account-option="current"]')?.textContent,
+    ).toContain("personal@example.com");
+    expect(
+      view.container.querySelector('[data-chat-account-option="account:openai:work"]')?.textContent,
+    ).toContain("work@example.com");
+    expect(view.container.textContent).not.toContain("5h");
+    expect(view.container.textContent).not.toContain("Week");
+    expect(view.container.querySelector('[data-chat-account-option="automatic"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(
+      view.container
+        .querySelector(".chat-controls__account-trigger")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("discards a late inventory after leaving its initiating chat", async () => {
@@ -270,8 +368,10 @@ describe("chat pane composer controls", () => {
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
     );
-    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      "GPT-5.6 Sol",
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+        "GPT-5.6 Sol",
+      ),
     );
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
   });
@@ -283,13 +383,13 @@ describe("chat pane composer controls", () => {
       cached: true,
       connected: false,
       error: "metadata unavailable",
-      message: "Offline",
+      message: "Disconnected",
     },
     {
       label: "failed with a snapshot",
       cached: true,
       error: "metadata unavailable",
-      message: "Some models could not be refreshed. Open Models to try again.",
+      message: "Couldn’t refresh some models. Open Models to try again.",
     },
     {
       label: "failed without a snapshot",
@@ -314,12 +414,17 @@ describe("chat pane composer controls", () => {
           : [],
         chatModelSwitchPromises: {},
         sessionKey: "main",
+        agentsList: {
+          agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
       }) as unknown as ChatPageHost;
       state.chatModelCatalogError = error;
       const onModelSetup = vi.fn();
 
       const controls = renderControls(state, {
-        agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
       controls.composerControls.model.modelPickerOpen = true;
@@ -330,13 +435,14 @@ describe("chat pane composer controls", () => {
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
 
-      expandModelProviders(container);
-
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-      const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
-      expect(catalogMessage?.textContent).toContain(message);
+      await waitForSolid(() =>
+        expect(
+          container.querySelector(".chat-controls__model-catalog-state")?.textContent,
+        ).toContain(message),
+      );
       expect(
         container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
       ).toBe(String(!connected));
@@ -352,7 +458,7 @@ describe("chat pane composer controls", () => {
         permissionContainer
           .querySelector('[data-chat-permission-select="true"]')
           ?.getAttribute("aria-label"),
-      ).toContain("Default (Guarded)");
+      ).toContain("Default (Ask me)");
       container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
       expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
     },
@@ -381,8 +487,13 @@ describe("chat pane composer controls", () => {
       entry: { sessionId: "permission-test-session" },
     } satisfies SessionPatchResult);
 
+    state.agentsList = {
+      agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+    };
     const controls = renderControls(state, {
-      agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
     const view = mountSolid(
@@ -401,8 +512,8 @@ describe("chat pane composer controls", () => {
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
-    const heading = container.querySelector<HTMLElement>(".chat-controls__permission-heading");
-    expect(heading?.textContent?.trim()).toBe("Execution permissions");
+    const heading = menu.querySelector<HTMLElement>(".oc-menu-heading__label");
+    expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
@@ -417,19 +528,19 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain("The agent's configured permissions.");
+    expect(defaultOption?.textContent).toContain("Uses this agent’s settings.");
     expect(
       container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
     ).toContain("Default");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
-    ).toBe("Execution permissions: Full Access");
+    ).toBe("Permissions: Full access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();
     expect(full?.querySelector(".chat-controls__permission-lock")).not.toBeNull();
     expect(full?.querySelector(".chat-controls__inline-select-check")).toBeNull();
-    expect(full?.getAttribute("aria-label")).toContain("operator.admin");
+    expect(full?.getAttribute("aria-label")).toContain("Only admins can turn on Full access.");
 
     menu.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
     await vi.waitFor(() =>
@@ -479,7 +590,7 @@ describe("chat pane composer controls", () => {
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(trigger.getAttribute("aria-busy")).toBe("true");
-    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
+    expect(trigger.getAttribute("aria-label")).toBe("Permissions: Auto-review");
     await vi.waitFor(() =>
       expect(patch).toHaveBeenCalledWith(
         key,
@@ -497,7 +608,7 @@ describe("chat pane composer controls", () => {
 
     expect(state.chatError).toBeNull();
     expect(trigger.disabled).toBe(false);
-    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
+    expect(trigger.getAttribute("aria-label")).toBe("Permissions: Auto-review");
   });
 
   it.each([

@@ -23,6 +23,7 @@ struct ChatProTab: View {
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
@@ -48,7 +49,6 @@ struct ChatProTab: View {
 
     var body: some View {
         self.content
-            .disabled(self.isGatewayTransitionPending)
             .task {
                 if self.speech == nil {
                     let gateway = self.appModel.operatorSession
@@ -69,37 +69,44 @@ struct ChatProTab: View {
                 .chatViewModelOwnerID)
     }
 
+    /// Session actions write through the chat owner, so they wait out a gateway handoff
+    /// even though the toolbar that offers them stays enabled.
+    private var areSessionActionsDisabled: Bool {
+        self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned ||
+            self.isGatewayTransitionPending
+    }
+
     private var content: some View {
         self.chatSurface
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
+            // Protect the chat owner during a handoff, but keep the toolbar outside this
+            // scope. Automatic reconnects keep the handoff pending while they retry an
+            // unreachable gateway, and the toolbar is the way to reach Gateway settings.
+                .disabled(self.isGatewayTransitionPending)
+                // The shared canvas supplies color for the native blur. Automatic
+                // edge effects harden to black when the host inserts an opaque fill.
                 .scrollEdgeEffectStyle(.soft, for: .vertical)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    if let headerSidebarAction {
-                        OpenClawSidebarToolbarItem(
-                            action: headerSidebarAction,
-                            placement: .topBarLeading)
+                    if #available(iOS 27.1, *) {
+                        // Custom controls must explicitly support the system's side bar.
+                        self.chatToolbar.axisBehavior(.verticalPreferred)
+                    } else {
+                        self.chatToolbar
                     }
-                    ToolbarItem(placement: .topBarLeading) {
-                        self.headerAgentIdentity
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.chatActionsMenu
-                    }
-                    .sharedBackgroundVisibility(.hidden)
                 }
                 .sheet(item: self.$transcriptShareItem) { item in
                     OpenClawChatFileShareSheet(fileURL: item.fileURL)
                 }
                 .sheet(isPresented: self.$showsNewSessionOptions) {
                     if let viewModel {
-                        ChatNewSessionOptionsPopover(viewModel: viewModel) {
-                            self.showsNewSessionOptions = false
+                        ScrollView {
+                            ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                                self.showsNewSessionOptions = false
+                            }
                         }
-                        .presentationDetents([.medium])
+                        .disabled(self.isGatewayTransitionPending)
+                        .presentationDetents(self.dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
                         .presentationDragIndicator(.visible)
                     }
                 }
@@ -115,6 +122,21 @@ struct ChatProTab: View {
                     Text("OpenClaw could not prepare the Markdown file.")
                         .font(OpenClawType.body)
                 }
+    }
+
+    @ToolbarContentBuilder
+    private var chatToolbar: some ToolbarContent {
+        if let headerSidebarAction {
+            OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            self.headerAgentIdentity
+        }
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarItem(placement: .topBarTrailing) {
+            self.chatActionsMenu
+        }
+        .sharedBackgroundVisibility(.hidden)
     }
 
     @ViewBuilder
@@ -142,11 +164,13 @@ struct ChatProTab: View {
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
-                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                    isCaptureInFlight: self.appModel.talkMode.isEnabled)
+                    ? Self.talkControl(appModel: self.appModel)
+                    : nil,
                 dictationControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
                     isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
-                    ? self.dictationControl
+                    ? Self.dictationControl(appModel: self.appModel)
                     : nil,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech,
@@ -175,24 +199,27 @@ struct ChatProTab: View {
     /// Voice activity owns the contour while gateway state stays a compact,
     /// stable dot on the avatar instead of competing with it in the toolbar.
     private var headerIdentityBadge: some View {
-        TalkAvatarWaveformView(
-            phase: self.voiceAvatarPhase,
-            palette: .openClawBrand,
-            diameter: 38,
-            avatarDiameter: 28)
-        {
-            Text(self.agentBadge)
-                .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(OpenClawBrand.carapaceElevated))
+        ChatVoiceAvatar(talkMode: self.appModel.talkMode) {
+            Group {
+                if let image = self.agentAvatarImage {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Text(self.agentBadge)
+                        .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(OpenClawBrand.carapaceElevated))
+            .clipShape(Circle())
         }
         .overlay(alignment: .topTrailing) {
             self.gatewayAvatarStatusDot
         }
         .accessibilityElement(children: .ignore)
+        .openClawToolbarGlyphScale()
     }
 
     private var gatewayAvatarStatusDot: some View {
@@ -207,29 +234,33 @@ struct ChatProTab: View {
         .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var headerAgentIdentity: some View {
-        HStack { self.headerAgentIdentityControl }
-            .frame(minHeight: 44)
-            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
-            .accessibilityIdentifier("chat-agent-identity")
-            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
-            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        if #available(iOS 27.1, *) {
+            self.headerAgentIdentityButton.modifier(ChatToolbarStatusPopover(
+                isExpanded: self.$isGatewayStatusManuallyExpanded,
+                status: self.expandedGatewayStatusLabel))
+        } else {
+            self.headerAgentIdentityButton
+        }
     }
 
-    private var headerAgentIdentityControl: some View {
+    private var headerAgentIdentityButton: some View {
         Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
         }
+        .openClawToolbarHitTarget(preservesIntrinsicWidth: true)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
         .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
         .accessibilityHint(self.gatewayStatusAccessibilityHint)
-        .accessibilityIdentifier("chat-gateway-status")
+        .accessibilityIdentifier("chat-agent-identity")
+        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     private var headerAgentIdentityLabel: some View {
-        HStack(spacing: 7) {
-            self.headerIdentityBadge
+        Label {
             VStack(alignment: .leading, spacing: 2) {
                 if self.showsExpandedGatewayStatus {
                     self.expandedGatewayStatusLabel
@@ -244,6 +275,8 @@ struct ChatProTab: View {
                     self.headerSessionTitle(session)
                 }
             }
+        } icon: {
+            self.headerIdentityBadge
         }
     }
 
@@ -316,19 +349,6 @@ struct ChatProTab: View {
             : String(localized: "Shows the full gateway status label")
     }
 
-    private var voiceAvatarPhase: TalkWaveformPhase {
-        guard self.appModel.talkMode.isEnabled else { return .idle }
-        if self.appModel.talkMode.isSpeaking {
-            return .speaking(level: self.appModel.talkMode.playbackLevel)
-        }
-        if self.appModel.talkMode.isListening {
-            return .listening(
-                level: self.appModel.talkMode.micLevel,
-                speechActive: self.appModel.talkMode.isUserSpeechDetected)
-        }
-        return .idle
-    }
-
     private var voiceAvatarAccessibilityLabel: String {
         let state = self.appModel.talkMode.isEnabled
             ? self.appModel.talkMode.statusText
@@ -336,68 +356,73 @@ struct ChatProTab: View {
         return "\(self.agentDisplayName), \(state)"
     }
 
-    private var talkControl: OpenClawChatTalkControl {
+    static func talkControl(appModel: NodeAppModel) -> OpenClawChatTalkControl {
         OpenClawChatTalkControl(
-            isEnabled: self.appModel.talkMode.isEnabled,
-            isListening: self.appModel.talkMode.isListening,
-            isSpeaking: self.appModel.talkMode.isSpeaking,
-            isGatewayConnected: self.appModel.talkMode.isGatewayConnected,
-            statusText: self.appModel.talkMode.statusText,
-            providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
-            level: self.talkLevel,
-            inputDevices: self.talkInputDevices,
-            selectedInputDeviceID: self.selectedTalkInputDeviceID,
-            selectInputDevice: { deviceID in
-                self.appModel.talkMode.selectInputDevice(deviceID)
+            isEnabled: appModel.talkMode.isEnabled,
+            isListening: appModel.talkMode.isListening,
+            isSpeaking: appModel.talkMode.isSpeaking,
+            isGatewayConnected: appModel.talkMode.isGatewayConnected,
+            statusText: appModel.talkMode.statusText,
+            providerLabel: appModel.talkMode.gatewayTalkProviderLabel,
+            levelProvider: {
+                if appModel.talkMode.isSpeaking {
+                    return appModel.talkMode.playbackLevel ?? 0
+                }
+                if appModel.talkMode.isListening {
+                    return appModel.talkMode.micLevel
+                }
+                return 0
             },
-            cameraFacing: self.appModel.preferredCameraFacing == .front ? .front : .back,
+            isMicrophoneMuted: appModel.talkMode.isMicrophoneMuted,
+            toggleMicrophone: {
+                Task {
+                    await appModel.talkMode.setMicrophoneMuted(!appModel.talkMode.isMicrophoneMuted)
+                }
+            },
+            inputDevices: self.talkInputDevices,
+            selectedInputDeviceID: self.selectedTalkInputDeviceID(appModel: appModel),
+            selectInputDevice: { deviceID in
+                appModel.talkMode.selectInputDevice(deviceID)
+            },
+            cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
             flipCamera: {
-                self.appModel.flipPreferredCameraFacing()
+                appModel.flipPreferredCameraFacing()
             },
             toggle: { sessionKey in
-                self.appModel.focusChatSession(sessionKey)
-                self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
+                appModel.focusChatSession(sessionKey)
+                appModel.setTalkEnabled(!appModel.talkMode.isEnabled)
             })
     }
 
-    private var talkInputDevices: [OpenClawChatAudioInputDevice] {
+    private static var talkInputDevices: [OpenClawChatAudioInputDevice] {
         (AVAudioSession.sharedInstance().availableInputs ?? []).map { input in
             OpenClawChatAudioInputDevice(id: input.uid, name: input.portName)
         }
     }
 
-    private var selectedTalkInputDeviceID: String? {
-        guard let preferredID = self.appModel.talkMode.preferredInputDeviceID,
+    private static func selectedTalkInputDeviceID(appModel: NodeAppModel) -> String? {
+        guard let preferredID = appModel.talkMode.preferredInputDeviceID,
               self.talkInputDevices.contains(where: { $0.id == preferredID })
         else { return nil }
         return preferredID
     }
 
-    private var dictationControl: OpenClawChatDictationControl {
+    static func dictationControl(appModel: NodeAppModel) -> OpenClawChatDictationControl {
         OpenClawChatDictationControl(
-            phase: self.appModel.chatDictationPhase,
-            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.chatDictationPhase != .idle,
-            partialTranscript: self.appModel.chatDictationPartialTranscript,
-            level: self.appModel.chatDictationLevel,
+            phase: appModel.chatDictationPhase,
+            isAvailable: !appModel.isTalkCaptureActive || appModel.chatDictationPhase != .idle,
+            partialTranscript: appModel.chatDictationPartialTranscript,
+            level: 0,
+            levelProvider: { appModel.chatDictationLevel },
             start: {
-                try await self.appModel.transcribeChatDraft()
+                try await appModel.transcribeChatDraft()
             },
             finish: {
-                self.appModel.finishChatDictation()
+                appModel.finishChatDictation()
             },
             cancel: {
-                self.appModel.cancelChatDictation()
+                appModel.cancelChatDictation()
             })
-    }
-
-    private var talkLevel: Double {
-        if self.appModel.talkMode.isSpeaking {
-            return self.appModel.talkMode.playbackLevel ?? 0
-        }
-        if self.appModel.talkMode.isListening {
-            return self.appModel.talkMode.micLevel
-        }
-        return 0
     }
 
     private var voiceNoteControl: OpenClawChatVoiceNoteControl {
@@ -410,15 +435,21 @@ struct ChatProTab: View {
         Button {
             self.showsChatActions.toggle()
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 22))
-                .foregroundStyle(OpenClawBrand.accent)
+            Label {
+                Text("Chat actions")
+                    .font(OpenClawType.body)
+            } icon: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 22))
+                    .openClawToolbarGlyphScale()
+            }
+            .foregroundStyle(OpenClawBrand.accent)
         }
-        .frame(width: 44, height: 44)
+        .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
-        .popover(isPresented: self.$showsChatActions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+        .popover(isPresented: self.$showsChatActions) {
             self.chatActionsPopover
                 .onDisappear {
                     self.performPendingChatAction()
@@ -432,18 +463,18 @@ struct ChatProTab: View {
             VStack(spacing: 0) {
                 if self.activeAgent?.workspacegit == true {
                     self.chatActionButton(
-                        title: "New chat in worktree",
+                        title: String(localized: "New chat in worktree"),
                         systemImage: "arrow.triangle.branch",
-                        disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                        disabled: self.areSessionActionsDisabled)
                     {
                         Task { await self.viewModel?.startNewSession(worktree: true) }
                     }
                 }
 
                 self.chatActionButton(
-                    title: "New session options…",
+                    title: String(localized: "New session options…"),
                     systemImage: "slider.horizontal.3",
-                    disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                    disabled: self.areSessionActionsDisabled)
                 {
                     self.pendingChatAction = .newSessionOptions
                 }
@@ -454,6 +485,7 @@ struct ChatProTab: View {
                     {
                         self.showsChatActions = false
                     }
+                    .disabled(self.isGatewayTransitionPending)
                 }
 
                 Button {
@@ -469,14 +501,14 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: "Export transcript",
+                    title: String(localized: "Export transcript"),
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
                 {
                     self.pendingChatAction = .exportTranscript
                 }
 
-                self.chatActionButton(title: "Gateway settings", systemImage: "network") {
+                self.chatActionButton(title: String(localized: "Gateway settings"), systemImage: "network") {
                     self.pendingChatAction = .gatewaySettings
                 }
                 .accessibilityIdentifier("chat-gateway-settings")
@@ -535,11 +567,9 @@ struct ChatProTab: View {
         }
     }
 
+    /// Chat follows the operator session; buildChat reports connected only when it can serve chat.
     private var gatewayConnected: Bool {
-        guard self.gatewayDisplayState == .connected else {
-            return false
-        }
-        return self.appModel.isLocalChatFixtureEnabled || self.appModel.isOperatorGatewayConnected
+        self.gatewayDisplayState == .connected
     }
 
     private var gatewayDisplayState: GatewayDisplayState {
@@ -696,6 +726,12 @@ struct ChatProTab: View {
         self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
     }
 
+    private var agentAvatarImage: UIImage? {
+        self.isAttachmentOwnerPinned
+            ? self.appModel.chatPresentation.presentationAgentAvatar
+            : self.appModel.agentAvatarImage(for: self.currentActiveAgent?.id ?? self.appModel.chatAgentId)
+    }
+
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
         OpenClawChatView.StarterPrompt(
             id: "summarize-status",
@@ -710,4 +746,61 @@ struct ChatProTab: View {
             title: String(localized: "Help me start voice chat"),
             prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
+}
+
+/// Keep live metering inside the avatar rather than observing it while building the chat surface.
+struct ChatVoiceAvatar<Avatar: View>: View {
+    let talkMode: TalkModeManager
+    private let avatar: Avatar
+
+    init(talkMode: TalkModeManager, @ViewBuilder avatar: () -> Avatar) {
+        self.talkMode = talkMode
+        self.avatar = avatar()
+    }
+
+    var body: TalkAvatarWaveformView<Avatar> {
+        TalkAvatarWaveformView(
+            phase: self.phase,
+            palette: .openClawBrand,
+            diameter: 38,
+            avatarDiameter: 28)
+        {
+            self.avatar
+        }
+    }
+
+    private var phase: TalkWaveformPhase {
+        guard self.talkMode.isEnabled else { return .idle }
+        if self.talkMode.isSpeaking {
+            return .speaking(level: self.talkMode.playbackLevel)
+        }
+        if self.talkMode.isListening {
+            return .listening(
+                level: self.talkMode.micLevel,
+                speechActive: self.talkMode.isUserSpeechDetected)
+        }
+        return .idle
+    }
+}
+
+@available(iOS 27.1, *)
+private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+    @Binding var isExpanded: Bool
+    let status: Status
+
+    func body(content: Content) -> some View {
+        content.popover(isPresented: self.isPresented) {
+            self.status
+                .padding(16)
+                .accessibilityIdentifier("chat-gateway-status-details")
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { self.verticalEdge != nil && self.isExpanded },
+            set: { self.isExpanded = $0 })
+    }
 }

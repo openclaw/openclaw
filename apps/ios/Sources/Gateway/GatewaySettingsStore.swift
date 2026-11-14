@@ -40,7 +40,6 @@ enum GatewaySettingsStore {
     private static let nodeService = "ai.openclawfoundation.app.node"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
-    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
 
     private static let instanceIdAccount = "instanceId"
     private static let gatewayRegistryAccount = "gateway-registry"
@@ -254,6 +253,9 @@ enum GatewaySettingsStore {
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
+        if service == self.gatewayCustomHeadersService {
+            self.invalidateShareRelayTransport(gatewayStableID: stableID)
+        }
         let sanitized = GatewayCustomHeaders.sanitized(headers)
         guard !sanitized.isEmpty else {
             return self.clearGatewayCustomHeaders(gatewayStableID: stableID, service: service)
@@ -278,6 +280,9 @@ enum GatewaySettingsStore {
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
+        if service == self.gatewayCustomHeadersService {
+            self.invalidateShareRelayTransport(gatewayStableID: stableID)
+        }
         let account = self.customHeadersAccount(stableID: stableID)
         let canonicalDeleted = GenericPasswordKeychainStore.delete(service: service, account: account)
         var legacyCleared = true
@@ -297,7 +302,19 @@ enum GatewaySettingsStore {
     /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
     @discardableResult
     static func clearGatewayCustomHeaders(service: String = GatewaySettingsStore.gatewayCustomHeadersService) -> Bool {
-        GenericPasswordKeychainStore.deleteAll(service: service)
+        if service == self.gatewayCustomHeadersService {
+            ShareGatewayRelaySettings.clearConfig()
+        }
+        return GenericPasswordKeychainStore.deleteAll(service: service)
+    }
+
+    private static func invalidateShareRelayTransport(gatewayStableID: String) {
+        guard GatewayStableIdentifier.matches(
+            ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, gatewayStableID)
+        else { return }
+        // Reconnect republishes the accepted transport. Until then, a removed
+        // service token must not survive in the extension's shared bundle.
+        ShareGatewayRelaySettings.clearConfig()
     }
 
     private static func customHeadersAccount(stableID: String) -> String {
@@ -617,11 +634,11 @@ enum GatewaySettingsStore {
         return deletedAll
     }
 
-    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+    private static func loadGatewayDefault(prefix: String, stableID: String) -> String? {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
         let defaults = UserDefaults.standard
-        let key = self.selectedAgentDefaultsKey(stableID: stableID)
-        let legacyKey = self.selectedAgentDefaultsPrefix + stableID
+        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
+        let legacyKey = prefix + stableID
         let value = (defaults.string(forKey: key) ??
             (self.canSafelyReadLegacyRawStorageKey(stableID) ? defaults.string(forKey: legacyKey) : nil))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -635,22 +652,22 @@ enum GatewaySettingsStore {
         return nil
     }
 
-    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+    private static func saveGatewayDefault(_ value: String?, prefix: String, stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        let key = self.selectedAgentDefaultsKey(stableID: stableID)
-        let trimmed = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
             UserDefaults.standard.removeObject(forKey: key)
         } else {
             UserDefaults.standard.set(trimmed, forKey: key)
         }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
-            UserDefaults.standard.removeObject(forKey: self.selectedAgentDefaultsPrefix + stableID)
+            UserDefaults.standard.removeObject(forKey: prefix + stableID)
         }
     }
 
-    private static func selectedAgentDefaultsKey(stableID: String) -> String {
-        "\(self.selectedAgentDefaultsPrefix)v2.\(GatewayStableIdentifier.storageComponent(stableID)!)"
+    private static func gatewayDefaultsKey(prefix: String, stableID: String) -> String {
+        "\(prefix)v2.\(GatewayStableIdentifier.storageComponent(stableID)!)"
     }
 
     private static func gatewayTokenAccount(instanceId: String) -> String {
@@ -807,6 +824,27 @@ enum GatewaySettingsStore {
         if let stored {
             defaults.set(stored, forKey: defaultsKey)
         }
+    }
+}
+
+extension GatewaySettingsStore {
+    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
+    private static let focusedChatSessionDefaultsPrefix = "gateway.focusedChatSessionKey."
+
+    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+        self.saveGatewayDefault(agentId, prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func loadGatewayFocusedChatSessionKey(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.focusedChatSessionDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewayFocusedChatSessionKey(stableID: String, sessionKey: String?) {
+        self.saveGatewayDefault(sessionKey, prefix: self.focusedChatSessionDefaultsPrefix, stableID: stableID)
     }
 }
 

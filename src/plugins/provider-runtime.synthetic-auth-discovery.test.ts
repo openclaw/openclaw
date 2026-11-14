@@ -81,6 +81,7 @@ import {
   resolveProviderSyntheticAuthWithPlugin,
 } from "./provider-runtime.js";
 import {
+  inheritPreparedSyntheticAuthScope,
   prepareSyntheticAuthWithProvider,
   resolveSyntheticAuthWithProvider,
   restorePreparedSyntheticAuthFacts,
@@ -352,7 +353,7 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledTimes(2);
 
     const worker = nativeParams();
-    restorePreparedSyntheticAuthFacts(worker.config, unavailable, worker);
+    restorePreparedSyntheticAuthFacts(unavailable, [worker]);
     expect(await prepareProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
     expect(resolveProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
     await expect(
@@ -365,6 +366,46 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     await expect(prepareProviderSyntheticAuthWithPlugin({ ...worker, env: {} })).rejects.toThrow(
       "environment or workspace does not match",
     );
+    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes closed facts through retained policy and registration config views", async () => {
+    const owner = nativeParams();
+    const policy = {};
+    const captured = {};
+    restorePreparedSyntheticAuthFacts(
+      [{ providerRef: "native-auth", result: nativeAuth }],
+      [owner],
+    );
+    inheritPreparedSyntheticAuthScope(owner.config, policy);
+    inheritPreparedSyntheticAuthScope(policy, captured);
+    const lookup = nativeParams(captured, owner.env, owner.workspaceDir);
+    for (const result of [nativeAuth, { ...nativeAuth, apiKey: "changed" }, null]) {
+      restorePreparedSyntheticAuthFacts([{ providerRef: "native-auth", result }], [owner]);
+      expect(await prepareProviderSyntheticAuthWithPlugin(lookup)).toEqual(result ?? undefined);
+    }
+    restorePreparedSyntheticAuthFacts([], [owner]);
+    await expect(prepareProviderSyntheticAuthWithPlugin(lookup)).rejects.toThrow(
+      "Prepared synthetic auth is missing",
+    );
+    await expect(prepareProviderSyntheticAuthWithPlugin({ ...lookup, env: {} })).rejects.toThrow(
+      "environment or workspace does not match",
+    );
+    expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not share ordinary external-auth preparation with a derived config", async () => {
+    const owner = nativeParams();
+    expect(await prepareProviderSyntheticAuthWithPlugin(owner)).toEqual(nativeAuth);
+    const derived = {};
+    inheritPreparedSyntheticAuthScope(owner.config, derived);
+    const replacement = { ...nativeAuth, apiKey: "derived" };
+    nativeProvider.prepareSyntheticAuth.mockResolvedValue(replacement);
+    expect(
+      await prepareProviderSyntheticAuthWithPlugin(
+        nativeParams(derived, owner.env, owner.workspaceDir),
+      ),
+    ).toEqual(replacement);
     expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledTimes(2);
   });
 
@@ -383,7 +424,7 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
         provider: "native-alias",
         context: { config: worker.config, provider: "native-alias" },
       };
-      restorePreparedSyntheticAuthFacts(worker.config, facts, worker);
+      restorePreparedSyntheticAuthFacts(facts, [worker]);
       const workerHook = vi.fn(() => ({ ...nativeAuth, apiKey: "unexpected-worker-probe" }));
       const workerProvider: ProviderPlugin = {
         ...nativeProvider,

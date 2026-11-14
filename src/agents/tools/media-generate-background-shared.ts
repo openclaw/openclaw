@@ -24,12 +24,19 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
@@ -52,8 +59,12 @@ import {
 import { tryResolveSubagentRequesterAgentId } from "../subagents/announce/subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "../subagents/announce/subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "../subagents/announce/subagent-requester-store-key.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
+import {
+  hasMediaGenerationCustodyObligation,
   retainBlockedMediaCompletion,
   wakeMediaGenerationTaskCompletion,
   type MediaGenerationCompletionWakeOutcome,
@@ -105,6 +116,7 @@ type CreateMediaGenerationTaskRunParams = {
   inputProvenance?: InputProvenance;
   prompt: string;
   providerId?: string;
+  deliveryMode?: "review";
   assertCurrent?: () => void;
 };
 
@@ -217,6 +229,13 @@ async function createMediaGenerationTaskRun(
   }
   const requesterRunSessionKey = params.requesterRunSessionKey?.trim() || sessionKey;
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
+  // Detached completion retains its Gateway instance, never the originating request.
+  const gatewayScope = getPluginRuntimeGatewayRequestScope();
+  const resolveGatewayContext = captureGatewayContextResolver(
+    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
+      gatewayScope?.resolveGatewayContext ??
+      gatewayScope?.context?.resolveGatewayContext,
+  );
   const assertCurrent = captureMediaGenerationAdmission(params.assertCurrent);
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   assertCurrent();
@@ -284,6 +303,12 @@ async function createMediaGenerationTaskRun(
             lifecycleRevision: entry.lifecycleRevision ?? null,
           }
         : undefined;
+    if (params.deliveryMode === "review" && entry?.incognito) {
+      throw new Error("Review-before-delivery requires a durable chat session");
+    }
+    const deliveryQueueContext = requesterTranscript
+      ? captureOpenClawStateWorkerContext()
+      : undefined;
     const task = createMediaGenerationOperation({
       taskId: runId,
       status: "running",
@@ -291,18 +316,42 @@ async function createMediaGenerationTaskRun(
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
+      requesterSessionId: requesterTranscript?.sessionId,
+      requesterStorePath: requesterTranscript?.storePath,
+      requesterLifecycleRevision: requesterTranscript?.lifecycleRevision,
       runId,
       task: params.prompt,
       progressSummary: params.queuedProgressSummary,
     });
+    const detach =
+      Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry);
     const handle = {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin,
-      detach: Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry),
+      detach,
+      deliveryMode: params.deliveryMode,
+      deliveryQueueContext,
+      acceptedOperation: task,
       requesterTranscript,
+      // Snapshot only the work that owns the requester now: the originating turn
+      // may still own terminal persistence when the media is ready, but later
+      // turns must not hold its delivery. Nothing survives a restart, so a
+      // recovered completion is not held.
+      requesterSettlement:
+        detach && requesterTranscript
+          ? captureSessionControllerSettlement({
+              target: captureSessionTarget({
+                storeScope: requesterTranscript.storePath,
+                sessionKey: requesterTranscript.sessionKey,
+                incarnation: requesterTranscript.sessionId,
+                agentId: requesterTranscript.agentId,
+              }),
+            })
+          : undefined,
+      resolveGatewayContext,
       taskLabel: params.prompt,
     };
     touchMediaGenerationTaskRunContext(handle);
@@ -428,7 +477,10 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       return;
     }
 
-    if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
+    if (
+      !isMediaGenerationOperationCurrent(params.handle.runId) &&
+      !hasMediaGenerationCustodyObligation(params.handle)
+    ) {
       clearMediaGenerationTaskRunContext(params.handle);
       return;
     }

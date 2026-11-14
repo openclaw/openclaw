@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { setSessionsShowPreview } from "../../components/session-organizer-menu.runtime.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
-
-const defaults: SessionsListResult["defaults"] = {
-  modelProvider: null,
-  model: null,
-  contextTokens: null,
-};
 
 function runningRow(key: string, updatedAt: number): GatewaySessionRow {
   return {
@@ -25,22 +20,12 @@ function runningRow(key: string, updatedAt: number): GatewaySessionRow {
   };
 }
 
-function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 10,
-    path: "",
-    count: rows.length,
-    defaults,
-    sessions: rows,
-  };
-}
-
 describe("AppSidebar live narration", () => {
   it("shows tool identity and progress only when the row has a preview line", async () => {
     const key = "agent:main:tool-preview";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", [key]);
-    sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+    sessions.publishList({ result: sessionListResult(10, [runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     setSessionsShowPreview(sidebar.sessionOrganizer, false);
     sidebar.connected = true;
@@ -103,7 +88,10 @@ describe("AppSidebar live narration", () => {
         acquired.resolve();
         return Promise.resolve({ key: subscribedKey, agentId: null });
       });
-      sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+      sessions.publishList({
+        result: sessionListResult(10, [runningRow(key, 5)]),
+        agentId: "main",
+      });
       const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
       setSessionsShowPreview(sidebar.sessionOrganizer, true);
       sidebar.connected = true;
@@ -149,7 +137,7 @@ describe("AppSidebar live narration", () => {
     const key = "agent:main:narrated";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", [key]);
-    sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+    sessions.publishList({ result: sessionListResult(10, [runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
@@ -180,7 +168,7 @@ describe("AppSidebar live narration", () => {
     expect(link?.querySelector("[aria-live]")).toBeNull();
 
     sessions.publishList({
-      result: sessionsResult([
+      result: sessionListResult(10, [
         { ...runningRow(key, 5), hasActiveRun: false, status: "done", endedAt: 20 },
       ]),
       agentId: "main",
@@ -196,7 +184,7 @@ describe("AppSidebar live narration", () => {
     const key = "agent:main:needs-answer";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", [key]);
-    sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+    sessions.publishList({ result: sessionListResult(10, [runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
@@ -256,7 +244,7 @@ describe("AppSidebar live narration", () => {
       ...runningRow(key, index + 1),
       startedAt: undefined,
     }));
-    sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
+    sessions.publishList({ result: sessionListResult(10, rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
@@ -269,14 +257,17 @@ describe("AppSidebar live narration", () => {
     expect(sessions.subscribeMessages).not.toHaveBeenCalledWith(keys[0], expect.anything());
 
     const reordered = [{ ...rows[0]!, updatedAt: 100 }, ...rows.slice(1).toReversed()];
-    sessions.publishList({ result: sessionsResult(reordered), agentId: "main" });
+    sessions.publishList({ result: sessionListResult(10, reordered), agentId: "main" });
     await sidebar.updateComplete;
     expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6);
     expect(sessions.unsubscribeMessages).not.toHaveBeenCalled();
 
     const settled: GatewaySessionRow = { ...rows[1]!, hasActiveRun: false, status: "done" };
     sessions.publishList({
-      result: sessionsResult(reordered.map((row) => (row.key === settled.key ? settled : row))),
+      result: sessionListResult(
+        10,
+        reordered.map((row) => (row.key === settled.key ? settled : row)),
+      ),
       agentId: "main",
     });
     await sidebar.updateComplete;
@@ -292,7 +283,7 @@ describe("AppSidebar live narration", () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", [openKey, backgroundKey]);
     sessions.publishList({
-      result: sessionsResult([runningRow(openKey, 1), runningRow(backgroundKey, 2)]),
+      result: sessionListResult(10, [runningRow(openKey, 1), runningRow(backgroundKey, 2)]),
       agentId: "main",
     });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);

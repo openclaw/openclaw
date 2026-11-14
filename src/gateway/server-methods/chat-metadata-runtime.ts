@@ -24,6 +24,7 @@ import type {
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
 import {
+  agentFactsMatch,
   assertPreparedAgentCurrent,
   authStoresCurrent,
   captureGenerationFacts,
@@ -80,6 +81,7 @@ export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayModelCatalogContext;
   onChanged?: (change: {
+    agentId?: string;
     modelCatalogChanged: boolean;
     modelCatalogStatusChanged?: true;
     authChanged: boolean;
@@ -107,19 +109,42 @@ export function createGatewayChatMetadataRuntime(params: {
   const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
     const previous = lastNotifiedFacts;
     lastNotifiedFacts = facts;
-    // Cooldown views still refresh, but they do not announce a changed model inventory.
-    const modelCatalogChanged =
-      !previous || !facts || !generationFactsMatch(previous, facts, "catalog-notification");
-    params.onChanged?.({
-      modelCatalogChanged,
-      ...(!modelCatalogChanged && catalogStatusChanged
-        ? { modelCatalogStatusChanged: true as const }
-        : {}),
-      authChanged: !previous || !facts || !generationFactsMatch(previous, facts, "auth"),
-      ...(previous && facts && generationFactsMatch(previous, facts, "commands")
-        ? { commandsChanged: false as const }
-        : {}),
-    });
+    if (
+      !previous ||
+      !facts ||
+      previous.configKey !== facts.configKey ||
+      previous.pluginRegistryVersion !== facts.pluginRegistryVersion
+    ) {
+      params.onChanged?.({ modelCatalogChanged: true, authChanged: true });
+      return;
+    }
+    const previousAgents = new Map(previous.agents.map((agent) => [agent.agentId, agent]));
+    const currentAgents = new Map(facts.agents.map((agent) => [agent.agentId, agent]));
+    for (const agentId of new Set([...previousAgents.keys(), ...currentAgents.keys()])) {
+      const before = previousAgents.get(agentId);
+      const after = currentAgents.get(agentId);
+      // Cooldown views still refresh, but they do not announce a changed model inventory.
+      const modelCatalogChanged = !agentFactsMatch(before, after, "catalog-notification");
+      const authChanged = !agentFactsMatch(before, after, "auth");
+      const commandsChanged = !agentFactsMatch(before, after, "commands");
+      if (modelCatalogChanged || authChanged || commandsChanged) {
+        params.onChanged?.({
+          agentId,
+          modelCatalogChanged,
+          authChanged,
+          ...(!commandsChanged ? { commandsChanged: false as const } : {}),
+        });
+      }
+    }
+    if (catalogStatusChanged) {
+      // Coalesced discovery settlements have no agent scope; only pending receipts need them.
+      params.onChanged?.({
+        modelCatalogChanged: false,
+        modelCatalogStatusChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+    }
   };
   let stoppedError: ChatMetadataSnapshotUnavailableError | undefined;
   const activeWork = new Set<Promise<unknown>>();

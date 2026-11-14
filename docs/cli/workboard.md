@@ -126,7 +126,7 @@ Idle scans leave ready-card history unchanged. Existing dispatch counters and
 timestamps remain as historical values; new launches use the card's launch,
 attempt, and execution history.
 
-Selection is conservative. One dispatch starts at most three workers by default. It skips archived or already-claimed cards. It starts only one card per owner or agent in a single pass. Cards already owned by active running or review work are left for a later dispatch. Pass `--max-starts <count>` with a positive integer to change the per-pass cap. The one-card-per-owner rule still applies, so the effective number of starts can be lower.
+Selection is conservative. One dispatch starts at most three workers by default. It skips archived or already-claimed cards. Each owner or agent may hold one active (running or claimed) card at a time, counted across boards; a board's `maxActivePerOwner` orchestration setting raises that limit for its cards (see [Worker selection](/plugins/workboard#worker-selection)). Cards over the limit are left for a later dispatch. Pass `--max-starts <count>` with a positive integer to change the per-pass cap. The per-owner limit still applies, so the effective number of starts can be lower.
 
 If worker start fails after a card is claimed, Workboard blocks that card and clears the claim. It records the failure in card execution and worker-log metadata. Failed starts stay visible instead of returning the card to the queue silently.
 
@@ -220,7 +220,7 @@ Check for at least one `ready` card without an active claim:
 openclaw workboard list --status ready
 ```
 
-Cards can also be skipped when the same owner already has running or review work. Move completed work to `done`, release stale claims through the Workboard tools, or run dispatch again after the active worker finishes.
+Cards can also be skipped when the same owner already holds as many active cards as the board allows. Move completed work to `done`, release stale claims through the Workboard tools, raise the board's `maxActivePerOwner`, or run dispatch again after the active worker finishes.
 
 ## Related
 

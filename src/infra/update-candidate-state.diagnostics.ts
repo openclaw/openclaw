@@ -1,4 +1,4 @@
-import { writeSync } from "node:fs";
+import fs from "node:fs";
 import type { BackupProgressInfo } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
@@ -17,6 +17,7 @@ const CaptureSpaceSchema = z
   .object({
     requiredBytes: z.number().int().nonnegative(),
     availableBytes: z.number().int().nonnegative(),
+    volume: z.enum(["backup", "rollback"]).optional(),
   })
   .refine(({ requiredBytes, availableBytes }) => availableBytes < requiredBytes);
 
@@ -110,7 +111,7 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
     try {
-      writeSync(2, line);
+      fs.writeSync(2, line);
       emittedBytes += Buffer.byteLength(line);
       exhausted = omitDetails;
     } catch (error) {

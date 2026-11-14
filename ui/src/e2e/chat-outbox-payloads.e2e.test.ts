@@ -168,9 +168,8 @@ suite.define(() => {
       await expect.poll(() => payloadCount(page)).toBe(1);
       await expect.poll(() => composerFor(page).inputValue()).toBe("");
       await expectRequestCountStable(gateway, "chat.send", 0);
-      const reloaded = page.waitForEvent("domcontentloaded");
       await context.setOffline(false);
-      await reloaded;
+      await page.reload({ waitUntil: "domcontentloaded" });
       await gateway.setOnline(true);
       const sent = await gateway.waitForRequest("chat.send");
       expectAttachmentSend(sent.params, { message, idempotencyKey: queued.sendRunId });

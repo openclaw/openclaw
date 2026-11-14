@@ -8,12 +8,13 @@ import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 const PENDING_DELIVERY_NOTICE =
   "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.";
 
-const sendRecoveryNotice = vi.hoisted(() => vi.fn());
+const sendNotice = vi.hoisted(() => vi.fn());
 const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
 const findDeliveryIntentOwner = vi.hoisted(() => vi.fn());
 
-vi.mock("../../gateway/server-recovery-runtime-context.js", () => ({
-  getGatewayRecoveryRuntime: () => ({ sendRecoveryNotice }),
+vi.mock("../../gateway/server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/server-lifecycle-runtime-context.js")>()),
+  getGatewayLifecycleRuntime: () => ({ sendNotice }),
 }));
 vi.mock("../../config/sessions/transcript.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/transcript.js")>()),
@@ -37,7 +38,7 @@ const expectNotice = (state: string) =>
 function pendingNotice() {
   const started = createDeferred();
   const result = createDeferred<{ suppressed: boolean }>();
-  sendRecoveryNotice.mockImplementationOnce(() => {
+  sendNotice.mockImplementationOnce(() => {
     started.resolve();
     return result.promise;
   });
@@ -46,7 +47,7 @@ function pendingNotice() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  sendRecoveryNotice.mockReset().mockResolvedValue({ suppressed: false });
+  sendNotice.mockReset().mockResolvedValue({ suppressed: false });
   findDeliveryIntentOwner.mockReturnValue(null);
   appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
   storePath = path.join(sessionDirs.make(), "sessions.json");
@@ -67,20 +68,57 @@ it("does not cross an account or thread route", async () => {
     delivery: { ...current.delivery, context: { ...context, accountId: "other" } },
   });
   await deliver();
-  expect(sendRecoveryNotice).not.toHaveBeenCalled();
+  expect(sendNotice).not.toHaveBeenCalled();
   expectNotice("owed");
 });
 
+it("keeps the supplied owner for a global session notice", async () => {
+  const secondary = { agentId: "secondary", sessionKey: "global", storePath };
+  await replaceSessionEntry(secondary, { ...entry(), sessionId: "secondary-global" });
+  await deliverPendingDeliveryNotice(secondary.sessionKey, storePath, secondary.agentId);
+  expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      ...secondary,
+      expectedSessionId: "secondary-global",
+      expectedLifecycleRevision: null,
+      text: PENDING_DELIVERY_NOTICE,
+    }),
+  );
+  expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("acknowledged");
+  expectNotice("owed");
+});
+
+it("does not acknowledge a new revision with the same session and notice identity", async () => {
+  const sent = pendingNotice();
+  const attempt = deliver();
+  await sent.started;
+  await replaceSessionEntry(locator(), { ...entry(), lifecycleRevision: "replacement" });
+  sent.resolve({ suppressed: false });
+  await attempt;
+  expectNotice("owed");
+  expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ expectedSessionId: "session-1", expectedLifecycleRevision: null }),
+  );
+});
+
 it.each([
-  ["failed", "unresolved"],
-  ["completed", "acknowledged"],
-  ["pending", "owed"],
-])("preserves %s durable notice status after a send error", async (status, state) => {
-  sendRecoveryNotice.mockRejectedValue(new Error("notice send failed"));
-  findDeliveryIntentOwner.mockReturnValue({ status });
+  ["send error", "failed", "unresolved"],
+  ["send error", "completed", "acknowledged"],
+  ["send error", "pending", "owed"],
+  ["suppressed", "failed", "unresolved"],
+  ["suppressed", "completed", "acknowledged"],
+  ["suppressed", "pending", "unresolved"],
+  ["suppressed", "missing", "unresolved"],
+])("preserves durable %s / %s notice status", async (outcome, status, state) => {
+  if (outcome === "send error") {
+    sendNotice.mockRejectedValue(new Error("notice send failed"));
+  } else {
+    sendNotice.mockResolvedValue({ suppressed: true });
+  }
+  findDeliveryIntentOwner.mockReturnValue(status === "missing" ? null : { status });
   await deliver();
   if (status === "completed") {
-    expect(sendRecoveryNotice).toHaveBeenCalledWith({
+    expect(sendNotice).toHaveBeenCalledWith({
       ...context,
       text: PENDING_DELIVERY_NOTICE,
       idempotencyKey: "main-session-restart-recovery:pending-final:intent-1",
@@ -88,6 +126,8 @@ it.each([
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ expectedSessionId: "session-1", text: PENDING_DELIVERY_NOTICE }),
     );
+  } else {
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   }
   expectNotice(state);
 });
@@ -112,4 +152,10 @@ it("leaves a replacement notice owed when an earlier send finishes", async () =>
   sent.resolve({ suppressed: false });
   await attempt;
   expect(entry().pendingDeliveryNotice).toEqual(replacement);
+});
+
+it("does not deliver a successor intent while settling an earlier failure", async () => {
+  await deliverPendingDeliveryNotice(sessionKey, storePath, undefined, "earlier-intent");
+  expect(sendNotice).not.toHaveBeenCalled();
+  expectNotice("owed");
 });

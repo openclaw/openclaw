@@ -15,23 +15,22 @@ describe("session target connection errors", () => {
     callGatewayMock.mockReset();
   });
 
-  it("surfaces identity-proxy remediation without tailnet or SSH tunnel advice", async () => {
-    callGatewayMock.mockRejectedValue(
+  it("shapes identity-proxy and malformed-URL connection errors", async () => {
+    callGatewayMock.mockRejectedValueOnce(
       new GatewayClientRequestError({
         code: "UNAVAILABLE",
         message: "gateway rejected websocket upgrade (HTTP 302)",
         details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
       }),
     );
+    const error = await resolveSessionTarget({ raw: "gw.example/main/a1166b81" }).catch(String);
+    expect(error).toContain("gateway.remote.edgeAuth");
+    expect(error).not.toContain("tailnet");
+    expect(error).not.toContain("SSH tunnel");
 
-    let error: unknown;
-    try {
-      await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" });
-    } catch (caught) {
-      error = caught;
-    }
-    expect(String(error)).toContain("gateway.remote.edgeAuth");
-    expect(String(error)).not.toContain("tailnet");
-    expect(String(error)).not.toContain("SSH tunnel");
+    callGatewayMock.mockRejectedValueOnce(new Error("SECURITY ERROR: plaintext ws://"));
+    await expect(
+      resolveSessionTarget({ raw: "agent:ops:main", gateway: { url: "ws://[bad" } }),
+    ).rejects.toThrow("SECURITY ERROR: plaintext ws://");
   });
 });

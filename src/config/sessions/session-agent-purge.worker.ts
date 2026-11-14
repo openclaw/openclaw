@@ -1,7 +1,7 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { applySessionEntryMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-store.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import {
   commitSessionAgentPurgeInDatabase,
   prepareSessionAgentPurgeInDatabase,

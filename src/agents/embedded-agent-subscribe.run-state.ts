@@ -26,6 +26,7 @@ import { collectAgentInternalEventMedia } from "./internal-events.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { ReplyDeliveryState } from "./reply-completion.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 
 /** Per-tool metadata tracked between tool start/update/end events. */
@@ -106,6 +107,7 @@ export class EmbeddedAgentSubscribeState {
   acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   toolMetaById = new Map<string, ToolCallSummary>();
   toolSummaryById = new Set<string>();
+  toolActivityPresentation = new ToolActivityPresentation();
   declare execLiveUpdateStateById?: Map<
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
@@ -149,6 +151,7 @@ export class EmbeddedAgentSubscribeState {
    */
   deltaBufferIsCommentary = false;
   declare nextCommentaryAt?: number;
+  declare commentaryTextProjection?: ReturnType<typeof createAssistantVisibleStreamText>;
   /** Whether timeout settlement committed visible text for this message. */
   hasFlushedPartialText = false;
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState } =
@@ -177,6 +180,8 @@ export class EmbeddedAgentSubscribeState {
   assistantMessageIndex = 0;
   /** Physical message boundary; assistantMessageIndex also advances between content blocks. */
   assistantMessageStartIndex = 0;
+  /** Input snapshot for the physical assistant message, shared by all its blocks. */
+  declare assistantReplyToId?: string;
   lastAssistantStreamContentIndex?: number = undefined;
   lastAssistantStreamItemId?: string = undefined;
   lastAssistantTextMessageIndex = -1;

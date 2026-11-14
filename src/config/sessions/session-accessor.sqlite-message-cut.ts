@@ -21,7 +21,6 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -39,12 +38,19 @@ import type {
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { planSessionMessageCut } from "./session-message-cut-plan.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
+import { planSessionMessageCut, selectSessionMessageCut } from "./session-message-cut-plan.js";
+import {
+  readSessionMessageCut,
+  SESSION_MESSAGE_CUT_MAX_BYTES,
+} from "./session-message-cut-read.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutPreconditions,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
@@ -128,6 +134,7 @@ export async function mutateSqliteSessionAtMessage(
     targetKey,
   };
   const memoryScope = { ...params, sessionKey: sourceKey };
+  let forkVisibility: SessionEntry["visibility"];
   const assertCurrent = () => {
     params.commitGuard?.();
     preconditions?.assertUpstreamCurrent?.();
@@ -164,6 +171,9 @@ export async function mutateSqliteSessionAtMessage(
                   try {
                     memory.authority.assertCurrent();
                     assertResetCurrent();
+                    if (mode === "fork") {
+                      preconditions?.assertForkVisibilityAllowed?.(forkVisibility);
+                    }
                   } catch (error) {
                     authorityError = error;
                     throw error;
@@ -172,6 +182,10 @@ export async function mutateSqliteSessionAtMessage(
               },
               {
                 beforeCommit(receipt) {
+                  if (mode === "fork" && receipt.value.status === "created") {
+                    // The actor rechecks authority after this observer's await, before install.
+                    forkVisibility = receipt.value.entry.visibility;
+                  }
                   const entry = receipt.changes.find((change) => change.sessionKey === sourceKey)
                     ?.before?.entry;
                   if (capture && receipt.value.status === "created" && entry) {
@@ -201,11 +215,46 @@ export async function mutateSqliteSessionAtMessage(
           if (!entry) {
             return { status: "missing-session" } as const;
           }
+          if (entry.worktree) {
+            intent.expectedState ??= {
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            };
+            const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
+              loadSessionTranscriptEvents({
+                ...memoryScope,
+                maxEventBytes: SESSION_MESSAGE_CUT_MAX_BYTES,
+                agentId: memory.agentId,
+                storePath: memory.path,
+                sessionId: entry.sessionId,
+              }),
+            );
+            memory.authority.assertCurrent();
+            const selected = selectSessionMessageCut(
+              entry,
+              events,
+              intent,
+              preconditions?.sourceRepositoryWorkspaceId,
+            );
+            if (selected.status !== "selected") {
+              return selected;
+            }
+          }
           const target = captureSessionTranscriptTargetBinding({
             agentId: memory.agentId,
             storePath: memory.path,
             env: params.env,
           });
+          intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+            {
+              agentId: memory.agentId,
+              sessionKey: sourceKey,
+              storePath: memory.path,
+              env: target.env,
+            },
+            entry,
+            () => memory.authority.assertCurrent(),
+          );
           return withSqliteSessionContextReset(
             {
               agentId: memory.agentId,
@@ -292,6 +341,39 @@ export async function mutateSqliteSessionAtMessage(
       assertPreparedCurrent,
       preconditions,
     );
+  if (mode !== "fork" && preparedEntry) {
+    if (preparedEntry.worktree) {
+      const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
+        loadSessionTranscriptEvents({
+          ...params,
+          maxEventBytes: SESSION_MESSAGE_CUT_MAX_BYTES,
+          sessionKey: sourceKey,
+          storePath: resolved.path,
+          sessionId: preparedEntry.sessionId,
+        }),
+      );
+      assertCurrent();
+      const selected = selectSessionMessageCut(
+        preparedEntry,
+        events,
+        { ...intent, expectedState: preparedExpectedState },
+        preconditions?.sourceRepositoryWorkspaceId,
+      );
+      if (selected.status !== "selected") {
+        return selected;
+      }
+    }
+    intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        sessionKey: sourceKey,
+        storePath: resolved.path,
+        env: resolved.env,
+      },
+      preparedEntry,
+      assertCurrent,
+    );
+  }
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
         resolved,
@@ -329,6 +411,9 @@ function mutatePreparedSqliteSessionAtMessage(
             intent,
             { sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
           );
+          if (intent.mode === "fork" && mutationResult.status === "created") {
+            preconditions?.assertForkVisibilityAllowed?.(mutationResult.entry.visibility);
+          }
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
           const publishIdentity = prepareSessionIdentityPublication(
             database,
@@ -372,11 +457,12 @@ export function mutateSqliteSessionAtMessageInTransaction(
   },
 ): SessionMessageCutResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
+  const source = currentEntry?.sessionId
+    ? readSessionMessageCut(database, currentEntry.sessionId, params.entryId)
+    : undefined;
   const plan = planSessionMessageCut(
     currentEntry,
-    currentEntry?.sessionId
-      ? loadTranscriptEventsFromDatabase(database, currentEntry.sessionId)
-      : [],
+    source?.events ?? [],
     params,
     projection?.sourceRepositoryWorkspaceId,
   );
@@ -388,19 +474,20 @@ export function mutateSqliteSessionAtMessageInTransaction(
   }
   const nextSessionId = plan.result.entry.sessionId;
   const targetScope = { ...resolved, sessionId: nextSessionId, sessionKey: params.targetKey };
-  let copiedBytes = 0;
   const rebuildSynchronously =
     params.mode !== "fork" &&
     plan.events.length <= SYNC_REBUILD_MAX_ROWS &&
-    plan.events.every((event) => {
-      copiedBytes += JSON.stringify(event).length;
-      return copiedBytes <= SYNC_REBUILD_MAX_BYTES;
-    });
+    source!.payloadBytes <= SYNC_REBUILD_MAX_BYTES;
   if (params.mode !== "fork" && !rebuildSynchronously) {
     ensureTranscriptSessionRoot(database, targetScope, Date.parse(plan.header.timestamp));
     markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
   }
-  appendTranscriptEventsInTransaction(database, targetScope, plan.events, projection);
+  appendTranscriptEventsInTransaction(
+    database,
+    targetScope,
+    source!.hydrate(plan.events),
+    projection,
+  );
   if (rebuildSynchronously) {
     reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
   } else if (params.mode !== "fork") {

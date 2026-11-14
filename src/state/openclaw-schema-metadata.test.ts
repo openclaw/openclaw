@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync, StatementSync, constants as SQL } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { probeSqliteIteratorBehavior } from "../infra/sqlite-native-observer.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
@@ -135,7 +134,6 @@ it("keeps admitted ownership current through local writes, rollback, and authori
   trackSqliteSchema(database, {
     DatabaseSync,
     StatementSync,
-    iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")).iteratorBehavior,
   });
   admitSqliteSchema(database);
   const read = () => readOperation(database, () => readAgentMeta(database));

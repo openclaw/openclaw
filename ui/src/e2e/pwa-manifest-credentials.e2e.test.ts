@@ -101,7 +101,8 @@ suite.define(() => {
         "bundled public asset build id",
       );
       const manifestUrl = new URL("manifest.webmanifest", proxy.baseUrl);
-      manifestUrl.searchParams.set("v", buildId);
+      expect(buildId).toMatch(/-[a-f0-9]{64}$/u);
+      manifestUrl.searchParams.set("v", buildId.slice(-64));
 
       expect(proxy.manifestRequests.length).toBeGreaterThan(0);
       expect(proxy.manifestRequests.filter((request) => !request.authorized)).toEqual([]);

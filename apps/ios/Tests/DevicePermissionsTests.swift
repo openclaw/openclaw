@@ -36,24 +36,4 @@ struct DevicePermissionsTests {
         #expect(!OnboardingStep.welcome.canGoBack)
         #expect(OnboardingStep.welcome.manualProgressTitle.isEmpty)
     }
-
-    @Test func `onboarding has no aggregate system permission prompt`() throws {
-        let onboardingDirectory = Self.sourceRoot()
-            .appending(path: "Onboarding", directoryHint: .isDirectory)
-        let wizard = try String(
-            contentsOf: onboardingDirectory.appending(path: "OnboardingWizardView.swift"),
-            encoding: .utf8)
-
-        #expect(!FileManager.default.fileExists(
-            atPath: onboardingDirectory.appending(path: "OnboardingPermissionsStep.swift").path))
-        #expect(!wizard.contains("OnboardingPermissionsStep"))
-        #expect(!wizard.contains("navigate(to: .permissions)"))
-    }
-
-    private static func sourceRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Sources", directoryHint: .isDirectory)
-    }
 }

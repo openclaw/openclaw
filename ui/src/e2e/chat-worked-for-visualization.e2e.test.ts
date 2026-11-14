@@ -38,12 +38,159 @@ async function captureProof(page: import("playwright").Page, name: string) {
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it.each(["saved", "live"] as const)(
+    "keeps inspected images in work and delivered media visible (%s)",
+    async (source) => {
+      await suite.withPage(
+        { viewport: { width: 1200, height: 900 }, colorScheme: "dark" },
+        async ({ page }) => {
+          const sessionKey = "agent:main:dashboard:tool-media-work";
+          const imageUrl = await page.evaluate(() => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 640;
+            canvas.height = 120;
+            const context = canvas.getContext("2d")!;
+            context.fillStyle = "#153343";
+            context.fillRect(0, 0, 640, 120);
+            context.fillStyle = "#9de2dd";
+            context.font = "24px sans-serif";
+            context.fillText("Verified preview · synthetic fixture", 30, 70);
+            return canvas.toDataURL("image/png");
+          });
+          const image = {
+            type: "image",
+            url: imageUrl,
+            mimeType: "image/png",
+            width: 640,
+            height: 120,
+          };
+          const inspect = (id: string) => [
+            {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [
+                { type: "toolCall", id, name: "view_image", arguments: { path: id + ".png" } },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: id,
+              toolName: "view_image",
+              content: [{ type: "text", text: "Inspected screenshot" }, image],
+            },
+          ];
+          const messages = [
+            { role: "user", content: "Check the preview and show the final image." },
+            { role: "assistant", phase: "commentary", content: "I will inspect both screenshots." },
+            ...inspect("before"),
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-publication",
+              stopReason: "stop",
+              content: "Published the preview update.",
+            },
+            ...inspect("after"),
+            {
+              role: "assistant",
+              phase: "final_answer",
+              stopReason: "stop",
+              content: [{ type: "text", text: "The preview is ready." }, image],
+            },
+          ].map((message, index) =>
+            Object.assign(message, {
+              timestamp: 1_000 + index * 1_000,
+              __openclaw: { id: "media-work-" + index, seq: index + 1, runId: "media-work-run" },
+            }),
+          );
+          const runId = "media-work-run";
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            historyMessages: source === "live" ? messages.slice(0, -1) : messages,
+            ...(source === "live"
+              ? {
+                  inFlightRun: { runId, startedAt: 1_000, text: "" },
+                  sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+                }
+              : {}),
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          if (source === "live") {
+            await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+            await page.getByText("after.png", { exact: false }).waitFor();
+            expect(await page.locator(".chat-work-group").count()).toBe(0);
+            const finalMessage = messages.at(-1)!;
+            await gateway.setHistoryMessages(messages);
+            await gateway.emitGatewayEvent("session.message", {
+              sessionKey,
+              runId,
+              message: finalMessage,
+              messageId: finalMessage["__openclaw"].id,
+              messageSeq: finalMessage["__openclaw"].seq,
+              hasActiveRun: true,
+              activeRunIds: [runId],
+            });
+            await gateway.emitGatewayEvent("chat", {
+              sessionKey,
+              runId,
+              seq: 1,
+              state: "final",
+              message: finalMessage,
+            });
+            await gateway.emitGatewayEvent("sessions.changed", {
+              sessionKey,
+              reason: "lifecycle",
+              session: {
+                key: sessionKey,
+                hasActiveRun: false,
+                activeRunIds: [],
+                lastRunId: runId,
+                status: "done",
+              },
+            });
+          }
+          // The saved case reloads the persisted fixture; the live case checks the
+          // event-to-history handoff without replacing the page or its transcript.
+          for (const reloaded of source === "saved" ? [false, true] : [false]) {
+            if (reloaded) {
+              await page.reload();
+            }
+            const answer = page
+              .locator(".chat-bubble")
+              .getByText("The preview is ready.", { exact: true });
+            await answer.waitFor();
+            const work = page.locator(".chat-work-group > .chat-activity-group__summary");
+            await work.waitFor();
+            await waitForChatScrollIdle(page);
+            if (!reloaded) {
+              await captureProof(page, `tool-media-collapsed-${source}`);
+            }
+            expect(await work.count()).toBe(1);
+            expect(await work.getAttribute("aria-expanded")).toBe("false");
+            expect(await page.getByText("before.png", { exact: false }).isVisible()).toBe(false);
+            expect(await page.getByText("after.png", { exact: false }).isVisible()).toBe(false);
+            expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(1);
+            await work.click();
+            await waitForChatScrollIdle(page);
+            expect(await work.getAttribute("aria-expanded")).toBe("true");
+            await page.getByText("Published the preview update.", { exact: true }).waitFor();
+            expect(await page.getByText("before.png", { exact: false }).isVisible()).toBe(true);
+            expect(await page.getByText("after.png", { exact: false }).isVisible()).toBe(true);
+            expect(await answer.isVisible()).toBe(true);
+            await work.click();
+            await waitForChatScrollIdle(page);
+            expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(1);
+          }
+        },
+      );
+    },
+  );
   it.each([
     { scenario: "widget first", browserFirst: false, framed: false },
     { scenario: "browser first", browserFirst: true, framed: false },
     { scenario: "widget first in a run frame", browserFirst: false, framed: true },
   ])(
-    "keeps widgets and browser previews in execution order ($scenario)",
+    "keeps delivered widgets visible without automatic browser previews ($scenario)",
     async ({ browserFirst, framed }) => {
       await suite.withPage(
         { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" },
@@ -115,7 +262,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
-              content: `[embed ref="${viewId}" title="Release confidence" height="180" /]`,
+              content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
               timestamp: browserFirst ? 4_000 : 3_000,
             },
           ];
@@ -179,56 +326,20 @@ suite.define(() => {
           const widget = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
           const browser = page.locator("openclaw-browser-tab-card");
           await widget.waitFor();
-          await browser.waitFor();
           await waitForChatScrollIdle(page);
           expect(await widget.count()).toBe(1);
-          expect(await browser.count()).toBe(1);
-          expect(
-            await page
-              .locator('.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card')
-              .evaluateAll((elements) =>
-                elements.map((element) =>
-                  element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
-                ),
-              ),
-          ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
-          // Each visible preview separates typed work into its own in-place chunk.
+          expect(await browser.count()).toBe(0);
           const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
-          expect(await workedFor.count()).toBe(2);
-          for (let chunkIndex = 0; chunkIndex < 2; chunkIndex++) {
-            const chunk = workedFor.nth(chunkIndex);
-            const otherChunk = workedFor.nth(1 - chunkIndex);
-            expect(await chunk.getAttribute("aria-expanded")).toBe("false");
-            expect(await chunk.locator(".chat-activity-group__label").textContent()).toBe("Worked");
-            for (const expanded of [true, false]) {
-              await chunk.click();
-              await waitForChatScrollIdle(page);
-              expect(await chunk.getAttribute("aria-expanded")).toBe(String(expanded));
-              expect(await otherChunk.getAttribute("aria-expanded")).toBe("false");
-              expect(await widget.count()).toBe(1);
-              expect(await browser.count()).toBe(1);
-              expect(await widget.isVisible()).toBe(true);
-              expect(await browser.isVisible()).toBe(true);
-              // The tall preview can virtualize the offscreen answer while work
-              // expands; it must never become a child of either disclosure.
-              expect(
-                await page
-                  .locator(".chat-work-group")
-                  .getByText("The widget and release reference are ready.", { exact: true })
-                  .count(),
-              ).toBe(0);
-              expect(
-                await page
-                  .locator(
-                    '.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card',
-                  )
-                  .evaluateAll((elements) =>
-                    elements.map((element) =>
-                      element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
-                    ),
-                  ),
-              ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
-              const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
+          expect(await workedFor.getAttribute("aria-expanded")).toBe("false");
+          for (const expanded of [true, false]) {
+            await workedFor.click();
+            await waitForChatScrollIdle(page);
+            expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
+            expect(await widget.count()).toBe(1);
+            expect(await browser.count()).toBe(0);
+            const overlaps = await page
+              .locator(".chat-virtual-row:not([data-prepared-row])")
+              .evaluateAll((elements) => {
                 const rects = elements.map((element) => element.getBoundingClientRect());
                 return rects.flatMap((rect, index) => {
                   const next = rects[index + 1];
@@ -237,8 +348,7 @@ suite.define(() => {
                     : [];
                 });
               });
-              expect(overlaps).toEqual([]);
-            }
+            expect(overlaps).toEqual([]);
           }
         },
       );
@@ -343,6 +453,18 @@ suite.define(() => {
       await workedFor.waitFor();
       await waitForChatScrollIdle(page);
       await captureProof(page, "worked-for-geometry-collapsed");
+      // Completed work is one line: its label and a resting chevron, with no rule below.
+      expect(
+        await workedFor.evaluate((button) => {
+          const chevron = button.querySelector(".chat-inline-disclosure__chevron");
+          return {
+            chevronOpacity: chevron ? getComputedStyle(chevron).opacity : null,
+            trailing:
+              button.parentElement!.getBoundingClientRect().bottom -
+              button.getBoundingClientRect().bottom,
+          };
+        }),
+      ).toEqual({ chevronOpacity: "1", trailing: 0 });
 
       const geometry = await workedFor.evaluate(async (element) => {
         const owner = element.closest("openclaw-chat-pane") as

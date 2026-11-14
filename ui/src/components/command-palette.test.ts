@@ -54,7 +54,7 @@ function catalogRequest(catalogs: Record<string, unknown>) {
 }
 
 function expectActive(palette: Parameters<typeof paletteInput>[0], row: Element | null) {
-  expect(palette.querySelector('[aria-selected="true"]')).toBe(row);
+  expect(palette.querySelector('[role="option"][aria-selected="true"]')).toBe(row);
   expect(
     document.getElementById(paletteInput(palette).getAttribute("aria-activedescendant")!),
   ).toBe(row);
@@ -122,21 +122,38 @@ describe("CommandPalette search", () => {
       methods: ["cron.list", "models.list"],
       request: catalogRequest({
         "cron.list": automations.promise,
-        "models.list": modelResult("needle", "Needle model"),
+        "models.list": modelResult("needle", "Cafe\u0301 model"),
       }),
     });
 
-    await searchPalette(palette, "needle");
-    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle model")).toBeDefined());
+    await searchPalette(palette, "CAFÉ");
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined());
     expect(palette.textContent).toContain("Searching commands");
-    findPaletteOption(palette, "Needle model")?.click();
+    findPaletteOption(palette, "Cafe\u0301 model")?.click();
     expect(palette.onNavigate).toHaveBeenCalledWith("model-providers");
 
-    await searchPalette(palette, "needle");
-    automations.resolve({ jobs: [{ id: "needle-job", name: "Needle automation" }] });
-    await vi.waitFor(() => expect(findPaletteOption(palette, "Needle automation")).toBeDefined());
-    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    await searchPalette(palette, "CAFÉ");
+    automations.resolve({ jobs: [{ id: "needle-job", name: "Café automation" }] });
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Café automation")).toBeDefined());
+    expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined();
     expect(palette.textContent).not.toContain("Searching commands");
+  });
+
+  it("keeps a pending model search when typing refreshes an expired command catalog", async () => {
+    const pending = createDeferred<ReturnType<typeof modelResult>>();
+    const request = vi.fn().mockReturnValue(pending.promise);
+    const { palette } = await mountModels(request);
+    await searchPalette(palette, "needle");
+    expect(request).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() + 30_001);
+    setInputValue(paletteInput(palette), "needle model");
+    await settlePalette(palette);
+    expect.soft(request).toHaveBeenCalledOnce();
+
+    pending.resolve(modelResult("needle", "Needle model"));
+    await settlePalette(palette);
+    expect(findPaletteOption(palette, "Needle model")).toBeDefined();
   });
 
   it("excludes agent primary models when selection is restricted", async () => {
@@ -168,7 +185,7 @@ describe("CommandPalette search", () => {
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
     await settlePalette(palette);
     expect(query('.cmd-palette__search [role="status"]')?.textContent).toContain(
-      "Model search unavailable",
+      "Couldn’t search models",
     );
     expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
 
@@ -190,7 +207,7 @@ describe("CommandPalette search", () => {
       const { context, palette, provider, query } = harness;
       await searchPalette(palette, "needle");
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-      harness.emit("config.changed");
+      harness.emit("chat.metadata.changed", { modelCatalogChanged: true });
       await vi.advanceTimersByTimeAsync(200);
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");
@@ -211,7 +228,7 @@ describe("CommandPalette search", () => {
       await palette.updateComplete;
       if (replacement === "connection") {
         expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-        expect(palette.textContent).toContain("Reconnect to search Gateway content.");
+        expect(palette.textContent).toContain("Reconnect to search sessions.");
       } else if (replacement !== "publication") {
         expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
       }
@@ -243,49 +260,38 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("keeps the current mode between 50 and 60 Unicode code points", async () => {
-    const character = "🦞";
-    const list = vi.fn(async () => null);
-    const { palette, query } = await mountSearch({ methods: ["sessions.search"] }, list);
-    await searchPalette(palette, character.repeat(59));
-    expect(list).toHaveBeenCalledOnce();
-    const input = paletteInput(palette);
-    for (const length of [60, 59, 51, 55, 60]) {
-      setInputValue(input, " " + character.repeat(length) + " ");
+  it.each([false, true])(
+    "moves a long query to Compose until Search is chosen (IME: %s)",
+    async (ime) => {
+      const list = vi.fn(async () => null);
+      const { palette } = await mountSearch({ methods: ["sessions.search"] }, list);
+      const query =
+        "Search for this full sentence without starting a background session.\nKeep searching.";
+      await openPalette(palette);
+      const input = paletteInput(palette);
+      if (ime) {
+        input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      }
+      setInputValue(input, query);
+      if (ime) {
+        await palette.updateComplete;
+        expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+        input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      }
       await settlePalette(palette);
       expectPalettePromptMode(palette);
-      expect(list).toHaveBeenCalledOnce();
-    }
-    for (const key of ["ArrowUp", "ArrowDown"]) {
-      expect(pressKey(input, key, { cancelable: true }).defaultPrevented).toBe(false);
-    }
-    expect(pressKey(input, "Enter", { cancelable: true }).defaultPrevented).toBe(true);
-    expect(palette.onNavigate).not.toHaveBeenCalled();
-    expect(palette.onSelectSession).not.toHaveBeenCalled();
-    expect(input.value).toBe(" " + character.repeat(60) + " ");
-    setInputValue(input, " " + character.repeat(50) + " ");
-    await settlePalette(palette);
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenLastCalledWith(
-      expect.objectContaining({ search: character.repeat(50) }),
-    );
-    setInputValue(input, character.repeat(59));
-    await settlePalette(palette);
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenCalledTimes(3);
-    setInputValue(input, character.repeat(60));
-    await palette.updateComplete;
-    expectPalettePromptMode(palette);
-    setInputValue(input, "");
-    await palette.updateComplete;
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    palette.togglePalette();
-    await palette.updateComplete;
-    await searchPalette(palette, character.repeat(55));
-    expect(input.isConnected).toBe(false);
-    expect(query(".cmd-palette__input")?.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenCalledTimes(4);
-  });
+      expect(list).not.toHaveBeenCalled();
+
+      pressKey(input, "Tab", { cancelable: true });
+      setInputValue(input, query + " Still searching.");
+      await settlePalette(palette);
+      expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+      expect(list).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ search: query + " Still searching." }),
+      );
+      expect(palette.querySelector(".cmd-palette__create")).toBeNull();
+    },
+  );
   it("waits for two characters before searching sessions", async () => {
     const list = vi.fn(async () => createSessionResult("agent:main:test", "Test"));
     const { palette, query } = await mountSearch({ methods: ["sessions.search"] }, list);
@@ -293,8 +299,8 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "n");
 
     expect(list).not.toHaveBeenCalled();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    expect(query('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-label")).toBe(
       query("textarea")?.getAttribute("aria-label"),
     );
     expect(palette.textContent).not.toContain("Searching sessions");
@@ -363,7 +369,7 @@ describe("CommandPalette search", () => {
     for (const expectedIndex of [1, 2, 0]) {
       pressKey(paletteInput(palette), "ArrowDown");
       await palette.updateComplete;
-      expect(query('[aria-selected="true"]')).toBe(items[expectedIndex]);
+      expect(query('[role="option"][aria-selected="true"]')).toBe(items[expectedIndex]);
     }
   });
 
@@ -444,14 +450,14 @@ describe("CommandPalette search", () => {
         pressKey(input, "ArrowDown");
         await palette.updateComplete;
       }
-      const fallbackSelection = query('[aria-selected="true"]')?.textContent;
+      const fallbackSelection = query('[role="option"][aria-selected="true"]')?.textContent;
 
       setConnected(false);
       setConnected(true);
       await palette.updateComplete;
       await settlePalette(palette);
       expect(list).toHaveBeenCalledTimes(3);
-      const active = query('[aria-selected="true"]');
+      const active = query('[role="option"][aria-selected="true"]');
       expect(active?.textContent).toEqual(
         interaction === "retain" ? sessionText : fallbackSelection,
       );
@@ -494,7 +500,7 @@ describe("CommandPalette search", () => {
       pressKey(input, "ArrowDown");
       await palette.updateComplete;
     }
-    expect(query('[aria-selected="true"]')?.textContent).toContain("Review Charlie");
+    expect(query('[role="option"][aria-selected="true"]')?.textContent).toContain("Review Charlie");
     refresh.resolve({
       ...roster,
       agents: roster.agents.slice(2),
@@ -522,10 +528,10 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "needle");
     pressKey(paletteInput(palette), "ArrowDown");
     await palette.updateComplete;
-    expect(query('[aria-selected="true"]')?.textContent).toContain("Needle Bravo");
+    expect(query('[role="option"][aria-selected="true"]')?.textContent).toContain("Needle Bravo");
   });
 
-  it("shows a chat search failure for plugins and retries after shortening a prompt", async () => {
+  it("shows a chat search failure and retries after returning from Compose", async () => {
     const query = "plugins";
     const list = vi
       .fn<ApplicationContext["sessions"]["list"]>()
@@ -535,19 +541,21 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, query);
 
     expect(list).toHaveBeenCalledOnce();
-    expect(palette.textContent).toContain("Chat search failed");
+    expect(palette.textContent).toContain("Couldn’t search sessions");
     expect(palette.textContent).not.toContain("No results");
     expect(findPaletteOption(palette, "Plugins")).toBeDefined();
 
     const input = paletteInput(palette);
+    pressKey(input, "Tab", { cancelable: true });
     setInputValue(input, `${query}\nExplain what needs to be repaired in a new session.`);
     await settlePalette(palette);
     expectPalettePromptMode(palette);
     expect(list).toHaveBeenCalledOnce();
 
     setInputValue(input, "zz");
+    pressKey(input, "Tab", { cancelable: true });
     await palette.updateComplete;
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(palette.textContent).not.toContain("Couldn’t search sessions");
     await settlePalette(palette);
     expect(palette.textContent).toContain("Recovered chat");
   });

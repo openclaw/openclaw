@@ -50,6 +50,8 @@ export type CronStreamExecApproval = {
   policyKey: string;
   binding: string;
   consumption: ExecApprovalPreparedConsumption;
+  /** Physical checks finish before the native admission releases its synchronous authority grant. */
+  revalidateExecution?: () => Promise<void>;
 };
 
 /** Historical confirmation of the native approval consumed by this stream mutation. */

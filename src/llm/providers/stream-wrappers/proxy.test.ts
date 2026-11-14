@@ -127,7 +127,7 @@ describe("proxy stream wrappers", () => {
         role: "system",
         content: [
           { type: "text", text: "STABLE", cache_control: { type: "ephemeral" } },
-          { type: "text", text: "VOLATILE" },
+          { type: "text", text: "\nVOLATILE" },
         ],
       },
     ]);
@@ -163,7 +163,7 @@ describe("proxy stream wrappers", () => {
         role: "system",
         content: [
           { type: "text", text: "STABLE", cache_control: { type: "ephemeral" } },
-          { type: "text", text: "VOLATILE" },
+          { type: "text", text: "\nVOLATILE" },
         ],
       },
     ]);

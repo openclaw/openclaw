@@ -1,4 +1,4 @@
-import type { createControlUiMockSessionRow } from "./control-ui-session-fixtures.ts";
+import type { createControlUiMockSessionRow } from "./control-ui-mock-session-row.ts";
 
 type ProgressSession = Pick<
   ReturnType<typeof createControlUiMockSessionRow>,

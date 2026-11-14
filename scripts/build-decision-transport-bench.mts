@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { build } from "tsdown";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
@@ -12,9 +12,39 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
   const root = process.cwd();
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-  // The same benchmark source is overlaid on each independently installed revision.
+  // Overlay the same committed benchmark on each revision. An owner-qualified
+  // physical graph may serve them serially when all frozen inputs match; the
+  // caller must have exclusive use and restore candidate source before gates.
   // Refuse production edits: a revision label must identify the measured code.
   const sourceRevision = git("rev-parse", "--verify", `${process.argv[2] ?? "HEAD"}^{commit}`);
+  const workload = process.argv[3] ?? "http";
+  if (workload !== "http" && workload !== "conversion") {
+    throw new Error("Unknown benchmark case");
+  }
+  const benchmarkRevision =
+    workload === "http"
+      ? undefined
+      : git("rev-parse", "--verify", `${process.argv[4] ?? "HEAD"}^{commit}`);
+  if (benchmarkRevision) {
+    if (realpathSync(path.join(root, "node_modules")) !== path.join(root, "node_modules")) {
+      throw new Error("Production proof requires its owned physical application graph");
+    }
+    for (const file of [
+      "scripts/bench-decision-transport.mts",
+      "scripts/bench-decision-transport-worker.ts",
+      "scripts/build-decision-transport-bench.mts",
+      "scripts/lib/benchmark-harness.mts",
+      "scripts/lib/arg-utils.mts",
+    ]) {
+      if (
+        !readFileSync(path.join(root, file)).equals(
+          execFileSync("git", ["show", `${benchmarkRevision}:${file}`], { cwd: root }),
+        )
+      ) {
+        throw new Error(`Benchmark source differs from its committed provenance: ${file}`);
+      }
+    }
+  }
   git(
     "diff",
     "--exit-code",
@@ -45,6 +75,7 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
     platform: "node",
     tsconfig: path.join(root, "tsconfig.json"),
     dts: false,
+    sourcemap: true,
     envPrefix: [],
     clean: false,
     outExtensions: () => ({ js: ".mjs" }),
@@ -60,11 +91,15 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
     },
     logLevel: "warn",
   });
-  const smoke = spawnSync(process.execPath, [path.join(outDir, "worker.mjs"), "2"], {
-    encoding: "utf8",
-    timeout: 30_000,
-    maxBuffer: 2 * 1024 * 1024,
-  });
+  const smoke = spawnSync(
+    process.execPath,
+    [path.join(outDir, "worker.mjs"), "2", ...(workload === "http" ? [] : [workload])],
+    {
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 2 * 1024 * 1024,
+    },
+  );
   if (smoke.error || smoke.status !== 0) {
     throw new Error(`Compiled worker smoke failed: ${smoke.error?.message ?? smoke.stderr}`);
   }
@@ -82,6 +117,22 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
       {
         sourceRevision,
         lockfileSha256: sha256(path.join(root, "pnpm-lock.yaml")),
+        ...(benchmarkRevision
+          ? {
+              productionInputs: {
+                benchmarkRevision,
+                packageSha256: sha256(path.join(root, "package.json")),
+                workspaceSha256: sha256(path.join(root, "pnpm-workspace.yaml")),
+                builderSourceSha256: sha256(
+                  path.join(root, "scripts/build-decision-transport-bench.mts"),
+                ),
+                installedLockfileSha256: sha256(path.join(root, "node_modules/.pnpm/lock.yaml")),
+                modulesMetadataSha256: sha256(path.join(root, "node_modules/.modules.yaml")),
+                platform: process.platform,
+                arch: process.arch,
+              },
+            }
+          : {}),
         workerSourceSha256: sha256(path.join(root, entry)),
         harnessSourceSha256: createHash("sha256")
           .update(readFileSync(path.join(root, "scripts/lib/benchmark-harness.mts")))

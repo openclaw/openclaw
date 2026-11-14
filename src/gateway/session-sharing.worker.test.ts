@@ -17,7 +17,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -519,6 +519,36 @@ it.for([false, true])(
     }),
 );
 
+it.each(["membership", "lifecycle"] as const)(
+  "keeps committing %s facts authoritative over older published sharing",
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const client = roleClient("view", "transaction-member");
+      const scope = await memberSession(client);
+      const authorization = await authorize(client, scope, () => cfg);
+      using _ = { [Symbol.dispose]: () => authorization.release?.() };
+      const input = authorization.admittedInputAuthority!;
+      const effect = vi.fn();
+      await input.withCurrent((facts, assertSourceCurrent) => {
+        expect(facts.members).toContainEqual(
+          expect.objectContaining({ identityId: client.authenticatedUserProfile!.profileId }),
+        );
+        const committing = {
+          ...facts,
+          ...(change === "membership"
+            ? { members: [] }
+            : { entry: { ...facts.entry!, lifecycleRevision: "transaction-successor" } }),
+        };
+        expect(() => input.withPreparedCurrent(committing, effect, assertSourceCurrent)).toThrow(
+          change === "membership" ? "session is read-only" : "session changed",
+        );
+      });
+      authorization.assertAdmittedInputCurrent!();
+      expect(effect).not.toHaveBeenCalled();
+    }),
+);
+
 it.each([
   "worker-before-read",
   "reset-before-read",
@@ -539,12 +569,12 @@ it.each([
       assertCurrent();
       authorization.assertCurrent();
     });
-    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const read = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
     let revoked = false;
     let inventories = 0;
     let closing: Promise<void> | undefined;
     const runExternalClose = AsyncLocalStorage.snapshot();
-    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       const kind =
         reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value

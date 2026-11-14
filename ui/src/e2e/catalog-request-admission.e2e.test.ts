@@ -41,6 +41,14 @@ async function client(path: string) {
   const fixture = createControlUiTeamScaleFixture({ baseUrl: suite.server.baseUrl });
   const gateway = await installMockGateway(page, {
     ...fixture.scenario,
+    operatorScopes: ["operator.read", "operator.admin"],
+    featureMethods: [
+      ...(fixture.scenario.featureMethods ?? []),
+      "models.list",
+      "config.get",
+      "tools.catalog",
+      "tools.effective",
+    ],
     models: [model("Initial fixture model")],
     methodResponses: {
       ...fixture.scenario.methodResponses,

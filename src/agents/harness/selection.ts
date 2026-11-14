@@ -29,7 +29,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
-import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
+import { resolveAgentHarnessOperatorPolicyError } from "../operator-access-program.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -50,7 +50,6 @@ import {
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
 } from "./execution-environment.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { bindHarnessSettledTurnCallback } from "./host-source-authority.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -184,13 +183,16 @@ export async function runAgentHarnessSettledTurnFinalization(
       },
       builtIn,
     );
+    const { withPreparedEmbeddedRunToolAuthority } = await import("./tool-authority.runtime.js");
     const result = await runAgentHarnessOperation(harness, params, () =>
       runWithAgentRingZeroTools([], () =>
-        runAgentHarnessLifecycleFinalization(harness, attemptParams, () => {
-          assertHarnessModelPolicySupport(harness, params);
-          modelExecution?.assertCurrent();
-          return finalizeSettledTurn({ attempt: attemptParams, settledAttempt });
-        }),
+        withPreparedEmbeddedRunToolAuthority(internalParams, attemptParams, undefined, (prepared) =>
+          runAgentHarnessLifecycleFinalization(harness, prepared, () => {
+            assertHarnessModelPolicySupport(harness, params);
+            modelExecution?.assertCurrent();
+            return finalizeSettledTurn({ attempt: prepared, settledAttempt });
+          }),
+        ),
       ),
     );
     modelExecution?.assertCurrent();
@@ -303,9 +305,9 @@ export async function runAgentHarnessAttempt(
               config: readRuntimeConfig(),
             });
             if (nativePermissionsConsented && !currentConsent) {
-              throw new AgentHarnessPreflightError(
-                "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying.",
-              );
+              const message =
+                "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying.";
+              throw new AgentHarnessPreflightError(message, { desktopMessage: message });
             }
           }
           attempt.hostCapabilities?.assertActive();
@@ -324,9 +326,9 @@ export async function runAgentHarnessAttempt(
     }
   };
   if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
-    throw new AgentHarnessPreflightError(
-      "Native session runtime changed before dispatch. Reattach the original native session before retrying.",
-    );
+    const message =
+      "Native session runtime changed before dispatch. Reattach the original native session before retrying.";
+    throw new AgentHarnessPreflightError(message, { desktopMessage: message });
   }
   if (internalParams.contextEngineLogicalTurnLease) {
     const effective = await beginContextEngineLogicalTurn({
@@ -392,7 +394,7 @@ export async function runAgentHarnessAttempt(
     systemAgentTool: _systemAgentTool,
     ...attemptParams
   } = internalParams;
-  const pluginAttempt = withoutInternalHarnessAuthority(
+  const pluginAttempt = await withoutInternalHarnessAuthority(
     attemptParams,
     harness,
     selection.builtIn,
@@ -518,14 +520,11 @@ export async function runAgentHarnessAttempt(
 function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
   const authority = readRunOperatorAuthority(params);
   authority?.assertCurrent();
-  if (
-    !isBuiltInOpenClawAgentHarness(harness) &&
-    requiresOperatorModelExecutionPolicy(authority) &&
-    harness.nativeModelPolicySupport !== "exact"
-  ) {
-    throw new AgentHarnessPreflightError(
-      `Agent harness ${harness.id} cannot enforce your operator role's model policy or Access grants. Choose a compatible runtime or ask a gateway administrator to update the harness.`,
-    );
+  const error = !isBuiltInOpenClawAgentHarness(harness)
+    ? resolveAgentHarnessOperatorPolicyError(harness, authority)
+    : undefined;
+  if (error) {
+    throw new AgentHarnessPreflightError(error);
   }
   return authority;
 }
@@ -616,17 +615,17 @@ function prepareHarnessFinalizationParams(
   };
 }
 
-function withoutInternalHarnessAuthority(
+async function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
   harness: AgentHarness,
   builtIn: boolean,
   ownerPluginId: string | undefined,
-): {
+): Promise<{
   params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
   setInputAttachmentReadAllowed: (allowed: boolean) => void;
   runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
-} {
+}> {
   if (builtIn) {
     return {
       // The caller hands us its fresh rest object; extend it without copying again.
@@ -639,6 +638,8 @@ function withoutInternalHarnessAuthority(
       runWithHostScope: (run) => run(),
     };
   }
+  const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
+  resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const pluginParams = withoutPluginHarnessPrivateState(params);
   const host = createAgentHarnessHostCapabilities({
     attempt: params,

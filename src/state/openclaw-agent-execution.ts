@@ -15,11 +15,11 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-contract.js";
-import {
-  createAgentDatabaseExecution,
-  type AgentDatabaseExecutionState,
-} from "./openclaw-agent-execution-owner.js";
+import type {
+  OpenClawAgentDatabaseExecution,
+  AgentDatabaseExecutionState,
+} from "./openclaw-agent-execution-contract.js";
+import { createAgentDatabaseExecution } from "./openclaw-agent-execution-owner.js";
 import {
   assertAgentDatabaseExecutionCreationIdentity,
   assertAgentDatabaseExecutionSharedState,
@@ -42,10 +42,10 @@ export function getPendingOpenClawAgentDatabasePreparation(
   physicalPath: string,
   admission: "read" | "write" = "write",
 ): Promise<void> | undefined {
-  if (admission === "read" && isAgentDatabaseStartupReadReady(physicalPath)) {
-    return undefined;
-  }
-  return executions.get(physicalPath)?.getPendingPreparation();
+  const pending = executions.get(physicalPath)?.getPendingPreparation();
+  return pending && admission === "read" && isAgentDatabaseStartupReadReady(physicalPath)
+    ? undefined
+    : pending;
 }
 
 /** Explicit preparation joins the file owner's already-captured creation target. */

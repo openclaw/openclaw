@@ -2,7 +2,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import { collectReclamationEntryReplacement } from "./session-accessor.sqlite-reclamation-publication.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type {

@@ -62,7 +62,7 @@ export function resolveSessionTranscriptsDirForAgent(
 }
 
 export function resolveDefaultSessionStorePath(agentId: string): string {
-  return path.join(resolveSessionTranscriptsDirForAgent(agentId), "sessions.json");
+  return `${resolveSessionTranscriptsDirForAgent(agentId)}${path.sep}sessions.json`;
 }
 
 /** Store selectors and explicit databases share the owning agent's session artifact directory. */
@@ -363,8 +363,7 @@ export function resolveSessionStorePathCore(
     if (!opts?.agentId?.trim()) {
       throw new SessionStoreAgentIdRequiredError();
     }
-    const agentId = normalizeAgentId(opts.agentId);
-    return path.join(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "sessions.json");
+    return `${resolveSessionTranscriptsDirForAgent(opts.agentId, env, homedir)}${path.sep}sessions.json`;
   }
   let expandedStore = store;
   if (expandedStore.includes("{agentId}")) {

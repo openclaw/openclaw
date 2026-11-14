@@ -43,7 +43,9 @@ import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { prepareSessionRowSelection } from "./session-utils-list.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -155,13 +157,20 @@ it("reuses packed row bytes across sibling changes without retaining another vie
       visibility: "shared" as const,
       sharingRole,
     });
-  const ownerRows = [row("a", "A", "owner"), row("b", "B", "owner"), row("c", "C", "owner")];
+  const ownerRows = [row("a", "A", "owner"), row("b", "B🦞", "owner"), row("c", "C", "owner")];
   const viewerRows = ownerRows.map((value) => row(value.key, value.label, "viewer"));
   const first = shareSidebarSessionRows(ownerRows);
   const viewer = shareSidebarSessionRows(viewerRows);
   expect(JSON.stringify(first.sessions)).toBe(
-    '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
+    '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B🦞","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
   );
+  // Aliased source rows must not repack an earlier response through their new shared layout.
+  const previousBytes = first.sessions.map(serializeSessionRow);
+  const duplicates = shareSidebarSessionRows([ownerRows[0]!, ownerRows[0]!]);
+  expect(duplicates.sessions.map(serializeSessionRow)).toEqual(
+    duplicates.sessions.map((value) => JSON.stringify(value)),
+  );
+  expect(first.sessions.map(serializeSessionRow)).toEqual(previousBytes);
   expect(first.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "owner" }]);
   expect(viewer.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "viewer" }]);
   using stringify = vi.spyOn(JSON, "stringify");
@@ -174,14 +183,60 @@ it("reuses packed row bytes across sibling changes without retaining another vie
   ).toHaveLength(2);
   stringify.mockRestore();
   // A sibling joining a singleton fact changes the unchanged row's reference layout.
-  const regrouped = shareSidebarSessionRows([row("a", "B", "owner"), ...ownerRows.slice(1)]);
+  const regrouped = shareSidebarSessionRows([row("a", "B🦞", "owner"), ...ownerRows.slice(1)]);
   expect(regrouped.sessions[1]).not.toBe(first.sessions[1]);
   expect(regrouped.sharedFacts).toEqual([
-    { label: "B" },
+    { label: "B🦞" },
     { visibility: "shared", sharingRole: "owner" },
   ]);
   expect(regrouped.sessions[1]?.sharedFacts).toEqual([0, 1]);
   expect(shareSidebarSessionRows([...viewerRows]).sessions[1]).toBe(viewer.sessions[1]);
+  shareSidebarSessionRows([...ownerRows]);
+  using movedStringify = vi.spyOn(JSON, "stringify");
+  const moved = shareSidebarSessionRows([
+    row("d", "D", "owner"),
+    row("e", "D", "owner"),
+    ...ownerRows,
+  ]);
+  expect(moved.sessions[2]?.sharedFacts).toEqual([1]);
+  expect(
+    movedStringify.mock.calls.filter(
+      ([value]) => value && typeof value === "object" && ["a", "b", "c"].includes(value.key),
+    ),
+  ).toHaveLength(0);
+  movedStringify.mockRestore();
+  expect(wire(moved)).toBe(JSON.stringify({ type: "res", id: "list", ok: true, payload: moved }));
+  // Index-only page churn must not rescan the same viewer-specific UTF-8 row prefixes.
+  const pages = [
+    [row("d", "D🦞", "owner"), row("e", "D🦞", "owner"), ...ownerRows],
+    [
+      row("d", "D🦞", "owner"),
+      row("e", "D🦞", "owner"),
+      row("f", "É", "owner"),
+      row("g", "É", "owner"),
+      ...ownerRows,
+    ],
+    viewerRows,
+  ];
+  for (const page of pages) {
+    shareSidebarSessionRows([...page]);
+  }
+  using byteLength = vi.spyOn(Buffer, "byteLength");
+  for (let turn = 0; turn < 4; turn++) {
+    for (const page of pages) {
+      const packed = shareSidebarSessionRows([...page]);
+      expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(page);
+      expect(wire(packed)).toBe(
+        JSON.stringify({ type: "res", id: "list", ok: true, payload: packed }),
+      );
+    }
+  }
+  expect(
+    byteLength.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes('"key":"b"'),
+    ),
+  ).toHaveLength(0);
+  byteLength.mockRestore();
   for (const payload of [first, viewer, changed, regrouped]) {
     const frame = { type: "res", id: "rows", ok: true, payload };
     expect(serializeGatewayFrame(frame).toString()).toBe(JSON.stringify(frame));
@@ -343,6 +398,7 @@ it.each(["sidebar", "dashboard"] as const)(
 
 it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", () =>
   withListReader("page-reader", async ({ context, client }) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const keys = ["agent:main:off-page", "agent:main:selected-page"];
     for (const [index, sessionKey] of keys.entries()) {
       writeListEntry(sessionKey, {
@@ -356,8 +412,15 @@ it("keeps a sidebar page revision across off-page facts and replaces it for sele
       readList(context, client, { rowMode: "sidebar", limit: 1, ifRowsRevision });
     const first = await read();
     expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
-    sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+    const before = wire(await read(first.rowsRevision));
+    writeListEntry(keys[0]!, {
+      sessionId: keys[0]!,
+      updatedAt: 1,
+      visibility: "shared",
+      label: "Off-page metadata change",
+    });
     const unchanged = await read(first.rowsRevision);
+    expect(wire(unchanged)).toBe(before);
     expect(unchanged).toMatchObject({
       rowsRevision: first.rowsRevision,
       rowsUnchanged: true,
@@ -386,6 +449,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
     using _ = retainList(context);
     await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
+    const membership = vi.spyOn(projection, "hasMembership");
     await projection.withSelectionPreparation(async () => {
       await projection.prepareSelection();
       const read = (client: typeof alice, limit = 100) =>
@@ -407,7 +471,116 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       expect(other.sessions[0]!.sessionId).toBe("cold-128");
       expect(other.owners).not.toBe(results[0]!.owners);
       expect((await read(alice, 1)).sessions).toHaveLength(1);
+      expect(membership).not.toHaveBeenCalled();
     });
+  }));
+
+it("resolves archived-only profile references before filtering active sessions", () =>
+  withListReader("archive-profile-reader", async ({ context, client }) => {
+    const visible = ensureProfileForEmail("archive-profile-visible@example.test").id;
+    const hidden = ensureProfileForEmail("archive-profile-hidden@example.test").id;
+    for (const [key, creator, archivedAt, visibility] of [
+      ["active", client.authenticatedUserProfile!.profileId, undefined, "shared"],
+      ["archived", visible, 0, "shared"],
+      ["hidden", hidden, 0, "draft"],
+    ] as const) {
+      writeListEntry(`agent:main:${key}`, {
+        sessionId: key,
+        updatedAt: 1,
+        createdActor: profileActor(creator),
+        archivedAt,
+        visibility,
+      });
+    }
+    using _ = retainList(context);
+    expect((await readList(context, client, {})).sessions.map(({ key }) => key)).toEqual([
+      "agent:main:active",
+    ]);
+    // Omit includePeople: involvingProfileId alone must retain full-roster resolution.
+    for (const archived of [false, true, "all"] as const) {
+      for (const profileId of [visible, hidden]) {
+        for (const involvingProfileId of [profileId, profileId.replaceAll("-", "").slice(0, 12)]) {
+          const result = await readList(context, client, { archived, involvingProfileId });
+          expect(result.involvingProfileId).toBe(profileId === visible ? visible : undefined);
+          const keys = profileId === visible && archived !== false ? ["agent:main:archived"] : [];
+          expect(result.sessions.map(({ key }) => key)).toEqual(keys);
+          expect(result.totalCount).toBe(keys.length);
+        }
+      }
+    }
+  }));
+
+it("visits only the requested archive population and preserves viewer isolation across moves", () =>
+  withListReader("archive-alice", async ({ context, client: alice }) => {
+    const bob = roleClient("view", "archive-bob");
+    prepareGatewayRecipientProfile(bob);
+    // These keys share a hash partition, so unrelated archive writes used to invalidate it.
+    const keys = [0, 13, 35, 57].map((id) => `agent:main:archive-${id}`);
+    const entries = keys.map((sessionId, index) => ({
+      sessionId,
+      updatedAt: index + 1,
+      archivedAt: index > 1 ? 0 : undefined,
+      createdActor: profileActor(alice.authenticatedUserProfile!.profileId),
+      visibility: index % 2 ? ("draft" as const) : ("shared" as const),
+    }));
+    const put = (index: number) =>
+      replaceSessionEntrySync({ agentId: "main", sessionKey: keys[index]! }, entries[index]!);
+    entries.forEach((_entry, index) => put(index));
+    using _ = retainList(context);
+    await initializeSessionReadContext(context);
+    const projection = getSessionRowProjection(context)!;
+    await projection.prepareSelection();
+    const prepared = prepareSessionRowSelection(projection, {}, { ordered: true });
+    let visited = 0;
+    for (const { entries: partitionEntries } of prepared.partitions!) {
+      const each = partitionEntries.forEach.bind(partitionEntries);
+      vi.spyOn(partitionEntries, "forEach").mockImplementation((callback, receiver) =>
+        each((value, key, map) => {
+          visited++;
+          callback.call(receiver, value, key, map);
+        }),
+      );
+      const values = partitionEntries.values.bind(partitionEntries);
+      vi.spyOn(partitionEntries, "values").mockImplementation(function* () {
+        for (const pair of values()) {
+          visited++;
+          yield pair;
+        }
+        return undefined;
+      });
+    }
+    const read = async (
+      archived: boolean | "all" | undefined,
+      expected: number[],
+      work: number,
+      client = alice,
+    ) => {
+      visited = 0;
+      const result = await readList(context, client, archived === undefined ? {} : { archived });
+      expect(result.sessions.map(({ key }) => key)).toEqual(expected.map((index) => keys[index]));
+      expect(result.totalCount).toBe(expected.length);
+      expect(visited).toBe(work);
+    };
+    await read(undefined, [1, 0], 2);
+    await read(true, [3, 2], 2);
+    await read("all", [3, 2, 1, 0], 4);
+    entries[2]!.updatedAt = 5;
+    put(2);
+    await read(undefined, [1, 0], 0);
+    await read(true, [2, 3], 2);
+    await read("all", [2, 3, 1, 0], 2);
+    await read(undefined, [0], 2, bob);
+    await read(true, [2], 2, bob);
+    entries[0]!.archivedAt = 0;
+    put(0);
+    await read(undefined, [1], 1);
+    await read(true, [2, 3, 0], 3);
+    await read("all", [2, 3, 1, 0], 4);
+    entries[2]!.archivedAt = undefined;
+    put(2);
+    await read(undefined, [2], 2, bob);
+    await read(true, [0], 2, bob);
+    await read("all", [2, 0], 4, bob);
   }));
 
 it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {

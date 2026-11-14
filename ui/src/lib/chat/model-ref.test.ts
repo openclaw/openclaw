@@ -16,6 +16,37 @@ import {
 const ambiguous = createAmbiguousModelCatalog("gpt-5-mini", "openai", "openrouter");
 
 describe("chat-model-ref helpers", () => {
+  it.each([
+    ["claude-cli", "Opus 5.5", "opus", "Opus 5.5"],
+    ["claude-cli", "Sonnet 5.5", "sonnet", "Sonnet 5.5"],
+    ["anthropic", "Claude Opus 5.5", " OPUS ", "Claude Opus 5.5"],
+    ["openai", "GPT-5.5", "gpt", "GPT-5.5"],
+    ["example", "Opus 5.5", "op", "Opus 5.5 · op"],
+    ["example", "Octopus 5.5", "opus", "Octopus 5.5 · opus"],
+    ["example", "Opus 5.5", "opus-prod", "Opus 5.5 · opus-prod"],
+    ["example", "Opus 5.5", "writing", "Opus 5.5 · writing"],
+    ["example", "Opus 5.5", "5.5", "Opus 5.5 · 5.5"],
+    ["example", "Opus 5.5 writing", "writing", "Opus 5.5 writing · writing"],
+    ["example", "Opus 5.5", "Opus 5.5 (custom)", "Opus 5.5 (custom)"],
+    ["clawrouter", "Opus 5.5 via ClawRouter", "opus", "Opus 5.5"],
+    ["clawrouter", "Example Model via ClawRouter", "Example Model", "Example Model"],
+    ["clawrouter", "Example Model", "Example Model via ClawRouter", "Example Model"],
+    ["clawrouter", "Example Model", "Example Model", "Example Model"],
+    [
+      "example",
+      "Example Model via ClawRouter",
+      "Example Model via ClawRouter",
+      "Example Model via ClawRouter",
+    ],
+  ])("formats %s catalog name %s with alias %s", (provider, name, alias, label) => {
+    const entry = { id: "vendor/example", provider, name, alias };
+    const lookup = buildCatalogDisplayLookup([entry]);
+    expect(buildChatModelOptionFromLookup(entry, lookup)).toEqual({
+      value: `${provider}/vendor/example`,
+      label,
+    });
+  });
+
   it("keeps case-distinct catalog display identities with shared names", () => {
     const labels = ["Shared name · model-a · custom", "Shared name · Model-A · custom"];
     const entries = ["model-a", "Model-A"].map((id) => ({

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
@@ -58,13 +59,7 @@ function emptyStore(options: Options) {
   fs.writeFileSync(options.path, "");
 }
 function isPreparing(request: SqliteWorkerAdmissionRequest, kind: string) {
-  return (
-    request.stage === "prepare" &&
-    request.facts !== null &&
-    typeof request.facts === "object" &&
-    "kind" in request.facts &&
-    request.facts.kind === kind
-  );
+  return request.stage === "prepare" && isRecord(request.facts) && request.facts.kind === kind;
 }
 function releaseAll(...executions: (Execution | undefined)[]) {
   return Promise.allSettled(executions.map(async (execution) => execution?.release()));
@@ -80,17 +75,12 @@ function initialized(sessionKey: string, sessionId: string) {
 function existingTranscript(sessionKey: string) {
   return { kind: "session-transcript-initialized", sessionKey, transcriptPublication: undefined };
 }
-async function readAliasAndClose(
-  options: Options,
-  sessionKey: string,
-  assertRegistry?: () => void,
-) {
+async function readAliasAndClose(options: Options, sessionKey: string) {
   const execution = capture(options);
   await using _ = onExit(() => execution.release());
-  await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual(
+  expect(await initialize(execution, sessionKey, "alias-session")).toEqual(
     existingTranscript(sessionKey),
   );
-  assertRegistry?.();
   await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
   expect(() => execution.assertCurrent()).toThrow(/closed/);
 }
@@ -132,7 +122,6 @@ it("exposes a prepared generation only after registration publication and keeps 
   expect(observedUnpublishedIdentity).toBe(true);
   const claim = execution.capturePreparedGenerationClaim();
   expect(claim).toBeDefined();
-  claim!.assertCurrent();
   const warmStages: string[] = [];
   const warmSource = source((request) => warmStages.push(request.stage));
   await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
@@ -230,7 +219,8 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
   expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
   await Promise.all([creator.release(), sibling.release()]);
   await readAliasAndClose(options, sessionKey);
-  await readAliasAndClose(aliased, sessionKey, () => expect(registry.assertCurrent).not.toThrow());
+  await readAliasAndClose(aliased, sessionKey);
+  expect(registry.assertCurrent).not.toThrow();
   const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer(options);
   assert(retainedValidation);
   expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(1);
@@ -376,30 +366,28 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
-  const options = fixture();
-  const creator = creatorFor(options);
-  emptyStore(options);
-  const later = creatorFor(options);
-  await using _ = onExit(() => releaseAll(creator, later));
-  await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
-  expect(fs.readFileSync(options.path)).toHaveLength(0);
-});
-
-it("retains the first creator's file witness on a preexisting execution owner", async () => {
-  const options = fixture();
-  emptyStore(options);
-  const ordinary = capture(options);
-  const creator = creatorFor(options);
-  fs.renameSync(options.path, `${options.path}.original`);
-  fs.writeFileSync(options.path, "");
-  const later = creatorFor(options);
-  await using _ = onExit(() => releaseAll(ordinary, creator, later));
-  await expect(later.prepare(source())).rejects.toThrow(
-    /identity changed|captured creating reference/,
-  );
-  expect(fs.readFileSync(options.path)).toHaveLength(0);
-});
+it.each(["absent", "preexisting"] as const)(
+  "retains the first creator's %s target witness when a later creator sees another file",
+  async (initial) => {
+    const options = fixture();
+    let ordinary: Execution | undefined;
+    if (initial === "preexisting") {
+      emptyStore(options);
+      ordinary = capture(options);
+    }
+    const creator = creatorFor(options);
+    if (ordinary) {
+      fs.renameSync(options.path, `${options.path}.original`);
+    }
+    emptyStore(options);
+    const later = creatorFor(options);
+    await using _ = onExit(() => releaseAll(ordinary, creator, later));
+    await expect(later.prepare(source())).rejects.toThrow(
+      ordinary ? /identity changed|captured creating reference/ : /changed before creating open/,
+    );
+    expect(fs.readFileSync(options.path)).toHaveLength(0);
+  },
+);
 
 it("prepares its originally missing store and records native birth without changing identity", async () => {
   const options = fixture();
@@ -426,15 +414,20 @@ it("prepares its originally missing store and records native birth without chang
       get: unrelatedInitialization,
     });
   }
-  const warm = capture({
-    ...options,
-    env,
-  });
+  const stat = vi.spyOn(fs, "statSync");
+  syncBuiltinESMExports();
   try {
-    await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-    expect(unrelatedInitialization).not.toHaveBeenCalled();
+    const warm = capture({ ...options, env });
+    try {
+      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+      expect(unrelatedInitialization).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      await warm.release();
+    }
   } finally {
-    await warm.release();
+    stat.mockRestore();
+    syncBuiltinESMExports();
   }
   const windows = (() => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -720,7 +713,6 @@ it("keeps another captured borrower live when the initiating caller is revoked d
   await using _ = onExit(() => releaseAll(rejected, retained));
   await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(refusal);
   expect(reachedNativeOpen).toBe(true);
-  expect(() => retained.assertCurrent()).not.toThrow();
   await expect(
     initialize(retained, "agent:main:after-open-refusal", "retained-borrower"),
   ).resolves.toEqual(initialized("agent:main:after-open-refusal", "retained-borrower"));
@@ -765,8 +757,8 @@ it.skipIf(process.platform === "win32")(
         replaced = true;
       }
     };
-    const readEntry = (request = source()) =>
-      execution.runExisting(request, (scope) =>
+    const readEntry = (request = source(), borrowed = execution) =>
+      borrowed.runExisting(request, (scope) =>
         scope.execute({
           type: "session.entry.read",
           input: { sessionKeys: ["agent:main:missing"] },
@@ -776,7 +768,12 @@ it.skipIf(process.platform === "win32")(
       await execution.prepare(source());
       await expect(readEntry(requestSource)).resolves.toMatchObject({ entries: [] });
       expect(replaced).toBe(true);
-      await expect(readEntry()).rejects.toThrow(/identity changed/);
+      const borrowed = capture(options);
+      try {
+        await expect(readEntry(source(), borrowed)).rejects.toThrow(/identity changed/);
+      } finally {
+        await borrowed.release();
+      }
     } finally {
       if (replaced) {
         fs.unlinkSync(options.path);

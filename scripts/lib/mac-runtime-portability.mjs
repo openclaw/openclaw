@@ -4,17 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The verifier owns containment and loader policy; inventory only observes types.
-export function auditMacRuntimePortability(runtime, executable) {
+function auditMacPortability(runtime, executable, app = false) {
   const inside = (candidate) => candidate === runtime || candidate.startsWith(`${runtime}/`);
   const systemLibrary = (candidate) => {
     // A system-looking prefix must not hide a load path that escapes with ../.
     const normalized = path.normalize(candidate);
     return normalized.startsWith("/usr/lib/") || normalized.startsWith("/System/Library/");
   };
-  function expandLoaderPath(value, filename) {
+  function expandLoaderPath(value, filename, entrypoint = executable) {
     return value
       .replace(/^@loader_path(?=\/|$)/u, path.dirname(filename))
-      .replace(/^@executable_path(?=\/|$)/u, path.dirname(executable));
+      .replace(/^@executable_path(?=\/|$)/u, path.dirname(entrypoint));
   }
   function loadSlices(filename) {
     const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
@@ -93,6 +93,7 @@ export function auditMacRuntimePortability(runtime, executable) {
     throw new Error("Incomplete runtime native inventory");
   }
   const native = [];
+  const executables = new Set();
   for (let index = 0; index < records.length; index += 2) {
     const kind = records[index];
     const filename = records[index + 1];
@@ -105,6 +106,9 @@ export function auditMacRuntimePortability(runtime, executable) {
       }
     } else if (kind === "executable" || kind === "library") {
       native.push(filename);
+      if (kind === "executable") {
+        executables.add(filename);
+      }
     } else {
       throw new Error(`Invalid runtime inventory kind: ${kind}`);
     }
@@ -112,6 +116,90 @@ export function auditMacRuntimePortability(runtime, executable) {
   const resolvedExecutable = fs.realpathSync(executable);
   if (!inside(resolvedExecutable)) {
     throw new Error("Runtime executable escapes bundle");
+  }
+  if (app) {
+    if (!executables.has(resolvedExecutable)) {
+      throw new Error(`Missing native app executable: ${resolvedExecutable}`);
+    }
+    const images = new Map(native.map((filename) => [filename, loadSlices(filename)]));
+    const inspected = new Set();
+    const sliceKey = (filename, slice) => `${filename}\0${slice.architecture}`;
+    const rpathsFor = (filename, slice, entrypoint) =>
+      slice.commands
+        .filter(({ command }) => command === "LC_RPATH")
+        .map(({ value }) => expandLoaderPath(value, filename, entrypoint));
+    const matchingSlice = (filename, architecture) => {
+      const slices = images.get(filename) ?? [];
+      return (
+        slices.find((slice) => slice.architecture === architecture) ??
+        slices.find((slice) => slice.architecture.split(":")[0] === architecture.split(":")[0])
+      );
+    };
+    function visit(filename, slice, entrypoint, inheritedRpaths, visited) {
+      const key = sliceKey(filename, slice);
+      if (visited.has(key)) {
+        return;
+      }
+      visited.add(key);
+      inspected.add(key);
+      const rpaths = [...rpathsFor(filename, slice, entrypoint), ...inheritedRpaths];
+      for (const { command, value } of slice.commands) {
+        // Swift Build can retain unused toolchain search paths. Only resolved
+        // load dependencies must be portable; the runtime's stricter audit stays separate.
+        if (command === "LC_RPATH") {
+          continue;
+        }
+        const candidates = value.startsWith("@rpath/")
+          ? rpaths.map((prefix) => path.join(prefix, value.slice(7)))
+          : [expandLoaderPath(value, filename, entrypoint)];
+        const target = candidates.find(
+          (candidate) =>
+            systemLibrary(candidate) ||
+            (path.isAbsolute(candidate) &&
+              inside(path.resolve(candidate)) &&
+              fs.existsSync(candidate) &&
+              inside(fs.realpathSync(candidate))),
+        );
+        if (!target) {
+          throw new Error(
+            `Nonportable ${command} in ${filename} (${slice.architecture}): ${value}`,
+          );
+        }
+        if (!systemLibrary(target)) {
+          const dependency = fs.realpathSync(target);
+          const dependencySlice = matchingSlice(dependency, slice.architecture);
+          if (!dependencySlice) {
+            throw new Error(
+              `Missing native dependency slice in ${dependency}: ${slice.architecture}`,
+            );
+          }
+          visit(dependency, dependencySlice, entrypoint, rpaths, visited);
+        }
+      }
+    }
+    // Each MH_EXECUTE starts a fresh dyld process, including nested Sparkle,
+    // MLX, and runtime helpers. Sibling executables never supply its runpaths.
+    for (const entrypoint of executables) {
+      for (const slice of images.get(entrypoint)) {
+        visit(entrypoint, slice, entrypoint, [], new Set());
+      }
+    }
+    // dlopen-only libraries are absent from executable load-command graphs.
+    // Runtime addons keep Bun as their host; other app libraries use OpenClaw.
+    const privateRuntime = path.join(runtime, "Contents/Resources/runtime");
+    for (const [filename, slices] of images) {
+      const entrypoint = filename.startsWith(`${privateRuntime}/`)
+        ? path.join(privateRuntime, "bin/bun")
+        : resolvedExecutable;
+      for (const slice of slices) {
+        if (!inspected.has(sliceKey(filename, slice))) {
+          const hostSlice = matchingSlice(entrypoint, slice.architecture);
+          const rpaths = hostSlice ? rpathsFor(entrypoint, hostSlice, entrypoint) : [];
+          visit(filename, slice, entrypoint, rpaths, new Set());
+        }
+      }
+    }
+    return native.length;
   }
   const executableSlices = loadSlices(resolvedExecutable);
   const executableRpaths = new Map(
@@ -150,4 +238,21 @@ export function auditMacRuntimePortability(runtime, executable) {
     }
   }
   return native.length;
+}
+
+export function auditMacRuntimePortability(runtime, executable) {
+  return auditMacPortability(runtime, executable);
+}
+
+function auditMacAppPortability(app) {
+  const root = fs.realpathSync(app);
+  return auditMacPortability(root, path.join(root, "Contents/MacOS/OpenClaw"), true);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [app] = process.argv.slice(2);
+  if (!app) {
+    throw new Error("Usage: mac-runtime-portability.mjs <app>");
+  }
+  console.log(`Verified app native dependencies (${auditMacAppPortability(app)} images)`);
 }

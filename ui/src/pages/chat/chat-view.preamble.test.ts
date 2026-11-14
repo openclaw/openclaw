@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { message, nativeMessage, queued, signedText } from "./chat-thread-fixtures.test-support.ts";
+import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
-import { renderChatInto } from "./chat-view.test-helpers.ts";
+import { createTestTranscript, renderChatInto, waitForElement } from "./chat-view.test-helpers.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -39,7 +41,7 @@ const narration = (container: HTMLElement) =>
 const content = (container: HTMLElement) =>
   Array.from(narration(container), (element) => element.textContent?.trim());
 
-it("keeps successive commentary inline and formatted across the live-to-history handoff", () => {
+it("keeps successive commentary inline and formatted across the live-to-history handoff", async () => {
   const container = createComposerContainer();
   const earlier = preamble("Reading the files.", 2, "read");
   const detail = "Checking the caller and its lifecycle. ".repeat(25);
@@ -49,7 +51,9 @@ it("keeps successive commentary inline and formatted across the live-to-history 
     messages,
     streamSegments: [{ text, ts: 3, runId, itemId: "test" }],
   });
-  expect(content(container)).toEqual(["Reading the files.", expect.stringContaining(detail)]);
+  await waitForSolid(() =>
+    expect(content(container)).toEqual(["Reading the files.", expect.stringContaining(detail)]),
+  );
   expect(narration(container)[1]?.querySelector("strong")?.textContent).toBe("Checking");
   expect(narration(container)[1]?.textContent).toContain("End of the explanation.");
   expect(container.querySelector(".chat-working-indicator")?.textContent).not.toContain("Checking");
@@ -109,7 +113,7 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
   },
 );
 
-it("leaves unphased answers and mixed-phase narration and final text in the transcript", () => {
+it("leaves unphased answers and mixed-phase narration and final text in the transcript", async () => {
   const container = createComposerContainer();
   renderChatInto(container, {
     runActive: true,
@@ -128,9 +132,149 @@ it("leaves unphased answers and mixed-phase narration and final text in the tran
       ),
     ],
   });
-  const text = content(container).join("\n");
-  expect(text).toContain("Unphased answer.");
-  expect(text).toContain("The result is ready.");
-  expect(text).toContain("Checking once more.");
-  expect(container.textContent?.match(/Checking once more\./g)).toHaveLength(1);
+  await waitForSolid(() => {
+    const text = content(container).join("\n");
+    expect(text).toContain("Unphased answer.");
+    expect(text).toContain("The result is ready.");
+    expect(text).toContain("Checking once more.");
+    expect(container.textContent?.match(/Checking once more\./g)).toHaveLength(1);
+  });
+});
+
+it("announces a run preamble and its later terminal answer separately", async () => {
+  const builder = vi.spyOn(chatThread, "buildCachedChatItems");
+  onTestFinished(() => builder.mockRestore());
+  const transcript = createTestTranscript();
+  const container = createComposerContainer();
+  const initialUser = {
+    kind: "group",
+    key: "group:user:announcement",
+    role: "user",
+    visibleContent: "text",
+    messages: [
+      {
+        key: "message:user:announcement",
+        message: {
+          role: "user",
+          content: "Start",
+          __openclaw: { id: "user:announcement", idempotencyKey: "run-announcement:user" },
+        },
+      },
+    ],
+    timestamp: 1,
+    isStreaming: false,
+  };
+  const renderItems = (items: ReturnType<typeof chatThread.buildCachedChatItems>) => {
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue(items);
+    renderChatInto(container, { transcript, messages: items });
+  };
+
+  renderItems([initialUser] as ReturnType<typeof chatThread.buildCachedChatItems>);
+  await waitForElement(container, ".chat-virtual-row");
+  const stream = {
+    kind: "stream" as const,
+    key: "stream:announcement",
+    text: "Latest streamed narration",
+    startedAt: 2,
+    isStreaming: true,
+    runId: "run-announcement",
+    boundaryId: "send:run-announcement",
+  };
+  renderItems([
+    initialUser,
+    stream,
+    {
+      kind: "reading-indicator",
+      key: "reading:announcement",
+      startedAt: 2,
+      runId: "run-announcement",
+      boundaryId: "send:run-announcement",
+    },
+  ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+  expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+    "Latest streamed narration",
+  );
+
+  renderItems([
+    initialUser,
+    {
+      kind: "group",
+      key: "group:assistant:persisted-announcement",
+      role: "assistant",
+      visibleContent: "text",
+      messages: [
+        {
+          key: "assistant:persisted-announcement",
+          message: {
+            role: "assistant",
+            content: "Persisted narration while the run continues",
+            runId: "run-announcement",
+          },
+        },
+      ],
+      timestamp: 3,
+      isStreaming: false,
+      runId: "run-announcement",
+    },
+    {
+      kind: "reading-indicator",
+      key: "reading:persisted-announcement",
+      startedAt: 4,
+      runId: "run-announcement",
+      boundaryId: "send:run-announcement",
+    },
+  ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+  expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+    "Persisted narration while the run continues",
+  );
+
+  renderItems([
+    initialUser,
+    { ...stream, isStreaming: false },
+    {
+      kind: "group",
+      key: "group:tool:announcement",
+      role: "tool",
+      visibleContent: "text",
+      messages: [
+        {
+          key: "tool:announcement",
+          message: {
+            role: "toolResult",
+            content: "Tool output",
+            runId: "run-announcement",
+          },
+        },
+      ],
+      timestamp: 3,
+      isStreaming: false,
+      runId: "run-announcement",
+    },
+    {
+      kind: "group",
+      key: "group:assistant:announcement",
+      role: "assistant",
+      visibleContent: "text",
+      messages: [
+        {
+          key: "assistant:announcement",
+          message: {
+            role: "assistant",
+            phase: "final_answer",
+            content: "Terminal answer",
+            runId: "run-announcement",
+          },
+        },
+      ],
+      timestamp: 4,
+      isStreaming: false,
+      runId: "run-announcement",
+    },
+  ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+  expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+    "Terminal answer",
+  );
 });

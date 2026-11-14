@@ -304,6 +304,7 @@ export async function authorizeOpenAiCompatibleHttpSession(params: {
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.requestAuth.operatorRoleActor,
+    openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
     operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
   });

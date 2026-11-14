@@ -33,7 +33,7 @@ type TrajectoryRuntimeInit = {
   workspaceDir?: string;
 };
 
-const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
+const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 65_536;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
@@ -47,7 +47,6 @@ const TRAJECTORY_PAYLOAD_PROJECTION = {
   maxNodes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2,
   maxKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS + 2,
   redactCredentials: false,
-  omitField: (key) => key === "providerReplay",
   propertyScope: "enumerable",
   projectBinary: (binary) => ({
     redacted: "<redacted>",
@@ -88,14 +87,66 @@ const OVERSIZE_PRESERVED_DATA_KEYS = [
   "prompt",
 ] as const;
 
-function truncateOversizedTrajectoryEvent(
+// Prepared fields have no JSON hooks and remain unchanged during reduction.
+// Reuse their encodings instead of constructing discarded full-event strings.
+function prepareTrajectoryEventJson(event: TrajectoryEvent) {
+  const prefix = `${JSON.stringify({ ...event, data: undefined }).slice(0, -1)},"data":{`;
+  const prefixBytes = Buffer.byteLength(prefix) + 2;
+  const encodeField = (key: string, value: unknown) => {
+    const json = JSON.stringify(value);
+    const keyJson = JSON.stringify(key);
+    return {
+      value,
+      json,
+      keyJson,
+      bytes: json === undefined ? 0 : Buffer.byteLength(keyJson) + 1 + Buffer.byteLength(json),
+    };
+  };
+  const fields = new Map(
+    Object.entries(event.data!).map(([key, value]) => [key, encodeField(key, value)]),
+  );
+  let bytes = prefixBytes;
+  let count = 0;
+  for (const field of fields.values()) {
+    if (field.json !== undefined) {
+      bytes += field.bytes + (count++ ? 1 : 0);
+    }
+  }
+  return {
+    bytes,
+    stringify: (next: TrajectoryEvent): string | undefined => {
+      const parts: string[] = [];
+      let size = prefixBytes;
+      for (const [key, value] of Object.entries(next.data!)) {
+        const prepared = fields.get(key);
+        const field = prepared && prepared.value === value ? prepared : encodeField(key, value);
+        if (field.json !== undefined) {
+          size += field.bytes + (parts.length ? 1 : 0);
+          if (parts.length) {
+            parts.push(",");
+          }
+          parts.push(field.keyJson, ":", field.json);
+        }
+      }
+      return size <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES
+        ? `${prefix}${parts.join("")}}}`
+        : undefined;
+    },
+  };
+}
+
+function serializeBoundedTrajectoryEvent(
   event: TrajectoryEvent,
-  line: string,
   stringify: (event: TrajectoryEvent) => string | null | undefined,
+  measuredBytes?: number,
 ): string | undefined {
-  const bytes = Buffer.byteLength(line, "utf8");
+  const line = measuredBytes === undefined ? stringify(event) : undefined;
+  if (measuredBytes === undefined && !line) {
+    return undefined;
+  }
+  const bytes = measuredBytes ?? Buffer.byteLength(line!, "utf8");
   if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-    return line;
+    return line ?? stringify(event) ?? undefined;
   }
 
   const originalData = event.data ?? {};
@@ -176,7 +227,7 @@ function limitTrajectoryPayloadValue(
   value: unknown,
   depth = 0,
   seen: WeakSet<object> = new WeakSet(),
-  serialization?: { needsSafeJson?: boolean; jsonCacheable?: boolean },
+  serialization?: { needsSafeJson?: boolean; jsonCacheable?: boolean; stringChars?: number },
 ): unknown {
   if (typeof value === "string") {
     if (value.length > TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS) {
@@ -184,6 +235,9 @@ function limitTrajectoryPayloadValue(
         originalChars: value.length,
         limitChars: TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS,
       });
+    }
+    if (serialization?.stringChars !== undefined) {
+      serialization.stringChars += value.length;
     }
     return value;
   }
@@ -238,12 +292,13 @@ function limitTrajectoryPayloadValue(
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
   const limited: Record<string, unknown> = {};
-  for (
-    let index = 0;
-    index < Math.min(keys.length, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS);
-    index++
-  ) {
+  const count = Math.min(keys.length, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS);
+  for (let index = 0; index < count; index++) {
     const key = keys[index]!;
+    // Replay is transcript-owned and omitted from capture; never copy its contents.
+    if (key === "providerReplay") {
+      continue;
+    }
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen, serialization);
     if (serialization?.jsonCacheable && key === "__proto__") {
       serialization.jsonCacheable = false;
@@ -384,7 +439,7 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
     enabled: true as const,
     recordEvent: (type: string, data?: Record<string, unknown>) => {
       const nextSeq = seq + 1;
-      const serialization = { needsSafeJson: false };
+      const serialization = { needsSafeJson: false, stringChars: 0 };
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
@@ -405,12 +460,19 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
       };
       // Limiting already creates plain records. Only bigint/function leaves need
       // the replacer; functions include toJSON hooks that can return arbitrary values.
-      const stringify = serialization.needsSafeJson ? safeJsonStringify : JSON.stringify;
-      const line = stringify(event);
-      if (!line) {
-        return;
-      }
-      const boundedLine = truncateOversizedTrajectoryEvent(event, line, stringify);
+      const prepared =
+        !serialization.needsSafeJson &&
+        serialization.stringChars > TRAJECTORY_RUNTIME_EVENT_MAX_BYTES &&
+        TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS.some((key) =>
+          Object.hasOwn(event.data!, key),
+        )
+          ? prepareTrajectoryEventJson(event)
+          : undefined;
+      const boundedLine = serializeBoundedTrajectoryEvent(
+        event,
+        prepared?.stringify ?? (serialization.needsSafeJson ? safeJsonStringify : JSON.stringify),
+        prepared?.bytes,
+      );
       if (!boundedLine) {
         return;
       }

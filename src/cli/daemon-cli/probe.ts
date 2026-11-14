@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resolveGatewayProbeTarget } from "../../gateway/probe-target.js";
 import type { GatewayProbeAuthSummary, GatewayProbeServerSummary } from "../../gateway/probe.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
 
@@ -55,6 +56,7 @@ export async function probeGatewayStatus(opts: {
   config?: OpenClawConfig;
   tlsFingerprint?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
@@ -67,6 +69,7 @@ export async function probeGatewayStatus(opts: {
   let eventLoop: HelloOk["snapshot"]["health"]["eventLoop"] | undefined;
   let gatewayReached = false;
   try {
+    opts.signal?.throwIfAborted();
     const result = await withProgress(
       {
         label: "Checking gateway status...",
@@ -93,6 +96,7 @@ export async function probeGatewayStatus(opts: {
             ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
+            ...(opts.signal ? { signal: opts.signal } : {}),
             sharedStateMode: "read-only",
             skipImplicitAuth: true,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
@@ -133,10 +137,12 @@ export async function probeGatewayStatus(opts: {
             ? { preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs }
             : {}),
           timeoutMs: opts.timeoutMs,
+          ...(opts.signal ? { signal: opts.signal } : {}),
           includeDetails: false,
         });
       },
     );
+    opts.signal?.throwIfAborted();
     auth = result.auth;
     server = result.server;
     const serverSummary = server ? { server } : {};
@@ -176,6 +182,9 @@ export async function probeGatewayStatus(opts: {
       error,
     } as const;
   } catch (err) {
+    if (opts.signal?.aborted && (err === opts.signal.reason || isAbortError(err))) {
+      throw opts.signal.reason;
+    }
     const error = redactSensitiveUrlLikeString(formatErrorMessage(err));
     return {
       ok: false,
