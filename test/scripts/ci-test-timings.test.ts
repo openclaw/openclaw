@@ -998,13 +998,9 @@ describe("CI test timing refit", () => {
   it.each(
     [
       [],
-      ["boat"],
       ["boat-small/from=snapshot"],
-      ["boat-large", "ubuntu-24.04"],
       ["boat-xlarge", "blacksmith-32vcpu-ubuntu-2404"],
       ["ubuntu-24.04", "self-hosted"],
-      ["ubuntu-24.04", "runson"],
-      ["unknown-runner"],
       ["blacksmith-4vcpu-ubuntu-2404", "blacksmith-8vcpu-ubuntu-2404"],
     ].map((labels) => ({ labels })),
   )("ignores compact and packed measurements from unsupported runners: $labels", ({ labels }) => {

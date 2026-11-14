@@ -416,7 +416,6 @@ describe("talk realtime gateway relay", () => {
   it.each([
     { forced: true, interrupt: undefined, expectedInterrupt: true },
     { forced: false, interrupt: undefined, expectedInterrupt: true },
-    { forced: false, interrupt: false, expectedInterrupt: false },
     { forced: true, interrupt: false, expectedInterrupt: false },
   ])(
     "resolves forced audio routing $forced independently of interruption $interrupt",

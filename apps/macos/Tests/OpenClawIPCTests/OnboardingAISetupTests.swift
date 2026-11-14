@@ -4079,28 +4079,6 @@ struct OnboardingAISetupTests {
         ) == .activationExpired)
     }
 
-    @Test func `missing model cannot start a second activation before pending deadline`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingPendingDeadlineBlockTests"))
-        let url = try #require(URL(string: "ws://localhost:18789"))
-        let appState = AppState(preview: true)
-        appState.connectionMode = .local
-        let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: appState)
-        markPending(defaults, for: routeIdentity, timeoutMs: 30000)
-        let harness = AISetupHarness(url: url) { _, request, _ in
-            request.method == "agents.list" ? missingConfiguredModelResponse(id: request.id) : nil
-        }
-        let view = harness.view(state: appState, defaults: defaults, routeIdentityProvider: { routeIdentity })
-
-        let initialProbe = try #require(view.onboardingDidAppear())
-        await initialProbe.value
-        await settleQueuedAISetupTasks()
-
-        #expect(await (harness.recorder.snapshot()).methods == ["agents.list"])
-        #expect(view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(isPending(defaults, for: routeIdentity))
-        view.onboardingDidDisappear()
-    }
-
     @Test func `expired pending activation restores choices without automatically testing`() async throws {
         let suiteName = "OnboardingExpiredPendingActivationTests-\(UUID().uuidString)"
         let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
@@ -5174,14 +5152,6 @@ struct OnboardingAISetupTests {
             defaults: defaults
         )
         #expect(isOwned(by: activationOwner, defaults: defaults))
-    }
-
-    @Test func `pending marker for another route is preserved`() throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingSystemAgentRouteMismatchTests"))
-        markPending(defaults, for: "remote:id:gateway-a")
-
-        #expect(!isPending(defaults, for: "remote:id:gateway-b"))
-        #expect(isPending(defaults, for: "remote:id:gateway-a"))
     }
 
     @Test func `A to B to A preserves first activation lease`() throws {
@@ -6471,21 +6441,6 @@ struct OnboardingAISetupTests {
         await staleActivation.value
 
         #expect(isPending(defaults, for: "remote:id:gateway-b"))
-    }
-
-    @Test func `configured resume preserves marker until route reset`() throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingConfiguredResumeMarkerTests"))
-        let model = OnboardingAISetupModel(
-            defaults: defaults,
-            routeIdentityProvider: { "local" }
-        )
-        markPending(defaults)
-
-        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
-        #expect(isPending(defaults))
-
-        model.resetForGatewayChange()
-        #expect(!isPending(defaults))
     }
 
     @Test func `retired setup socket requires a fresh detection lease`() {

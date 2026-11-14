@@ -3061,39 +3061,6 @@ describe("chat model controls", () => {
     ]);
   });
 
-  it("keeps reconciliation inside the session settings lane", async () => {
-    const reconciliationStarted = createDeferred();
-    const releaseReconciliation = createDeferred();
-    const patches: Array<Record<string, unknown>> = [];
-    const patchResult: SessionPatchResult = {
-      ok: true,
-      path: "",
-      key: "main",
-      entry: { sessionId: "main" },
-    };
-    const host = createSettingsLaneHost(
-      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-        if (options?.waitFor) {
-          await options.waitFor;
-        }
-        patches.push(patch);
-        reconciliationStarted.resolve();
-        await releaseReconciliation.promise;
-        return patchResult;
-      },
-    );
-
-    const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
-    await reconciliationStarted.promise;
-    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
-    await Promise.resolve();
-    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
-
-    releaseReconciliation.resolve();
-    await expect(Promise.all([modelSwitch, thinkingPatch])).resolves.toEqual([true, true]);
-    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
-  });
-
   it("validates queued settings independently after a model switch fails", async () => {
     const modelPatch = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];

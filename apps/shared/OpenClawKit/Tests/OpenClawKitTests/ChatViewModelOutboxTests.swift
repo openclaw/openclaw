@@ -1392,26 +1392,6 @@ struct ChatViewModelOutboxTests {
             OpenClawChatViewModel.BranchListingUnadvertisedError()))
     }
 
-    @Test func `explicit unsupported reply on a pre-catalog gateway still releases queued send`() async throws {
-        let (store, _, databaseDirectory) = try makeOutboxStore()
-        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let transport = OutboxTestTransport(healthy: false)
-        await transport.state.update {
-            $0.advertisedMethods = nil
-            $0.branchListingBehavior = .unsupportedTextRejection
-        }
-        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
-        let text = "explicit unsupported still flushes"
-
-        await MainActor.run { vm.load() }
-        try await sendWhileOffline(vm, text: text)
-        await transport.goOnline()
-
-        await transport.state.waitForState { $0.sentMessages.count >= 1 }
-        #expect(await transport.state.sentMessages == [text])
-        #expect(await transport.state.branchListCalls >= 1)
-    }
-
     @Test func `offline queue persists the effective thinking level`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }

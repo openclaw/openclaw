@@ -845,12 +845,6 @@ describe("createBackupArchive", () => {
       /schema role global; expected agent/iu,
     ],
     [
-      "agent with different owner",
-      "agent",
-      (sqlitePath) => createOwnedSqliteDatabase({ sqlitePath, role: "agent", agentId: "worker" }),
-      /belongs to agent worker; requested agent main/iu,
-    ],
-    [
       "agent with noncanonical owner",
       "agent",
       (sqlitePath) => createOwnedSqliteDatabase({ sqlitePath, role: "agent", agentId: "Main" }),

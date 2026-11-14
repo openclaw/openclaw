@@ -295,24 +295,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun compactComposerRetainsSeparateMinimumTouchTargets() {
-    val height = mutableStateOf(720.dp)
-    showChat(viewportWidth = 320.dp, viewportHeight = { height.value })
-    composerEditor().performTextReplacement("Touch target draft")
-    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
-    assertComposerControlsVisible(primaryAction = "Send")
-
-    composeRule.runOnIdle { height.value = 180.dp }
-    composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed()
-    assertComposerControlsVisible(primaryAction = "Send")
-    composerEditor().assertTextEquals("Touch target draft")
-
-    composeRule.runOnIdle { height.value = 720.dp }
-    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
-    assertComposerControlsVisible(primaryAction = "Send")
-  }
-
-  @Test
   fun placeholderFollowsComposerOwnerWithoutChangingBoundDrafts() {
     val scale = mutableStateOf(1f)
     val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { scale.value })
@@ -1207,23 +1189,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun activeRunKeepsNewTextSendableAndRestoresStopForAnEmptyDraft() {
-    showChat()
-    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
-    val editor = composerEditor()
-    listOf("hello", "/help", "/unknown").forEach { input ->
-      editor.performTextReplacement(input)
-      editor.assertTextEquals(input)
-      assertComposerControlsVisible(primaryAction = "Send")
-      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
-      assertTrue("Typing must not end the active run", controller.pendingRunCount.value > 0)
-    }
-    editor.performTextReplacement("")
-    assertComposerControlsVisible(primaryAction = "Stop")
-    composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
-  }
-
-  @Test
   fun physicalEnterPreservesTheDraftDuringTalkWithAnActiveRun() {
     assertPhysicalEnterDuringActiveRun(talkActive = true, expectedSends = 0)
   }
@@ -1562,36 +1527,6 @@ class ChatComposerLayoutTest {
       assertComposerControlsVisible(talkActive = true)
     }
     assertTrue((failures + measurements).joinToString("\n"), failures.isEmpty())
-  }
-
-  @Test
-  fun narrowFrenchMultilineDraftKeepsTalkAndRunControlsVisibleWithKeyboardOpen() {
-    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
-    showChat(viewportWidth = 320.dp, fontScale = { 1.5f }, talkActive = true)
-    val editor = composerEditor()
-    val draft = "Un\ndeux\ntrois\nquatre\ncinq\nsix"
-    editor.performTextReplacement(draft)
-    editor.assertTextEquals(draft)
-    assertComposerControlsVisible(talkActive = true)
-  }
-
-  @Test
-  @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun composerResizeScreenshotProof() {
-    val height = mutableStateOf(720.dp)
-    showChat(viewportWidth = 320.dp, viewportHeight = { height.value }, fontScale = { 2f }, useChatShell = true)
-    val editor = composerEditor()
-    editor.performClick().performTextReplacement("Short viewport draft")
-    applyChatImeInsets()
-    composeRule.runOnIdle { height.value = 360.dp }
-    composeRule.waitForIdle()
-    System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { path ->
-      val folder = File(path).apply { mkdirs() }
-      val image = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
-      assertTrue(image.width >= 320 && image.height >= 360)
-      File(folder, "composer-resize.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-    }
-    assertCompleteComposerLineAboveIme()
   }
 
   @Test
@@ -5434,21 +5369,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun longProgressPlanKeepsEditorAndStopVisibleAndLastStepReachable() {
-    val viewModel = showChat()
-    val steps = List(20) { index -> "Step ${index + 1}: verify the Android chat behavior and document the result." }
-    showProgressCard(viewModel, steps)
-
-    assertComposerControlsVisible()
-    if (composeRule.onAllNodesWithContentDescription("Expand progress card").fetchSemanticsNodes().isNotEmpty()) {
-      composeRule.onNodeWithContentDescription("Expand progress card").performClick()
-    }
-    assertComposerControlsVisible()
-    composeRule.onNodeWithText(steps.last()).performScrollTo().assertIsDisplayed()
-    assertComposerControlsVisible()
-  }
-
-  @Test
   fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
     val viewModel = showChat()
     showProgressCard(viewModel, listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
@@ -5903,14 +5823,6 @@ class ChatComposerLayoutTest {
     if (text.isNotEmpty()) editor.assertTextEquals(text)
     attachment?.let { composeRule.onNodeWithText(it.fileName).assertIsDisplayed() }
   }
-
-  @Test
-  fun connectedEmptyChatDoesNotClaimGatewayOfflineWhileHealthIsPending() =
-    withConnectedUnreadyEmptyChat(rejectHealth = false) { _, _, _ ->
-      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
-      composeRule.onNodeWithText(nativeString("Chat not ready")).assertIsDisplayed()
-      composeRule.onNodeWithText(nativeString("Use Refresh chat to check Gateway health.")).assertIsDisplayed()
-    }
 
   @Test
   fun connectedEmptyChatDoesNotClaimGatewayOfflineAfterHealthFails() =

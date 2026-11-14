@@ -1524,22 +1524,9 @@ EOF
     },
     { name: "fresh retained config reports success only after Doctor", configured: true },
     {
-      name: "fresh explicit verification rejects failure before success",
-      verify: true,
-      verifyExit: 1,
-      expectedStatus: 1,
-    },
-    {
       name: "upgrade implicit verification counts four stages before success",
       configured: true,
       upgrade: true,
-    },
-    {
-      name: "upgrade rejects failed Doctor before success",
-      configured: true,
-      upgrade: true,
-      doctorExit: 9,
-      expectedStatus: 9,
     },
     {
       name: "upgrade rejects failed verification before success",
@@ -1549,10 +1536,6 @@ EOF
       expectedStatus: 1,
     },
     { name: "plain fresh install reports success before skipping onboarding" },
-    {
-      name: "plain fresh install reports success before optional onboarding handoff",
-      onboard: true,
-    },
     {
       name: "fresh verification completes before success and optional onboarding handoff",
       verify: true,

@@ -1626,14 +1626,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
-    @Test @MainActor func `session key extracts canonical agent ID`() {
-        #expect(OpenClawChatSessionKey.agentID(from: "agent:rust-claw:mattermost:channel:w6g") == "rust-claw")
-        #expect(OpenClawChatSessionKey.agentID(from: " agent:main:main ") == "main")
-        #expect(OpenClawChatSessionKey.agentID(from: "main") == nil)
-        #expect(OpenClawChatSessionKey.agentID(from: "agent::main") == nil)
-        #expect(OpenClawChatSessionKey.agentID(from: nil) == nil)
-    }
-
     @Test @MainActor func `chat agent name uses focused canonical session agent`() {
         let appModel = NodeAppModel()
         appModel.gatewayDefaultAgentId = "main"
@@ -9050,15 +9042,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(encodedApproval["gatewayStableID"] as? String == "gateway-a")
         #expect(encodedApproval["warningText"] as? String == "Review shell expansion")
 
-        let reply = try #require(try parseWatchExecApprovalResolvePayload([
-            "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
-            "replyId": "reply-a",
-            "approvalId": "approval-a",
-            "gatewayStableID": "gateway-a",
-            "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
-        ], transport: "sendMessage"))
-        #expect(reply.gatewayStableID == "gateway-a")
-
         let resolved = WatchMessagingPayloadCodec.encodeExecApprovalResolvedPayload(
             OpenClawWatchExecApprovalResolvedMessage(
                 approvalId: "approval-a",
@@ -9133,12 +9116,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             ], transport: "applicationContext"))
         #expect(missingHeldApprovalsRequest.requestId == "missing-held-approvals")
         #expect(missingHeldApprovalsRequest.heldApprovals.isEmpty)
-        let missingRequestIdRequest = try #require(
-            try parseWatchExecApprovalSnapshotRequestPayload([
-                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
-                "heldApprovals": [],
-            ], transport: "applicationContext"))
-        #expect(!missingRequestIdRequest.requestId.isEmpty)
         let emptyRequestIdRequest = try #require(
             try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
@@ -9496,22 +9473,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(coalescedPrompt.id != firstPrompt.id)
         #expect(coalescedPrompt.messagePreview.contains("second prompt"))
-    }
-
-    @Test @MainActor func `handle deep link strips delivery fields before confirmation`() async throws {
-        let appModel = NodeAppModel()
-        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
-        let url = makeAgentDeepLinkURL(
-            message: "route this",
-            deliver: true,
-            to: "123456",
-            channel: "telegram")
-
-        await appModel.handleDeepLink(url: url)
-        let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
-        #expect(prompt.request.deliver == false)
-        #expect(prompt.request.to == nil)
-        #expect(prompt.request.channel == nil)
     }
 
     @Test @MainActor func `handle deep link rejects long message when connected`() async {

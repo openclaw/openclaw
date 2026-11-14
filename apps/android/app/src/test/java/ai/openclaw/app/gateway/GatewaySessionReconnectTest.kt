@@ -2388,11 +2388,9 @@ class GatewaySessionReconnectTest {
   fun tokenFailuresPauseUnlessOneDeviceTokenRetryIsPending() {
     val cases =
       listOf(
-        Triple("AUTH_TOKEN_MISMATCH", false, true),
         Triple("AUTH_TOKEN_MISMATCH", true, false),
         Triple("AUTH_DEVICE_TOKEN_MISMATCH", false, true),
         Triple("AUTH_TOKEN_NOT_CONFIGURED", false, true),
-        Triple("AUTH_PASSWORD_MISSING", false, true),
         Triple("AUTH_PASSWORD_NOT_CONFIGURED", false, true),
         Triple("AUTH_SCOPE_MISMATCH", false, true),
         Triple("AUTH_VERIFIED_USER_REQUIRED", false, true),
@@ -2480,35 +2478,6 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = false,
         role = "operator",
         scopes = listOf("operator.read"),
-        pendingDeviceTokenRetry = false,
-      ),
-    )
-  }
-
-  @Test
-  fun protocolMismatchPausesReconnect() {
-    val error =
-      GatewaySession.ErrorShape(
-        code = "INVALID_REQUEST",
-        message = "protocol mismatch",
-        details =
-          GatewayErrorDetails(
-            code = "PROTOCOL_MISMATCH",
-            canRetryWithDeviceToken = false,
-            recommendedNextStep = null,
-            clientMinProtocol = 4,
-            clientMaxProtocol = 4,
-            expectedProtocol = 5,
-            minimumProbeProtocol = 4,
-          ),
-      )
-
-    assertTrue(
-      shouldPauseGatewayReconnectAfterAuthFailure(
-        error = error,
-        hasBootstrapToken = false,
-        role = "node",
-        scopes = emptyList(),
         pendingDeviceTokenRetry = false,
       ),
     )

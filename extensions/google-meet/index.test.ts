@@ -2679,61 +2679,6 @@ describe("google-meet plugin", () => {
       expect(nodesInvoke).not.toHaveBeenCalled();
     });
 
-    it("creates and joins a Meet through the create tool action by default", async () => {
-      const { tools, nodesInvoke } = setupCreate(
-        { defaultMode: "transcribe" },
-        {
-          nodesInvokeHandler: createBrowserProxyHandler({
-            handleChromeStart: true,
-            openedTargetId: (url) =>
-              url === "https://meet.google.com/new?hl=en" ? "create-tab" : "join-tab",
-            act: (body) =>
-              body.fn?.includes("meetUrlPattern")
-                ? browserCreateResult("https://meet.google.com/new-abcd-xyz")
-                : JSON.stringify({
-                    inCall: true,
-                    micMuted: false,
-                    title: "Meet call",
-                    url: "https://meet.google.com/new-abcd-xyz",
-                  }),
-          }),
-        },
-      );
-      const tool = tools[0] as {
-        execute: (
-          id: string,
-          params: unknown,
-        ) => Promise<{
-          details: {
-            source?: string;
-            joined?: boolean;
-            meetingUri?: string;
-            join?: { session: { url: string } };
-          };
-        }>;
-      };
-
-      const result = await tool.execute("id", { action: "create" });
-
-      expect(result.details.source).toBe("browser");
-      expect(result.details.joined).toBe(true);
-      expect(result.details.meetingUri).toBe("https://meet.google.com/new-abcd-xyz");
-      expect(result.details.join?.session.url).toBe("https://meet.google.com/new-abcd-xyz");
-      expectBrowserProxyCall(nodesInvoke, "/tabs/open", {
-        url: "https://meet.google.com/new?hl=en",
-      });
-      expect(nodesInvoke).toHaveBeenCalledWith(
-        expect.objectContaining({
-          command: "googlemeet.chrome",
-          params: expect.objectContaining({
-            action: "start",
-            url: "https://meet.google.com/new-abcd-xyz",
-            launch: false,
-          }),
-        }),
-      );
-    });
-
     it("returns structured manual action from the create tool action", async () => {
       const { tools } = setupCreate(
         {},

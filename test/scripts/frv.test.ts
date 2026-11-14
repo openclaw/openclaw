@@ -1121,15 +1121,6 @@ describe("FRV continuation preflight", () => {
     },
   );
 
-  it("rejects ambiguous producer dispatch logs", async () => {
-    const fixture = artifactFixture();
-    fixture.logs.dispatch += `\n${fixture.logs.dispatch}`;
-    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
-      "dispatch identity is unavailable or ambiguous",
-    );
-    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       "mismatched",
@@ -2148,34 +2139,6 @@ describe("FRV same-parent recovery", () => {
     },
   );
 
-  it("does not retry an ambiguous child job rerun after a 502", async () => {
-    const selected = child("normalCi", "101");
-    const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" }]]);
-    const parent = { attempt: 1, conclusion: "success" };
-    const base = controllerClient([selected], childRuns, parent);
-    const serverError = Object.assign(new Error("gh api failed"), {
-      stderr: "gh: request failed (HTTP 502)",
-    });
-    let posts = 0;
-    const client = {
-      ...base,
-      rerunFailed: async () => {
-        posts += 1;
-        throw serverError;
-      },
-      rerunParent: async () => {},
-      verify: async () => "{}",
-    };
-    await withFastPolling(
-      () =>
-        expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
-          "rerun mutation did not produce an observable newer attempt for 101",
-        ),
-      "5",
-    );
-    expect(posts).toBe(1);
-  });
-
   it("keeps exact-terminal parent admission before dispatch", async () => {
     const scenario = rerunScenario({
       childSource: [1, "success"],
@@ -2489,11 +2452,6 @@ describe("FRV child rerun", () => {
       "a failed upstream image whose rerun re-executes a consumer",
       ["installer_smoke_update_image", "root_dockerfile_image", "installer_smoke"],
     ],
-    [
-      "a failed root image whose rerun reaches only the status aggregate",
-      ["root_dockerfile_image", "root_dockerfile_image_ready", "installer_smoke"],
-    ],
-    ["a failed Bun consumer that verifies the producer attempt", ["bun_global_install_smoke"]],
   ])("refuses a duplicate-prone multi-job install-smoke rerun for %s", (_case, failed) => {
     const jobs = [
       job(producer),

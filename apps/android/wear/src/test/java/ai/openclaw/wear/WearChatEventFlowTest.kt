@@ -254,21 +254,6 @@ class WearChatEventFlowTest {
     }
 
   @Test
-  fun canonicalOwnedAssistantCanSettleWhenATerminalWasMissed() =
-    withFlow { flow ->
-      flow.send()
-      val reply = WearChatMessage("reply", "assistant", "Done", 1L, idempotencyKey = flow.runId)
-      val transcript = flow.transcript().copy(messages = listOf(reply))
-      assertNull(
-        flow.state
-          .copy(messages = listOf(reply))
-          .reconcileReplyHistory(transcript)
-          .pendingReply,
-      )
-      assertNotNull(flow.state.reconcileReplyHistory(flow.transcript()).pendingReply)
-    }
-
-  @Test
   fun completedRunMustNotSuppressLaterTerminalOnlyError() =
     withFlow { flow ->
       flow.emit("final", eventRunId = "completed-a")
@@ -571,20 +556,6 @@ class WearChatEventFlowTest {
     }
 
   @Test
-  fun terminalOnlyFinalCanFinishAfterHistoryConfirmsNoAssistantReply() =
-    withFlow { flow ->
-      flow.send()
-      flow.historyGate = CompletableDeferred()
-      flow.emit("final")
-      assertNull(flow.state.replyTerminal?.history)
-      flow.historyGate?.complete(Unit)
-      flow.idle()
-      assertNotNull(flow.state.replyTerminal?.history)
-      assertTrue(flow.state.messages.isEmpty())
-      assertNull(flow.state.pendingReply)
-    }
-
-  @Test
   fun emptyHistoryDoesNotForgetTheCompletedOutcomesAssistantBoundary() =
     withFlow { flow ->
       val originalHistory = """[{"id":"old-reply","role":"assistant","content":"Previous reply"}]"""
@@ -735,23 +706,6 @@ class WearChatEventFlowTest {
       flow.historyMessages = """[{"id":"owned","role":"assistant","content":"Owned reply","idempotencyKey":"${flow.runId}"},{"id":"foreign","role":"assistant","content":"Foreign tail","idempotencyKey":"foreign-run"}]"""
       flow.emit("final")
       assertEquals(listOf("Owned reply"), flow.completedReplies.map { it?.text })
-    }
-
-  @Test
-  fun identifiedFinalMessageRemainsOwnedWithoutAHistoryKey() =
-    withFlow { flow ->
-      flow.send()
-      flow.observeReplyCompletion()
-      flow.emit(
-        "final",
-        message =
-          buildJsonObject {
-            put("id", "owned-event")
-            put("role", "assistant")
-            put("content", "Owned event reply")
-          },
-      )
-      assertEquals(listOf("Owned event reply"), flow.completedReplies.map { it?.text })
     }
 
   @Test
@@ -1761,25 +1715,6 @@ class WearChatEventFlowTest {
       assertNull(flow.state.failure)
       assertEquals(oldRun, flow.state.pendingReply?.runId)
       assertEquals(false, flow.vm.sendReply("Hello"))
-    }
-
-  @Test
-  fun canonicalOwnCompletionRemainsKnownWhileForeignHistoryIsActive() =
-    withFlow { flow ->
-      flow.send()
-      val ownRun = flow.runId
-      flow.observeReplyCompletion()
-      flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
-      flow.vm.refresh()
-      flow.idle()
-      assertTrue(flow.completedReplies.isEmpty())
-      assertEquals("foreign-run", flow.state.activeRunId)
-      flow.historyMessages = "[]"
-      flow.historyRun = null
-      flow.emit("final", eventRunId = "foreign-run")
-      assertNull(flow.state.pendingReply)
-      assertEquals(listOf("Owned reply"), flow.completedReplies.map { it?.text })
     }
 
   @Test

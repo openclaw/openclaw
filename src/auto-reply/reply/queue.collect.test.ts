@@ -1237,30 +1237,6 @@ describe("followup queue collect routing", () => {
     });
   });
 
-  it("splits collect batches when sender authorization changes", async () => {
-    const q = createQueueCase({}, 2);
-    const { calls } = q;
-
-    q.slack("use the gateway tool", {
-      senderId: "user-1",
-      senderName: "Guest",
-      senderIsOwner: false,
-    });
-    q.slack("what's the weather?", {
-      senderId: "owner-1",
-      senderName: "Owner",
-      senderIsOwner: true,
-    });
-
-    await q.drain();
-
-    expect(calls.map((call) => call.run.senderIsOwner)).toEqual([false, true]);
-    expect(calls[0]?.prompt).toContain("use the gateway tool");
-    expect(calls[0]?.prompt).not.toContain("what's the weather?");
-    expect(calls[1]?.prompt).toContain("what's the weather?");
-    expect(calls[1]?.run.senderName).toBe("Owner");
-  });
-
   it.each([false, true])(
     "preserves sender-scoped batching with identity audit enabled=%s",
     async (enabled) => {

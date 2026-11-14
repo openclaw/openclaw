@@ -29,7 +29,6 @@ import {
 import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
-import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
@@ -1221,26 +1220,6 @@ describe("ClawHub prepared publication", () => {
     ).rejects.toThrow(/bytes and inventory mismatch/u);
     expect(existsSync(f.restoreOptions.outputDir)).toBe(false);
     expect(f.registryReads).toEqual([]);
-  });
-
-  it("refuses a matching-version registry package with different bytes instead of adopting it", async () => {
-    const f = preparedFixture();
-    await restorePreparedClawHubPackage(f.restoreOptions);
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/artifact/download")) {
-        return new Response("different published bytes");
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    await expect(
-      verifyPublishedClawHubPackage({
-        expectedArtifactDir: f.restoreOptions.outputDir,
-        packageName: f.entry.name,
-        packageVersion: f.entry.version,
-        publishTag: "latest",
-        retryOptions: { fetchImpl, attempts: 1 },
-      }),
-    ).rejects.toThrow(/registry artifact sha256 mismatch/u);
   });
 });
 

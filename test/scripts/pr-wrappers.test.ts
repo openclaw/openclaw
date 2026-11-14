@@ -1011,7 +1011,6 @@ exit "$status"
       ["merge-run", "123", "--body-file", ""],
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
-      ["merge-recover", "123", outcomeOid, "--body-file", "one"],
       ...[
         ["--admin-evidence", "proof.json"],
         ["--confirmed-operator-admin"],

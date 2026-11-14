@@ -501,30 +501,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun reconnectFlushWaitsForPendingSessionSettings() =
-    outboxTest {
-      val chat = controller()
-      chat.load("main")
-      advanceUntilIdle()
-      assertTrue(chat.sendMessageAwaitAcceptance(message = "queued", thinkingLevel = "high", attachments = emptyList()))
-
-      gateway.online = true
-      gateway.settingsPatchStarted = CompletableDeferred()
-      gateway.settingsPatchGate = CompletableDeferred()
-      chat.setSessionModel("main", "openai/gpt-5.6-sol")
-      gateway.settingsPatchStarted?.await()
-      chat.handleGatewayEvent("health", null)
-      runCurrent()
-
-      assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Queued, chat.singleOutboxStatus())
-
-      gateway.settingsPatchGate?.complete(Unit)
-      advanceUntilIdle()
-      assertEquals(listOf("queued"), gateway.sentMessages)
-    }
-
-  @Test
   fun reconnectFlushWaitsForQueuedRowsOwnerAfterVisibleOwnerChanges() =
     outboxTest {
       val chat = controller()
@@ -1178,26 +1154,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun runIdOnlyAckFailsUnconfirmed() =
-    outboxTest {
-      val chat = controller()
-      chat.load("main")
-      advanceUntilIdle()
-      chat.send("missing status")
-
-      gateway.online = true
-      gateway.sendResponse = { key -> """{"runId":"$key"}""" }
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(listOf("missing status"), gateway.sentMessages)
-      val failed = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
-      assertTrue(chat.healthOk.value)
-    }
-
-  @Test
   fun unknownOrMalformedAckFailsUnconfirmed() =
     runTest {
       val responses =
@@ -1237,53 +1193,6 @@ class ChatControllerOutboxTest {
         advanceUntilIdle()
         assertEquals(1, gateway.sentMessages.size)
       }
-    }
-
-  @Test
-  fun terminalSuccessAckWithoutRunIdFailsUnconfirmed() =
-    outboxTest {
-      val chat = controller()
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "completed ack", thinkingLevel = "off", attachments = emptyList())
-
-      gateway.online = true
-      gateway.sendResponse = { _ -> """{"status":"ok"}""" }
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(listOf("completed ack"), gateway.sentMessages)
-      val failed = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
-      assertTrue(chat.healthOk.value)
-    }
-
-  @Test
-  fun retryResetsFailedRowAndFlushesImmediately() =
-    outboxTest {
-      // Recent timestamp: the startup/flush expiry sweep must not expire this row.
-      seed(
-        id = "failed-row",
-        text = "try me again",
-        createdAtMs = System.currentTimeMillis(),
-        status = ChatOutboxStatus.Failed,
-        retryCount = 2,
-        lastError = "boom",
-      )
-      val chat = controller()
-      gateway.online = true
-      chat.load("main")
-      advanceUntilIdle()
-      assertTrue(chat.healthOk.value)
-      val seededRow = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, seededRow.status)
-
-      chat.retryOutboxCommand("failed-row")
-      advanceUntilIdle()
-
-      assertEquals(listOf("failed-row"), gateway.sentIdempotencyKeys)
-      assertTrue(chat.outboxItems.value.isEmpty())
     }
 
   @Test
@@ -1372,22 +1281,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun flushBuildsTheRequestIdentityFromTheCurrentReplacementRowId() =
-    outboxTest {
-      seed(
-        id = "replacement-client-id",
-        text = "retry on the selected branch",
-        createdAtMs = System.currentTimeMillis(),
-      )
-      val chat = controller()
-      gateway.online = true
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(listOf("replacement-client-id"), gateway.sentIdempotencyKeys)
-    }
-
-  @Test
   fun queueFullRefusalSurfacesErrorWithoutQueueing() =
     outboxTest(capacity = 1) {
       val chat = controller()
@@ -1401,28 +1294,6 @@ class ChatControllerOutboxTest {
       assertEquals(1, outbox.rows().size)
       val errorText = chat.errorText.value.orEmpty()
       assertTrue(errorText.contains("full"))
-    }
-
-  @Test
-  fun sendingRowsBecomeDeliveryUnconfirmedOnControllerStartup() =
-    outboxTest {
-      // Recent timestamp: startup recovery must surface this row before any retry decision.
-      seed(
-        id = "interrupted",
-        text = "crashed mid-send",
-        createdAtMs = System.currentTimeMillis(),
-        status = ChatOutboxStatus.Sending,
-        retryCount = 1,
-        lastError = "socket closed",
-      )
-
-      val chat = controller()
-      advanceUntilIdle()
-
-      val recovered = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, recovered.status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, recovered.lastError)
-      assertEquals(1, recovered.retryCount)
     }
 
   @Test

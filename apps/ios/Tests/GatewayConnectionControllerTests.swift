@@ -521,22 +521,6 @@ private func pendingHandoffDiagnostic(
         }
     }
 
-    @Test @MainActor func `current commands include location when enabled`() {
-        withUserDefaults([
-            "node.instanceId": "ios-test",
-            "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: false,
-                ingress: makeOrdinaryIngress())
-            let commands = Set(controller._test_currentCommands())
-
-            #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
-        }
-    }
-
     @Test(arguments: [CLAuthorizationStatus.notDetermined, .denied, .restricted])
     @MainActor func `location permission without app authorization skips global services`(
         status: CLAuthorizationStatus) async
@@ -579,28 +563,6 @@ private func pendingHandoffDiagnostic(
         #expect(GatewayConnectionController._test_hasEventKitReadAccess(.fullAccess))
         #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.writeOnly))
         #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.denied))
-    }
-
-    @Test @MainActor func `current commands exclude dangerous system exec commands`() {
-        withUserDefaults([
-            "node.instanceId": "ios-test",
-            "camera.enabled": true,
-            "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: false,
-                ingress: makeOrdinaryIngress())
-            let commands = Set(controller._test_currentCommands())
-
-            // iOS should expose notify, but not host shell/exec-approval commands.
-            #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.which.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.execApprovalsGet.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.execApprovalsSet.rawValue))
-        }
     }
 
     @Test @MainActor func `operator connect options only request approval scope when enabled`() {

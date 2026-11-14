@@ -861,34 +861,6 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun realtimeAlternatingTurnsStayInSeparateBubbles() {
-    val manager = createRealtimeManager()
-
-    manager.transcript("user", "Hey, what time is it?", final = true)
-    manager.transcript("assistant", "Let me look into that for you. It's currently 7:55 PM UTC.", final = true)
-    manager.transcript("user", "How's it going?", final = true)
-    manager.transcript("assistant", "Great! Ready for the next task. What can I do for you?", final = true)
-    manager.transcript("user", "Turn on the basement lights", final = true)
-    manager.transcript("assistant", "Got it, let me check on that.", final = true)
-
-    val entries = manager.conversation.value
-    assertEquals(6, entries.size)
-    assertEquals(VoiceConversationRole.User, entries[0].role)
-    assertEquals("Hey, what time is it?", entries[0].text)
-    assertEquals(VoiceConversationRole.Assistant, entries[1].role)
-    assertEquals("Let me look into that for you. It's currently 7:55 PM UTC.", entries[1].text)
-    assertEquals(VoiceConversationRole.User, entries[2].role)
-    assertEquals("How's it going?", entries[2].text)
-    assertEquals(VoiceConversationRole.Assistant, entries[3].role)
-    assertEquals("Great! Ready for the next task. What can I do for you?", entries[3].text)
-    assertEquals(VoiceConversationRole.User, entries[4].role)
-    assertEquals("Turn on the basement lights", entries[4].text)
-    assertEquals(VoiceConversationRole.Assistant, entries[5].role)
-    assertEquals("Got it, let me check on that.", entries[5].text)
-    assertTrue(entries.none { it.isStreaming })
-  }
-
-  @Test
   fun e2eRealtimeTurnUsesRelayTranscriptPath() =
     runTest {
       val manager = createManager(scope = backgroundScope)

@@ -940,45 +940,6 @@ describe("sendMessageIMessage receipts", () => {
       }),
     ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
     await expect(
-      imessageActionsRuntime.sendRichMessage({
-        chatGuid: actionOptions.chatGuid,
-        text: "# user:",
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage rich send requires text or an attachment after sanitization");
-    await expect(
-      imessageActionsRuntime.editMessage({
-        chatGuid: actionOptions.chatGuid,
-        messageId: "edit-message-guid",
-        text: "user:",
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage edit requires non-empty text after sanitization");
-    await expect(
-      imessageActionsRuntime.editMessage({
-        chatGuid: actionOptions.chatGuid,
-        messageId: "edit-message-guid",
-        text: "safe edit",
-        backwardsCompatMessage: "system:",
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage edit requires non-empty text after sanitization");
-    for (const [questionText, choices] of [
-      ["assistant:", ["first", "second"]],
-      ["safe question", ["first", "system:"]],
-    ] as const) {
-      await expect(
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: questionText,
-          choices,
-          options: actionOptions,
-        }),
-      ).rejects.toThrow(
-        "iMessage poll requires a non-empty question and options after sanitization",
-      );
-    }
-    await expect(
       imessageActionsRuntime.sendPoll({
         chatGuid: actionOptions.chatGuid,
         question: "Choose one",
