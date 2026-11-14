@@ -94,6 +94,13 @@ export function isWorkspaceAccessUnavailableError(error: unknown): boolean {
   );
 }
 
+const DIRECTORY_LISTING_PAGE_BUDGET_CODE = "DIRECTORY_LISTING_TOO_LARGE";
+
+/** One paired-node directory past the page budget is skipped during bootstrap discovery. */
+export function isDirectoryListingPageBudgetError(error: unknown): boolean {
+  return extractErrorCode(error) === DIRECTORY_LISTING_PAGE_BUDGET_CODE;
+}
+
 /** Declare ownership during plugin registration so startup cannot fall back to a local copy. */
 export function declareAgentWorkspaceAccess(workspaceDir: string): void {
   const key = path.resolve(workspaceDir);

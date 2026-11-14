@@ -487,6 +487,51 @@ describe("workspace service", () => {
     );
   });
 
+  it("stops a directory listing that never ends", async () => {
+    const bridge = (await f.start()).bridge;
+    let pages = 0;
+    f.invoke.mockImplementation(async () => {
+      pages += 1;
+      return {
+        payload: {
+          ok: true,
+          path: f.remote,
+          entries: [{ name: `f${pages}.txt`, isDir: false, isFile: true, size: 0, mtime: 1 }],
+          truncated: true,
+          nextPageToken: String(pages * 4096),
+        },
+      };
+    });
+    await expect(bridge.readDirectory!({ filePath: "." })).rejects.toMatchObject({
+      code: "DIRECTORY_LISTING_TOO_LARGE",
+      message: "Directory listing exceeded 32 pages",
+    });
+    expect(pages).toBe(32);
+  });
+
+  it("returns every name when the directory finishes on page 32", async () => {
+    const bridge = (await f.start()).bridge;
+    let pages = 0;
+    f.invoke.mockImplementation(async () => {
+      pages += 1;
+      const finished = pages === 32;
+      return {
+        payload: {
+          ok: true,
+          path: f.remote,
+          entries: [{ name: `f${pages}.txt`, isDir: false, isFile: true, size: 0, mtime: 1 }],
+          truncated: !finished,
+          ...(finished ? {} : { nextPageToken: String(pages * 4096) }),
+        },
+      };
+    });
+    const entries = await bridge.readDirectory!({ filePath: "." });
+    expect(pages).toBe(32);
+    expect(entries.map((entry) => entry.name)).toEqual(
+      Array.from({ length: 32 }, (_unused, index) => `f${index + 1}.txt`),
+    );
+  });
+
   it("resolves in-workspace bootstrap aliases", async () => {
     const nested = remote("nested");
     await fs.mkdir(nested);

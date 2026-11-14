@@ -12,7 +12,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.j
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
-import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import { getAgentWorkspaceAccess, isDirectoryListingPageBudgetError } from "./workspace-access.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -868,6 +868,7 @@ async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
   matcher: Minimatch,
+  skipped: ExtraBootstrapLoadDiagnostic[] = [],
 ): AsyncGenerator<string> {
   const access = getAgentWorkspaceAccess(workspaceDir);
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
@@ -903,6 +904,18 @@ async function* walkWorkspaceFiles(
         }));
       }
     } catch (error) {
+      // A local unreadable directory is skipped. The page budget is the
+      // remote equivalent for one oversized directory, not for the tree.
+      // Record that skip so configured instructions do not disappear quietly.
+      if (access && isDirectoryListingPageBudgetError(error)) {
+        skipped.push({
+          path: currentDir,
+          reason: "io",
+          detail:
+            error instanceof Error ? error.message : "Directory listing exceeded the page budget",
+        });
+        continue;
+      }
       if (access) {
         throw error;
       }
@@ -931,6 +944,7 @@ async function* walkWorkspaceFiles(
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
+  skipped: ExtraBootstrapLoadDiagnostic[] = [],
 ): Promise<string[]> {
   if (!getAgentWorkspaceAccess(workspaceDir)) {
     try {
@@ -951,6 +965,7 @@ async function resolveExtraBootstrapPatternPaths(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
     matcher,
+    skipped,
   )) {
     matches.push(candidate);
   }
@@ -981,7 +996,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     }
     try {
       if (hasGlobPattern(pattern)) {
-        const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
+        const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern, diagnostics);
         for (const match of matches) {
           resolvedPaths.add(match);
         }
