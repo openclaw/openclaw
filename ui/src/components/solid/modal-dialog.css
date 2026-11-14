@@ -269,7 +269,7 @@ openclaw-modal-dialog.palette {
 
 @media (max-width: 560px) {
   openclaw-modal-dialog.palette {
-    --cmd-palette-dock-height: 56px;
+    --cmd-palette-dock-height: 44px;
   }
 }
 

@@ -191,7 +191,7 @@ describe("PaletteSessionDraft", () => {
     });
   });
 
-  it("selects a hosted workspace in palette settings without cloning or dispatching a project", async () => {
+  it("selects a hosted workspace without cloning or dispatching a project", async () => {
     const model = {
       id: "gpt-5.6-luna",
       name: "Luna",
@@ -242,11 +242,11 @@ describe("PaletteSessionDraft", () => {
     await select("local", "registered");
     await select("runtime:agentsapi");
     expect(setting(host, "workspace")?.textContent).toContain("Hosted workspace");
-    expect(setting(host, "workspace")?.textContent).toContain("OpenAI (Agents API)");
+    expect(setting(host, "workspace")?.getAttribute("title")).toContain("OpenAI (Agents API)");
     expect(setting(host, "worktree")).toBeNull();
     await select("local", "registered");
     expect(setting(host, "workspace")?.textContent).toContain("Local project");
-    expect(setting(host, "workspace")?.textContent).not.toContain("Agents API");
+    expect(setting(host, "workspace")?.getAttribute("title")).not.toContain("Agents API");
     await select("runtime:agentsapi");
     create.mockResolvedValue({
       key: "agent:main:hosted-palette",

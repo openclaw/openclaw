@@ -7,7 +7,6 @@ import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { SwitchIndicator } from "../../components/solid/switch.tsx";
-import { keyboardHints } from "../../lib/keyboard-hints.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -18,7 +17,7 @@ import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
-type FocusTarget = "back" | "search" | "workspace";
+type Panel = "settings" | "project";
 
 function SettingsIcon() {
   return (
@@ -35,14 +34,12 @@ export function PaletteSessionSettingsView(properties: {
   options: SettingsOptions;
   registerClose: (close: () => void) => () => void;
 }) {
-  const [open, setOpen] = createSignal(false);
-  // Locking placement retires the places panel; unlocking does not reopen it.
-  const [places, setPlaces] = createSignal(
-    (previous = false) => !properties.options.draft.place.requiredPlacement && previous,
+  const [open, setOpen] = createSignal<Panel | undefined>((previous) =>
+    properties.options.draft.place.requiredPlacement && previous === "project"
+      ? undefined
+      : previous,
   );
   const [query, setQuery] = createSignal("");
-  let focusTarget: FocusTarget | undefined;
-  const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
   const controlRef = () =>
     elementRef((element: HTMLElement) => {
@@ -50,26 +47,28 @@ export function PaletteSessionSettingsView(properties: {
       return () => focusControls.delete(element);
     });
   let readAgentControls: (() => readonly HTMLElement[]) | undefined;
-  let popover!: PopoverHandle;
+  let settingsPopover!: PopoverHandle;
+  let projectPopover!: PopoverHandle;
   const close = (preferences: SettingsOptions["preferences"]) => {
     preferences.retirePresentation();
-    setOpen(false);
-    setPlaces(false);
+    setOpen(undefined);
     setQuery("");
-    focusTarget = undefined;
   };
-  const showPlaces = (value: boolean, pointer = false) => {
-    setPlaces(value);
-    setQuery("");
-    // Search takes focus; a touch tap focuses Back so no on-screen keyboard covers the list.
-    focusTarget = value ? (pointer && !keyboardHints.visible() ? "back" : "search") : "workspace";
+  const changePanel = (panel: Panel, value: boolean) => {
+    if (value) {
+      setQuery("");
+      setOpen(panel);
+    } else if (open() === panel) {
+      // A sibling's delayed close must not dismiss the newly opened picker.
+      close(properties.options.preferences);
+    }
   };
   const view = createMemo(() => resolvePaletteSessionSettings(properties.options, query()));
   const selectMachine = (
     machine: SettingsProjection["groups"][number]["machine"],
     projectId?: string,
   ) => {
-    if (view().locked || machine.disabledReason) {
+    if (view().locked || view().placementLocked || machine.disabledReason) {
       return;
     }
     machine.select();
@@ -84,7 +83,8 @@ export function PaletteSessionSettingsView(properties: {
       }
     }
     properties.options.onChange();
-    showPlaces(false);
+    close(properties.options.preferences);
+    projectPopover.overlay.trigger?.focus({ preventScroll: true });
   };
   onSettled(() => {
     const preferences = properties.options.preferences;
@@ -94,68 +94,68 @@ export function PaletteSessionSettingsView(properties: {
       unregister();
     };
   });
-  const keydown = nativeListener("keydown", (event) => {
-    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
-      return;
-    }
-    // Nested menus own Escape and roving focus, including their triggers.
-    if (
-      event
-        .composedPath()
-        .some(
-          (node) =>
-            node instanceof Element &&
-            node.matches(
-              '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
-            ),
-        )
-    ) {
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (places()) {
-        showPlaces(false);
-      } else {
+  const keydown = () =>
+    nativeListener("keydown", (event) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      // Nested menus own Escape and roving focus, including their triggers.
+      if (
+        event
+          .composedPath()
+          .some(
+            (node) =>
+              node instanceof Element &&
+              node.matches(
+                '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
+              ),
+          )
+      ) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        const popover = open() === "project" ? projectPopover : settingsPopover;
         close(properties.options.preferences);
         popover.overlay.trigger?.focus({ preventScroll: true });
+        return;
       }
-      return;
-    }
-    if (
-      !["ArrowDown", "ArrowUp"].includes(event.key) ||
-      !(event.currentTarget instanceof HTMLElement)
-    ) {
-      return;
-    }
-    const panel = event.currentTarget;
-    const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
-      // Arrows walk the field and the choices; Tab still reaches the field's clear button.
-      .filter(
-        (control) =>
-          panel.contains(control) &&
-          !control.matches(":disabled") &&
-          !control.matches(".header-search__clear"),
-      )
-      .toSorted((left, right) =>
-        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      if (
+        !["ArrowDown", "ArrowUp"].includes(event.key) ||
+        !(event.currentTarget instanceof HTMLElement)
+      ) {
+        return;
+      }
+      const panel = event.currentTarget;
+      const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
+        // Arrows walk the field and the choices; Tab still reaches the field's clear button.
+        .filter(
+          (control) =>
+            panel.contains(control) &&
+            !control.matches(":disabled") &&
+            !control.matches(".header-search__clear"),
+        )
+        .toSorted((left, right) =>
+          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        );
+      if (!controls.length) {
+        return;
+      }
+      const current = controls.findIndex(
+        (control) => control === panel.ownerDocument.activeElement,
       );
-    if (!controls.length) {
-      return;
-    }
-    const current = controls.findIndex((control) => control === panel.ownerDocument.activeElement);
-    event.preventDefault();
-    event.stopPropagation();
-    controls[
-      (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length
-    ]?.focus();
-  });
+      event.preventDefault();
+      event.stopPropagation();
+      controls[
+        (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length
+      ]?.focus();
+    });
   const failed = createMemo(() => properties.options.preferences.failed);
   const { saving, submit } = createPresentationAction(
     () => properties.options.preferences,
     (owner) => owner.presentationLifetime,
-    open,
+    () => open() === "settings",
     failed,
     (owner) => owner.reportFailure(),
   );
@@ -170,42 +170,18 @@ export function PaletteSessionSettingsView(properties: {
       { equals: (previous, next) => previous.promise === next.promise },
     );
     const cloudProfilesRead = createMemo(() => completion().promise?.then(() => null));
-    onSettled(() => {
-      if (focusTarget) {
-        focusTargets[focusTarget]?.focus({ preventScroll: true });
-      }
-    });
-    const back = nativeListener("click", () => showPlaces(false));
     const connect = nativeListener("click", () => properties.options.onConnectMachine());
     return (
       <>
         <HeaderSearch
+          autofocus="popover"
           class="palette-session-settings__heading"
           inputClass="palette-session-settings__search"
           label={t("common.search")}
           placeholder={t("newSession.searchProjects")}
           query={query()}
           controlRef={controlRef}
-          inputRef={(node) => {
-            focusTargets.search = node;
-          }}
           onQueryChange={setQuery}
-          leading={
-            <button
-              type="button"
-              class="palette-session-settings__back"
-              aria-label={t("common.back")}
-              ref={[
-                controlRef(),
-                (node) => {
-                  back(node);
-                  focusTargets.back = node;
-                },
-              ]}
-            >
-              <Icon name="arrowLeft" />
-            </button>
-          }
         />
         <div class="palette-session-settings__choices">
           <For each={view().groups} keyed={(group) => group.machine.id}>
@@ -315,15 +291,11 @@ export function PaletteSessionSettingsView(properties: {
 
   function SettingsSummary() {
     onSettled(() => {
-      if (focusTarget === "workspace") {
-        focusTargets.workspace?.focus({ preventScroll: true });
-      }
       return () => {
         readAgentControls = undefined;
       };
     });
     const place = () => properties.options.draft.place;
-    const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));
     const worktree = nativeListener("click", () => {
       place().selectWorktree(!place().worktree);
       properties.options.onChange();
@@ -358,36 +330,6 @@ export function PaletteSessionSettingsView(properties: {
           />
         ) : (
           <>
-            <button
-              class="palette-session-settings__row palette-session-settings__workspace"
-              type="button"
-              disabled={view().locked}
-              ref={[
-                controlRef(),
-                (node) => {
-                  workspace(node);
-                  focusTargets.workspace = node;
-                },
-              ]}
-            >
-              <span class="palette-session-settings__icon">
-                <Icon name="folder" />
-              </span>
-              <span class="palette-session-settings__copy">
-                <span class="palette-session-settings__label">
-                  {place().hostedEnvironment
-                    ? t("newSession.hostedWorkspace")
-                    : view().projectState.label}
-                </span>
-                <span class="palette-session-settings__secondary">
-                  {view().machineLabel}
-                  {view().cloudSummary ? " · " + view().cloudSummary : ""}
-                </span>
-              </span>
-              <span class="palette-session-settings__chevron">
-                <Icon name="chevronRight" />
-              </span>
-            </button>
             {place().checkoutVisible && !place().remoteRepository ? (
               <button
                 class="palette-session-settings__row palette-session-settings__worktree"
@@ -422,55 +364,53 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   return (
-    <Popover
-      triggerId={properties.id + "-settings-trigger"}
-      triggerClass="palette-session-settings__trigger"
-      triggerTitle={t("commandPalette.newSessionSettings")}
-      trigger={<SettingsIcon />}
-      ref={(handle) => {
-        popover = handle;
-      }}
-      id={properties.id + "-settings-popover"}
-      label={t("commandPalette.newSessionSettings")}
-      class="palette-session-settings"
-      placement="bottom-start"
-      open={open()}
-      onOpenChange={(value) => (value ? setOpen(true) : close(properties.options.preferences))}
-    >
-      <div class="palette-session-settings__content" ref={keydown}>
-        {places() ? <SettingsPlaces /> : <SettingsSummary />}
-        {!places() || latest(failed) ? (
+    <>
+      <Popover
+        triggerId={properties.id + "-settings-trigger"}
+        triggerClass="palette-session-settings__trigger"
+        triggerTitle={t("commandPalette.newSessionSettings")}
+        trigger={<SettingsIcon />}
+        ref={(handle) => {
+          settingsPopover = handle;
+        }}
+        id={properties.id + "-settings-popover"}
+        label={t("commandPalette.newSessionSettings")}
+        class="palette-session-settings"
+        placement="bottom-start"
+        open={open() === "settings"}
+        onOpenChange={(value) => changePanel("settings", value)}
+      >
+        <div class="palette-session-settings__content" ref={keydown()}>
+          <SettingsSummary />
           <div class="palette-session-settings__footer" aria-busy={saving() ? "true" : "false"}>
-            {!places() ? (
-              <label
-                class="palette-session-settings__remember"
-                title={
-                  !properties.options.preferences.available
-                    ? t("commandPalette.rememberUnavailable")
-                    : undefined
+            <label
+              class="palette-session-settings__remember"
+              title={
+                !properties.options.preferences.available
+                  ? t("commandPalette.rememberUnavailable")
+                  : undefined
+              }
+            >
+              <Checkbox
+                ref={[controlRef()]}
+                checked={properties.options.preferences.remember}
+                disabled={view().locked || !properties.options.preferences.available}
+                onChange={(event) =>
+                  void save(() =>
+                    properties.options.preferences.setRemember(event.currentTarget.checked),
+                  )
                 }
-              >
-                <Checkbox
-                  ref={[controlRef()]}
-                  checked={properties.options.preferences.remember}
-                  disabled={view().locked || !properties.options.preferences.available}
-                  onChange={(event) =>
-                    void save(() =>
-                      properties.options.preferences.setRemember(event.currentTarget.checked),
-                    )
-                  }
+              />
+              <span>
+                <ShortcutText
+                  fallback={t("commandPalette.rememberSettingsNoShortcut")}
+                  text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
+                  shortcut={() => (
+                    <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
+                  )}
                 />
-                <span>
-                  <ShortcutText
-                    fallback={t("commandPalette.rememberSettingsNoShortcut")}
-                    text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
-                    shortcut={() => (
-                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
-                    )}
-                  />
-                </span>
-              </label>
-            ) : undefined}
+              </span>
+            </label>
             {latest(failed) ? (
               <div class="palette-session-settings__error" role="alert">
                 {t("commandPalette.settingsSaveFailed")}{" "}
@@ -480,8 +420,45 @@ export function PaletteSessionSettingsView(properties: {
               </div>
             ) : undefined}
           </div>
-        ) : undefined}
-      </div>
-    </Popover>
+        </div>
+      </Popover>
+      <Popover
+        triggerId={properties.id + "-project-trigger"}
+        triggerClass="palette-session-settings__workspace palette-session-project__trigger"
+        triggerTitle={[view().machineLabel, view().cloudSummary].filter(Boolean).join(" · ")}
+        triggerAriaLabel={
+          t("newSession.folder") +
+          ": " +
+          (properties.options.draft.place.hostedEnvironment
+            ? t("newSession.hostedWorkspace")
+            : view().projectState.label)
+        }
+        trigger={
+          <>
+            <Icon name="folder" />
+            <span class="palette-session-project__label">
+              {properties.options.draft.place.hostedEnvironment
+                ? t("newSession.hostedWorkspace")
+                : view().projectState.label}
+            </span>
+            <Icon name="chevronDown" />
+          </>
+        }
+        ref={(handle) => {
+          projectPopover = handle;
+        }}
+        id={properties.id + "-project-popover"}
+        label={t("newSession.folder")}
+        class="palette-session-settings palette-session-project"
+        placement="bottom-start"
+        disabled={view().locked || view().placementLocked}
+        open={open() === "project"}
+        onOpenChange={(value) => changePanel("project", value)}
+      >
+        <div class="palette-session-settings__content" ref={keydown()}>
+          {open() === "project" ? <SettingsPlaces /> : undefined}
+        </div>
+      </Popover>
+    </>
   );
 }

@@ -45,14 +45,13 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
   );
-  const workspace = get(host, ".palette-session-settings__workspace");
   const trigger = get(host, ".agent-select__trigger");
   const remember = expectDefined(
     host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
     "remember checkbox",
   );
   expect(remember.disabled).toBe(true);
-  expectArrow(workspace, "ArrowDown", trigger);
+  expectArrow(trigger, "ArrowDown", trigger);
 
   trigger.click();
   const menu = get(host, ".agent-select__menu");
@@ -133,7 +132,7 @@ it("uses current placement and preference retry controls after their branches ch
   );
 });
 
-it("keeps filtered choices and unavailable rows in DOM order before the existing footer", async () => {
+it("keeps filtered project choices and unavailable rows in DOM order", async () => {
   const { host } = await mount({
     scopes: ["operator.admin", "operator.read", "operator.write"],
     agents: [{ id: "main", workspace: "/workspace", model: { primary: "example/local" } }],
@@ -174,7 +173,6 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   options.preferences.failed = true;
   options.onChange();
   await openSettings(host);
-  const retry = get(host, ".palette-session-settings__error button");
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
   );
@@ -185,8 +183,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   await waitForSolid(() =>
     expect(host.querySelector('[data-machine="runtime:hosted"]')).not.toBeNull(),
   );
-  const content = get(host, ".palette-session-settings__content");
-  const back = get(content, ".palette-session-settings__back");
+  const content = get(host, ".palette-session-project .palette-session-settings__content");
   await waitForSolid(() =>
     expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );
@@ -207,8 +204,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(search, "ArrowDown", unavailable);
   expectArrow(alpha, "ArrowDown", beta);
   expectArrow(beta, "ArrowDown", connect);
-  expectArrow(connect, "ArrowDown", retry);
-  expectArrow(retry, "ArrowDown", back);
+  expectArrow(connect, "ArrowDown", search);
 
   search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
