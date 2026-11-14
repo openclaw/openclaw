@@ -96,6 +96,7 @@ export async function statusCommand(
     runtime.log("");
   }
 
+  const usageSecretDiagnostics: string[] = [];
   const {
     securityAudit,
     usage,
@@ -109,6 +110,7 @@ export async function statusCommand(
     ...probeBudget,
     ...(opts.agent ? { agentId: opts.agent } : {}),
     usage: opts.usage,
+    onSecretDiagnostics: (diagnostics) => usageSecretDiagnostics.push(...diagnostics),
     deep: opts.deep,
     gatewayReachable,
     ...(gatewayProbe?.startupPhase ? { gatewayStartupPhase: gatewayProbe.startupPhase } : {}),
@@ -154,10 +156,10 @@ export async function statusCommand(
 
   const tableWidth = getTerminalTableWidth();
 
-  const secretDiagnostics = buildStatusSecretDiagnostics(
-    scan.summary.degradedSecretOwners ?? [],
-    commandSecretDiagnostics,
-  );
+  const secretDiagnostics = buildStatusSecretDiagnostics(scan.summary.degradedSecretOwners ?? [], [
+    ...commandSecretDiagnostics,
+    ...usageSecretDiagnostics,
+  ]);
   if (secretDiagnostics.length > 0) {
     runtime.log(theme.warn("Secret diagnostics:"));
     for (const entry of secretDiagnostics.slice(0, 10)) {
