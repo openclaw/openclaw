@@ -447,7 +447,7 @@ describe("test-projects args", () => {
       expectedPlan(
         "extension-database-workers",
         expect.arrayContaining([
-          "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
           "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
         ]),
       ),

@@ -121,7 +121,7 @@ applies to the Plugin Prerelease Node lane, for example
 `["src/plugins/manifest-registry.test.ts"]`.
 `extension_test_exclude_patterns_json` applies to the Plugin Prerelease extension
 shards, for example
-`["extensions/codex/src/app-server/run-attempt.test.ts"]`. Both default to `[]`;
+`["extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts"]`. Both default to `[]`;
 there is no implicit Codex test omission. Normal CI keeps its own core lanes;
 Plugin Prerelease owns the full extension sweep.
 

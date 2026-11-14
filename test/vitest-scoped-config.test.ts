@@ -130,7 +130,13 @@ describe("createScopedVitestConfig", () => {
 
   it("does not narrow scoped includes for exclude option values", () => {
     const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
-      argv: ["node", "vitest", "run", "--exclude", "codex/src/app-server/run-attempt.test.ts"],
+      argv: [
+        "node",
+        "vitest",
+        "run",
+        "--exclude",
+        "codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",
+      ],
       dir: "extensions",
       env: {},
     });
