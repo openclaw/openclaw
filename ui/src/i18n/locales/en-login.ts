@@ -6,7 +6,7 @@ const enLogin = {
   connection: {
     help: {
       title: "How to connect",
-      step1: "Start the Gateway on this computer:",
+      step1: "On the computer where OpenClaw is installed, start the Gateway:",
       step2: "Get a one-time dashboard link:",
       step3: "Enter the Gateway URL and secret above, or open the link.",
       docsLink: "Read the docs →",
@@ -32,7 +32,7 @@ const enLogin = {
     setupCodeHint:
       "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
     secretPlaceholder: "Paste the token or type the password",
-    runOnHost: "Run on this computer",
+    runOnHost: "Run on the computer running OpenClaw",
     browserPair: {
       action: "Pair this browser",
       open: "Pair with a code instead",
@@ -105,7 +105,8 @@ const enLogin = {
         title: "This Gateway expects its token",
         passwordTitle: "This Gateway expects its password",
         summary: "Couldn’t connect to {host}. Enter its token or password to continue.",
-        stepPaste: "Paste the token from openclaw gateway auth-token --show into Gateway secret.",
+        stepPaste:
+          "On the computer running OpenClaw, run openclaw gateway auth-token --show. Paste its token into Gateway secret.",
         stepPassword: "Type the configured Gateway password into Gateway secret.",
         stepGenerate:
           "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
@@ -116,7 +117,7 @@ const enLogin = {
         summary:
           "Couldn’t connect with this token or password. Check that it belongs to this Gateway and try again.",
         stepDashboard:
-          "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
+          "On the computer running OpenClaw, run openclaw dashboard --no-open for a fresh link, or openclaw gateway auth-token --show to recover the token.",
         stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
       },
       bootstrapInvalid: {
@@ -190,7 +191,7 @@ const enLogin = {
           "Couldn’t connect because this page’s address isn’t allowed. Ask an admin to allow it.",
         stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
         stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart the Gateway after changing its allowed origins.",
+        stepRestart: "Once the allowed origins change takes effect, choose Connect.",
       },
       protocol: {
         title: "Protocol mismatch",
