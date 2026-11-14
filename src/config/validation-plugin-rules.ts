@@ -55,6 +55,8 @@ import {
 import type { ValidateConfigWithPluginsResult } from "./validation.types.js";
 
 export type ValidateConfigWithPluginsParams = {
+  /** Readers may keep the core available with an ambiguous optional plugin inactive. Never for writes. */
+  quarantinePluginPolicy?: boolean;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   pluginValidation?: "full" | "skip" | "core-only";

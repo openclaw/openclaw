@@ -1023,6 +1023,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     getTerminalHostedStop: () =>
       terminalHostedStop === hostLifecycle ? terminalHostedStop : undefined,
     updateSuccessor,
+    beforeRestart: params.beforeRestart,
     request,
   });
   const releaseRuntimeRecovery = eagerLifecycleRuntime.registerGatewayRuntimeRecovery({

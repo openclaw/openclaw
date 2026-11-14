@@ -80,6 +80,8 @@ export type GatewayRunLoopParams = {
   /** Reports terminal cleanup disposition, never mere invocation or exit intent. */
   onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
+  /** Refuse an ordinary restart before closing the serving runtime. Updates own admission separately. */
+  beforeRestart?: () => Promise<void>;
 };
 
 export function createGatewayRestartRecovery(

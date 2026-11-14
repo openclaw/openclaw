@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { hasPluginPolicyQuarantine } from "../plugins/config-policy-quarantine.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
@@ -341,6 +342,7 @@ async function readConfigSnapshot(
     let callerRejectedSuspiciousRecovery = false;
     if (
       options.recoverSuspicious === true &&
+      !hasPluginPolicyQuarantine(validated) &&
       deps.observe &&
       !options.skipSuspiciousRecovery &&
       !containsConfigIncludeDirective(effectiveParsed)
@@ -463,6 +465,7 @@ export async function prepareConfigRecoveryFromContext(
     if (
       !current.exists ||
       !current.valid ||
+      hasPluginPolicyQuarantine(current) ||
       typeof current.raw !== "string" ||
       containsConfigIncludeDirective(current.parsed)
     ) {

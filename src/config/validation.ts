@@ -3,13 +3,14 @@ import {
   listChannelIdsForOwnershipMigration,
   listChannelIdsForOwnershipMigrationAsync,
 } from "../plugins/channel-presence-policy.js";
+import { projectPluginPolicyQuarantine } from "../plugins/config-policy-quarantine.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
 import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
 import {
   validatePreparedConfigWithPlugins,
@@ -53,7 +54,11 @@ export async function validateConfigObjectWithStrictFactsAsync(
   raw: unknown,
   params: ValidateConfigWithPluginsAsyncParams,
 ): Promise<ValidateConfigWithPluginsResult> {
-  return validateConfigObjectWithPluginsAsyncInternal(raw, params, true);
+  return validateConfigObjectWithPluginsAsyncInternal(
+    raw,
+    { ...params, quarantinePluginPolicy: false },
+    true,
+  );
 }
 
 async function validateConfigObjectWithPluginsAsyncInternal(
@@ -74,6 +79,7 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     ok: true,
     migrated: cloneConfigWithResolutionFacts(prepared.migrated),
     parsedConfig: prepared.parsedConfig,
+    warnings: prepared.warnings,
   };
   const validate = (metadata?: PreparedConfigValidationPluginMetadata) => {
     // Defaults normalize paths in place; a suspended attempt must not alter the source facts.
@@ -139,14 +145,18 @@ type PreparedConfigWithPlugins = {
   ok: true;
   migrated: OpenClawConfig;
   parsedConfig: OpenClawConfig;
+  warnings: ConfigValidationIssue[];
 };
 
 function prepareConfigObjectWithPlugins(
   raw: unknown,
   params: ValidateConfigWithPluginsParams | undefined,
 ): PreparedConfigWithPlugins | { ok: false; result: ValidateConfigWithPluginsResult } {
+  const projection = params?.quarantinePluginPolicy
+    ? projectPluginPolicyQuarantine(raw)
+    : { config: raw, warnings: [] };
   const migrated = applyImplicitAgentRosterDefaults(
-    omitDeferredPluginMigrationConfig(raw, params?.deferredPluginMigrations),
+    omitDeferredPluginMigrationConfig(projection.config, params?.deferredPluginMigrations),
   ) as OpenClawConfig;
   const base = validateConfigObjectRaw(migrated, {
     sourceRaw: params?.sourceRaw,
@@ -155,28 +165,29 @@ function prepareConfigObjectWithPlugins(
     homedir: params?.homedir,
   });
   if (!base.ok) {
-    return { ok: false, result: { ok: false, issues: base.issues, warnings: [] } };
+    return { ok: false, result: { ok: false, issues: base.issues, warnings: projection.warnings } };
   }
   // Validate before cloning so malformed deep values return schema errors. Zod
   // retains nested z.unknown() references; isolate them before runtime path expansion
   // and restore the non-enumerable roster projection that structuredClone omits.
   const parsedConfig = attachAgentListProjection(cloneConfigWithResolutionFacts(base.config));
-  return { ok: true, migrated, parsedConfig };
+  return { ok: true, migrated, parsedConfig, warnings: projection.warnings };
 }
 
 function finishConfigObjectWithPlugins(
-  { migrated, parsedConfig }: PreparedConfigWithPlugins,
+  { migrated, parsedConfig, warnings }: PreparedConfigWithPlugins,
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
 ): ValidateConfigWithPluginsResult {
-  return validatePreparedConfigWithPlugins(migrated, parsedConfig, {
+  const result = validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
   });
+  return { ...result, warnings: [...warnings, ...result.warnings] };
 }
 
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(
