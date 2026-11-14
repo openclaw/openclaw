@@ -175,15 +175,15 @@ function audioResponse(
       if (step.error !== undefined) {
         throw new Error("ClawRouter Google interaction failed");
       }
-      for (const value of list(step.content, 0, 64)) {
-        const block = object(value);
+      for (const content of list(step.content, 0, 64)) {
+        const block = object(content);
         if (block.error !== undefined || block.type === "error") {
           throw new Error("ClawRouter Google interaction content failed");
         }
         const audio =
           block.type === "audio" ||
           [block.mime_type, block.mimeType].some(
-            (value) => typeof value === "string" && value.toLowerCase().startsWith("audio/"),
+            (mime) => typeof mime === "string" && mime.toLowerCase().startsWith("audio/"),
           );
         if (audio) {
           if (step.type !== "model_output" || block.type !== "audio") {

@@ -1,7 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import * as catalog from "./capability-offers.js";
 import { readGoogleSpeechConfig, synthesizeGoogleSpeech } from "./speech-google.js";
 
@@ -149,8 +149,9 @@ describe("ClawRouter Google speech codec and admission", () => {
       expect(new Headers(f.calls[0]?.init?.headers).get("authorization")).toBe(
         "Bearer synthetic-router",
       );
-      const body = JSON.parse(String(f.calls[0]?.init?.body));
-      expect(body).toEqual(
+      const body = f.calls[0]?.init?.body;
+      assert(typeof body === "string");
+      expect(JSON.parse(body)).toEqual(
         model === preview
           ? {
               contents: [{ role: "user", parts: [{ text: "Synthetic speech" }] }],
@@ -201,10 +202,12 @@ describe("ClawRouter Google speech codec and admission", () => {
       readGoogleSpeechConfig({ upstreamProvider: "google", model: "google/" + preview }),
     ).toThrow("explicit single voice");
     await f.run({ providerOverrides: { speakerVoiceId: "Puck", modelId: "google/" + preview } });
-    expect(
-      JSON.parse(String(f.calls[0]?.init?.body)).generationConfig.speechConfig.voiceConfig
-        .prebuiltVoiceConfig.voiceName,
-    ).toBe("Puck");
+    const requestBody = f.calls[0]?.init?.body;
+    assert(typeof requestBody === "string");
+    const body = JSON.parse(requestBody);
+    expect(body.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe(
+      "Puck",
+    );
     await expect(f.run({ providerOverrides: { apiKey: "different-owner" } })).rejects.toThrow();
   });
 
