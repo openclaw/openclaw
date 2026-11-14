@@ -4010,7 +4010,6 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.76f1e6d99e6b6f99","source":"Stop listening"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.c42bdabe745ca33a","source":"Copy Message"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.2a929a01e489abf2","source":"Fork from Here"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.b7bfe69a25b5e24c","source":"Loading chat"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.78287c061daf0ec9","source":"Message Actions"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.e9a811d9a9b0392b","source":"Open Full Message"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.523c7af21d1f5343","source":"Rewind to Here"},
