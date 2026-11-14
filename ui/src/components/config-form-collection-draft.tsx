@@ -1,10 +1,12 @@
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { Show, createMemo, createStore, onSettled } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configEnumOptionLabel, jsonValue } from "./config-form.node.shared.ts";
 import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { schemaMayAcceptString, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { Checkbox } from "./solid/checkbox.tsx";
+import { SettingsSelect } from "./solid/settings-select.tsx";
 
 export type ConfigFormCollectionDraftProps = {
   schema: JsonSchema;
@@ -140,7 +142,7 @@ export function ConfigCollectionDraft(
   },
 ): SolidJSX.Element {
   let keyInput: HTMLInputElement | undefined;
-  let valueInput: HTMLInputElement | HTMLTextAreaElement | undefined;
+  let valueInput: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | undefined;
   const scope = createMemo(() => [props.identity, props.sourceIdentity] as const, {
     // Autosave acknowledgements clone unchanged values; keep their in-progress draft.
     equals: (previous, next) =>
@@ -154,6 +156,25 @@ export function ConfigCollectionDraft(
   const visible = () => draft.open && !props.disabled;
   const valueType = createMemo(() => schemaType(props.schema));
   const canUseNull = createMemo(() => isSupportedConfigValueValid(props.schema, null));
+  const choices = createMemo(() => {
+    const options = props.schema.enum;
+    if (!options) {
+      return undefined;
+    }
+    return canUseNull() && !options.includes(null) ? [...options, null] : options;
+  });
+  const choiceOptions = createMemo(() => {
+    getLocale();
+    const options = choices();
+    return options?.map((value) => ({
+      value: jsonValue(value),
+      label: configEnumOptionLabel(value, options),
+      disabled:
+        !isSupportedConfigValueValid(props.schema, value) ||
+        props.existingValues?.some((entry) => configValuesEqual(entry, value)) ||
+        props.validateValue?.(value) === false,
+    }));
+  });
   const usesTextInput = createMemo(() =>
     ["string", "number", "integer"].includes(valueType() ?? ""),
   );
@@ -198,7 +219,10 @@ export function ConfigCollectionDraft(
     if (current.disabled) {
       return;
     }
-    const parsed = parseValue(current.schema, draft.value, draft.isNull);
+    const options = choices();
+    const parsed = options
+      ? { ok: true as const, value: options.find((option) => jsonValue(option) === draft.value) }
+      : parseValue(current.schema, draft.value, draft.isNull);
     if (!parsed.ok) {
       fail("value", parsed.message);
       return;
@@ -268,7 +292,7 @@ export function ConfigCollectionDraft(
                       onInput={(event) => editDraft({ key: event.currentTarget.value })}
                     />
                   </Show>
-                  <Show when={canUseNull()}>
+                  <Show when={canUseNull() && !choices()}>
                     <label class="field checkbox">
                       <Checkbox
                         data-collection-draft-null
@@ -278,29 +302,67 @@ export function ConfigCollectionDraft(
                       <span>{t("configForm.nullValue")}</span>
                     </label>
                   </Show>
-                  <ValueInput
-                    ref={(element: HTMLInputElement | HTMLTextAreaElement) =>
-                      (valueInput = element)
+                  <Show
+                    when={choices()}
+                    fallback={
+                      <ValueInput
+                        ref={(element: HTMLInputElement | HTMLTextAreaElement) =>
+                          (valueInput = element)
+                        }
+                        data-collection-draft-value
+                        type={
+                          usesTextInput()
+                            ? valueType() === "string"
+                              ? "text"
+                              : "number"
+                            : undefined
+                        }
+                        class="settings-input"
+                        aria-label={valueLabel()}
+                        aria-describedby={errorId()}
+                        aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
+                        placeholder={usesTextInput() ? undefined : t("configForm.jsonValue")}
+                        rows={usesTextInput() ? undefined : 2}
+                        value={draft.value}
+                        disabled={draft.isNull}
+                        onInput={onValueInput}
+                      />
                     }
-                    data-collection-draft-value
-                    type={
-                      usesTextInput() ? (valueType() === "string" ? "text" : "number") : undefined
-                    }
-                    class="settings-input"
-                    aria-label={valueLabel()}
-                    aria-describedby={errorId()}
-                    aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
-                    placeholder={usesTextInput() ? undefined : t("configForm.jsonValue")}
-                    rows={usesTextInput() ? undefined : 2}
-                    value={draft.value}
-                    disabled={draft.isNull}
-                    onInput={onValueInput}
-                  />
+                  >
+                    {(_options) => (
+                      <SettingsSelect
+                        ref={(element) => (valueInput = element)}
+                        data-collection-draft-value
+                        aria-label={valueLabel()}
+                        aria-describedby={errorId()}
+                        aria-invalid={draft.invalidTarget === "value" ? "true" : "false"}
+                        value={draft.value}
+                        options={[
+                          {
+                            value: "",
+                            label: t(
+                              choiceOptions()?.some((option) => !option.disabled)
+                                ? "configForm.select"
+                                : "configForm.noAvailableChoices",
+                            ),
+                            disabled: true,
+                          },
+                          ...(choiceOptions() ?? []),
+                        ]}
+                        onChange={(event) => editDraft({ value: event.currentTarget.value })}
+                      />
+                    )}
+                  </Show>
                   <span id={errorId()} class="cfg-field__error" role="alert" hidden={!draft.error}>
                     {draft.error}
                   </span>
                   <div class="cfg-collection-draft__actions">
-                    <button type="button" class="btn btn--sm" onClick={commit}>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      disabled={Boolean(choices()) && draft.value === ""}
+                      onClick={commit}
+                    >
                       {props.existingKeys ? t("configForm.addEntry") : t("configForm.add")}
                     </button>
                     <button type="button" class="btn btn--sm" onClick={closeDraft}>
