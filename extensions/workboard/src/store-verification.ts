@@ -5,7 +5,7 @@ import {
   type WorkboardMetadata,
   type WorkboardVerification,
 } from "@openclaw/workboard-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import { MAX_CARD_METADATA_BYTES } from "./store-constants.js";
 import type { WorkboardUpdateCardOptions } from "./store-inputs.js";
@@ -54,11 +54,34 @@ function verdictsFromEvidence(evidence: unknown): WorkboardVerification[] {
       if (!isRecord(entry) || entry.kind !== "verification") {
         return [];
       }
-      const verdict = { ...entry };
-      delete verdict.kind;
-      delete verdict.claimId;
-      // Workboard's own buildVerification wrote these with today's verification fields.
-      return [verdict as WorkboardVerification];
+      // Main's buildVerification wrote today's fields plus kind and claimId; keep today's.
+      const { id, recordedAt, checkerId, checkedOwnWork, scope } = entry;
+      const outcome = WORKBOARD_VERIFICATION_OUTCOMES.find((value) => value === entry.outcome);
+      if (
+        typeof id !== "string" ||
+        typeof recordedAt !== "number" ||
+        typeof checkerId !== "string" ||
+        typeof checkedOwnWork !== "boolean" ||
+        typeof scope !== "string" ||
+        !outcome
+      ) {
+        return [];
+      }
+      return [
+        definedFields<WorkboardVerification>({
+          id,
+          recordedAt,
+          checkerId,
+          checkedOwnWork,
+          scope,
+          outcome,
+          proofId: readStringValue(entry.proofId),
+          artifactId: readStringValue(entry.artifactId),
+          runId: readStringValue(entry.runId),
+          note: readStringValue(entry.note),
+          url: readStringValue(entry.url),
+        }),
+      ];
     })
     .slice(-MAX_VERIFICATIONS);
 }
