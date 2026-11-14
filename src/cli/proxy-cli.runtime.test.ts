@@ -438,6 +438,26 @@ describe("proxy cli runtime", () => {
     },
   );
 
+  it.each([
+    { code: "ENOENT", reason: "command not found" },
+    { code: "EACCES", reason: "permission denied" },
+  ])("names the launch failure when the proxied command fails with $code", async (testCase) => {
+    spawnMock.mockResolvedValue(
+      Object.assign(new Error(`Command failed with ${testCase.code}: does-not-exist`), {
+        failed: true,
+        code: testCase.code,
+      }),
+    );
+
+    await expect(
+      proxyCliRuntime.runDebugProxyRunCommand({ commandArgs: ["does-not-exist", "--flag"] }),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: `proxy run could not start "does-not-exist": ${testCase.reason}.`,
+    });
+    expect(serverStopSpy).toHaveBeenCalledOnce();
+  });
+
   it("stops the proxy server and ends the session when child spawn fails", async () => {
     spawnMock.mockRejectedValue(new Error("spawn failed"));
 
