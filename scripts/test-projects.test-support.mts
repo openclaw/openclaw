@@ -3455,7 +3455,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     "scripts/e2e/update-corrupt-plugin-docker.sh",
     [dockerBuild, dockerE2e, packageAcceptance, "plugin-update-unchanged-docker"],
   ],
-  ["scripts/e2e/plugins-docker.sh", [dockerBuild, dockerE2e, "plugins-assertions"]],
+  ["scripts/e2e/plugins-docker.sh", [dockerBuild, dockerE2e]],
   [
     "scripts/e2e/release-user-journey-docker.sh",
     [dockerBuild, dockerE2e, packageAcceptance, "release-user-journey-assertions"],
