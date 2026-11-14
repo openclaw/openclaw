@@ -112,12 +112,13 @@ export async function createNpmPackageRootLinkLifecycle(params: {
  * A directory cannot be renamed over a link, so replacing npm's package link
  * leaves the package path empty between two renames. An updater killed there
  * leaves the link under its backup name. The checkout that link names puts it
- * back before its next update judges the destination.
+ * back before its next update judges the destination; a dry run only finds it.
  */
 export async function restoreInterruptedNpmPackageRootLink(
   globalRoot: string,
   liveRoot: string,
   checkout: string,
+  dryRun: boolean,
 ): Promise<string | undefined> {
   const names = await fs.readdir(globalRoot).catch((error: unknown) => ignoreMissingPath(error));
   const owner = await fs.realpath(checkout);
@@ -126,12 +127,13 @@ export async function restoreInterruptedNpmPackageRootLink(
     /^\.openclaw\.package-backup-\d+-\d+$/u.test(entry),
   )) {
     const backup = path.join(globalRoot, name);
+    // An entry removed since the listing matches nothing.
+    const entry = await fs.lstat(backup).catch((error: unknown) => ignoreMissingPath(error));
     // A link to another checkout, or an old package directory, is not this installation.
-    if (
-      (await fs.lstat(backup)).isSymbolicLink() &&
-      (await fs.realpath(backup).catch(() => null)) === owner
-    ) {
-      await fs.rename(backup, liveRoot);
+    if (entry?.isSymbolicLink() && (await fs.realpath(backup).catch(() => null)) === owner) {
+      if (!dryRun) {
+        await fs.rename(backup, liveRoot);
+      }
       return backup;
     }
   }

@@ -88,7 +88,7 @@ describe.skipIf(process.platform === "win32")(
         const fixture = await createNpmLinkedCheckout();
         const inspect = () =>
           inspectNpmGlobalDestination(fixture.checkout, fixture.params.installTarget);
-        expect(await inspect()).toEqual({ kind: "owned", restoredLink: undefined });
+        expect(await inspect()).toEqual({ kind: "owned", interruptedLink: undefined });
 
         const backupRoot = await killLinkedSwapBeforeActivation(fixture.root);
         // The interruption itself: no package at its path, so the launcher dangles.
@@ -96,7 +96,7 @@ describe.skipIf(process.platform === "win32")(
         await expect(fs.realpath(fixture.launcher)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await fs.lstat(backupRoot)).ino).toBe(fixture.linkIdentity);
 
-        expect(await inspect()).toEqual({ kind: "owned", restoredLink: backupRoot });
+        expect(await inspect()).toEqual({ kind: "owned", interruptedLink: backupRoot });
         expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
         expect(await fs.readlink(fixture.packageRoot)).toBe(fixture.target);
         expect(await fs.realpath(fixture.launcher)).toBe(fixture.entrypoint);
@@ -124,6 +124,26 @@ describe.skipIf(process.platform === "win32")(
         ).toMatchObject({ kind: "unknown", cause: "unreadable-layout" });
         await expect(fs.lstat(fixture.packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await fs.lstat(backup)).ino).toBe(fixture.linkIdentity);
+      }));
+
+    it("reads a backup entry that vanished while it was listed as no link", async () =>
+      lifetime.run(async () => {
+        const fixture = await createNpmLinkedCheckout();
+        const backup = path.join(fixture.globalRoot, ".openclaw.package-backup-1-1");
+        await fs.rename(fixture.packageRoot, backup);
+        await fs.unlink(fixture.launcher);
+        const lstat = fs.lstat.bind(fs);
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (String(args[0]) === backup) {
+            // Another process removed the entry between the listing and this read.
+            throw Object.assign(new Error("backup entry removed"), { code: "ENOENT" });
+          }
+          return lstat(...args);
+        });
+
+        expect(
+          await inspectNpmGlobalDestination(fixture.checkout, fixture.params.installTarget),
+        ).toEqual({ kind: "empty" });
       }));
 
     it("leaves a retained package directory where it is", async () =>
