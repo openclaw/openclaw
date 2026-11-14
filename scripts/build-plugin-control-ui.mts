@@ -11,7 +11,8 @@ async function buildBundledPluginControlUi(
   const rootDir = path.resolve(packageDir);
   const packageManifest = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
   const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  const { readPluginAuthoringJson } = await import("../src/cli/plugins-authoring-json.js");
+  const manifest = readPluginAuthoringJson(manifestPath, true);
   if (options.copy) {
     const generatedManifest = JSON.parse(
       await fs.readFile(path.join(rootDir, "dist/openclaw.plugin.json"), "utf8"),
