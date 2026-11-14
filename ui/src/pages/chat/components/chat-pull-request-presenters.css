@@ -90,6 +90,7 @@
 .chat-pr-branch-menu .chat-pr__create {
   display: flex;
   align-items: center;
+  gap: 10px;
   width: 100%;
   min-height: 32px;
   padding: 6px 8px;
@@ -101,8 +102,39 @@
   text-align: start;
 }
 
-.chat-pr-branch-menu .chat-pr__create:hover {
+.chat-pr-branch-menu .chat-pr__create:hover:not(:disabled) {
   background: var(--bg-hover);
+}
+
+.chat-pr-branch-menu .chat-pr__create:disabled {
+  color: var(--muted);
+}
+
+.chat-pr-branch-menu .chat-pr__create:disabled[aria-busy="true"] {
+  opacity: 1;
+}
+
+.chat-pr-branch-menu .chat-pr__publication-status > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
+  color: var(--text);
+}
+
+.chat-pr-branch-menu .chat-pr__publication-chevron {
+  flex: none;
+}
+
+.chat-pr-branch-menu .chat-pr__publication-more {
+  gap: 6px;
+  padding: 4px 8px 10px;
+}
+
+.chat-pr-branch-menu .chat-pr__publication-note {
+  padding: 4px 8px;
 }
 
 .chat-details .chat-pr.chat-pr--summary .chat-pr__icon {
