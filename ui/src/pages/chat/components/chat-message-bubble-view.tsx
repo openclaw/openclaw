@@ -334,26 +334,31 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options" | "messa
   const disclosureId = () => `reasoning:${props.messageKey}`;
   const open = () => props.options.isUserMessageExpanded?.(disclosureId()) ?? false;
   // Shimmer only while the thought itself is the live part of the reply.
-  const thinking = () => Boolean(props.options.isStreaming && !props.state().bodyMarkdown);
+  const thinking = () => props.options.isStreaming && !props.state().bodyMarkdown;
   return (
-    <div class={["chat-reasoning", { "chat-reasoning--open": open() }]}>
+    <div class="chat-reasoning">
       <button
-        class="chat-reasoning__toggle"
+        class="chat-inline-disclosure"
         type="button"
         aria-expanded={open() ? "true" : "false"}
         aria-label={t("chat.view.reasoning")}
         onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
       >
-        <span class="chat-reasoning__icon" aria-hidden="true">
+        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
           <Icon name="brain" />
         </span>
-        <span class="chat-reasoning__label">{t("chat.view.reasoning")}</span>
-        <span class="chat-reasoning__chevron" aria-hidden="true">
+        <span>{open() ? t("chat.view.reasoning") : ""}</span>
+        <span class="chat-tool-row__chevron" aria-hidden="true">
           <Icon name="chevronRight" />
         </span>
       </button>
       <MarkdownText
-        class={thinking() && !open() ? "chat-thinking text-shimmer" : "chat-thinking"}
+        class={
+          open()
+            ? "chat-thinking"
+            : `chat-thinking chat-thinking--preview${thinking() ? " text-shimmer" : ""}`
+        }
+        inert={!open()}
         content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
           codeBlockInteraction: "interactive",
         })}

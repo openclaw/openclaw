@@ -1,146 +1,32 @@
-/* Reasoning reads like a tool step: one quiet line that opens into the full
-   thought. The toggle spans the first row; the collapsed thought overlays its
-   middle column as a single-line preview, then moves below when opened. */
+/* Reasoning reads like a tool row (tool-cards.css shares its type and color):
+   one line that opens into the full thought. The collapsed preview overlays
+   the toggle's middle column. */
 .chat-reasoning {
   display: grid;
-  grid-template-columns: 16px minmax(0, max-content) 14px;
-  justify-content: start;
-  align-items: center;
-  column-gap: 6px;
-  min-width: 0;
-  font-family: var(--font-body);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: 1.5;
-  color: color-mix(in oklab, var(--text) 60%, transparent);
+  grid-template-columns: 18px minmax(0, auto) 14px;
 }
 
-.chat-reasoning__toggle {
+.chat-reasoning > button {
   display: grid;
   grid-area: 1 / 1 / 2 / -1;
   grid-template-columns: subgrid;
-  align-items: center;
   padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  cursor: var(--cursor-action);
-  transition: color 150ms ease-out;
 }
 
-.chat-reasoning__toggle:hover,
-.chat-reasoning__toggle:focus-visible,
-.chat-reasoning__toggle:hover + .chat-thinking,
-.chat-reasoning__toggle:focus-visible + .chat-thinking {
-  color: var(--text);
-}
-
-.chat-reasoning__toggle:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.chat-reasoning__icon,
-.chat-reasoning__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-reasoning__icon svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: var(--chat-tool-icon-stroke-width, 1.5px);
-}
-
-.chat-reasoning__label {
-  min-width: 0;
-  visibility: hidden;
-}
-
-.chat-reasoning__chevron {
-  opacity: 0;
-  transition:
-    opacity 150ms ease-out,
-    transform 150ms ease-out;
-}
-
-.chat-reasoning__chevron svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: calc(12px / 7);
-}
-
-.chat-reasoning__toggle:hover .chat-reasoning__chevron,
-.chat-reasoning__toggle:focus-visible .chat-reasoning__chevron {
-  opacity: 1;
-}
-
-.chat-reasoning--open {
-  .chat-reasoning__label {
-    visibility: visible;
-  }
-
-  .chat-reasoning__chevron {
-    opacity: 1;
-    transform: rotate(90deg);
-  }
-}
-
+/* Activity text keeps the row's color and font smoothing, like the tool rows. */
 .chat-thinking {
-  grid-area: 2 / 2 / 3 / -1;
-  min-width: 0;
-  padding-block: 2px 4px;
-  color: var(--muted);
-  /* Reasoning is reading text like .chat-text: keep macOS stem darkening so the
-     small muted prose does not render thin. App chrome keeps body antialiased. */
-  -webkit-font-smoothing: auto;
-  -moz-osx-font-smoothing: auto;
+  grid-column: 2 / -1;
 }
 
-/* Collapsed, prose flows into one ellipsized line; other blocks wait for the
-   open view. Clicks pass through to the toggle underneath. */
-.chat-reasoning:not(.chat-reasoning--open) > .chat-thinking {
+/* The inert collapsed thought clamps to its first line. The negative margin
+   cancels the first block's default 1em top margin inside the clamp. */
+.chat-thinking--preview {
+  display: -webkit-box;
   grid-area: 1 / 2;
+  margin-top: -1em;
   overflow: hidden;
-  padding: 0;
-  color: inherit;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  -webkit-user-select: none;
-  user-select: none;
-
-  & > * {
-    display: none;
-  }
-
-  & > p,
-  & > h1,
-  & > h2,
-  & > h3,
-  & > h4,
-  & > h5,
-  & > h6 {
-    display: inline;
-    margin: 0;
-    font: inherit;
-  }
-
-  /* The preview is one plain line; emphasis returns in the open view. */
-  & strong,
-  & em,
-  & code,
-  & a {
-    padding: 0;
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    text-decoration: none;
-  }
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .chat-message-disclosure {
@@ -1624,7 +1510,7 @@
   > .chat-assistant-attachments,
   > .chat-assistant-attachment-card,
   > .chat-pairing-qr-notices,
-  > .chat-thinking,
+  > .chat-reasoning,
   > .chat-tool-card__widget-host,
   > .chat-text,
   > .chat-message-disclosure,
@@ -1636,7 +1522,7 @@
     + .chat-assistant-attachments,
     + .chat-assistant-attachment-card,
     + .chat-pairing-qr-notices,
-    + .chat-thinking,
+    + .chat-reasoning,
     + .chat-tool-card__widget-host,
     + .chat-text,
     + .chat-message-disclosure,
