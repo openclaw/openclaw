@@ -188,6 +188,22 @@ it("uses the same favorite across runtimes while retaining distinct row identiti
   await waitForSolid(() => expect(Object.hasOwn(view.entries, key)).toBe(false));
 });
 
+it("lets the selected default model be favorited", async () => {
+  const view = await mount({}, undefined, {
+    modelOptions: [
+      modelOption("openai", "default", { isDefault: true }),
+      modelOption("openai", "large"),
+      modelOption("anthropic", "sonnet"),
+    ],
+    selectedModelValue: "openai/default",
+  });
+  await waitForSolid(() => expect(view.star("openai/default")).toBeDefined());
+  view.star("openai/default").click();
+  await waitForSolid(() => expect(view.entries[key]).toEqual(["openai/default"]));
+  await selectProvider(view.container, "$favorites");
+  expect(rowValues(view.container)).toEqual(["openai/default"]);
+});
+
 it("updates Favorites immediately while retaining provider row order until reopening", async () => {
   const view = await mount({}, undefined, {
     modelOptions: [
@@ -209,11 +225,6 @@ it("updates Favorites immediately while retaining provider row order until reope
     model,
     "openai/other",
   ]);
-  expect(
-    view.container.querySelector(
-      '[data-chat-model-option="openai/default"] [data-chat-model-favorite]',
-    ),
-  ).toBeNull();
   view.star().click();
   await waitForSolid(() => expect(view.entries[key]).toEqual([model]));
   expect(rowValues(view.container)).toEqual(before);

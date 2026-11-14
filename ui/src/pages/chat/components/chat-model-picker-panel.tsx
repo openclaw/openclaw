@@ -351,7 +351,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             entry={props.entry}
             rowKey={key()}
             favorite={
-              !props.entry.isDefault && favorites.available()
+              favorites.available()
                 ? {
                     selected: favorites.keys().includes(props.entry.value),
                     disabled: disabled() || favorites.disabled(),

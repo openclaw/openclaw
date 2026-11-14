@@ -187,11 +187,7 @@ export function prepareChatModelPickerPanel(
       group.more = group.lead.splice(9);
     }
   }
-  const byModel = new Map(
-    params.modelOptions
-      .filter((option) => !option.isDefault)
-      .map((option) => [option.value, option]),
-  );
+  const byModel = new Map(params.modelOptions.map((option) => [option.value, option]));
   const favoriteOptions = (favorites?.keys ?? [])
     .map((key) => byModel.get(key))
     .filter((option) => option !== undefined);
