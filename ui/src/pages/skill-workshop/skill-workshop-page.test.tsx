@@ -496,5 +496,7 @@ it.each([
   await waitForSolid(() => {
     expect(button(page, "Drafts 0", true)).not.toBeNull();
     expect(text(page, ".sw-list__rows")).toContain("No drafts yet.");
+    expect(page.querySelector(".sw-detail")).toBeNull();
+    expect(page.textContent).not.toContain("Select a skill to view it.");
   });
 });

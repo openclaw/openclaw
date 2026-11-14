@@ -112,7 +112,6 @@ const enSkillWorkshop = {
       },
     },
     viewer: {
-      pick: "Select a skill to view it.",
       pickFile: "Select a file.",
       noFiles: "This skill has no support files. Scripts, templates, and references appear here.",
       lastUsed: "last used {time}",
