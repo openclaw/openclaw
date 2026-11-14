@@ -57,10 +57,10 @@ function overview(cfg: OpenClawConfig) {
 describe("resolved non-env config credentials in the auth overview", () => {
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it("shows the resolved config source without exposing its credential", () => {
+  it("shows the resolved config source without exposing its credential", async () => {
     const cfg = publishResolvedConfig(sourceConfig());
 
-    const result = overview(cfg);
+    const result = await overview(cfg);
 
     expect(result.effective).toEqual({
       kind: "models.json",
@@ -70,10 +70,10 @@ describe("resolved non-env config credentials in the auth overview", () => {
     expect(JSON.stringify(result)).not.toContain(credential);
   });
 
-  it("does not borrow resolved material after the configured reference changes", () => {
+  it("does not borrow resolved material after the configured reference changes", async () => {
     publishResolvedConfig(sourceConfig("old-reference"));
 
-    const result = overview(sourceConfig("new-reference"));
+    const result = await overview(sourceConfig("new-reference"));
 
     expect(result.effective).toEqual({ kind: "missing", detail: "missing" });
     expect(JSON.stringify(result)).not.toContain(credential);

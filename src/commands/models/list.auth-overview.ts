@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { formatAuthProfileOAuthLabel } from "../../agents/auth-profiles/display.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthStorePathForDisplayAsync } from "../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -43,7 +43,7 @@ function formatMarkerOrSecret(value: string): string {
     : maskApiKey(value);
 }
 
-export function resolveProviderAuthOverview(params: {
+export async function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
@@ -54,7 +54,7 @@ export function resolveProviderAuthOverview(params: {
   aliasMap?: Readonly<Record<string, string>>;
   envCandidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
-}): ProviderAuthOverview {
+}): Promise<ProviderAuthOverview> {
   const { provider, cfg, store } = params;
   const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
@@ -128,7 +128,7 @@ export function resolveProviderAuthOverview(params: {
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
 
-  const effective: ProviderAuthOverview["effective"] = (() => {
+  const effective: ProviderAuthOverview["effective"] = await (async () => {
     if (providerApiKeyRef) {
       if (
         providerApiKeyRef.source !== "env" &&
@@ -152,26 +152,20 @@ export function resolveProviderAuthOverview(params: {
       return { kind: "models.json", detail: formatMarkerOrSecret(providerEntryKey.apiKey) };
     }
     if (profiles.length > 0) {
+      const agentDir = params.agentDir;
+      let displayDir = agentDir;
+      if (agentDir) {
+        const localStore = loadPersistedAuthProfileStore(agentDir);
+        if (!profiles.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
+          const mainStore = loadPersistedAuthProfileStore(undefined);
+          displayDir = profiles.every((profileId) => Boolean(mainStore?.profiles[profileId]))
+            ? undefined
+            : agentDir;
+        }
+      }
       return {
         kind: "profiles",
-        detail: shortenHomePath(
-          resolveAuthStorePathForDisplay(
-            (() => {
-              const agentDir = params.agentDir;
-              if (!agentDir || profiles.length === 0) {
-                return agentDir;
-              }
-              const localStore = loadPersistedAuthProfileStore(agentDir);
-              if (profiles.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
-                return agentDir;
-              }
-              const mainStore = loadPersistedAuthProfileStore(undefined);
-              return profiles.every((profileId) => Boolean(mainStore?.profiles[profileId]))
-                ? undefined
-                : agentDir;
-            })(),
-          ),
-        ),
+        detail: shortenHomePath(await resolveAuthStorePathForDisplayAsync(displayDir)),
       };
     }
     if (env) {

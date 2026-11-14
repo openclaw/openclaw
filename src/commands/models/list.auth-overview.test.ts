@@ -8,7 +8,7 @@ import {
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
@@ -23,7 +23,10 @@ vi.mock("../../agents/auth-profiles/persisted.js", () => ({
 
 // mock-isolation: synthetic display paths must not depend on the host state directory.
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
-  resolveAuthStorePathForDisplay: (agentDir?: string) =>
+  resolveAuthStorePathForDisplay: () => {
+    throw new Error("sync auth store display path must not be used");
+  },
+  resolveAuthStorePathForDisplayAsync: async (agentDir?: string) =>
     agentDir ? `${agentDir}/auth-profiles.json` : "/tmp/auth-profiles.json",
 }));
 
@@ -55,8 +58,8 @@ function providerConfig(provider: string, entry: Omit<ModelProviderConfig, "mode
 
 beforeEach(() => persistedStores.clear());
 
-it("labels token profiles that only have tokenRef", () => {
-  const result = resolveOverview("github-copilot", {
+it("labels token profiles that only have tokenRef", async () => {
+  const result = await resolveOverview("github-copilot", {
     "github-copilot:default": {
       type: "token",
       provider: "github-copilot",
@@ -66,14 +69,14 @@ it("labels token profiles that only have tokenRef", () => {
   expect(result.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
 });
 
-it("reports an explicit provider env SecretRef ahead of stored profiles", () => {
+it("reports an explicit provider env SecretRef ahead of stored profiles", async () => {
   const cfg = providerConfig("custom", {
     apiKey: "current-provider-key",
     baseUrl: "https://models.example/v1",
   });
   const envRefs = new Map([["models.providers.custom.apiKey", "CUSTOM_PROVIDER_KEY"]]);
   setConfigResolutionFacts(cfg, createConfigResolutionFacts([], new Map(), undefined, envRefs));
-  const result = withEnv({ CUSTOM_PROVIDER_KEY: "current-provider-key" }, () =>
+  const result = await withEnvAsync({ CUSTOM_PROVIDER_KEY: "current-provider-key" }, () =>
     resolveOverview(
       "custom",
       {
@@ -93,8 +96,8 @@ it("reports an explicit provider env SecretRef ahead of stored profiles", () => 
 it.each([
   ["api-key", "models.json"],
   [undefined, "profiles"],
-] as const)("reports the credential inference selects with auth %s", (auth, kind) => {
-  const result = resolveOverview(
+] as const)("reports the credential inference selects with auth %s", async (auth, kind) => {
+  const result = await resolveOverview(
     "ollama-2",
     {
       "ollama-2:ambient": createApiKeyCredential("ollama-2", "ambient-key"),
@@ -109,10 +112,10 @@ it.each([
   expect(result.effective.kind).toBe(kind);
 });
 
-it("reports the main auth store for inherited profiles", () => {
+it("reports the main auth store for inherited profiles", async () => {
   const profileId = "openai:peter@example.test";
   persistedStores.set("__main__", { profiles: { [profileId]: {} } });
-  const result = resolveOverview(
+  const result = await resolveOverview(
     "openai",
     { [profileId]: createOAuthRefreshCredential() },
     {
@@ -137,8 +140,8 @@ const masked = expect.not.stringMatching(/marker\(|OPENAI_API_KEY/);
 it.each([
   ["oauth:openai", { kind: "models.json", detail: marker }, marker],
   ["OPENAI_API_KEY", { kind: "missing", detail: "missing" }, masked],
-] as const)("displays %s without exposing credentials", (apiKey, effective, value) => {
-  const result = withEnv({ OPENAI_API_KEY: undefined }, () =>
+] as const)("displays %s without exposing credentials", async (apiKey, effective, value) => {
+  const result = await withEnvAsync({ OPENAI_API_KEY: undefined }, () =>
     resolveOverview(
       "openai",
       {},
