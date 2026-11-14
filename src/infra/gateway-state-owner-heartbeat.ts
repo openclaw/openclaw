@@ -231,7 +231,7 @@ export function startGatewayStateOwnerHeartbeat(
             // A stuck worker may leak its lock fds on runtimes without an exit sweep.
             process.emitWarning(
               `Gateway state-owner heartbeat did not close within ${RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS}ms; forcing termination. Lock file descriptors may remain open until process exit.`,
-              { code: "OPENCLAW_STATE_HEARTBEAT_CLOSE_TIMEOUT" },
+              { code: "GATEWAY_STATE_HEARTBEAT_CLOSE_TIMEOUT" },
             );
           }
           return worker.terminate();

@@ -773,7 +773,7 @@ it("bounds an unresponsive heartbeat close and warns before forced termination",
     expect(warning).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("forcing termination"),
       {
-        code: "OPENCLAW_STATE_HEARTBEAT_CLOSE_TIMEOUT",
+        code: "GATEWAY_STATE_HEARTBEAT_CLOSE_TIMEOUT",
       },
     );
   } finally {
