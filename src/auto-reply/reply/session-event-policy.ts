@@ -293,3 +293,35 @@ export function captureSessionEventConfigRelevance(
     );
   };
 }
+
+/** Nested callers intersect ceilings; only an unrestricted same-session owner retains the exemption. */
+export function inheritSessionEventToolPolicy(
+  identity: {
+    agentId: string;
+    sessionKey: string;
+    sessionEventToolsAllow?: readonly string[];
+    sessionEventToolsAllowSessionScoped?: true;
+  },
+  owner?: {
+    agentId: string;
+    sessionKey: string;
+    sessionEventToolsAllow?: readonly string[];
+    sessionEventToolsAllowSessionScoped?: true;
+  },
+) {
+  return {
+    sessionEventToolsAllow:
+      identity.sessionEventToolsAllow && owner?.sessionEventToolsAllow
+        ? identity.sessionEventToolsAllow.filter((name) =>
+            owner.sessionEventToolsAllow!.includes(name),
+          )
+        : (identity.sessionEventToolsAllow ?? owner?.sessionEventToolsAllow),
+    sessionEventToolsAllowSessionScoped:
+      !owner ||
+      (owner.agentId === identity.agentId.trim() &&
+        owner.sessionKey === identity.sessionKey.trim() &&
+        (!owner.sessionEventToolsAllow || owner.sessionEventToolsAllowSessionScoped))
+        ? identity.sessionEventToolsAllowSessionScoped
+        : undefined,
+  };
+}
