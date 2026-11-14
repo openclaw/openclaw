@@ -63,7 +63,10 @@ function captureAppendReservations(root) {
   );
 }
 
-/** @param {{ campaignRoot: string; temporaryRoot: string }} options */
+/**
+ * @public Imported by the task-local preload described above; the bench env allowlist cannot carry these paths.
+ * @param {{ campaignRoot: string; temporaryRoot: string }} options
+ */
 export function prepareTranscriptFactsBackfillStress(options) {
   if (!isMainThread || process.argv[2] !== "gateway" || process.argv[3] !== "run") {
     return;
