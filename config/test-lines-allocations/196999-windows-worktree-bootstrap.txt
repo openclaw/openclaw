@@ -1,0 +1,2 @@
+25
+# Fresh Windows bootstrap regression exercises the real spawner before proc-safe is installed.

@@ -1805,3 +1805,28 @@ function isProcessAlive(pid: number) {
     return false;
   }
 }
+
+it("spawns Windows commands normally before proc-safe is installed", () => {
+  // worktree-setup runs the first `pnpm install` through this spawner.
+  const script = `
+    import { registerHooks } from "node:module";
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier.startsWith("@openclaw/proc-safe")) {
+          throw Object.assign(new Error("Cannot find package '" + specifier + "'"), {
+            code: "ERR_MODULE_NOT_FOUND",
+          });
+        }
+        return next(specifier, context);
+      },
+    });
+    const { loadManagedChildSpawner } = await import(${JSON.stringify(managedModuleUrl)});
+    const spawnManagedChild = await loadManagedChildSpawner("win32");
+    spawnManagedChild(process.execPath, ["-e", "console.log('child ran')"], { stdio: "inherit" });
+  `;
+  const result = spawnSync(resolveTestNodeExecPath(), ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+  });
+  expect(result.stderr).toBe("");
+  expect(result.stdout.trim()).toBe("child ran");
+});
