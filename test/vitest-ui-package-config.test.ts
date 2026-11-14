@@ -337,7 +337,7 @@ export default {
         if (browser === "chromium") {
           for (const file of [
             "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
-            "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
+            "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
           ]) {
             expect(standalone?.files).toContain(path.join(uiRoot, file));
           }
