@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Generated, InferResult } from "kysely";
+import { sql, type Generated, type InferResult } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,7 +10,10 @@ import {
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { createSessionTranscriptActiveFactsInserter } from "./session-transcript-active-facts.js";
+import {
+  createSessionTranscriptActiveFactsInserter,
+  transcriptDependencyFactsProjectableSql,
+} from "./session-transcript-active-facts.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -25,13 +28,14 @@ import {
   type SessionTranscriptProjectionCursor,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
-import {
-  projectionFactsColumns,
-  projectionRowFacts,
-} from "./session-transcript-projection-facts-columns.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventDependencyNavigationSql,
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -98,6 +102,41 @@ const PROJECTION_FINALIZE_TAIL_BYTES = 256 * 1024;
 
 function getProjectionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
+}
+
+export function projectionFactsColumns(db: EngineConnection) {
+  return [
+    /* kysely-allow-raw: the projection retains the exact stored byte count and JSONL separator. */ sql<number>`${transcriptEventReadBytesSql()} + 1`.as(
+      "serialized_bytes",
+    ),
+    // Eligibility is resolved by the existing JS branch owner. Capture the larger
+    // candidate set here, during its existing payload read, then narrow it below.
+    /* kysely-allow-raw: malformed and deep legacy rows retain their prior read-time projection. */ sql<
+      string | null
+    >`CASE WHEN ${transcriptDependencyFactsProjectableSql(db, "transcript_events")}
+      THEN ${transcriptEventDependencyNavigationSql(db, sql.lit(0), "transcript_events")} ELSE NULL END`.as(
+      "dependency_navigation_json",
+    ),
+    transcriptPredicateSql(db, "navigation_type").as("navigation_type"),
+  ];
+}
+
+export function projectionRowFacts(
+  row: Pick<
+    SessionTranscriptProjectionRow,
+    "serialized_bytes" | "dependency_navigation_json" | "navigation_type"
+  >,
+  contextEligible: 0 | 1,
+) {
+  return row.serialized_bytes === undefined || row.dependency_navigation_json == null
+    ? undefined
+    : {
+        serializedBytes: row.serialized_bytes,
+        dependencyNavigationJson:
+          row.navigation_type === "message" && contextEligible !== 0
+            ? "{}"
+            : row.dependency_navigation_json,
+      };
 }
 
 function readCanonicalEventId(event: unknown): string | null {

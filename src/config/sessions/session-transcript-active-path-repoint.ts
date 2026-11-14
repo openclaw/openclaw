@@ -26,7 +26,7 @@ import {
 import {
   projectionFactsColumns,
   projectionRowFacts,
-} from "./session-transcript-projection-facts-columns.js";
+} from "./session-transcript-projection-rebuild.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 type RepointDatabase = Pick<

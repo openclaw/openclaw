@@ -18,7 +18,7 @@ import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
-import { refuseInPlaceSessionMessageCut } from "./session-message-cut-preflight.js";
+import { refuseInPlaceSessionMessageCut } from "./session-message-cut-target.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,

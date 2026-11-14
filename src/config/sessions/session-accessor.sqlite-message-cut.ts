@@ -45,7 +45,6 @@ import { captureSessionActorStorageOwner } from "./session-actor-storage-binding
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
 import { planInPlaceSessionMessageCut, planSessionMessageCut } from "./session-message-cut-plan.js";
-import { refuseInPlaceSessionMessageCut } from "./session-message-cut-preflight.js";
 import {
   readSessionMessageCut,
   SESSION_MESSAGE_CUT_MAX_BYTES,
@@ -53,6 +52,7 @@ import {
 import {
   createMemorySessionMessageCutReader,
   createSessionMessageCutReader,
+  refuseInPlaceSessionMessageCut,
 } from "./session-message-cut-target.js";
 import type {
   SessionMessageCutIntent,

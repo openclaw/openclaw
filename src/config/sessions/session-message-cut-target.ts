@@ -4,12 +4,20 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
 import {
-  getActiveTranscriptKysely,
-  selectActiveTranscriptIdentityRows,
-} from "./session-accessor.sqlite-projection-read.js";
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import type { SessionAccessScope } from "./session-accessor.types.js";
+import { planInPlaceSessionMessageCut } from "./session-message-cut-plan.js";
+import type {
+  SessionMessageCutIntent,
+  SessionMessageCutResult,
+} from "./session-message-cut.types.js";
 import {
   reconcileSessionTranscriptIndexInTransaction,
   sessionTranscriptIndexNeedsReconcile,
@@ -21,6 +29,7 @@ import {
   selectSessionTranscriptTreePathNodes,
   selectSessionTranscriptTreeTipNodes,
 } from "./transcript-tree.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type SessionMessageCutTarget = {
   /** Parsed payload of the target row; the only event body this path reads. */
@@ -136,41 +145,12 @@ export function createSessionMessageCutReader(
         .where("identity.session_id", "=", sessionId)
         .where("identity.event_id", "=", entryId),
     );
-  const readActiveEventId = (eventId: string) =>
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      selectActiveTranscriptIdentityRows(database)
-        .select("identity.event_id")
-        .where("identity.session_id", "=", sessionId)
-        .where("identity.event_id", "=", eventId),
-    )?.event_id ?? null;
-  const readVisiblePredecessor = (activePosition: number) =>
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      selectActiveTranscriptIdentityRows(database)
-        .select("identity.event_id")
-        .where("identity.session_id", "=", sessionId)
-        .where("active.active_position", "<", activePosition)
-        .where("identity.event_type", "is not", null)
-        .where("identity.event_type", "<>", "leaf")
-        .orderBy("active.active_position", "desc")
-        .limit(1),
-    )?.event_id ?? null;
   return {
     readTarget(entryId) {
       const row = readIdentity(entryId);
       if (!row) {
         return undefined;
       }
-      const onActivePath = row.active_position !== null;
-      // The stored parent link is the tree parent for every append-written row.
-      // Fall back to the active-path predecessor when normalization moved it.
-      const parentId = row.parent_id;
-      const repointTargetId =
-        parentId === null
-          ? null
-          : (readActiveEventId(parentId) ??
-            (onActivePath ? readVisiblePredecessor(row.active_position!) : null));
       return {
         event: asRecord(
           row.event_json === null && row.event_zstd === null
@@ -178,8 +158,10 @@ export function createSessionMessageCutReader(
             : (JSON.parse(readTranscriptPayload(row)) as TranscriptEvent),
         ),
         eventType: row.event_type,
-        onActivePath,
-        repointTargetId,
+        onActivePath: row.active_position !== null,
+        // Appends chain onto the active tip, so a target on the active path has
+        // its stored parent on that path too.
+        repointTargetId: row.parent_id,
       };
     },
     isBranchTip(entryId) {
@@ -233,4 +215,30 @@ export function createSessionMessageCutReader(
       }
     },
   };
+}
+
+/**
+ * Best-effort semantic precheck before a local workspace is retired.
+ *
+ * Reads are indexed and read-only, so a lagging active-path projection defers
+ * to the committing transaction, which owns reconciliation and revalidation.
+ */
+export function refuseInPlaceSessionMessageCut(
+  scope: SessionAccessScope & { agentId: string; sessionId: string },
+  entry: InternalSessionEntry,
+  intent: SessionMessageCutIntent & { mode: "rewind" | "switch" },
+  sourceRepositoryWorkspaceId?: string,
+): Exclude<SessionMessageCutResult, { status: "created" }> | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const reader = createSessionMessageCutReader(database, resolved.sessionId, {
+      reconcile: false,
+    });
+    if (!reader) {
+      return undefined;
+    }
+    const plan = planInPlaceSessionMessageCut(entry, reader, intent, sourceRepositoryWorkspaceId);
+    return plan.status === "prepared" ? undefined : plan;
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : undefined;
 }
