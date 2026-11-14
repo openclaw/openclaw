@@ -5,9 +5,22 @@ import {
   mergeCliHistoryRow,
   type CliHistoryIndex,
   type CliHistoryMergeStore,
+  type HistoryMatch,
   type HistoryRow,
   type HistoryTextMatch,
 } from "./cli-session-history-index-policy.js";
+import {
+  decodeIndexedHistoryText,
+  noteImportedCliCoverage,
+  selectCoveredCliAggregateIds,
+  toLocalCoverageUsers,
+} from "./cli-session-history-index.coverage.js";
+import {
+  cliAssistantAggregateOwnsCanonicalAttachments,
+  createCliAssistantCoverage,
+  isCliAssistantAggregateMessage,
+  isNativeToolResultMessage,
+} from "./cli-session-history.merge-aggregates.js";
 
 function addToGroup(groups: Map<string, HistoryRow[]>, key: string, row: HistoryRow): void {
   const group = groups.get(key);
@@ -24,6 +37,10 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
   private readonly imports: HistoryRow[] = [];
   private order: HistoryRow[] = [];
   private readonly messageOrdinals = new Map<string, number>();
+  private readonly coverage = createCliAssistantCoverage();
+  private readonly aggregateIds: number[] = [];
+  private readonly coverageSegments: Array<{ import_id: number; turn: number }> = [];
+  private readonly nativeToolResultImports = new Set<number>();
   private nextLocal = 0;
   count = 0;
 
@@ -32,12 +49,23 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
       const id = seq - 1;
       this.nextLocal = Math.max(this.nextLocal, id + 1);
       if (!this.messages.has(id)) {
-        this.messages.set(id, createCliHistoryRow(message, id, seq));
+        const row = createCliHistoryRow(message, id, seq);
+        this.messages.set(id, row);
+        // Native text cannot replace an attachment-owning canonical row.
+        if (
+          isCliAssistantAggregateMessage(message, row.role ?? undefined) &&
+          !cliAssistantAggregateOwnsCanonicalAttachments(message)
+        ) {
+          this.aggregateIds.push(id);
+        }
       }
     }
   }
 
   appendImported(message: unknown): void {
+    if (isNativeToolResultMessage(message)) {
+      this.nativeToolResultImports.add(this.imports.length);
+    }
     this.imports.push(createCliHistoryRow(message, this.imports.length));
   }
 
@@ -103,6 +131,28 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
       };
       return { any: create("any"), window: create("window"), missing: create("missing") };
     };
+    const hasAggregates = this.aggregateIds.length > 0;
+    if (hasAggregates) {
+      this.coverage.setLocalUsers(
+        toLocalCoverageUsers(
+          this.order.filter((row) => row.role === "user" && !row.consumed && row.text !== null),
+        ),
+      );
+    }
+    const noteCoverage = (
+      imported: Omit<HistoryRow, "payload">,
+      match?: HistoryMatch,
+      byIdentity = false,
+    ) => {
+      const turn = noteImportedCliCoverage(this.coverage, imported, {
+        match,
+        byIdentity,
+        toolResult: this.nativeToolResultImports.has(imported.id),
+      });
+      if (turn !== undefined) {
+        this.coverageSegments.push({ import_id: imported.id, turn });
+      }
+    };
     const store: CliHistoryMergeStore = {
       matchExternal: (identity) => external.get(identity),
       matchImage: (identity) => images.get(identity)?.find((row) => !row.consumed),
@@ -117,10 +167,14 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
         Object.assign(row, match, { consumed: 1 });
         registerExternal(row);
       },
+      onMatch: hasAggregates ? noteCoverage : undefined,
     };
     let expanded = false;
     for (const imported of this.imports) {
       if (!mergeCliHistoryRow(imported, store)) {
+        if (hasAggregates) {
+          noteCoverage(imported);
+        }
         const row = {
           ...imported,
           id: this.nextLocal++,
@@ -132,6 +186,29 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
         this.order.push(row);
         registerExternal(row);
         expanded = true;
+      }
+    }
+    this.coverage.release();
+    if (hasAggregates) {
+      const readTexts =
+        (rows: (id: number) => HistoryRow | undefined) => (ids: readonly number[]) =>
+          new Map(
+            ids.flatMap((id) => {
+              const text = decodeIndexedHistoryText(rows(id)?.text ?? null);
+              return text ? [[id, text] as const] : [];
+            }),
+          );
+      const dropped = selectCoveredCliAggregateIds({
+        userIds: this.order
+          .filter((row) => row.local_seq !== null && row.role === "user")
+          .map((row) => row.id),
+        aggregateIds: this.aggregateIds,
+        segments: this.coverageSegments,
+        readAggregateTexts: readTexts((id) => this.messages.get(id)),
+        readSegmentTexts: readTexts((id) => this.imports[id]),
+      });
+      if (dropped.size > 0) {
+        this.order = this.order.filter((row) => !dropped.has(row.id));
       }
     }
     if (expanded) {
@@ -178,6 +255,7 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
   }
 
   close(): void {
+    this.coverage.release();
     this.messages.clear();
     this.imports.length = 0;
     this.order.length = 0;

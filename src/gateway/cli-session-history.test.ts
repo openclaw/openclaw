@@ -707,15 +707,20 @@ it.each([
       ),
     );
   }
-  const merged = merge(localMessages, imported);
-  const keys = merged
-    .map(readRecord)
-    .map(
-      (message) =>
-        message.idempotencyKey ?? asOptionalRecord(message["__openclaw"])?.idempotencyKey,
-    )
-    .filter((key) => typeof key === "string" && key.startsWith("cli-assistant:"));
-  expect(keys).toEqual(retained.map((key) => `cli-assistant:${key}`));
-  expect(merged).toEqual(expect.arrayContaining(imported.slice(1)));
-  expect(merged.filter((message) => readRecord(message).role === "user")).toHaveLength(userCount);
+  for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+    const merged = mergeImportedChatHistoryMessages(
+      { localMessages, importedMessages: imported },
+      new Index(),
+    );
+    const keys = merged
+      .map(readRecord)
+      .map(
+        (message) =>
+          message.idempotencyKey ?? asOptionalRecord(message["__openclaw"])?.idempotencyKey,
+      )
+      .filter((key) => typeof key === "string" && key.startsWith("cli-assistant:"));
+    expect(keys).toEqual(retained.map((key) => `cli-assistant:${key}`));
+    expect(merged).toEqual(expect.arrayContaining(imported.slice(1)));
+    expect(merged.filter((message) => readRecord(message).role === "user")).toHaveLength(userCount);
+  }
 });
