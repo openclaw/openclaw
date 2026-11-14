@@ -521,6 +521,49 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
+  it.each([
+    {
+      name: "regular session",
+      rows: [sessionRow(0)],
+      text: "keeps an archived copy of its transcript",
+    },
+    {
+      name: "incognito flag",
+      rows: [sessionRow(0, { incognito: true })],
+      text: "without an archive",
+    },
+    {
+      name: "incognito key",
+      rows: [sessionRow(0, { key: "agent:main:dashboard:incognito-private" })],
+      text: "without an archive",
+    },
+    {
+      name: "incognito selection",
+      rows: [sessionRow(0, { incognito: true }), sessionRow(1, { incognito: true })],
+      text: "their transcripts without an archive",
+    },
+    {
+      name: "mixed selection",
+      rows: [sessionRow(0), sessionRow(1, { incognito: true })],
+      text: "Regular transcripts are archived; incognito transcripts are deleted without an archive",
+    },
+  ])("explains transcript retention for $name before deletion", async ({ rows, text }) => {
+    const h = createHarness(destructiveHarness);
+    const pending =
+      rows.length === 1
+        ? deleteSession(h.host, rows[0]!, h.scope)
+        : deleteSessionsBatch(h.host, rows, h.scope);
+    const actions = await waitForConfirmDialogActions();
+    const message = document.body.querySelector("openclaw-modal-dialog")?.textContent;
+    expect.soft(message).toContain(text);
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(h.deleteMany).not.toHaveBeenCalled();
+    answerConfirmDialog(actions, "cancel");
+    await pending;
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(h.deleteMany).not.toHaveBeenCalled();
+  });
+
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
     const h = createHarness(destructiveHarness);
     const rows = [sessionRow(0), sessionRow(1)];
@@ -537,7 +580,7 @@ describe("session organizer destructive confirmations", () => {
     const pending = deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions?This also deletes their transcripts.",
+      "Delete 2 sessions?This deletes the session entries but keeps archived copies of their transcripts.",
     );
     answerConfirmDialog(actions, "confirm");
     await pending;

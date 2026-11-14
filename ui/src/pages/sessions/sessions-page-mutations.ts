@@ -29,6 +29,7 @@ import type {
   SessionDeleteTarget,
   SessionListOptions,
 } from "../../lib/sessions/session-capability.ts";
+import { sessionDeleteConfirmationMessage } from "../../lib/sessions/session-delete-confirmation.ts";
 import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
@@ -160,11 +161,11 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
             title: t("sessionsView.deleteSessionTitle", {
               session: normalizeOptionalString(only.label) ?? only.key,
             }),
-            message: t("sessionsView.deleteSelectedConfirmOne"),
+            message: sessionDeleteConfirmationMessage(rows),
           }
         : {
             title: t("sessionsView.deleteSessionsTitle", { count: String(rows.length) }),
-            message: t("sessionsView.deleteSelectedConfirm"),
+            message: sessionDeleteConfirmationMessage(rows),
           };
     if (!(await confirmDelete(prompt, rows, scope)) || !isRequestScopeCurrent(scope)) {
       return;
@@ -332,7 +333,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (
       !(await confirmMutation({
         title: t("sessionsView.deleteAllArchivedTitle", { count: String(archivedRows.length) }),
-        message: t("sessionsView.deleteSessionsConfirm"),
+        message: sessionDeleteConfirmationMessage(archivedRows),
         signal: scope.signal,
       })) ||
       !isRequestScopeCurrent(scope)
@@ -350,7 +351,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       !(await confirmDelete(
         {
           title: t("sessionsView.deleteSessionTitle", { session: label }),
-          message: t("sessionsView.deleteSessionConfirm"),
+          message: sessionDeleteConfirmationMessage([row]),
         },
         [row],
         scope,
