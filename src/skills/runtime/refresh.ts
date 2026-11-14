@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import type { SandboxMountPlanInput } from "../../agents/sandbox/mount-plan.prepare.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,6 +10,8 @@ import { observeOwnedDirectory } from "../../infra/owned-directory-observation.j
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createWorkerMutationAuthority } from "../../infra/worker-mutation-authority.js";
+import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -122,6 +126,37 @@ function pool() {
         workerClass: "singleton",
       }),
   ));
+}
+
+export async function prepareSandboxMounts(
+  input: SandboxMountPlanInput,
+  assertCurrent?: () => void,
+) {
+  const nativeMode = getFsSafeNativeConfig().mode;
+  if (state.closing) {
+    await state.closing;
+  }
+  const worker = pool();
+  const authority = assertCurrent ? createWorkerMutationAuthority(assertCurrent) : undefined;
+  try {
+    const result = await worker.run(
+      { kind: "sandbox-mounts", input, nativeMode, authority: authority?.buffer },
+      { timeoutMs: 120_000, onNotification: () => authority?.onNotification() },
+    );
+    authority?.throwIfRefused();
+    if (result.kind === "sandbox-mounts-error") {
+      throw decodeNativeWorkerFailure(result.error);
+    }
+    if (result.kind !== "sandbox-mounts") {
+      throw new Error("Unexpected sandbox mount preparation response");
+    }
+    return result.plan;
+  } catch (error) {
+    authority?.throwIfRefused();
+    throw error;
+  } finally {
+    authority?.dispose();
+  }
 }
 
 function observeSource(source: Source) {

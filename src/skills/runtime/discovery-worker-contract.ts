@@ -1,3 +1,9 @@
+import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
+import type {
+  SandboxMountPlan,
+  SandboxMountPlanInput,
+} from "../../agents/sandbox/mount-plan.prepare.js";
+import type { NativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import type { WorkspaceSkillStatusFacts } from "../discovery/status.types.js";
 import type { PluginSkillContribution } from "../loading/plugin-skills.js";
@@ -53,6 +59,12 @@ export type SkillsDiscoverySourceSelection =
     };
 
 export type SkillsDiscoveryInput =
+  | {
+      kind: "sandbox-mounts";
+      input: SandboxMountPlanInput;
+      nativeMode: FsSafeNativeMode;
+      authority?: SharedArrayBuffer;
+    }
   | { kind: "plan"; input: SkillsSourcePlanInput }
   | {
       kind: "scan";
@@ -83,6 +95,8 @@ export type SkillsDiscoveryResult = {
 };
 
 export type SkillsDiscoveryOutput =
+  | { kind: "sandbox-mounts"; plan: SandboxMountPlan }
+  | { kind: "sandbox-mounts-error"; error: NativeWorkerFailure }
   | { kind: "plan"; plan: WorkspaceSkillSourcePlan }
   | { kind: "scan"; results: SkillsDiscoveryResult[] }
   | {

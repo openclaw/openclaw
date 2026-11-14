@@ -1,6 +1,9 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
+import { withWorkerFsSafeNativeMode } from "../../infra/worker-fs-safe.js";
+import { workerMutationAssertion } from "../../infra/worker-mutation-authority.js";
+import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   createPluginCache,
@@ -61,10 +64,40 @@ function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = cre
   });
 }
 
-serveWorkerTasks<SkillsDiscoveryOutput>(async (input, channel) => {
+serveWorkerTasks<SkillsDiscoveryOutput>(async (input, channel, control) => {
   // SAFETY: This private worker only receives the discovery owner's typed requests.
   const request = input as SkillsDiscoveryInput;
   channel?.consumeInput();
+  if (request.kind === "sandbox-mounts") {
+    if (request.authority && !channel) {
+      throw new Error("Sandbox mount preparation requires its live host channel");
+    }
+    return withWorkerFsSafeNativeMode(request.nativeMode, () =>
+      control.runNativeSection<SkillsDiscoveryOutput>(async () => {
+        const assertHost = request.authority
+          ? workerMutationAssertion(
+              request.authority,
+              () => channel?.notify("authority"),
+              control.throwIfCancelled,
+            )
+          : control.throwIfCancelled;
+        const assertCurrent = () => {
+          control.throwIfCancelled();
+          assertHost();
+        };
+        try {
+          const { prepareSandboxMountPlanFilesystem } =
+            await import("../../agents/sandbox/mount-plan.prepare.js");
+          return {
+            kind: "sandbox-mounts",
+            plan: await prepareSandboxMountPlanFilesystem(request.input, assertCurrent),
+          };
+        } catch (error) {
+          return { kind: "sandbox-mounts-error", error: encodeNativeWorkerFailure(error) };
+        }
+      }),
+    );
+  }
   if (request.kind === "plan") {
     applyEnvironment(request.input.environment);
     return { kind: "plan", plan: resolveInputPlan(request.input) };

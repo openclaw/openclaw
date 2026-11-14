@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 import { DOCKER_SANDBOX_ENGINE as engine, execContainer } from "./container-engine.js";
 import { resolveDockerSourceNamespace } from "./docker-mount-source.js";
 import {
@@ -82,6 +83,25 @@ async function expectMounts(
 }
 
 describe("managed mount plan", () => {
+  it("prepares managed mounts without synchronous filesystem work after runtime initialization", async () => {
+    const { closeSkillsWatchers } = await import("../../skills/runtime/refresh.js");
+    // Resolve the source loader once, then prove a fresh worker performs all mount work off-thread.
+    resolveRuntimeWorkerThreadExecArgv(
+      new URL("../../skills/runtime/discovery.worker.ts", import.meta.url),
+    );
+    await closeSkillsWatchers();
+    using exists = vi.spyOn(fs, "existsSync");
+    using stat = vi.spyOn(fs, "statSync");
+    using lstat = vi.spyOn(fs, "lstatSync");
+    using realpath = vi.spyOn(fs, "realpathSync");
+    const plan = await prepare("rw", { workspaceSource: "managed-worktree" });
+    expect(plan.binds).toContain(skillsBind);
+    expect(exists).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(lstat).not.toHaveBeenCalled();
+    expect(realpath).not.toHaveBeenCalled();
+  });
+
   it("allocates managed skill mount targets as the workspace host owner before engine create", async () => {
     const workspace = path.join(root, "agent");
     fs.mkdirSync(path.join(workspace, ".openclaw"), { mode: 0o750 });
