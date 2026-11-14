@@ -139,7 +139,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
   } else if (status === "paused") {
     parts.push("Paused");
   } else if (firstRunPending(snapshot)) {
-    parts.push("First run in progress");
+    parts.push(job?.state.runningAtMs ? "First run in progress" : "First run requested");
   }
   if (job && status !== "missing") {
     parts.push(scheduleText(job));
@@ -239,7 +239,7 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
   firstRuns.add(job.id);
   try {
     await runScribeNow(ui.s.context.host, job);
-    ui.announce(`${snapshot.scribe.title}: first run started.`);
+    ui.announce(`${snapshot.scribe.title}: first run requested.`);
   } catch (error) {
     // Not started: forget it so the next load tries again and nothing shows it as running.
     firstRuns.delete(job.id);
@@ -500,7 +500,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   };
   if (job && status !== "missing") {
     actions.append(
-      control("Run now", () => runScribeNow(host, job), `${scribe.title} is running.`),
+      control("Run now", () => runScribeNow(host, job), `Run requested for ${scribe.title}.`),
     );
   }
   if (session && !session.archived) {
@@ -669,7 +669,11 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   }
   if (!runs.length && firstRunPending(snapshot)) {
     const line = el("div", undefined, "scribe-run");
-    line.append(el("time", "First run"), el("span", "Running now"), el("span"));
+    line.append(
+      el("time", "First run"),
+      el("span", job?.state.runningAtMs ? "Running now" : "Run requested"),
+      el("span"),
+    );
     rows.append(line);
   } else if (!runs.length && snapshot.result) {
     const line = el("div", undefined, "scribe-run");
