@@ -62,3 +62,40 @@ describe("Signal account media limits", () => {
     }
   });
 });
+
+describe("Signal voice-note delivery", () => {
+  it("forwards audioAsVoice from the media adapter as signal-cli voiceNote", async () => {
+    const state = await createOpenClawTestState({ prefix: "signal-voice-note-" });
+    const request = vi
+      .spyOn(client, "signalRpcRequest")
+      .mockResolvedValue({ timestamp: 1234567890 });
+    try {
+      const voice = state.path("voice-1.mp3");
+      await writeFile(
+        voice,
+        Buffer.concat([Buffer.from("ID3\x04\x00\x00\x00\x00\x00\x00"), Buffer.alloc(64)]),
+      );
+      const transport = { kind: "external-native" as const, url: "http://signal.test" };
+      const send = signalPlugin.outbound?.sendMedia;
+      if (!send) {
+        throw new Error("Missing Signal media sender");
+      }
+      await send({
+        cfg: { channels: { signal: { account: "+15550001111", transport } } },
+        to: "+15555550123",
+        text: "",
+        mediaUrl: voice,
+        mediaLocalRoots: [state.root],
+        audioAsVoice: true,
+      });
+      expect(request).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ voiceNote: true }),
+        expect.any(Object),
+      );
+    } finally {
+      request.mockRestore();
+      await state.cleanup();
+    }
+  });
+});

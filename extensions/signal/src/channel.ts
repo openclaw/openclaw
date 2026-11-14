@@ -156,6 +156,7 @@ async function sendSignalOutbound(params: {
   accountId?: string | null;
   deps?: { [channelId: string]: unknown };
   replyToId?: string | null;
+  audioAsVoice?: boolean;
   assertDirectAdapterHandoff?: () => void;
 }) {
   const send = await createSignalOutboundSender(params);
@@ -166,6 +167,7 @@ async function sendSignalOutbound(params: {
     ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    ...(params.audioAsVoice === true ? { audioAsVoice: true } : {}),
   });
 }
 
@@ -594,6 +596,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
             mediaLocalRoots: ctx.mediaLocalRoots,
             ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+            ...(ctx.audioAsVoice === true ? { audioAsVoice: true } : {}),
             textMode: "plain",
             textStyles: formatted.styles,
           });
