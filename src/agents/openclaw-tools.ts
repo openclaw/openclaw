@@ -19,6 +19,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentIds,
 } from "./agent-scope.js";
+import { prepareAgentToolRuntimeListing } from "./agent-tool-runtime-listing.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
 import {
@@ -150,6 +151,10 @@ export async function createOpenClawToolsWithPreparation(
     captured.assertInvocationCurrent?.();
     next = steps.next(tools);
   }
+  await prepareAgentToolRuntimeListing(next.value, () => {
+    shared.assertCurrent();
+    captured.assertInvocationCurrent?.();
+  });
   return next.value;
 }
 

@@ -275,15 +275,16 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
     });
   const computerAllowed = shouldConstructTools && allowsConversationTool("computer");
-  const pairedNodeComputerUse = (
-    await loadPairedComputerUseAvailabilityForSurface({
-      computerAllowed,
-      modelHasVision: attempt.model.input?.includes("image") ?? true,
-      computerTransport,
-      embeddedMode: isEmbeddedMode(),
-      signal: params.runAbortController.signal,
-    })
-  )?.prepared;
+  const nodeToolAvailability = await loadPairedComputerUseAvailabilityForSurface({
+    config: attempt.config,
+    computerAllowed,
+    mobileUiAllowed: shouldConstructTools && allowsConversationTool("mobile_ui"),
+    modelHasVision: attempt.model.input?.includes("image") ?? true,
+    computerTransport,
+    embeddedMode: isEmbeddedMode(),
+    signal: params.runAbortController.signal,
+  });
+  const pairedNodeComputerUse = nodeToolAvailability?.prepared;
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
     agentId: params.setup.sessionAgentId,
@@ -519,6 +520,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
+      nodeToolAvailability,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,

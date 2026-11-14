@@ -1,5 +1,5 @@
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
-import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 
 export const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
@@ -7,6 +7,15 @@ export const OLLAMA_MODELS_COMMAND = "ollama.models";
 export const OLLAMA_CHAT_COMMAND = "ollama.chat";
 export const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
 export const OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS = ["macos", "linux", "windows"] as const;
+
+type OllamaNodeDescriptor = Pick<
+  Awaited<ReturnType<OpenClawPluginApi["runtime"]["nodes"]["list"]>>["nodes"][number],
+  "commands" | "invocableCommands"
+>;
+
+export function supportsOllamaModelDiscovery(node: OllamaNodeDescriptor): boolean {
+  return (node.invocableCommands ?? node.commands ?? []).includes(OLLAMA_MODELS_COMMAND);
+}
 
 export const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
 export const DEFAULT_MAX_TOKENS = 512;

@@ -1,3 +1,4 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -62,7 +63,13 @@ describe("ollama lazy imports", () => {
     });
 
     const { default: ollamaPlugin } = await import("./index.js");
-    const api = createTestPluginApi({ id: "ollama", runtime: createPluginRuntimeMock() });
+    const list = vi.fn<OpenClawPluginApi["runtime"]["nodes"]["list"]>();
+    const api = createTestPluginApi({
+      id: "ollama",
+      runtime: createPluginRuntimeMock({
+        nodes: { list, invoke: vi.fn(), openDuplex: vi.fn() },
+      }),
+    });
     const memory = vi.spyOn(api, "registerEmbeddingProvider");
     const media = vi.spyOn(api, "registerMediaUnderstandingProvider");
     const commands = vi.spyOn(api, "registerNodeHostCommand");
@@ -78,6 +85,36 @@ describe("ollama lazy imports", () => {
 
     expect(imports).toEqual({ memory: 0, node: 0, setup: 0, stream: 0, web: 0, wsl: 0 });
     expect(media.mock.calls[0]?.[0]).toMatchObject({ id: "ollama", capabilities: ["image"] });
+    expect(list).not.toHaveBeenCalled();
+    const listingSupported = tools.mock.calls[0]?.[1]?.listingSupported;
+    if (!listingSupported) {
+      throw new Error("Expected passive node inference support");
+    }
+    for (const [advertisedCommands, invocableCommands, expected] of [
+      [["ollama.models"], undefined, true],
+      [["ollama.models", "ollama.chat"], ["ollama.models"], true],
+      [["ollama.models", "ollama.chat"], ["ollama.chat"], false],
+      [["ollama.models", "ollama.chat"], [], false],
+      [["ollama.chat"], undefined, false],
+      [[], undefined, false],
+    ] as const) {
+      list.mockImplementation(async (params) => ({
+        nodes: params?.connected
+          ? []
+          : [
+              {
+                nodeId: "offline",
+                connected: false,
+                commands: [...advertisedCommands],
+                invocableCommands: invocableCommands ? [...invocableCommands] : undefined,
+              },
+            ],
+      }));
+      await expect(listingSupported({})).resolves.toBe(expected);
+    }
+    list.mockResolvedValue({ nodes: [] });
+    await expect(listingSupported({})).resolves.toBe(false);
+    expect(imports).toEqual({ memory: 0, node: 0, setup: 0, stream: 0, web: 0, wsl: 0 });
 
     await expect(memory.mock.calls[0]?.[0].create({} as never)).resolves.toEqual({
       provider: null,

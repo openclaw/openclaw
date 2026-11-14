@@ -7,8 +7,10 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import { projectAgentToolRuntimeListing } from "../../agent-tool-runtime-listing.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
+import { omitUnsupportedNodeTools } from "../../computer-use-node-capabilities.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -251,7 +253,24 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         sessionId: params.attempt.sessionId,
       });
-      return schemaProjection.tools;
+      return projectAgentToolRuntimeListing(
+        omitUnsupportedNodeTools(
+          schemaProjection.tools,
+          params.preparedToolBase.nodeToolAvailability,
+        ),
+        {
+          normalize: (changed) => normalizeTools(changed, recordQuarantine),
+          onSchemaDiagnostics: (diagnostics, changed) =>
+            recordQuarantine({
+              diagnostics,
+              tools: changed,
+              runId: params.attempt.runId,
+              agentId: params.setup.sessionAgentId,
+              sessionKey: params.attempt.sessionKey,
+              sessionId: params.attempt.sessionId,
+            }),
+        },
+      );
     };
     phases.mark("attempt.bundle-tools.project");
     const uncompactedEffectiveTools = await withRuntimeToolSchemaQuarantine((record) =>

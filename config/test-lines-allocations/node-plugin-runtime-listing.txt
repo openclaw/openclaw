@@ -1,0 +1,3 @@
+# Optional listing support lifecycle, sync/unknown/error handling, widget-target projection,
+# per-command/platform consumers, and embedded/MCP descendant eligibility regressions.
+328

@@ -298,6 +298,8 @@ describe("production lint suppressions", () => {
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
         // Binary output must escape C0/C1 bytes while preserving tab, LF and CR.
         "src/agents/shell-utils.ts|no-control-regex|1",
+        // The typed resolver fixture completes its generator without pending preparation.
+        "src/agents/test-helpers/fast-tool-stubs.ts|require-yield|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.
         "src/agents/tools/media-generate-tool-actions-shared.ts|unicorn/prefer-structured-clone|1",

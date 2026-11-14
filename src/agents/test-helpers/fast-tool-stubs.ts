@@ -37,6 +37,13 @@ vi.mock("../tools/web-tools.js", () => ({
   createWebFetchTool: () => null,
 }));
 
-vi.mock("../../plugins/tools.js", () => ({
+vi.mock("../../plugins/tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/tools.js")>()),
   resolvePluginTools: () => [],
+  // oxlint-disable-next-line require-yield -- The resolver requires a generator; this fixture has no pending preparation.
+  *resolvePluginToolsSteps(): ReturnType<
+    typeof import("../../plugins/tools.js").resolvePluginToolsSteps
+  > {
+    return [];
+  },
 }));

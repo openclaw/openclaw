@@ -21,6 +21,20 @@ const { createMobileUiTool } = await import("./mobile-ui-tool.js");
 const OBSERVE = "mobile.ui.observe";
 const ACT = "mobile.ui.act";
 
+it("forwards configured remote Gateway options without changing the mobile route", async () => {
+  installGatewayBehavior();
+  listNodesMock.mockResolvedValue([androidMobileUiNode()]);
+  const remote = { gatewayUrl: "wss://desktop.example", gatewayToken: "synthetic-remote-token" };
+  await createMobileUiTool().execute("remote-observe", { action: "observe", ...remote });
+  expect(listNodesMock).toHaveBeenCalledWith(expect.objectContaining(remote), undefined);
+  expect(callGatewayToolMock).toHaveBeenCalledWith(
+    "node.invoke",
+    expect.objectContaining(remote),
+    expect.objectContaining({ nodeId: "android-1", command: OBSERVE }),
+    expect.anything(),
+  );
+});
+
 function androidMobileUiNode(overrides?: Record<string, unknown>) {
   return {
     nodeId: "android-1",

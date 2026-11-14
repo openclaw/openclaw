@@ -34,30 +34,74 @@ function presentation(sessionKey?: string) {
   };
 }
 
-function registeredPresenter(nodes: PluginRuntime["nodes"]) {
+function registeredCanvas(nodes: PluginRuntime["nodes"]) {
   const registerWidgetPresenter = vi.fn<OpenClawPluginApi["registerWidgetPresenter"]>();
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   canvasPlugin.register(
     createTestPluginApi({
       runtime: createPluginRuntimeMock({ nodes }),
       registerWidgetPresenter,
+      registerTool,
     }),
   );
   const presenter = registerWidgetPresenter.mock.calls[0]?.[0];
   if (!presenter) {
     throw new Error("Canvas widget presenter was not registered");
   }
-  return presenter;
+  return { presenter, toolListingSupported: registerTool.mock.calls[0]?.[1]?.listingSupported };
 }
 
 function createNodesRuntime(nodes: CanvasNode[]): PluginRuntime["nodes"] {
   return {
-    list: vi.fn(async () => ({ nodes })),
+    list: vi.fn<PluginRuntime["nodes"]["list"]>(async (params) => ({
+      nodes: params?.connected ? nodes.filter((entry) => entry.connected) : nodes,
+    })),
     invoke: vi.fn(async () => ({ ok: true })),
     openDuplex: vi.fn(),
   };
 }
 
 describe("Canvas widget presenter", () => {
+  it("preserves remote Canvas tool overrides without treating them as a local panel", async () => {
+    const runtime = createNodesRuntime([]);
+    const { presenter, toolListingSupported } = registeredCanvas(runtime);
+    expect(
+      await toolListingSupported?.({
+        config: { gateway: { mode: "local", remote: { url: "wss://desktop.example" } } },
+      }),
+    ).toBeUndefined();
+    expect(runtime.list).not.toHaveBeenCalled();
+    await expect(presenter.listingSupported?.({})).resolves.toBe(false);
+    expect(runtime.invoke).not.toHaveBeenCalled();
+  });
+  it("lists both surfaces from passive macOS command support, not connection readiness", async () => {
+    const inventories: Array<{ nodes: CanvasNode[]; supported: boolean }> = [
+      { nodes: [], supported: false },
+      { nodes: [node("versioned", { platform: "macOS 26.6.2" })], supported: true },
+      {
+        nodes: [node("offline", { connected: false, invocableCommands: undefined, commands })],
+        supported: true,
+      },
+      { nodes: [node("linux", { platform: "linux" })], supported: false },
+      {
+        nodes: [node("denied", { commands, invocableCommands: [] })],
+        supported: false,
+      },
+      { nodes: [node("hide-only", { invocableCommands: ["canvas.hide"] })], supported: false },
+    ];
+    for (const { nodes, supported } of inventories) {
+      const runtime = createNodesRuntime(nodes);
+      const { presenter, toolListingSupported } = registeredCanvas(runtime);
+      expect(runtime.list).not.toHaveBeenCalled();
+      if (!presenter.listingSupported || !toolListingSupported) {
+        throw new Error("Expected passive support for the Canvas presenter and tool");
+      }
+      await expect(presenter.listingSupported({})).resolves.toBe(supported);
+      await expect(toolListingSupported({})).resolves.toBe(supported);
+      expect(runtime.invoke).not.toHaveBeenCalled();
+    }
+  });
+
   it("presents the hosted URL on a versioned macOS node", async () => {
     const runtime = createNodesRuntime([
       node("android-recent", { displayName: "Android", platform: "android", connectedAtMs: 20 }),
@@ -67,7 +111,7 @@ describe("Canvas widget presenter", () => {
         connectedAtMs: 10,
       }),
     ]);
-    const presenter = registeredPresenter(runtime);
+    const { presenter } = registeredCanvas(runtime);
 
     await expect(presenter.present(presentation("agent:main:status"))).resolves.toEqual({
       ok: true,
@@ -101,7 +145,7 @@ describe("Canvas widget presenter", () => {
       throw new Error("navigation rejected after presentation");
     });
 
-    const result = await registeredPresenter(runtime).present(presentation());
+    const result = await registeredCanvas(runtime).presenter.present(presentation());
 
     expect(result).toEqual({
       ok: false,
@@ -118,7 +162,7 @@ describe("Canvas widget presenter", () => {
     node("linux-panel", { platform: "linux" }),
   ])("rejects unavailable panel $nodeId", async (unavailable) => {
     const runtime = createNodesRuntime([unavailable]);
-    const presenter = registeredPresenter(runtime);
+    const { presenter } = registeredCanvas(runtime);
 
     await expect(presenter.availability({})).resolves.toMatchObject({
       ok: false,

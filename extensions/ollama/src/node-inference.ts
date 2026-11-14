@@ -30,6 +30,7 @@ import {
   OLLAMA_MODELS_COMMAND,
   OLLAMA_NODE_INFERENCE_CAPABILITY,
   ollamaNodeInferenceToolDefinition,
+  supportsOllamaModelDiscovery,
 } from "./node-inference-contract.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
@@ -366,9 +367,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
       const action = readStringParam(params, "action", { required: true });
       const nodeQuery = readStringParam(params, "node");
       const listed = await api.runtime.nodes.list({ connected: true });
-      const modelNodes = listed.nodes.filter((node) =>
-        (node.invocableCommands ?? node.commands)?.includes(OLLAMA_MODELS_COMMAND),
-      );
+      const modelNodes = listed.nodes.filter(supportsOllamaModelDiscovery);
 
       if (action === "discover") {
         const targets = nodeQuery ? [findNode(modelNodes, nodeQuery)] : modelNodes;

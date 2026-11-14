@@ -126,6 +126,7 @@ async function plan(
       requireExplicitMessageTarget: false,
       inheritedToolAllowlist: [],
       additionalInheritedToolNamesRef: [],
+      nodeToolAvailability: undefined,
       localModelLeanEnabled: false,
       localModelLeanPreserveToolNames: [],
       replaySafetyOptions: { declaredReplaySafe: () => undefined },
