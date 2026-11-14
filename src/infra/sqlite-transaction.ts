@@ -467,8 +467,12 @@ function settleSqliteTransactionSync<T>(
   let statementTiming: ReturnType<ReturnType<typeof startSqliteStatementTiming>> | undefined;
   try {
     // Share admitted schema inside rollback protection unless the source fence already owns it.
+    // Live appends hold the writer in front of streaming turns; name a slow one's statements.
+    // GC sampling stays hydration-only: joining it restarts the native profiler per call.
     const stopStatementTiming =
-      operationLabel === "session.lifecycle.delete" || hydration
+      operationLabel === "session.lifecycle.delete" ||
+      operationLabel === "session.transcript.append-turn" ||
+      hydration
         ? startSqliteStatementTiming(hydration)
         : undefined;
     let result: T;

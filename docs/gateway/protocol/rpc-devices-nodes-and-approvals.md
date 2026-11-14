@@ -60,6 +60,11 @@ Outcomes are retained past the credential's own expiry.
 - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
 - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 
+Foreground actions queued through OpenClaw ID retain the requesting device's
+membership authority. A pull discards actions whose original membership is no
+longer current, while an ordinary socket disconnect preserves them. Requests
+bound to an agent run or an execution approval are not deferred to a later pull.
+
 ## Approval families
 
 - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows. Treat each cursor as an opaque server token and return the exact value without padding, rewriting, or adding fields.

@@ -13,12 +13,7 @@ import {
   pollAttribute,
   pollCount,
 } from "./new-session-page.test-support.ts";
-import {
-  unavailableError,
-  pollVisible,
-  pollFocused,
-  pollOpacity,
-} from "./new-session-shard.test-support.ts";
+import { unavailableError, pollVisible, pollFocused } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
@@ -61,7 +56,7 @@ suite.define(() => {
       );
     },
   );
-  it("keeps picker geometry stable while shortcut visibility follows focus", async () => {
+  it("keeps picker geometry stable without numeric keycaps while focus moves", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -71,17 +66,19 @@ suite.define(() => {
         const modelSelect = page.locator('[data-chat-model-select="true"]');
         const picker = page.locator(".chat-controls__model-picker");
         const search = page.locator('[data-chat-model-search="true"]');
-        const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
+        const providerModel = page.locator(
+          '[data-chat-model-option="anthropic/claude-sonnet-4-6"]',
+        );
 
         await modelSelect.click();
         await pollAttribute(picker, "open").toBe("");
         // Opening the picker moves focus to its filter so typing filters models.
         await pollFocused(search).toBe(true);
-        await revealChatModelOption(page, "openai/gpt-5.5");
-        await revealChatModelOption(page, "anthropic/claude-sonnet-4-6");
+        await picker.locator('[data-chat-model-provider-toggle="anthropic"]').click();
         await modelSelect.focus();
-        const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
-        await pollCount(secondShortcut).toBe(1);
+        // Numeric shortcuts index the visible provider, not the whole catalog.
+        await pollAttribute(providerModel, "aria-keyshortcuts").toBe("1");
+        await pollCount(picker.locator("kbd")).toBe(0);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
         await picker.locator(":scope > [data-anchored-overlay]").evaluate(finishElementAnimations);
@@ -90,7 +87,7 @@ suite.define(() => {
             const anchor = document.querySelector('[data-chat-model-select="true"]');
             const menu = document.querySelector(".chat-controls__model-menu");
             const action = document.querySelector(
-              '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-option-action',
+              '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-favorite-slot',
             );
             if (!anchor || !menu || !action) {
               return null;
@@ -114,14 +111,13 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(4);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(8);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
-        await pollOpacity(secondShortcut).toBe("1");
 
         await search.focus();
         await pollFocused(search).toBe(true);
-        await pollOpacity(secondShortcut).toBe("0");
+        await pollCount(picker.locator("kbd")).toBe(0);
         await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
       },
     );

@@ -32,7 +32,7 @@ function roleConfig(agents: GatewayOperatorRoleDefinition["agents"]): OpenClawCo
   };
   return {
     agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    gateway: { roles: { definitions: { reader } } },
+    gateway: { roles: { default: "reader", definitions: { reader } } },
   };
 }
 

@@ -487,7 +487,11 @@ describe("worker CPU lifecycle", () => {
       await Promise.all([direct.terminate(), owned.terminate()]);
       expect(getTrackedWorkerLifecycleSnapshot().workerCount).toBe(initial.workerCount);
       const retired = sampleTrackedWorkerMemory();
-      expect(retired).toEqual({ ...initial, workerLifecycle: retired.workerLifecycle });
+      expect(retired).toEqual({
+        ...initial,
+        workerLifecycle: retired.workerLifecycle,
+        workerTaskMetrics: memory.workerTaskMetrics,
+      });
       for (const [name, reason] of [
         ["other", "exit"],
         [script, "idle_timeout"],

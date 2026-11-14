@@ -52,7 +52,7 @@ export function renderSessionActivityPulse(props: {
                 <span
                   title={
                     key === "people" && props.options.peopleIncomplete
-                      ? t("activityFeed.partialHistory")
+                      ? t("activityFeed.partialHistoryTooltip")
                       : undefined
                   }
                 >

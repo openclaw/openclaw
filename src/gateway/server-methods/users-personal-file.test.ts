@@ -597,6 +597,7 @@ describe("personal USER.md self-service", () => {
     client.connect.scopes = ["operator.sessions.read"];
     config.gateway = {
       roles: {
+        default: "reader",
         definitions: {
           reader: {
             scopes: ["operator.sessions.read"],

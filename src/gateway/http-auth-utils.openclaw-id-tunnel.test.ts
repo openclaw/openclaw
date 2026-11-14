@@ -1,10 +1,12 @@
 import { ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -25,6 +27,9 @@ afterEach(() => {
 });
 
 function publishMembership() {
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  });
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => membership.get(peerKey));
   setOpenClawIdTunnelPrincipalLookup((peerKey) => membership.get(peerKey));
 }

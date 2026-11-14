@@ -36,9 +36,11 @@ const qaLabFiles = [
 const serialGatewayFiles =
   `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
+    .concat("required-human-action")
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
+  "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",

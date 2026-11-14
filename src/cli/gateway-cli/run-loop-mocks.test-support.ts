@@ -157,7 +157,8 @@ const m = {
       cancel: cancelShutdownHardExitWatchdog,
     }),
   ),
-  requestSettledExitWatchdog: vi.fn((_delayMs: number) => {}),
+  requestSettledExitWatchdog:
+    vi.fn<typeof import("../one-shot-exit.js").requestSettledExitWatchdog>(),
 };
 
 async function drainedCronWork(_timeoutMs?: number) {
