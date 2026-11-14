@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./cli-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./cli-utils.js")>()),
   runNodesCommand: async (_label: string, action: () => Promise<void>) => action(),
+  runNodesReadCommand: async (_label: string, action: () => Promise<void>) => action(),
 }));
 
 vi.mock("./rpc.js", async (importOriginal) => ({
@@ -61,6 +62,7 @@ describe("nodes location get validation", () => {
       expect.objectContaining({
         params: expect.objectContaining({ desiredAccuracy: "precise" }),
       }),
+      expect.objectContaining({ signal: undefined }),
     );
   });
 
