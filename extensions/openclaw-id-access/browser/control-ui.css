@@ -432,7 +432,7 @@
   padding: 2px 9px;
   font-size: var(--control-ui-text-xs);
   line-height: 18px;
-  text-transform: capitalize;
+  text-transform: none;
 }
 
 .ocid-access__group .chip {
@@ -788,4 +788,23 @@
     transition-duration: 0.01ms !important;
     transition-delay: 0.01ms;
   }
+}
+
+.ocid-access__role-notice {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ocid-access__confirmation .ocid-access__role-picker {
+  width: 100%;
+  min-width: 0;
+}
+
+.ocid-access__form {
+  flex-wrap: wrap;
+}
+
+.ocid-access__form > .ocid-access__role-notice {
+  flex-basis: 100%;
 }

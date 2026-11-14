@@ -19,7 +19,6 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
-  type AuthorityEvent,
   type AuthorityState,
   type Channel,
   type Ed25519PublicKey,
@@ -55,6 +54,11 @@ import {
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
+import {
+  prepareMemberRoleChangeAssertion,
+  roleChangeDisconnects,
+  refuseUndefinedMemberRole,
+} from "./member-role-change.js";
 import { readMemberView, readOwnerView } from "./membership-views.js";
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
@@ -409,7 +413,7 @@ export function createOpenClawIdAuthority(
 
     /** Applies an owner-signed statement that arrived on `channel`. */
     submit(input: unknown, channel: Channel): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
+      return serialize<AuthorityAccepted | AuthorityRefusal>(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
@@ -427,28 +431,32 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
+        const assertRoleCurrent = prepareMemberRoleChangeAssertion(input);
         const resolved = resolvedInvite(input);
-        await commit({
-          ...current,
-          authority: result.state,
-          ...(resolved
-            ? {
-                invite_reports: resolveReport(
-                  current.invite_reports,
-                  resolved.inviteId,
-                  resolved.resolution,
-                  now,
-                ),
-              }
-            : {}),
-        });
+        await commit(
+          {
+            ...current,
+            authority: result.state,
+            ...(resolved
+              ? {
+                  invite_reports: resolveReport(
+                    current.invite_reports,
+                    resolved.inviteId,
+                    resolved.resolution,
+                    now,
+                  ),
+                }
+              : {}),
+          },
+          assertRoleCurrent,
+        );
         const reconnect = roleChangeDisconnects(current.authority, result.state);
         return {
           ok: true,
           status: result.status,
           events: [...expiry, ...result.events, ...reconnect],
         };
-      });
+      }).catch(refuseUndefinedMemberRole);
     },
 
     /**
@@ -787,16 +795,6 @@ export type OpenClawIdAuthority = ReturnType<typeof createOpenClawIdAuthority>;
 // Inactivity windows with the protocol defaults filled in.
 function withDefaults(windows: Partial<InactivityWindows>): InactivityWindows {
   return { ...DEFAULT_INACTIVITY_WINDOWS, ...windows };
-}
-
-// A member whose role changed reconnects, so their Gateway connections pick up the
-// new role's scope ceiling instead of keeping the one granted at connect.
-function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): AuthorityEvent[] {
-  const peerKeys = Object.entries(after.members).flatMap(([accountId, member]) => {
-    const previous = before.members[accountId];
-    return previous && previous.role !== member.role ? member.peer_keys : [];
-  });
-  return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
 }
 
 // Every listed node, member or owner device key, admitted now or not.

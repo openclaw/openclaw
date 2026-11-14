@@ -65,7 +65,8 @@ export function memoryStore() {
         ),
     },
     read: async () => record,
-    write: async (next: StoredClaw) => {
+    write: async (next: StoredClaw, assertCurrent?: () => void) => {
+      assertCurrent?.();
       // Match the durable store's strict JSON contract, including absent optional fields.
       serializePluginStoreJson({
         value: next,
@@ -84,7 +85,7 @@ export function memoryStore() {
 export async function linkedClaw(
   store: {
     read: () => Promise<StoredClaw | undefined>;
-    write: (record: StoredClaw) => Promise<void>;
+    write: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = memoryStore(),
   // Commits the link another way (through a service) instead of the authority directly.
