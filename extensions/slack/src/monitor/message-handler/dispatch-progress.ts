@@ -32,6 +32,10 @@ import {
 } from "./dispatch-progress-card.js";
 import { createSlackNativeProgressTransport } from "./dispatch-progress-native.js";
 import {
+  createSlackReasoningCardsRuntime,
+  pushSlackReasoningPreview,
+} from "./dispatch-progress-reasoning.js";
+import {
   combineProgressHeadlineAndExplanation,
   isSlackProgressTitleText,
   resolveNativeProgressLines,
@@ -136,6 +140,12 @@ export function createSlackProgressRuntime(runtimeParams: {
   const useDraftProgressCard =
     shouldUseDraftStream && isProgressMode && slackProgressStyle === "card";
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
+  const reasoningCards = createSlackReasoningCardsRuntime({
+    entry: account.config,
+    // Cards are task rows: they need the detailed native card.
+    detailedNativeCard: useNativeProgressStreaming && previewToolProgressEnabled,
+    compositor: () => progressDraft,
+  });
   const progressDraftMaxLineChars = resolveChannelProgressDraftMaxLineChars(account.config);
   const progressCard = createSlackDraftProgressCardRuntime({
     setup,
@@ -188,9 +198,15 @@ export function createSlackProgressRuntime(runtimeParams: {
     }
   };
 
-  const resolveNativeProgressTitle = (snapshot: ChannelProgressDraftCompositorSnapshot) =>
+  // A finished card summarizes the think instead of the running headline.
+  const resolveNativeProgressTitle = (
+    snapshot: ChannelProgressDraftCompositorSnapshot,
+    completed = false,
+  ) =>
     combineProgressHeadlineAndExplanation(
-      explicitProgressTitle ?? snapshot.statusHeadline,
+      explicitProgressTitle ??
+        (completed ? reasoningCards.summaryTitle() : undefined) ??
+        snapshot.statusHeadline,
       snapshot.planExplanation,
     );
 
@@ -328,11 +344,12 @@ export function createSlackProgressRuntime(runtimeParams: {
     progressWorkCounter.reset();
     cardPostRequested = false;
     nativeNarration = { rendered: "", source: "" };
+    reasoningCards.reset();
   };
 
   const progressDraft = createChannelProgressDraftCompositor({
     preparedItems: true,
-    entry: account.config,
+    entry: reasoningCards.compositorEntry,
     mode: slackStreaming.mode,
     active: progressDraftActive,
     seed: progressSeed,
@@ -520,7 +537,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       previous: nativeStreamSnapshot,
       finalStatus: finalInProgressStatus,
       chunks: buildSlackProgressStreamChunks({
-        title: resolveNativeProgressTitle(snapshot),
+        title: resolveNativeProgressTitle(snapshot, true),
         lines,
         plan: snapshot.plan,
         maxLineChars: progressDraftMaxLineChars,
@@ -604,27 +621,12 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (!isProgressMode) {
       // Each merge reprocesses the accumulated reasoning, so a long stream with
       // no preview to show it would block the event loop for nothing.
-      if (!previewToolProgressEnabled) {
-        return false;
-      }
-      const normalized = progressDraft
-        .mergeReasoningProgress(payload.text, {
-          snapshot: payload.isReasoningSnapshot === true,
-        })
-        .replace(/^_(.*)_$/su, "$1")
-        .trim();
-      if (!normalized) {
-        return false;
-      }
-      const visible = await progressDraft.pushToolProgress({
-        id: "reasoning",
-        kind: "item",
-        text: normalized,
-        label: "Reasoning",
-      });
-      // Tool admission closes reasoning bursts; restore this still-open preview lane.
-      progressDraft.mergeReasoningProgress(normalized, { snapshot: true });
-      return visible;
+      return (
+        previewToolProgressEnabled && (await pushSlackReasoningPreview(progressDraft, payload))
+      );
+    }
+    if (reasoningCards.enabled) {
+      return await reasoningCards.push(payload);
     }
     return await progressDraft.pushReasoningProgress(payload.text, {
       snapshot: payload.isReasoningSnapshot === true,
@@ -769,6 +771,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     onQueuedFollowupSettled,
     pushPlanProgress,
     pushReasoningProgress,
+    reasoningCards,
     updateDraftFromPartial,
   };
 }

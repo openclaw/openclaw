@@ -69,6 +69,7 @@ reply retains the settings it started with. The same behavior applies to account
 - `progress` (default): show structured progress in a reply thread using a native task card when Slack supports it, with a Block Kit session-card fallback. Outside reply threads, leave only the final answer by default.
 - `streaming.progress.toolProgress`: `progress` mode is quiet by default (`false`). Set `true` to add one task row per tool call on the native card, or tool activity, the plan checklist, and tool/file/time totals on the Block Kit card. Finished Block Kit cards retain only file diff totals. `streaming.preview.toolProgress` controls tool previews in `partial` and `block` modes (default: `true`).
 - `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
+- `streaming.progress.reasoning`: how streamed reasoning (`agents.defaults.reasoningDefault: "stream"`) appears on the native task card. `narration` (default) streams one compacted line as text; `cards` renders the reasoning as task rows. See [Reasoning cards](#reasoning-cards).
 
 Show the tool log while hiding raw command/exec text:
 
@@ -177,6 +178,35 @@ Legacy keys:
 - boolean `channels.slack.streaming` is a legacy alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
 - top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
 - Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the current keys.
+
+### Reasoning cards
+
+With `agents.defaults.reasoningDefault: "stream"` (or a per-agent `reasoningDefault`), OpenClaw streams the model's reasoning while the reply is generated. On the native card the default presentation, `progress.reasoning: "narration"`, keeps one compacted reasoning line and streams it into the message text above the card. Set `progress.reasoning: "cards"` to show the reasoning as task rows instead:
+
+- The reasoning text is split into segments of about 240 characters at word boundaries, and each segment is one row prefixed with 🧠. Finished segments are marked complete and stay put; the newest one is in progress. Row titles are capped at 250 characters because Slack allows 256 characters per `task_update` field ([chat.appendStream](https://docs.slack.dev/reference/methods/chat.appendStream/)).
+- Slack's plan block holds at most 50 tasks ([plan block](https://docs.slack.dev/reference/block-kit/blocks/plan-block/)), shared with tool rows. Segment rows stop at 47 minus the number of tool calls so far, never fewer than 8; the rest of the reasoning rolls through one tail row that shows the latest 240 characters until the answer starts.
+- A tool call or the end of a reasoning phase closes the open segment, so thinking after a tool result starts a new row below the tool row.
+- When the turn finishes, the card title becomes `Thought for <n>s, <k> tool calls` unless `progress.label` sets an explicit title.
+- Commentary still streams as text; reasoning no longer appears in the text.
+
+Reasoning cards need the detailed native card (`progress.toolProgress: true` with native task cards); the quiet card keeps its single summary row and shows reasoning as narration. In `cards` mode the rolling progress window is at least 64 lines, and a larger `progress.maxLines` raises it further, so a burst of reasoning cannot push a row out of the window before it is sent. Card updates ride the same one-second coalescing as other progress updates, one `chat.appendStream` call per batch.
+
+While an assistant thread status set through `assistant.threads.setStatus` is showing, the Slack client hides the streamed cards; they appear once the status clears.
+
+With `agents.defaults.reasoningDefault: "stream"` in place, the Slack side is:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: { toolProgress: true, reasoning: "cards" },
+      },
+    },
+  },
+}
+```
 
 ## Typing reaction fallback
 

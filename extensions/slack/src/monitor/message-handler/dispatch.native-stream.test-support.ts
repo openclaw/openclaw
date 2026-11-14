@@ -15,11 +15,16 @@ import type { SlackSendResult } from "../../send.js";
 import {
   createDraftStreamStub,
   emitSlackToolProgressTestEvent,
+  nativeChunks,
   type SlackReplyOptionEvent,
   type TestDispatchSequenceEntry,
   type TestReplyPayload,
 } from "./dispatch.compact-progress.test-support.js";
-import { requireRecord, type DeliveryParams } from "./dispatch.preview.test-support.js";
+import {
+  expectMockCallArgFields,
+  requireRecord,
+  type DeliveryParams,
+} from "./dispatch.preview.test-support.js";
 
 // Native progress streaming through the real dispatcher with the Slack stream
 // transport mocked: every start, append and stop is recorded in call order.
@@ -373,11 +378,32 @@ export async function dispatchNativeProgressScenario(params: {
   );
 }
 
+export function collectNativeTaskUpdates() {
+  return nativeChunks([
+    ...startSlackStreamMock.mock.calls,
+    ...appendSlackStreamMock.mock.calls,
+    ...stopSlackStreamMock.mock.calls,
+  ]).filter((chunk) => chunk.type === "task_update");
+}
+
 export function expectNativeStreamText(text: string, count = 1) {
   const matches = [...startSlackStreamMock.mock.calls, ...appendSlackStreamMock.mock.calls].filter(
     (call) => requireRecord(call[0], "native stream call").text === text,
   );
   expect(matches).toHaveLength(count);
+}
+
+export function expectNativeProgressStart(chunks: unknown[]) {
+  expectMockCallArgFields(startSlackStreamMock, 0, {
+    channel: "C123",
+    threadTs: THREAD_TS,
+    taskDisplayMode: "plan",
+    chunks,
+  });
+}
+
+export function expectNativeProgressAppend(index: number, chunks: unknown[]) {
+  expectMockCallArgFields(appendSlackStreamMock, index, { chunks });
 }
 
 export function expectDeliverReplyCall(index: number, text: string) {

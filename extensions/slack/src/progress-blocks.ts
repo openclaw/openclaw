@@ -11,6 +11,7 @@ import {
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { isSlackReasoningCardLine } from "./progress-reasoning.js";
 import { SLACK_SESSION_LINK_ACTION_ID } from "./reply-action-ids.js";
 import { applyAppendOnlyStreamUpdate } from "./stream-mode.js";
 import { truncateSlackText } from "./truncate.js";
@@ -20,6 +21,8 @@ const DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS = 120;
 const DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS = 48;
 const SLACK_PROGRESS_CHUNK_TEXT_MAX = 256;
 const SLACK_PROGRESS_TASK_TITLE_MAX = 120;
+// Reasoning cards carry the text in the title; Slack allows 256 characters per task_update field.
+const SLACK_PROGRESS_REASONING_TITLE_MAX = 250;
 const SLACK_PROGRESS_PLAN_FALLBACK_TITLE = "Thinking";
 const SLACK_PROGRESS_LINE_DELTA_RE = /(?:^|\s)\+(\d+)\s+[−-](\d+)(?=\s|$)/u;
 // Work IDs cannot contain hyphens; this namespace marks transient attention.
@@ -107,6 +110,9 @@ function lineDetailParts(line: ChannelProgressDraftLine): string[] {
 }
 
 function lineTaskTitle(line: ChannelProgressDraftLine): string {
+  if (isSlackReasoningCardLine(line)) {
+    return compactTitle(line.text, SLACK_PROGRESS_REASONING_TITLE_MAX);
+  }
   const label = line.label.replace(/\s+/g, " ").trim() || line.toolName || line.kind || "Update";
   const fallback = line.text.replace(/\s+/g, " ").trim();
   if (fallback && fallback !== label) {
@@ -223,9 +229,14 @@ export function buildSlackProgressStreamChunks(params: {
     DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS,
   );
   const taskContentIdOccurrences = new Map<string, number>();
+  // Reasoning cards never lend their text to the plan headline.
+  const reasoningTaskIds = new Set<string>();
   for (const line of taskLines) {
     const id = resolveLineTaskIdentity(line, taskContentIdOccurrences);
     const task: SlackPlanTask = { id, title: lineTaskTitle(line), status: lineTaskStatus(line) };
+    if (isSlackReasoningCardLine(line)) {
+      reasoningTaskIds.add(id);
+    }
     // Native tasks append details/output; keep details stable and put results in
     // output so a status change cannot repeat the command.
     const detail = line.detail
@@ -262,7 +273,7 @@ export function buildSlackProgressStreamChunks(params: {
       : params.finalInProgressStatus === "complete" || !params.summaryRow
         ? "Completed"
         : "Working";
-  const newest = tasks.at(-1);
+  const newest = tasks.findLast((task) => !reasoningTaskIds.has(task.id));
   const title = compactTitle(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||

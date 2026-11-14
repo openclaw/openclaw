@@ -2,6 +2,7 @@ import type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
   ChannelProgressDraftCompositorParams,
+  ChannelProgressDraftNoteOptions,
 } from "./progress-draft-compositor.types.js";
 import {
   createProgressDraftDiffStatTracker,
@@ -380,7 +381,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
-    options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
+    options?: ChannelProgressDraftNoteOptions,
   ) => {
     if (!isTurnActive()) {
       return false;
@@ -420,8 +421,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
-    // Hidden work still delimits reasoning bursts so unrelated thoughts do not concatenate.
-    if (quietProgress || (shouldStoreLine && lineChanged)) {
+    // Hidden work still delimits reasoning bursts so unrelated thoughts do not
+    // concatenate; a row that is the reasoning's own projection does not.
+    if (!options?.reasoningLine && (quietProgress || (shouldStoreLine && lineChanged))) {
       reasoningProgress.reset();
       lastReasoningLine = undefined;
     }
