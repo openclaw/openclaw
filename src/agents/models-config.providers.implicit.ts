@@ -10,6 +10,7 @@ import {
 import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { warnProviderCatalogFailure } from "../plugins/provider-catalog-diagnostics.js";
 import {
   withProviderCatalogExpiry,
   withProviderCatalogDiscoveryBudget,
@@ -56,11 +57,7 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-import {
-  isRequestWideFailure,
-  runProviderIsolated,
-  skipFailedProvider,
-} from "./provider-failure-isolation.js";
+import { isRequestWideFailure, runProviderIsolated } from "./provider-failure-isolation.js";
 
 type ImplicitProviderParams = {
   agentDir: string;
@@ -354,6 +351,8 @@ export async function runProviderCatalogWithTimeout(
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs;
+  const startedAt = performance.now();
+  let deadlineExceeded = false;
   let active = true;
   const catalogParams = {
     ...params,
@@ -400,6 +399,7 @@ export async function runProviderCatalogWithTimeout(
       timeoutMs,
       () => {
         active = false;
+        deadlineExceeded = true;
         throw new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`);
       },
       { ref: false },
@@ -409,10 +409,19 @@ export async function runProviderCatalogWithTimeout(
       return undefined;
     }
     // A failing hook owns only its selected providers, not the healthy siblings in this batch.
-    skipFailedProvider(error, {
-      providerIds: params.providerIds ?? [params.provider.id],
-      stage: "provider discovery",
-      reportCatalogOutcome: params.reportCatalogOutcome,
+    if (isRequestWideFailure(error)) {
+      throw error;
+    }
+    for (const provider of params.providerIds ?? [params.provider.id]) {
+      params.reportCatalogOutcome?.({ provider, status: "unavailable" });
+    }
+    // Discovery errors may carry credentials or response bodies; log closed diagnostics only.
+    warnProviderCatalogFailure({
+      provider: params.provider.id,
+      phase: "provider-discovery",
+      startedAt,
+      error,
+      deadlineExceeded,
     });
     return undefined;
   } finally {
