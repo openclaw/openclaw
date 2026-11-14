@@ -43,15 +43,17 @@ function writePackage(root: string, version: string, build: { buildId: string })
 }
 
 it.each([
-  "package-publication-recovery",
-  "package-verification-recovery",
-  "package-stranded-first-hop",
-  "auth-profile-v2026-7-2-beta-5",
-])("keeps %s live package journals on runtime storage, not the artifact mount", (scenario) => {
+  ["package-publication-recovery", "/tmp/package-recovery-paths/runtime/npm-prefix"],
+  ["package-verification-recovery", "/tmp/package-recovery-paths/runtime/npm-prefix"],
+  ["package-stranded-first-hop", "/tmp/package-recovery-paths/runtime/npm-prefix"],
+  ["auth-profile-v2026-7-2-beta-5", "/tmp/package-recovery-paths/runtime/npm-prefix"],
+  ["projects-doctor", "/tmp/openclaw-upgrade-survivor-package"],
+  ["projects-startup-migration", "/tmp/openclaw-upgrade-survivor-package"],
+])("keeps %s live package journals on native storage", (scenario, expectedPrefix) => {
   const paths = readUpgradeSurvivorPaths("/tmp/package-recovery-paths", {
     OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
   });
-  expect(paths.npmPrefix).toBe(path.join(paths.runtimeRoot, "npm-prefix"));
+  expect(paths.npmPrefix).toBe(expectedPrefix);
   expect(paths.summaryJson).toBe(path.join(paths.artifactRoot, "summary.json"));
 });
 
