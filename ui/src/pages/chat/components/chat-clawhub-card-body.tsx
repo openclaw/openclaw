@@ -65,14 +65,12 @@ export function ChatClawHubCardBody(
     return null;
   };
   const state: {
-    dismissed: boolean;
     iconUrls: Record<string, string>;
     pluginIconUrls: Record<string, string>;
     loadedImage?: string;
     failedImages: Set<string>;
     presentation?: CardPresentation;
   } = {
-    dismissed: false,
     iconUrls: {},
     pluginIconUrls: {},
     loadedImage: undefined,
@@ -191,7 +189,7 @@ export function ChatClawHubCardBody(
                 pluginId: plugin.local.pluginId,
                 official: plugin.catalog.official,
                 installed: plugin.local.installed,
-                canInstall: plugin.catalog.official && plugin.local.action === "install",
+                canInstall: plugin.local.action === "install",
                 needsSignIn: Boolean(
                   inspection?.mcpAuth?.some((server) => server.state !== "authorized"),
                 ),
@@ -290,7 +288,7 @@ export function ChatClawHubCardBody(
           return null;
         }}
       </Show>
-      <Show when={props.recommendation && !read().dismissed && card()}>
+      <Show when={props.recommendation && card()}>
         {(current) => (
           <div
             class="card chat-clawhub-card"
@@ -377,27 +375,13 @@ export function ChatClawHubCardBody(
                     <Show
                       when={result().installed}
                       fallback={
-                        <>
-                          <button
-                            type="button"
-                            class="btn chat-clawhub-card__dismiss"
-                            onClick={() => {
-                              state.dismissed = true;
-                              notify();
-                            }}
-                          >
-                            {t("common.dismiss")}
-                          </button>
-                          <button
-                            type="button"
-                            class="btn primary chat-clawhub-card__install"
-                            onClick={() => props.onOpenListing(readyStatus()?.canInstall === true)}
-                          >
-                            {result().canInstall
-                              ? t("pluginsPage.install")
-                              : t("chat.clawhub.viewDetails")}
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          class="btn primary chat-clawhub-card__install"
+                          onClick={() => props.onOpenListing(readyStatus()?.canInstall === true)}
+                        >
+                          {t("pluginsPage.install")}
+                        </button>
                       }
                     >
                       <Show
