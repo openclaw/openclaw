@@ -844,6 +844,8 @@ it.each([
   ],
   [["cron", "show", "   "], "Missing job id"],
   [["cron", "run", "job-1", "--wait", "--poll-interval", "0ms"], "invalid --poll-interval"],
+  [["cron", "run", "job-1", "--wait-timeout", "10m"], "--wait-timeout requires --wait"],
+  [["cron", "run", "job-1", "--poll-interval", "2s"], "--poll-interval requires --wait"],
   [[...EVENT_ADD, "--stagger", "1m", "--exact"], "Choose either --stagger or --exact"],
   [
     [...CREATE, "--every", "10m", "--stagger", "30s", "--system-event", "tick"],
