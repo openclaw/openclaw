@@ -5,14 +5,20 @@ import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "../config/include-write-boundary.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import {
   ConfigWritePostCommitError,
   isConfigValidationFailedError,
 } from "../config/io.write-errors.js";
-import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
+import {
+  prepareConfigWriteValues,
+  resolvePersistCandidateForWrite,
+} from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
+import { projectLegacyWorkboardWrite } from "../config/legacy-workboard-database.js";
+import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
@@ -461,6 +467,11 @@ export async function runConfigOperations(params: {
     env: preparedValues.resolutionEnv,
     previousEnv: preparedPreviousValues.resolutionEnv,
   };
+  const unchanged =
+    params.successMode === "set" &&
+    isDeepStrictEqual(currentConfig, nextConfig) &&
+    isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig);
+  let dryRunTopology: Awaited<ReturnType<typeof prepareConfigWriteTopology>> | undefined;
   if (options.dryRun) {
     const topology = await prepareConfigWriteTopology({
       snapshot,
@@ -470,6 +481,7 @@ export async function runConfigOperations(params: {
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
       env: resolutionEnv,
     });
+    dryRunTopology = topology;
     nextConfig = topology.nextConfig;
     modelValidation = {
       config: topology.authoredConfig,
@@ -487,6 +499,45 @@ export async function runConfigOperations(params: {
   if (workshopPolicyRefusal) {
     throw new Error(workshopPolicyRefusal);
   }
+  const topology = dryRunTopology;
+  const validatePersistence =
+    topology && !unchanged
+      ? () => {
+          // The include writer routes authored changes before the root writer prepares topology.
+          if (
+            !resolveConfigIncludeWriteBoundary({
+              snapshot,
+              nextConfig: authoredNextConfig,
+              explicitSetPaths: normalizedExplicitSetPaths,
+            })
+          ) {
+            resolvePersistCandidateForWrite({
+              inputBasis: { kind: "source", config: topology.authoredSourceConfig },
+              runtimeConfig: topology.authoredRuntimeConfig,
+              sourceConfig: topology.authoredSourceConfig,
+              sourceConfigValid: snapshot.valid,
+              sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+              nextConfig: topology.authoredConfig,
+              rootAuthoredConfig: projectLegacyWorkboardWrite(
+                snapshot,
+                authoredNextConfig,
+                resolutionEnv,
+              ),
+              agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+              keyedAgentEntryIncludePaths: resolveKeyedAgentEntryIncludePreservation({
+                configPath: snapshot.path,
+                provenance: snapshot.includeProvenance,
+              })?.includePaths,
+              unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+              explicitSetPaths: topology.explicitSetPaths,
+              explicitSetValueSource: topology.explicitSetValueSource,
+              persistCanonicalAgentRoster: topology.persistCanonicalAgentRoster,
+              allowedAgentRosterRemovals,
+              preserveLegacyAgentRoster: topology.preserveLegacyAgentRoster,
+            });
+          }
+        }
+      : undefined;
   const validation = await validateConfigMutation({
     config: nextConfig,
     modelValidation,
@@ -494,13 +545,11 @@ export async function runConfigOperations(params: {
     operations: appliedOperations,
     options,
     configPath: snapshot.path,
-    unchanged:
-      params.successMode === "set" &&
-      isDeepStrictEqual(currentConfig, nextConfig) &&
-      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
+    unchanged,
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
     databaseOnly: params.databaseOnly,
+    validatePersistence,
   });
   if (validation.kind === "dry-run") {
     printConfigDryRunResult(validation.result, runtime, options.json);

@@ -10,6 +10,7 @@ import { configFailureHeading } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { formatConfigFilePath } from "../config/logging.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -304,6 +305,7 @@ export async function validateConfigMutation(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   databaseOnly?: true;
+  validatePersistence?: () => void;
 }): Promise<{ kind: "dry-run"; result: ConfigSetDryRunResult } | { kind: "unchanged" | "write" }> {
   const { config, operations, options, pluginMetadataSnapshot } = params;
   assertDeferredPluginMigrationConfigEditAllowed({
@@ -434,6 +436,19 @@ export async function validateConfigMutation(params: {
           ref: `${ref.source}:${ref.provider}:${ref.id}`,
         });
       }
+    }
+  }
+  if (errors.length === 0) {
+    try {
+      params.validatePersistence?.();
+    } catch (error) {
+      if (!options.json) {
+        throw error;
+      }
+      errors.push({
+        kind: error instanceof ConfigMutationConflictError ? "conflict" : "schema",
+        message: formatErrorMessage(error),
+      });
     }
   }
   const failures = dedupeByKey(errors, (error) =>
