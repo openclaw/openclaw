@@ -201,7 +201,10 @@ session under that session principal's current authority. OpenClaw does not
 restore the original requester or operator continuation. Reset or archived
 sessions, incognito sessions, subagents, ended cron runs, and disabled completion
 notifications receive no restart wake. Empty successful outcomes follow the
-captured `notifyOnExitEmptySuccess` policy. Before restart, ordinary live-requester
+captured `notifyOnExitEmptySuccess` policy. The registry checks these conditions
+when it adopts the process and again when it exits. A still-running adopted
+process whose exit will wake its session says so in `process poll`, and the
+Control UI shows its **Waiting on …** card above the composer. Before restart, ordinary live-requester
 completion behavior stays unchanged. Completed durable records and their logs
 expire under the captured completion-relative retention setting and normal
 registry limits; restarting does not renew retention.
