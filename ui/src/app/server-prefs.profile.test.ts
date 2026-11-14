@@ -183,14 +183,13 @@ it.each([false, true])(
     const config = configWithPrefs({ theme: "rose" });
     const request = readRequest({ "ui.theme": "knot" });
     const { options, refresh } = readProfile(request, delayed ? null : config);
-    patchSettings({ theme: "rose" });
+    patchSettings({ theme: "dash" });
     const offline = createServerPrefsWriter(request, scope, false);
     pushServerUiPrefs(offline, { theme: null }, { profileId, canWrite: true });
     resetServerUiPrefsSync();
     await refresh();
-    expect(loadSettings().theme).toBe("rose");
+    expect(loadSettings().theme).toBe(delayed ? "dash" : "rose");
     if (delayed) {
-      patchSettings({ theme: "dash" });
       applyServerUiPrefs(config, options);
       expect(loadSettings().theme).toBe("rose");
     }
