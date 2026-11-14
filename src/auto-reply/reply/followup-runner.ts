@@ -394,16 +394,24 @@ export function createFollowupRunner(
       }
     } catch (error) {
       let operatorAuthorityLost = false;
+      let operatorAuthorityError: unknown;
       try {
         queued.operatorAuthority?.assertCurrent();
-      } catch {
+      } catch (authorityError) {
         operatorAuthorityLost = true;
+        operatorAuthorityError = authorityError;
       }
       if (operatorAuthorityLost) {
         // Revoked input is terminal; retrying it would hold the queue indefinitely.
         disposition = { kind: "consumed" };
         completion = { kind: "aborted" };
-        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
+        // Report the original failure before lifecycle settlement fills the unset
+        // failure with the generic abandonment text, matching the sibling
+        // internal-event branch. The receipt then names the real cause.
+        queued.run.internalEventExecution?.onFailed?.(error);
+        defaultRuntime.error?.(
+          `followup queue: canceled input after loss of operator authority: ${formatErrorMessage(operatorAuthorityError)} (while handling: ${formatErrorMessage(error)})`,
+        );
       } else if (
         (queued.run.internalEventExecution &&
           (executionEntered ||
