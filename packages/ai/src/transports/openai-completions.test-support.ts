@@ -1,5 +1,5 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { expect } from "vitest";
+import { afterAll, expect } from "vitest";
 import {
   configureAiTransportHost,
   getAiTransportHost,
@@ -128,6 +128,11 @@ configureAiTransportHost({
       ? Math.floor(value)
       : undefined;
   },
+});
+
+// This fixture overrides the process-shared host only for its importing test file.
+afterAll(() => {
+  configureAiTransportHost(baseTestHost);
 });
 
 export function makeCompletionsModel(
