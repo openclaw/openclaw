@@ -629,7 +629,6 @@ describe("CI changed Node test plan", () => {
         "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
-        "test/scripts/ci-linux-git.test.ts",
         "test/scripts/full-release-validation-at-sha.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-merge-admission.test.ts",

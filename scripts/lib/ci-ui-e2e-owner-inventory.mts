@@ -401,7 +401,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-attachment-spacing.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
-    "ui/src/e2e/chat-attributed-identity.e2e.test.ts",
     ["chat", "config", "profile"],
     ["ui/src/components/solid/viewer-facepile.tsx"],
   ),
