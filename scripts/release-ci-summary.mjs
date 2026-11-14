@@ -2150,7 +2150,11 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
   };
   return {
     validateChildReuse(selection, request, { deadlineMs } = {}) {
-      return validateReusableReleaseChild(selection, request, { immutableReads, deadlineMs });
+      return validateReusableReleaseChild(selection, request, {
+        immutableReads,
+        deadlineMs,
+        getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
+      });
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (

@@ -234,10 +234,15 @@ and frozen upgrade baselines remain authoritative; there is no new test selectio
 or current-registry baseline resolution.
 
 The recovery owner authenticates the original admission and dispatches, each
-current successful child attempt and its complete composite receipt, the sealed
+current policy-passing child attempt and its complete composite receipt, the sealed
 candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
-producer receipts and payload digests. Missing payloads, incomplete job history,
-changed attempts, or lost authority fail closed. Each recovery child verification
+producer receipts and payload digests. Only the candidate version authenticated by
+the original admission selects checked-in P-owned waivers. Recovery rechecks exact
+failed aggregate causes, preserves raw child conclusions, and records the matched
+waivers in its new seal. Strict readers independently recompute that policy and
+reject added or omitted waivers. Ordinary green-only child reuse is unchanged.
+Missing payloads, incomplete job history, changed attempts, or lost authority fail
+closed. Each recovery child verification
 has a ten-minute budget to read its complete rerun history; ordinary child reuse
 keeps its two-minute default, and job-inventory request timeouts and retry limits are unchanged.
 It never dispatches test or preparation workflows and has only Actions/content
