@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -15,7 +16,7 @@ import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import type { MutableCronSession } from "./run-session-state.js";
-import { ensureAgentWorkspace } from "./run.runtime.js";
+import { ensureAgentWorkspace, resolveEffectiveAgentRuntime } from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
 type CronParentWorkspaceBinding = Readonly<{ sessionKey: string; entry: SessionEntry }>;
@@ -108,10 +109,20 @@ async function resolveCronSessionWorkspace(params: {
   if (!entry) {
     return { workspaceDir: params.defaultWorkspaceDir };
   }
+  const model = resolveSessionModelRef(params.cfg, entry, params.agentId);
   const override = resolveIngressWorkspaceOverrideForSessionRun({
     spawnedBy: entry.spawnedBy,
     workspaceDir: entry.spawnedWorkspaceDir,
     cwd: entry.spawnedCwd,
+    execHost: entry.execHost,
+    runtimeBackendId: resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: model.provider,
+      modelId: model.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: entry,
+    }),
   });
   const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
   const ownershipError = resolveCronSessionWorkspaceOwnershipError({

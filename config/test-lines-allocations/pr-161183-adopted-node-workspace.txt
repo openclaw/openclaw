@@ -1,0 +1,5 @@
+# PR #161183: public Gateway adopted-node workspace regression plus
+# inherited/local/shell-only metadata and CLI diagnostic boundary controls.
+# Exact net regression growth: 182 LF against main f24a3f03cd16176b2704ec2e51aba9b459a09f90.
+# Reuses the Gateway fixture and consolidates metadata cases; no shared scalar change.
+182

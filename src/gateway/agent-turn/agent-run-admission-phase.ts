@@ -286,6 +286,8 @@ export async function prepareAgentRunDispatch(
     spawnedBy: params.sessionEntry?.spawnedBy,
     workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
     cwd: params.sessionEntry?.spawnedCwd,
+    execHost: params.sessionEntry?.execHost,
+    runtimeBackendId: resolvedRuntime.harness,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let dispatchRuntimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
