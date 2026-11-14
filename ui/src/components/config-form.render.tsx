@@ -18,6 +18,7 @@ import {
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
@@ -180,24 +181,20 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
             <Show when={hasSectionHelp()}>
               {
                 <span class="settings-section__docs">
-                  <openclaw-tooltip
-                    prop:content={t("configForm.sectionHelp", { section: meta().label })}
+                  <button
+                    ref={setDocsTrigger}
+                    id={docsTriggerId()}
+                    type="button"
+                    class="settings-section__help-button"
+                    aria-label={t("configForm.sectionHelp", { section: meta().label })}
+                    aria-controls={`settings-section-help-popover-${props.section.id}`}
+                    aria-haspopup="dialog"
+                    onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
                   >
-                    <button
-                      ref={setDocsTrigger}
-                      id={docsTriggerId()}
-                      type="button"
-                      class="settings-section__help-button"
-                      aria-label={t("configForm.sectionHelp", { section: meta().label })}
-                      aria-controls={`settings-section-help-popover-${props.section.id}`}
-                      aria-haspopup="dialog"
-                      onClick={() => docsPopover.overlay.request(!docsPopover.overlay.open)}
-                    >
-                      <span aria-hidden="true">
-                        <Icon name="circleQuestionMark" />
-                      </span>
-                    </button>
-                  </openclaw-tooltip>
+                    <span aria-hidden="true">
+                      <Icon name="circleQuestionMark" />
+                    </span>
+                  </button>
                   <Show when={docsTrigger()}>
                     {(trigger) => (
                       <Popover
@@ -355,7 +352,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
     >
       <Show
         when={schemaType(props.schema!) === "object" && props.schema!.properties}
-        fallback={<div class="callout danger">{t("configForm.unsupportedSchema")}</div>}
+        fallback={<InlineAlert tone="danger">{t("configForm.unsupportedSchema")}</InlineAlert>}
       >
         <Show
           when={visibleSections().length > 0}

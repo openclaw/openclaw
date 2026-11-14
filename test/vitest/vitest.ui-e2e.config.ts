@@ -32,12 +32,15 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/agents-settings-delete.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+  "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-completed-assistant.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-files-refresh.e2e.test.ts",
+  "ui/src/e2e/chat-github-tool-surface.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-incognito-send.real-gateway.e2e.test.ts",
@@ -45,6 +48,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-provider-failure-cause.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-quota-account-identity.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-companion-private.real-gateway.e2e.test.ts",
@@ -70,6 +74,8 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
@@ -81,16 +87,17 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",
-  "ui/src/e2e/model-providers-fresh-install.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
+  "ui/src/e2e/pinned-snooze.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
+  "ui/src/e2e/required-human-action.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.child-failures.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/session-management.new-nested.real-gateway.e2e.test.ts",
@@ -99,7 +106,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-  "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
   "ui/src/e2e/skill-workshop-plugin-enable.real-gateway.e2e.test.ts",
   "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
@@ -116,8 +122,10 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
 // These independent fixture/build owners do not share the source optimizer cache.
 // New files stay bundled unless they own every UI server they use.
 export const uiE2eProductionArtifactTestFiles = [
+  "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
   "ui/src/e2e/service-worker-update.e2e.test.ts",
   "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+  "ui/src/e2e/template-chat-review.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 const uiE2eStandaloneTestFiles = [
@@ -127,6 +135,7 @@ const uiE2eStandaloneTestFiles = [
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+  "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 // Real Gateways never overlap the parallel phase when the CI skip is absent.

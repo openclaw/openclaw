@@ -1,8 +1,17 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -49,7 +58,7 @@ export function createMergeOutcomeFixtureHarness() {
     wrapper.indexOf("\n# Keep dependency sourcing independent"),
   );
   const nodeExecutable = requireNodeTool("node");
-  const nodeArgs = resolveVitestNodeArgs();
+  const nodeArgs = resolveNodeCompilerArgs();
   const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
   const lockRef = "refs/openclaw/pr-operation-locks/123";
   const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -330,7 +339,9 @@ export function createMergeOutcomeFixtureHarness() {
     const clockPath = join(root, "clock");
     writeFileSync(clockPath, "0\n");
     const save = (state: typeof initial) => {
-      writeFileSync(statePath, JSON.stringify(state));
+      const temporary = `${statePath}.${randomUUID()}.tmp`;
+      writeFileSync(temporary, JSON.stringify(state));
+      renameSync(temporary, statePath);
       if (!state.review || !state.ready) {
         const file = join(worktree, ".local/review.json");
         const review = JSON.parse(readFileSync(file, "utf8"));
@@ -350,7 +361,12 @@ export function createMergeOutcomeFixtureHarness() {
 const file=process.env.FIXTURE_STATE;
 const s=JSON.parse(fs.readFileSync(file,"utf8"));
 const git=(args,input)=>execFileSync("git",["-c","commit.gpgsign=false","-c","core.hooksPath=/dev/null",...args],{cwd:process.env.FIXTURE_REPO,env:process.env,input,encoding:"utf8"}).trim();
-const save=()=>fs.writeFileSync(file,JSON.stringify(s));
+// A dispatch crash can interrupt the final save after its explicit checkpoint.
+const save=()=>{
+  const temporary=file+"."+require("node:crypto").randomUUID()+".tmp";
+  fs.writeFileSync(temporary,JSON.stringify(s));
+  fs.renameSync(temporary,file);
+};
 const out=(value)=>{
   const body=typeof value==="string"?value:JSON.stringify(value);
   const writerQuery=args.includes("--include")&&args.includes("graphql")&&args.some(arg=>/^query=\\s*query\\b/.test(arg));
@@ -955,7 +971,7 @@ pr_git() {
   fi
   if [ "$1" = --no-lazy-fetch ] &&
     [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
-  if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&
+  if [[ " $* " == *" fetch "*" --no-write-fetch-head \${MERGE_REPO_URL:-unset} "* ]] &&
     [ "$(command jq -r .priorCi.revokeAdminOnMainFetch "$FIXTURE_STATE")" = true ]; then
     command git "$@" || return
     command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));state.priorCi.membership="member";state.priorCi.revokeAdminOnMainFetch=false;state.priorCi.adminRevokedDuringMainFetch=true;fs.writeFileSync(path,JSON.stringify(state));'
@@ -993,10 +1009,12 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
   if [ "\${14:-false}" = true ]; then
     PR_WORKFLOW_RECOVERY_OUTCOME="$2"
     PR_WORKFLOW_RECOVERY_HEAD="$3"
+    PR_WORKFLOW_RECOVERY_ACTION=merge
+    [ "$7" != true ] || PR_WORKFLOW_RECOVERY_ACTION=cancel-auto
     PR_WORKFLOW_ADMISSION=0
     selection_mode=workflow-recovery-select
     if [ -z "$2" ]; then PR_WORKFLOW_ADMISSION=1; selection_mode=workflow-admission-select; fi
-    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3")
+    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3" refs/remotes/origin/main "" "$PR_WORKFLOW_RECOVERY_ACTION")
     IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
     PR_WORKFLOW_BOOTSTRAP=0
     PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
@@ -1004,7 +1022,7 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
     hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
     [ -z "\${FIXTURE_WORKFLOW_AFTER_HOLD:-}" ] || source "$FIXTURE_WORKFLOW_AFTER_HOLD"
-    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" >/dev/null
+    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" "" "$PR_WORKFLOW_RECOVERY_ACTION" >/dev/null
     admit_pr_workflow_binding 123
     script_parent_dir="$original_scripts"
   fi

@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import {
   beginModelCatalogRead,
   clearModelCatalogCache,
@@ -24,8 +25,12 @@ import { CloudProfileIcon } from "./cloud-profile-icon.tsx";
 import { Icon } from "./icon.tsx";
 import { ProviderBrandIcon, ProviderFallbackIcon } from "./provider-icon.tsx";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  setAvatarGatewayOrigin(null);
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -157,7 +162,75 @@ it("loads artwork through the Gateway and falls through to the effective-name in
   flush();
   expect(container.querySelector("img")).toBeNull();
   expect(container.textContent).toBe("W");
-  expect(revoke).toHaveBeenCalledWith(imageUrl);
+  await expect.poll(() => revoke.mock.calls.some(([url]) => url === imageUrl)).toBe(true);
+});
+
+it("shares artwork through row replacement and releases it when the last icon leaves", async () => {
+  const fetch = vi.fn(() => Promise.resolve(new Response(new Blob(["image"]))));
+  vi.stubGlobal("fetch", fetch);
+  const create = vi.spyOn(URL, "createObjectURL");
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  const presentation = {
+    providerIcon: { source: "asset" as const, url: "/__openclaw__/provider-icon/shared" },
+  };
+  const [row, setRow] = createSignal(true);
+  const view = render(() => (
+    <>
+      <ProviderBrandIcon provider="example" presentation={presentation} />
+      {row() && <ProviderBrandIcon provider="example" presentation={presentation} />}
+    </>
+  ));
+  await expect.poll(() => view.container.querySelectorAll("img").length).toBe(2);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(create).toHaveBeenCalledTimes(1);
+  const url = view.container.querySelector("img")!.src;
+  setRow(false);
+  flush();
+  setRow(true);
+  flush();
+  await expect.poll(() => view.container.querySelectorAll("img").length).toBe(2);
+  expect([...view.container.querySelectorAll("img")].map((image) => image.src)).toEqual([url, url]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(revoke).not.toHaveBeenCalled();
+  view.unmount();
+  await expect.poll(() => revoke.mock.calls.some(([value]) => value === url)).toBe(true);
+});
+
+it("retires pending and displayed artwork when the Gateway credentials change", async () => {
+  const oldBody = Promise.withResolvers<Blob>();
+  const create = vi.spyOn(URL, "createObjectURL");
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, blob: () => oldBody.promise })
+    .mockImplementation(() => Promise.resolve(new Response(new Blob(["current"]))));
+  vi.stubGlobal("fetch", fetch);
+  setAvatarGatewayOrigin("https://gateway.example", ["first-account"], "", "first");
+  const view = render(() => (
+    <ProviderBrandIcon
+      provider="example"
+      presentation={{
+        providerIcon: { source: "asset", url: "/__openclaw__/provider-icon/shared" },
+      }}
+    />
+  ));
+  await expect.poll(() => fetch.mock.calls.length).toBe(1);
+  setAvatarGatewayOrigin("https://gateway.example", ["second-account"], "", "second");
+  await expect.poll(() => view.container.querySelector("img")).not.toBeNull();
+  const currentUrl = view.container.querySelector("img")!.src;
+  oldBody.resolve(new Blob(["retired"]));
+  await expect.poll(() => create.mock.calls.length).toBe(2);
+  expect(view.container.querySelector("img")!.src).toBe(currentUrl);
+  await expect.poll(() => revoke.mock.calls.length).toBe(1);
+  expect(revoke).not.toHaveBeenCalledWith(currentUrl);
+  expect(fetch.mock.calls.map(([, init]) => init.headers.Authorization)).toEqual([
+    "Bearer first-account",
+    "Bearer second-account",
+  ]);
+  setAvatarGatewayOrigin("https://other.example", ["second-account"], "", "third");
+  await expect.poll(() => view.container.querySelector("img")!.src).not.toBe(currentUrl);
+  expect(revoke).toHaveBeenCalledWith(currentUrl);
+  expect(fetch.mock.calls[2]?.[0]).toBe("https://other.example/__openclaw__/provider-icon/shared");
 });
 
 it("keeps the built-in brand if configured artwork cannot be loaded", async () => {

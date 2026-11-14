@@ -31,7 +31,10 @@ import {
   getPluginToolMeta,
   setPluginToolMeta,
 } from "../plugins/tool-metadata.js";
-import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
+import type {
+  OpenClawPluginToolAuthQuery,
+  OpenClawPluginToolDelivery,
+} from "../plugins/tool-types.js";
 import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -374,21 +377,60 @@ function* resolveOpenClawPluginToolSteps(
         includePluginSyntheticAuth: false,
       })
     : undefined;
-  const hasAuthForProvider = authProfileStore
-    ? (providerId: string) =>
-        hasProviderAuthForTool({
+  // A typed query sees only ordered stored profiles of that type, matching what
+  // resolveApiKeyForProvider would select for the same query.
+  const listTypedToolProfileIds = (
+    providerId: string,
+    cfg: OpenClawConfig | undefined,
+    credentialType: NonNullable<OpenClawPluginToolAuthQuery["credentialType"]>,
+  ): string[] =>
+    !authProfileStore ||
+    resolveProviderAuthScope({
+      provider: providerId,
+      config: cfg,
+      workspaceDir: pluginToolInputs.context.workspaceDir,
+    }) === "plugin"
+      ? []
+      : resolveAuthProfileOrder({
+          cfg,
+          store: authProfileStore,
           provider: providerId,
-          cfg: availabilityConfig,
-          workspaceDir: pluginToolInputs.context.workspaceDir,
-          agentDir: params.options?.agentDir,
-          authStore: authProfileStore,
-          runtimeLookup: availabilityRuntimeLookup,
-        })
+          includePendingOAuthRefresh: true,
+        }).filter((profileId) => authProfileStore.profiles[profileId]?.type === credentialType);
+  const hasAuthForProvider = authProfileStore
+    ? (providerId: string, query?: OpenClawPluginToolAuthQuery) =>
+        query?.credentialType
+          ? listTypedToolProfileIds(providerId, availabilityConfig, query.credentialType).length > 0
+          : hasProviderAuthForTool({
+              provider: providerId,
+              cfg: availabilityConfig,
+              workspaceDir: pluginToolInputs.context.workspaceDir,
+              agentDir: params.options?.agentDir,
+              authStore: authProfileStore,
+              runtimeLookup: availabilityRuntimeLookup,
+            })
     : undefined;
   const resolveApiKeyForProvider = authProfileStore
-    ? async (providerId: string): Promise<string | undefined> => {
+    ? async (
+        providerId: string,
+        query?: OpenClawPluginToolAuthQuery,
+      ): Promise<string | undefined> => {
         const cfg = resolveCurrentRuntimeConfig();
         const workspaceDir = pluginToolInputs.context.workspaceDir;
+        if (query?.credentialType) {
+          for (const profileId of listTypedToolProfileIds(providerId, cfg, query.credentialType)) {
+            const resolved = await resolveApiKeyForProfile({
+              cfg,
+              store: authProfileStore,
+              profileId,
+              agentDir: params.options?.agentDir,
+            });
+            if (resolved?.apiKey) {
+              return resolved.apiKey;
+            }
+          }
+          return undefined;
+        }
         // This preparation excludes plugin auth, including agent-profile substitutes.
         if (
           resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) === "plugin"

@@ -425,6 +425,11 @@ suite.define(() => {
       menu = await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "checks");
     }
     await expandLinuxJob(page);
+    if (mode === "running") {
+      expect(
+        await menu.locator('.chat-ci__status[data-state="running"] .btn__spinner').count(),
+      ).toBeGreaterThan(0);
+    }
     // Step text can appear before Floating UI finishes positioning the expanded popup.
     await expect
       .poll(() =>

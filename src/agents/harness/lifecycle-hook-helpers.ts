@@ -91,6 +91,29 @@ export function runAgentHarnessAgentEndHook(
   void executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: true });
 }
 
+/**
+ * Hydrates agent_end evidence before resolving, then starts hooks without waiting for them.
+ * Awaited inside the caller's plugin invocation scope, so handlers are admitted before it closes.
+ */
+export async function startAgentHarnessAgentEndHook(
+  params: AgentHarnessHookParams<PluginHookAgentEndEvent>,
+): Promise<void> {
+  const loadMessages = takeHookMessageLoader(params.event);
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!loadMessages || !hookRunner?.hasHooks("agent_end")) {
+    runAgentHarnessAgentEndHook(params);
+    return;
+  }
+  let messages: unknown[];
+  try {
+    messages = await loadMessages();
+  } catch (error) {
+    log.warn(`agent_end hook failed: ${String(error)}`);
+    return;
+  }
+  runAgentHarnessAgentEndHook({ ...params, event: { ...params.event, messages } });
+}
+
 /** Runs agent_end hooks and waits for completion. */
 export async function awaitAgentHarnessAgentEndHook(
   params: AgentHarnessHookParams<PluginHookAgentEndEvent>,

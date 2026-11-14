@@ -53,6 +53,11 @@ JIT, bytecode, and AOT compilation pass the module inventory through a build
 driver, so large plugin selections do not hit the operating system's
 command-line argument limit.
 
+Native package exports are captured after bundling in a fresh process using the
+same compiler. This keeps export discovery independent of the bundler's resolver
+cache. Unexpected resolution failures stop the build before an incomplete
+export map or executable can be published.
+
 On macOS, the builder uses `scripts/build-mac-sqlite.sh` and the pin in
 `scripts/lib/sqlite-macos.json` to include `runtime/lib/libsqlite3.dylib` for the
 target architecture. It respects `OPENCLAW_MACOS_DEPLOYMENT_TARGET` (default
@@ -324,8 +329,10 @@ this same option.
 
 Omitted plugins contribute no entrypoints, plugin assets, or sidecar metadata.
 Their exclusively owned chunks and dependencies are removed; dependencies needed
-by retained code stay. Discovery sees only the selected set as bundled. Official
-channel and provider catalogs keep offering omitted plugins for installation,
+by retained code stay. Discovery sees only the selected set as bundled.
+Chunk selection resolves relative references against the declared package files,
+so unrelated files on the build host do not change the selected graph.
+Official channel and provider catalogs keep offering omitted plugins for installation,
 and configuration references receive the normal `openclaw plugins install`
 guidance. On-demand installs use the normal plugin installer and configured state
 directory; they do not modify the executable or its sidecar. Cached help for the

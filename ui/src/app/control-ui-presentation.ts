@@ -23,6 +23,11 @@ const ACCENT_CSS_VARIABLES = [
   "--primary-active",
   "--primary-foreground",
   "--chat-send-foreground",
+  "--chat-send-bg",
+  "--sidebar-rail-action-foreground",
+  "--sidebar-rail-action-bg",
+  "--sidebar-rail-action-hover-bg",
+  "--sidebar-rail-action-active-bg",
   "--chat-send-hover-bg",
   "--chat-send-active-bg",
   "--focus",
@@ -112,7 +117,7 @@ export function syncControlUiSystemChrome(
   const root = document.documentElement;
   committedShell = shell ?? committedShell;
   const { contentCanvas, navScrim } = committedShell;
-  const narrow = globalThis.matchMedia?.(
+  const narrow = globalThis.matchMedia(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
   const narrowCanvas = narrow && contentCanvas;
@@ -249,21 +254,35 @@ export function applyControlUiAccent(userAccent?: string): void {
     return;
   }
   const focusSurfaces: string[] = [];
-  for (const family of ["accent", "primary", "chat-send"]) {
-    const source = family === "chat-send" ? "primary" : family;
+  // Capture theme ink before publishing the custom accent/primary pairs.
+  const actionInk = {
+    "chat-send": resolveThemeColor(computed, "--chat-send-foreground"),
+    "sidebar-rail-action": resolveThemeColor(computed, "--accent-foreground"),
+  };
+  for (const family of ["accent", "primary", "chat-send", "sidebar-rail-action"] as const) {
+    const iconAction = family === "chat-send" || family === "sidebar-rail-action";
+    const source =
+      family === "chat-send" ? "primary" : family === "sidebar-rail-action" ? "accent" : family;
     const background = color ?? resolveThemeColor(computed, "--" + source);
-    const hoverProperty =
-      family === "chat-send" ? "--chat-send-hover-bg" : "--" + family + "-hover";
+    const hoverProperty = "--" + family + (iconAction ? "-hover-bg" : "-hover");
     const hover = color ? undefined : resolveThemeColor(computed, hoverProperty) || undefined;
-    const foreground = color
-      ? undefined
-      : resolveThemeColor(computed, "--" + family + "-foreground") || undefined;
-    const states = controlUiAccentStates(background, hover, foreground);
+    const foreground = iconAction
+      ? actionInk[family] || undefined
+      : color
+        ? undefined
+        : resolveThemeColor(computed, "--" + family + "-foreground") || undefined;
+    const states = controlUiAccentStates(
+      background,
+      hover,
+      foreground,
+      color && iconAction ? 3 : undefined,
+    );
     for (const [state, pair] of Object.entries(states)) {
       focusSurfaces.push(pair.background);
-      if (family === "chat-send") {
-        if (state !== "normal") {
-          root.style.setProperty("--chat-send-" + state + "-bg", pair.background);
+      if (iconAction) {
+        if (color || state !== "normal") {
+          const suffix = state === "normal" ? "-bg" : "-" + state + "-bg";
+          root.style.setProperty("--" + family + suffix, pair.background);
         }
       } else if (color || state !== "normal") {
         const suffix = state === "normal" ? "" : "-" + state;

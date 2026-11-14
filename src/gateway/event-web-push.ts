@@ -25,6 +25,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -226,7 +227,7 @@ export function createEventWebPushDelivery(
             ) {
               continue;
             }
-            if (cfg.gateway?.roles && sessionKeys.length === 0) {
+            if (isNamedOperatorRoleEnforcementEnabled(cfg) && sessionKeys.length === 0) {
               // Multi-user events without an authoritative session owner are not broadcast offline.
               continue;
             }

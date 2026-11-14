@@ -27,13 +27,19 @@ Ordinary steering does not interrupt a tool call that is already running. An ass
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+Input accepted during continuation preparation or background-result placement is
+checked before model dispatch, including after a failed Code Mode cell. It does not wait for an
+extra model response. One-at-a-time steering still delivers one queued input per
+request.
+
 In the Control UI, a waiting steer has a small **Send now** link below its normal
 user bubble. A session writer can use it to interrupt supported running tools
 without aborting the run. Each interrupted tool records that the user interrupted
 it; the steer then reaches the next model decision after those results. Repeated
 clicks do not reinject the message or interrupt later work. When a running tool
 cannot safely stop, or the runtime does not support tool-only interruption, the
-UI explains the wait instead of offering the link.
+UI shows the steer as **Steering…** instead of offering the link, and its hover
+text explains the wait.
 
 Foreground local `exec` waits for process cleanup before delivery. Interrupting a
 `process` poll only stops that wait; its independently owned background command
@@ -50,6 +56,29 @@ In the built-in runtime, each steered user input gets its own delivered answer i
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
 
 If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
+Rejection logs preserve the owner’s `reason` and, when known, a closed
+`runtimeReason`. `tool_boundary_timeout` means a tool was still active at the
+transcript deadline; `transcript_commit_timeout` means the receipt was missing
+without an active tool. Other codes distinguish turn end, handoff, closed
+steering, source cancellation, unavailable compaction state, unsupported
+compaction steering, a non-steerable turn, and a missing injection capability.
+A non-interruptible tool still has a steering boundary after completion, so it
+does not trigger immediate followup fallback. Provider token-stream state alone
+does not determine whether the local steering queue can accept input.
+
+After that fallback, **Send now** stays below the waiting message while the
+original run still has supported, interruptible tools running. Clicking it stops
+those tool calls through the same cleanup path. The queued message keeps its
+place and is delivered once when the run can accept it or the next turn starts.
+The action never targets a later run. Unsupported tools keep the wait explanation.
+
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
 
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
@@ -188,6 +217,10 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. Gateway chat sends acknowledge saved input custody without waiting
 for steering admission behind older queued messages or for the active turn to end.
+The built-in runtime waits up to two minutes for an accepted steer to reach its
+transcript boundary. If it can withdraw the still-pending input, the input returns
+to the followup queue. Rejection logs include the runtime's reason, capped at 512
+characters; a transcript timeout is distinct from an initial refusal to accept input.
 Steering and followup delivery retain their original order, and later events report
 the input's outcome. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
@@ -201,6 +234,8 @@ interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
+This also covers messages waiting for a turn during reply initialization, including
+command-bearing messages. Slow-send diagnostics attribute these admission waits to `queued`.
 
 The `runId` returned by `chat.send` remains that input's public identity when
 steering falls back to a followup. Queue admission does not complete it. Its

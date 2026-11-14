@@ -12,6 +12,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import { nativeExit } from "../../daemon/systemd-exec.test-support.js";
 import * as lockPayload from "../../infra/gateway-lock-payload.js";
 import * as gatewayLocks from "../../infra/gateway-lock.js";
 import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
@@ -383,6 +384,87 @@ it.each([
       /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
     );
     expect(effect).not.toHaveBeenCalled();
+  }),
+);
+
+it.each([
+  "free",
+  "live lock",
+  "occupied port",
+  "booted",
+  "booted missing tools",
+  "probe error",
+] as const)("checks publication without systemd: %s", (scenario) =>
+  withRuntimePublicationFixture(async ({ home, root, env }) => {
+    const actual =
+      await vi.importActual<typeof import("../../daemon/service.js")>("../../daemon/service.js");
+    mocks.service.mockReturnValue(actual.resolveGatewayService());
+    vi.spyOn(await import("../../daemon/exec-file.js"), "execFileUtf8").mockImplementation(
+      async (command) =>
+        scenario === "booted"
+          ? command === "systemctl"
+            ? nativeExit("running")
+            : nativeExit("", "Failed to connect to bus: No such file or directory", 1)
+          : { ...nativeExit("", "", 1), termination: "error", errorCode: "ENOENT" },
+    );
+    const directory = await fs.lstat(home);
+    const { access, lstat, readdir } = fs;
+    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+    vi.spyOn(fs, "access").mockImplementation((...args: Parameters<typeof fs.access>) =>
+      typeof args[0] === "string" && args[0].endsWith(".service")
+        ? Promise.reject(missing())
+        : access(...args),
+    );
+    vi.spyOn(fs, "readdir").mockImplementation((...args: Parameters<typeof fs.readdir>) =>
+      typeof args[0] === "string" && args[0].includes("/systemd/")
+        ? Promise.resolve([])
+        : readdir(...args),
+    );
+    vi.spyOn(fs, "lstat").mockImplementation((...args: Parameters<typeof fs.lstat>) => {
+      if (args[0] === "/run/systemd") {
+        return Promise.resolve(directory);
+      }
+      if (args[0] === "/run/systemd/system") {
+        if (scenario.startsWith("booted")) {
+          return Promise.resolve(directory);
+        }
+        return Promise.reject(
+          scenario === "probe error"
+            ? Object.assign(new Error("denied"), { code: "EACCES" })
+            : missing(),
+        );
+      }
+      return lstat(...args);
+    });
+    const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
+    const port = vi.mocked(portProbe.probePortUsage);
+    if (scenario === "live lock") {
+      lock.mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 });
+    }
+    if (scenario === "occupied port") {
+      port.mockResolvedValue("busy");
+    }
+    const effect = vi.fn(async () => "published");
+    const publication = createPublication(root, {
+      ...env,
+      XDG_RUNTIME_DIR: path.join(home, "runtime"),
+      DBUS_SESSION_BUS_ADDRESS: undefined,
+      DBUS_SYSTEM_BUS_ADDRESS: undefined,
+      SUDO_USER: undefined,
+    })(effect, { timeoutMs: 5_000 });
+    if (scenario === "free") {
+      await expect(publication).resolves.toBe("published");
+      expect(effect).toHaveBeenCalledOnce();
+    } else {
+      await expect(publication).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+      expect(effect).not.toHaveBeenCalled();
+    }
+    if (scenario === "free" || scenario === "live lock" || scenario === "occupied port") {
+      expect(lock).toHaveBeenCalled();
+    }
+    if (scenario === "free" || scenario === "occupied port") {
+      expect(port).toHaveBeenCalled();
+    }
   }),
 );
 

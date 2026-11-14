@@ -9,7 +9,6 @@ import {
   describeSecretResolutionOperatorRecovery,
   isSecretResolutionError,
 } from "../secrets/resolve-errors.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { formatConcreteConfigPath, tokenizeConcreteConfigPath } from "../shared/dot-path.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
@@ -72,6 +71,7 @@ async function resolveConfiguredSecretInput(params: ConfiguredSecretInputParams)
 
   const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
   try {
+    const { resolveSecretRefValues } = await import("../secrets/resolve.js");
     const resolved = await resolveSecretRefValues([ref], {
       config: params.config,
       env: params.env,

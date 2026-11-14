@@ -12,7 +12,7 @@ import { runUtf8CommandWithTimeout, type SpawnResult } from "../process/exec.js"
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGogServeInvocation } from "./gmail.js";
 
-export type GogTokenEnvSupport = "supported" | "unsupported" | "indeterminate";
+type GogTokenEnvSupport = "supported" | "unsupported" | "indeterminate";
 export type GogInspection = { executable: string | undefined; support: GogTokenEnvSupport };
 type GogOptions = { env?: NodeJS.ProcessEnv; signal?: AbortSignal };
 export type GogUpgrade = {
@@ -39,7 +39,7 @@ function completeOutput(result: SpawnResult): boolean {
   );
 }
 
-export async function probeGogTokenEnv(
+async function probeGogTokenEnv(
   executable: string,
   options: GogOptions = {},
 ): Promise<GogTokenEnvSupport> {

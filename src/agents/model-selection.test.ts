@@ -732,4 +732,7 @@ it("excludes typed-only rows from conversational selection while retaining dual-
   const result = allowed({}, [chat, typed, dual], { defaultProvider: "fixture" });
   expect(result.allowedCatalog).toEqual([chat, dual]);
   expect(result.allowedKeys.has("fixture/typed")).toBe(false);
+  const authored = allowed(config({ models: { "fixture/typed": {}, "fixture/new": {} } }), [typed]);
+  expect(authored.allowedCatalog).toEqual([row("fixture", "new")]);
+  expect(authored.allows(ref("fixture", "typed"))).toBe(false);
 });

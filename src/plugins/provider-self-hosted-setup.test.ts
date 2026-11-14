@@ -225,7 +225,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       apiKey: "self-hosted-test-key",
     });
 
-    expect(models).toEqual([expectedModel("Qwen/Qwen3-32B")]);
+    expect(models).toEqual([expectedModel("Qwen/Qwen3-32B", { maxTokens: 32_768 })]);
     expectRequest(1, "http://127.0.0.1:8000/v1/models", {
       Authorization: "Bearer self-hosted-test-key",
     });
@@ -262,7 +262,11 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([
-      expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 262_144, contextTokens: 65_536 }),
+      expectedModel("qwen3.6-mxfp4-moe", {
+        contextWindow: 262_144,
+        contextTokens: 65_536,
+        maxTokens: 32_768,
+      }),
     ]);
     expectRequest(2, "http://127.0.0.1:8080/props");
     expectReleased(modelsRelease, propsRelease);
@@ -288,8 +292,17 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([
-      expectedModel("qwen/router-a", { contextWindow: 262_144, contextTokens: 65_536 }),
-      expectedModel("qwen/router-b", { contextWindow: 131_072, contextTokens: 32_768 }),
+      expectedModel("qwen/router-a", {
+        contextWindow: 262_144,
+        contextTokens: 65_536,
+        maxTokens: 32_768,
+      }),
+      // The 32K served window keeps half for the prompt.
+      expectedModel("qwen/router-b", {
+        contextWindow: 131_072,
+        contextTokens: 32_768,
+        maxTokens: 16_384,
+      }),
     ]);
     expectRequest(2, "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false");
     expectRequest(3, "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false");
@@ -306,7 +319,9 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       contextWindow: 65_536,
     });
 
-    expect(models).toEqual([expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 65_536 })]);
+    expect(models).toEqual([
+      expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 65_536, maxTokens: 32_768 }),
+    ]);
     expect(models[0]).not.toHaveProperty("contextTokens");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledOnce();
@@ -329,7 +344,9 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         endpoint === "props" ? llamaUrl : vllmUrl,
       );
       // A model overflow rejects discovery; a props overflow preserves the catalog.
-      expect(models).toEqual(endpoint === "props" ? [expectedModel("qwen3.6-mxfp4-moe")] : []);
+      expect(models).toEqual(
+        endpoint === "props" ? [expectedModel("qwen3.6-mxfp4-moe", { maxTokens: 32_768 })] : [],
+      );
       expect(oversized.state.cancelCount).toBe(1);
       expect(oversized.state.bytesPulled).toBeLessThanOrEqual(
         SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES + 2 * CHUNK_BYTES,
@@ -371,7 +388,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       baseUrl: params.baseUrl.replace(/\/+$/, ""),
       api: "openai-completions",
       apiKey: params.envVar,
-      models: [expectedModel(params.modelId)],
+      models: [expectedModel(params.modelId, { maxTokens: 32_768 })],
     });
     expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${params.modelId}`);
     expect(upsertAuthProfileWithLockOrThrow).toHaveBeenCalledWith({

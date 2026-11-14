@@ -118,7 +118,7 @@ suite.define(() => {
       const alert = page.getByRole("alert").filter({ hasText: "Couldn’t start this session" });
       await alert.waitFor({ state: "visible" });
       await alert.locator("summary").click();
-      const details = alert.locator(".chat-error__diagnostic");
+      const details = alert.locator(".lazy-view-error__detail");
       await details.waitFor({ state: "visible" });
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await pollDisabled(composer).toBe(false);
@@ -291,7 +291,7 @@ suite.define(() => {
     await expectPastedPngImage(page.getByRole("img", { name: "pixel.png" }));
     await openChatModelPicker(page);
     const picker = page.locator("[data-chat-account-selection]");
-    await picker.locator("[data-chat-account-group-toggle]").click();
+    await picker.locator(".chat-controls__account-trigger").click();
     await picker.locator(`[data-chat-account-option="account:${account.authProfileId}"]`).click();
     await pollAttribute(start, "aria-disabled").toBe("false");
     await page.keyboard.press("Escape");

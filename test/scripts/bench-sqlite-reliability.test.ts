@@ -15,7 +15,7 @@ import {
   canonicalPathWithExistingParent,
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -33,7 +33,7 @@ import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const makeRoot = () => tempDirs.make("openclaw-sqlite-reliability-test-");
 const nodeExecutable = resolveTestNodeExecPath();
-const nodeArgs = resolveVitestNodeArgs();
+const nodeArgs = resolveNodeCompilerArgs();
 // Windows repeats ACL checks and crash/restore copies throughout the full proof.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;

@@ -1,2 +1,0 @@
-# Reuse the write-scoped RPC flow to prove archived deletion retries are idempotent.
-3

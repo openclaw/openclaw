@@ -176,6 +176,50 @@ it.each([
   expect(state.records.size).toBe(0);
 });
 
+it("borrows current authority without writing a durable admission", async () => {
+  const { service } = fixture();
+  let escaped: Parameters<Parameters<typeof service.withCurrent>[1]>[0] | undefined;
+  await expect(
+    service.withCurrent(input, async (current) => {
+      escaped = current;
+      current.assertCurrent();
+      expect(current.target).toEqual(state.target);
+      expect(state.records.size).toBe(0);
+      return "read result";
+    }),
+  ).resolves.toBe("read result");
+  expect(state.records.size).toBe(0);
+  expect(escaped?.signal.aborted).toBe(true);
+  expect(() => escaped?.assertCurrent()).toThrow("borrow closed");
+  expect(state.release).toHaveBeenCalled();
+});
+it.each([
+  { agentId: "other", sessionKey: input.sessionKey },
+  { agentId: input.agentId, sessionKey: "agent:main:other" },
+])("refuses cross-conversation current authority: %j", async (target) => {
+  const { service } = fixture();
+  const work = vi.fn();
+  await expect(service.withCurrent({ ...input, ...target }, work)).rejects.toThrow(
+    "own conversation",
+  );
+  expect(work).not.toHaveBeenCalled();
+  expect(state.prepare).not.toHaveBeenCalled();
+});
+it("propagates current-work failure and closes the borrowed authority", async () => {
+  const { service } = fixture();
+  const failure = new Error("read failed");
+  let escaped: Parameters<Parameters<typeof service.withCurrent>[1]>[0] | undefined;
+  await expect(
+    service.withCurrent(input, async (current) => {
+      escaped = current;
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(escaped?.signal.aborted).toBe(true);
+  expect(() => escaped?.assertCurrent()).toThrow("borrow closed");
+  expect(state.records.size).toBe(0);
+  expect(state.release).toHaveBeenCalled();
+});
 it("admits and reauthorizes an exact operation with its original tool ceiling", async () => {
   const { service } = fixture();
   await expect(service.admit(input)).resolves.toEqual({ target: state.target, recoverable: true });

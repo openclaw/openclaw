@@ -7,6 +7,7 @@ import type {
   StoredSecretSources,
 } from "../lib/config/config-secret-fields.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -192,17 +193,15 @@ function HeldSecretToggle(props: {
   return (
     <Show when={props.hold.text() !== undefined} fallback={props.fallback}>
       <Show when={props.hidesText}>
-        <openclaw-tooltip prop:content={label()}>
-          <button
-            type="button"
-            class="settings-secret__toggle"
-            aria-label={label()}
-            aria-pressed={props.hold.revealed() ? "true" : "false"}
-            onClick={() => props.hold.toggleRevealed()}
-          >
-            <Icon name={props.hold.revealed() ? "eye" : "eyeOff"} />
-          </button>
-        </openclaw-tooltip>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label={label()}
+          aria-pressed={props.hold.revealed() ? "true" : "false"}
+          onClick={() => props.hold.toggleRevealed()}
+        >
+          <Icon name={props.hold.revealed() ? "eye" : "eyeOff"} />
+        </button>
       </Show>
     </Show>
   );
@@ -259,6 +258,8 @@ export function secretInputProps(isSecret: () => boolean) {
     get "data-form-type"() {
       return when("other");
     },
+    // handleHeldSecretKey reads this to skip the Enter that commits an IME candidate.
+    onCompositionEnd: recordCompositionEnd,
   };
 }
 
@@ -269,6 +270,9 @@ export function handleHeldSecretKey(
   options: { multiline: boolean; onSave: () => void; onCancel: () => void },
 ): boolean {
   if (hold.text() === undefined || (event.key !== "Enter" && event.key !== "Escape")) {
+    return false;
+  }
+  if (isComposingKeyboardEvent(event)) {
     return false;
   }
   if (event.key === "Escape") {

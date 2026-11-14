@@ -1,7 +1,8 @@
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "./chat-activity-fixtures.ts";
 
-const interruptedChatRunId = "synthetic-interrupted-run";
+const runId = "synthetic-interrupted-run";
+export const interruptedChatSession = { abortedLastRun: true, lastRunId: runId };
 export const interruptedChatPrompt = "Inspect the synthetic project and report your findings.";
 export const interruptedChatCommentary = [
   "I found the relevant files and am checking their behavior.",
@@ -10,7 +11,6 @@ export const interruptedChatCommentary = [
 
 /** Persisted tool iterations, including narration, with no terminal assistant row. */
 export function interruptedChatHistory() {
-  const runId = interruptedChatRunId;
   const timestamp = Date.UTC(2026, 9, 12, 12);
   const messages: Record<string, unknown>[] = [];
   const append = (message: Record<string, unknown>) => {

@@ -8,7 +8,7 @@ import {
   isKeyFingerprint,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import type { AuthorityRefusal } from "./authority.js";
+import type { AuthorityRefusal } from "./authority-result.js";
 import type { DiscoveryClient } from "./discovery-client.js";
 
 type StaleSeqLogger = { info: (message: string) => void; warn: (message: string) => void };

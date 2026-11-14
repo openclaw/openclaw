@@ -165,7 +165,7 @@ test("sessions.compact responds after an idle session compacts under its own con
     return compactedResult;
   });
   // Loaded after the harness installs its runtime mocks, which a static import would precede.
-  const { compactEmbeddedAgentSession } =
+  const { compactQueuedEmbeddedAgentSession: compactEmbeddedAgentSession } =
     await import("../agents/embedded-agent-runner/compact.queued.js");
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce((...args) =>
     compactEmbeddedAgentSession(...(args as Parameters<typeof compactEmbeddedAgentSession>)),

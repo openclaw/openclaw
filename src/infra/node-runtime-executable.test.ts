@@ -37,11 +37,27 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("reuses a current Node executable named nodejs without probing PATH", () => {
-  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: undefined });
+  vi.spyOn(process, "versions", "get").mockReturnValue({
+    ...process.versions,
+    bun: undefined,
+    node: "24.16.0",
+  });
   vi.spyOn(process, "execPath", "get").mockReturnValue("/usr/bin/nodejs");
 
   expect(resolveNode()).toBe("/usr/bin/nodejs");
   expect(probe).not.toHaveBeenCalled();
+});
+
+it("probes PATH instead of reusing an unsupported current Node", () => {
+  vi.spyOn(process, "versions", "get").mockReturnValue({
+    ...process.versions,
+    bun: undefined,
+    node: "20.20.2",
+  });
+  probe.mockReturnValueOnce("/qa/supported/node\n");
+
+  expect(resolveNode({ env: { PATH: "/qa/supported" } })).toBe("/qa/supported/node");
+  expect(probe).toHaveBeenCalledOnce();
 });
 
 it.each(['"', ""])(
@@ -81,11 +97,14 @@ it("skips a Bun node shim before selecting a real Node executable", () => {
   ]);
 });
 
-it("reports an unavailable runtime when every Node candidate fails", () => {
+it.each(["unavailable", "unsupported"])("reports no %s Node runtime", (kind) => {
   mockProcessPlatform("linux");
   probe.mockImplementation(() => {
+    if (kind === "unsupported") {
+      return "";
+    }
     throw new Error("fixture executable unavailable");
   });
 
-  expect(resolveNode({ env: { PATH: "/qa/missing" } })).toBeUndefined();
+  expect(resolveNode({ env: { PATH: `/qa/${kind}` } })).toBeUndefined();
 });

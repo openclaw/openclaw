@@ -1,9 +1,12 @@
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { aroundEach, describe, expect, it, vi, type Mock } from "vitest";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import * as sqliteRuntimeTesting from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { aroundEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import {
@@ -722,4 +725,37 @@ describe("native Codex thread tool", () => {
     ).rejects.toThrow("descendant lookup failed");
     expectNoRequest(request, CODEX_CONTROL_METHODS.archiveThread);
   });
+});
+
+it("retires fixture database validation before removing its directory", async () => {
+  const retire = vi.spyOn(sqliteRuntimeTesting, "closeOpenClawAgentDatabasesForTest");
+  onTestFinished(() => retire.mockRestore());
+  let removed = false;
+  await withCodexNativeThreadToolFixture(async ({ root }) => {
+    const target = {
+      agentId: "main",
+      sessionId: "cleanup-session",
+      sessionKey: "agent:main:cleanup",
+      storePath: path.join(root, "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntry({
+      ...target,
+      entry: { sessionId: target.sessionId, updatedAt: 1 },
+    });
+    expect(await readSessionTranscriptEvents(target)).toEqual([]);
+    expect(retire).not.toHaveBeenCalledWith(root);
+    const remove = fsPromises.rm;
+    const removeSpy = vi.spyOn(fsPromises, "rm").mockImplementation(async (directory, options) => {
+      if (directory === root) {
+        const retired = retire.mock.calls.some(([pathname]) => pathname === root);
+        await remove(directory, options);
+        removed = true;
+        expect(retired).toBe(true);
+        return;
+      }
+      await remove(directory, options);
+    });
+    onTestFinished(() => removeSpy.mockRestore());
+  });
+  expect(removed).toBe(true);
 });

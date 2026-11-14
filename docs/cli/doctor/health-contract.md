@@ -15,11 +15,10 @@ To inspect registry clone shape, run
 `openclaw doctor --lint --only core/doctor/project-clone-shape --json`.
 This check also runs in ordinary Doctor and `--lint --all`. Unreadable clones
 produce a skipped-inspection warning without aborting the remaining checks.
-Repair guidance removes all partial-clone filters, refetches from origin
-(unshallowing only when needed), fetches missing objects by ID, clears promisor
-settings and `extensions.partialclone`, then repacks. See the
-[repair sequence](/gateway/doctor#11e-project-clone-shape) before running these
-network and disk operations manually.
+`openclaw doctor --fix` unshallows managed project clones while retaining
+`blob:none` under the project checkout lifecycle lease. It skips busy clones and
+does not repack or remove promisor settings. See
+[project clone repair](/gateway/doctor/gateway-and-services#11e-project-clone-shape).
 
 Doctor checks that use the structured health registry declare a small split contract:
 

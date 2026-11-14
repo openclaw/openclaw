@@ -276,9 +276,8 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.sw-notice--warning {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--text);
+.sw-detail-alert {
+  margin: 0 var(--space-5) var(--space-3);
 }
 
 .sw-tabs {

@@ -393,7 +393,18 @@ async function createCandidateDockerPublication(recovered = false) {
     publisherSha: fixture.p,
     publisherFullRef: fixture.publisherFullRef,
     fullReleaseManifest: fixture.manifest,
-    evidenceClient: fixture.client,
+    evidenceClient: {
+      ...fixture.client,
+      verifyRetainedPublicationArtifacts() {
+        throw new Error("Docker producer fixture does not recover publication artifacts");
+      },
+      downloadArtifactArchive() {
+        throw new Error("Docker producer fixture does not download artifact archives");
+      },
+      getRunArtifacts() {
+        throw new Error("Docker producer fixture does not list run artifacts");
+      },
+    },
     readApi: (endpoint: string) =>
       endpoint.endsWith("/actions/runs/" + fixture.runId)
         ? currentRun

@@ -1,2 +1,0 @@
-# Scope the hosted-environment fixture's preference setup and teardown.
-5

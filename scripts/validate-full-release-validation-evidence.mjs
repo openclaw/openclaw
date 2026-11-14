@@ -15,6 +15,10 @@ import {
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
 import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  verifyReceiptRecoveryAuthority,
+} from "./full-release-receipt-recovery.mjs";
+import {
   normalizeReleaseCoveragePolicy,
   isSplitChangelogEvidenceDelta,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
@@ -99,6 +103,7 @@ function displayValue(value) {
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
  * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown, knownFlakyJobsJson?: unknown }} [validationInputs]
  * @property {unknown} [qualificationCoverage]
+ * @property {unknown} [receiptRecovery]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -114,6 +119,7 @@ function displayValue(value) {
  * @property {string} [expectedTrustedWorkflowSha]
  * @property {string} [expectedWorkflowBranch]
  * @property {import("./full-release-publication-contract.mjs").PublicationSelection | (() => import("./full-release-publication-contract.mjs").PublicationSelection)} [expectedPublicationSelection]
+ * @property {import("./full-release-publication-contract.mjs").PublicationSelection | (() => import("./full-release-publication-contract.mjs").PublicationSelection)} [expectedPublicationOperation]
  * @property {{ npmDistTag: string }} [expectedCoreNpmPublication]
  * @property {(sha: string) => string} [getWorkflowSource]
  * @property {(sha: string) => boolean} [isTrustedMainAncestor]
@@ -152,6 +158,49 @@ export function isShaPinnedReleaseValidationBranch(branch) {
   return PINNED_BRANCH_PATTERN.test(branch ?? "");
 }
 
+/**
+ * The caller has authenticated the complete original admission. This derives
+ * only the current operation; it never rewrites the admission or artifact roster.
+ * @param {import("./full-release-publication-contract.mjs").PublicationSourceFact | undefined} source
+ * @param {import("./full-release-publication-contract.mjs").PublicationSelection} operation
+ */
+function validatePublicationOperation(source, operation) {
+  const original = source?.publicationSelection;
+  if (!source || !original || source.validationPurpose !== "publish") {
+    throw new Error("Publication operation requires an authenticated publish admission.");
+  }
+  if (publicationSourceJson(original) === publicationSourceJson(operation)) {
+    return;
+  }
+  if (
+    original.pluginPublishScope !== "all-publishable" ||
+    operation.publishOpenclawNpm ||
+    operation.pluginPublishScope !== "selected" ||
+    !Array.isArray(operation.plugins) ||
+    operation.plugins.length === 0 ||
+    new Set(operation.plugins).size !== operation.plugins.length ||
+    publicationSourceJson({
+      ...operation,
+      publishOpenclawNpm: original.publishOpenclawNpm,
+      pluginPublishScope: original.pluginPublishScope,
+      plugins: original.plugins,
+    }) !== publicationSourceJson(original) ||
+    operation.plugins.some(
+      (name) =>
+        !source.projection?.packages.some(
+          (entry) =>
+            entry.name === name &&
+            name.startsWith("@openclaw/") &&
+            entry.targets.some((target) => target === "npm" || target === "clawhub"),
+        ),
+    )
+  ) {
+    throw new Error(
+      "Publication operation is not a covered plugin-only subset of the original admission.",
+    );
+  }
+}
+
 /** @param {FullReleaseValidationEvidenceOptions} options */
 export function validateFullReleaseValidationEvidence({
   run: rawRun,
@@ -165,6 +214,7 @@ export function validateFullReleaseValidationEvidence({
   expectedTrustedWorkflowSha,
   expectedWorkflowBranch,
   expectedPublicationSelection,
+  expectedPublicationOperation,
   expectedCoreNpmPublication,
   getWorkflowSource,
   isTrustedMainAncestor,
@@ -177,10 +227,18 @@ export function validateFullReleaseValidationEvidence({
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
-  if (expectedPublicationSelection && expectedCoreNpmPublication) {
+  if (
+    [expectedPublicationSelection, expectedPublicationOperation, expectedCoreNpmPublication].filter(
+      Boolean,
+    ).length > 1
+  ) {
     throw new Error("Publication evidence requires one actual consumption selection.");
   }
   const run = normalizeFullReleaseValidationRun(rawRun);
+  const receiptRecovery = run.workflowPath === RECEIPT_RECOVERY_WORKFLOW;
+  if (Boolean(manifest.receiptRecovery) !== receiptRecovery) {
+    throw new Error("Receipt recovery requires its separately authenticated workflow");
+  }
   const trustedWorkflowFullRef = expectedTrustedWorkflowFullRef ?? "refs/heads/main";
   const protectedTag = TRUSTED_RELEASE_PUBLISH_TAG_PATTERN.exec(trustedWorkflowFullRef);
   if (protectedTag) {
@@ -198,8 +256,8 @@ export function validateFullReleaseValidationEvidence({
   }
   const checks = [
     ["databaseId", String(expectedRunId)],
-    ["workflowName", FULL_RELEASE_WORKFLOW],
-    ["workflowPath", FULL_RELEASE_WORKFLOW_PATH],
+    ["workflowName", receiptRecovery ? "Full Release Receipt Recovery" : FULL_RELEASE_WORKFLOW],
+    ["workflowPath", receiptRecovery ? RECEIPT_RECOVERY_WORKFLOW : FULL_RELEASE_WORKFLOW_PATH],
     ["repository", expectedRepository],
     ["event", "workflow_dispatch"],
     ["status", "completed"],
@@ -263,7 +321,10 @@ export function validateFullReleaseValidationEvidence({
   }
   const workflowSource = getWorkflowSource
     ? getWorkflowSource(run.headSha)
-    : createReleaseEvidenceClient(expectedRepository).getWorkflowSource(run.headSha);
+    : createReleaseEvidenceClient(expectedRepository).getWorkflowSource(
+        run.headSha,
+        receiptRecovery ? RECEIPT_RECOVERY_WORKFLOW : FULL_RELEASE_WORKFLOW_PATH,
+      );
   const contract = publicationSourceContract(workflowSource);
   const registryContract = publicationAdmissionContract(workflowSource);
   if (manifest.sourceAdmissionContract !== contract) {
@@ -320,6 +381,7 @@ export function validateFullReleaseValidationEvidence({
   }
   const publicationAdmission = validatePublicationAdmissionBinding(manifest, {
     publicationAdmissionContract: registryContract,
+    ...(receiptRecovery ? { workflowPath: RECEIPT_RECOVERY_WORKFLOW } : {}),
   });
   let strictEvidence;
   const strict = () => {
@@ -373,7 +435,7 @@ export function validateFullReleaseValidationEvidence({
       }
     }
   }
-  if (registryContract) {
+  if (registryContract || expectedPublicationOperation) {
     const contextIdentity = sourceAdmission?.projection
       ? resolveReleaseContextIdentity(
           sourceAdmission.targetContextRef,
@@ -386,8 +448,10 @@ export function validateFullReleaseValidationEvidence({
         ? `v${sourceAdmission.projection.version}`
         : undefined);
     if (
-      !publicationAdmission ||
-      (!expectedPublicationSelection && !expectedCoreNpmPublication) ||
+      (registryContract && !publicationAdmission) ||
+      (!expectedPublicationSelection &&
+        !expectedPublicationOperation &&
+        !expectedCoreNpmPublication) ||
       sourceReleaseTag !== expectedReleaseTag
     ) {
       throw new Error("B publication evidence requires the actual selection and release tag.");
@@ -406,6 +470,9 @@ export function validateFullReleaseValidationEvidence({
     }
   }
 
+  if (receiptRecovery && strict().current?.workflowRefProof !== "receipt-backed-recovery-v1") {
+    throw new Error("Receipt recovery requires authenticated original qualification");
+  }
   const candidateOwned = sourceAdmission?.qualificationAdmission !== undefined;
   if (candidateOwned) {
     const authenticated = strict();
@@ -424,9 +491,17 @@ export function validateFullReleaseValidationEvidence({
       );
     }
   }
+  if (expectedPublicationOperation) {
+    validatePublicationOperation(
+      sourceAdmission,
+      typeof expectedPublicationOperation === "function"
+        ? expectedPublicationOperation()
+        : expectedPublicationOperation,
+    );
+  }
   const pinnedMatch = PINNED_BRANCH_PATTERN.exec(run.headBranch ?? "");
   if (!pinnedMatch) {
-    if (protectedTag) {
+    if (protectedTag && !receiptRecovery) {
       throw new Error(
         "Protected-tag release evidence must use a canonical release-ci producer branch.",
       );
@@ -443,7 +518,11 @@ export function validateFullReleaseValidationEvidence({
           `Direct main validation workflow ${run.headSha} is not reachable from current main.`,
         );
       }
-      return { run, source: "direct", coveragePolicy };
+      return {
+        run,
+        source: receiptRecovery ? "receipt-backed-recovery-v1" : "direct",
+        coveragePolicy,
+      };
     }
     throw new Error(
       `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch ?? "<missing>"}.`,
@@ -542,6 +621,7 @@ export function validateFullReleaseValidationEvidence({
  *   manifestPath?: string,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
+ *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
  * }} options
  * @param {ReturnType<typeof createReleaseEvidenceClient>} [client]
  */
@@ -549,11 +629,12 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   const evidenceClient = client ?? createReleaseEvidenceClient(options.expectedRepository);
   const run = normalizeFullReleaseValidationRun(options.run);
   const workflowSources = new Map();
-  const getWorkflowSource = (sha) => {
-    if (!workflowSources.has(sha)) {
-      workflowSources.set(sha, evidenceClient.getWorkflowSource(sha));
+  const getWorkflowSource = (sha, path = run.workflowPath) => {
+    const key = `${sha}:${path}`;
+    if (!workflowSources.has(key)) {
+      workflowSources.set(key, evidenceClient.getWorkflowSource(sha, path));
     }
-    return workflowSources.get(sha);
+    return workflowSources.get(key);
   };
   const evidence = await validateReleaseRunEvidence(
     {
@@ -588,30 +669,128 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     validateEvidenceReuseStrictly: () => evidence,
   });
   const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
+  if (options.npmPreflightLineage) {
+    // Retain this owner's authenticated evidence across the consumer handoff.
+    // Serialized or caller-supplied evidence never replaces this traversal.
+    const { validateNpmPreflightQualification, verifyNpmPreflightPublicationLineage } =
+      await import("./npm-preflight-tooling-identity.mjs");
+    const lineage = {
+      manifest,
+      repository: options.expectedRepository,
+      sourceSha: options.expectedTargetSha,
+      toolingSha: options.npmPreflightLineage.qualificationSha,
+      publisherSha: options.expectedTrustedWorkflowSha,
+      publisherFullRef: options.expectedTrustedWorkflowFullRef,
+      producerRunId: options.npmPreflightLineage.producerRunId,
+      producerRunAttempt: options.npmPreflightLineage.producerRunAttempt,
+    };
+    if (manifest.sourceAdmission?.qualificationAdmission || manifest.receiptRecovery) {
+      validateCandidateOwnedArtifactBinding(
+        manifest,
+        lineage.sourceSha,
+        lineage.toolingSha,
+        evidence,
+      );
+      validateNpmPreflightQualification(lineage);
+    } else {
+      await verifyNpmPreflightPublicationLineage(lineage);
+    }
+    // Imports and lineage checks can wait. Refresh live admission at the final
+    // handoff, not just before the original full artifact authentication.
+    revalidateAuthority?.();
+  }
   return {
     ...result,
     evidence,
     publicationAdmission: manifest.publicationAdmission ?? null,
     revalidateAuthority,
+    publicationAuthority: candidateArtifactAuthorityRecord(manifest, evidence),
   };
 }
 
 function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
-  if (!manifest?.sourceAdmission?.qualificationAdmission) {
+  const authority = candidateArtifactAuthorityRecord(manifest, evidence);
+  if (!authority) {
+    return undefined;
+  }
+  const revalidate = () => revalidateCandidateArtifactAuthority(authority, evidenceClient);
+  revalidate();
+  return revalidate;
+}
+
+function candidateArtifactAuthorityRecord(manifest, evidence) {
+  const descriptor =
+    manifest?.sourceAdmission?.qualificationAdmission ??
+    manifest?.receiptRecovery?.qualificationAdmission;
+  if (!descriptor) {
     return undefined;
   }
   if (!evidence.qualificationAdmission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
-  // Keep live authority process-local and independent of caller-owned data.
-  const authority = structuredClone({
-    descriptor: manifest.sourceAdmission.qualificationAdmission,
+  // Retain authenticated identities, not live permission or ref verdicts.
+  return structuredClone({
+    descriptor,
     admission: evidence.qualificationAdmission,
+    recoveryProducer: manifest.receiptRecovery
+      ? {
+          runId: String(manifest.runId),
+          runAttempt: Number(manifest.runAttempt),
+          fullRef: manifest.workflowFullRef,
+          sha: manifest.workflowSha,
+        }
+      : null,
   });
-  const revalidateAuthority = () =>
+}
+
+// Only an authenticated preview carrier may restore this owner-generated record.
+// It carries the operator identities, never their current permission verdict.
+export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
+  if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
-  revalidateAuthority();
-  return revalidateAuthority;
+    if (authority.recoveryProducer) {
+      if (evidenceClient.verifyReceiptRecoveryAuthority) {
+        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
+      } else {
+        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      }
+    }
+  }
+}
+
+function validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha) {
+  const recovery = manifest.receiptRecovery;
+  if (
+    candidateSha !== qualificationSha ||
+    manifest.targetSha !== candidateSha ||
+    (recovery
+      ? recovery.candidateBinding?.request?.toolingSha !== qualificationSha
+      : manifest.workflowSha !== qualificationSha)
+  ) {
+    throw new Error("Candidate-owned artifact source and qualification SHA differ");
+  }
+}
+
+function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
+  const recovery = manifest.receiptRecovery;
+  validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha);
+  if (
+    evidence.current.manifest.sourceAdmission?.validationPurpose !== "publish" ||
+    evidence.current.manifest.publicationAdmissionContract !== "1" ||
+    !evidence.current.manifest.publicationAdmission
+  ) {
+    throw new Error("Publication artifacts require publish-purpose admitted qualification");
+  }
+  if (
+    evidence.current.targetSha !== candidateSha ||
+    evidence.current.runAttempt !== Number(manifest.runAttempt) ||
+    evidence.current.workflowRefProof !==
+      (recovery ? "receipt-backed-recovery-v1" : "candidate-owned-admission-v1") ||
+    evidence.current.conclusion !== "success" ||
+    !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
+  ) {
+    throw new Error("Publication artifact is not bound to authenticated candidate qualification");
+  }
 }
 
 // Publication consumers replace ancestry only after the full FRV owner has
@@ -625,16 +804,11 @@ export async function authenticateCandidateOwnedArtifact({
   publisherFullRef = "refs/heads/main",
   client,
 }) {
-  if (!manifest?.sourceAdmission?.qualificationAdmission) {
+  const recovery = manifest?.receiptRecovery;
+  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
     return null;
   }
-  if (
-    candidateSha !== qualificationSha ||
-    manifest.targetSha !== candidateSha ||
-    manifest.workflowSha !== qualificationSha
-  ) {
-    throw new Error("Candidate-owned artifact source and qualification SHA differ");
-  }
+  validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha);
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);
   const evidence = await validateReleaseRunEvidence(
     {
@@ -648,22 +822,7 @@ export async function authenticateCandidateOwnedArtifact({
     },
     evidenceClient,
   );
-  if (
-    evidence.current.manifest.sourceAdmission?.validationPurpose !== "publish" ||
-    evidence.current.manifest.publicationAdmissionContract !== "1" ||
-    !evidence.current.manifest.publicationAdmission
-  ) {
-    throw new Error("Publication artifacts require publish-purpose admitted qualification");
-  }
-  if (
-    evidence.current.targetSha !== candidateSha ||
-    evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.workflowRefProof !== "candidate-owned-admission-v1" ||
-    evidence.current.conclusion !== "success" ||
-    !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
-  ) {
-    throw new Error("Publication artifact is not bound to authenticated candidate qualification");
-  }
+  validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence);
   const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
   return { ...evidence, revalidateAuthority };
 }
@@ -685,6 +844,43 @@ function gitIsAncestor(ancestor, target) {
   );
 }
 
+/** @returns {import("./full-release-publication-contract.mjs").PublicationSelection} */
+function publisherOperationFromEnvironment() {
+  const plugins = (process.env.RELEASE_PLUGINS ?? "").split(/[\s,]+/u).filter(Boolean);
+  const subset = process.env.PLUGIN_PUBLISH_SCOPE === "selected";
+  const publishOpenclawNpm = process.env.PUBLISH_OPENCLAW_NPM === "true";
+  // Normalize the unchanged route/channel/Windows operands as a full intent.
+  // Only authenticated operation validation below may narrow that intent.
+  const { publicationSelection } = normalizePublicationIntent(
+    "publish",
+    JSON.stringify({
+      route: process.env.PREPARED_PLUGINS?.trim()
+        ? "prepared"
+        : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
+          ? "extended-stable"
+          : "normal",
+      npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
+      publishOpenclawNpm: subset ? true : publishOpenclawNpm,
+      pluginPublishScope: subset ? "all-publishable" : process.env.PLUGIN_PUBLISH_SCOPE,
+      plugins: subset ? [] : plugins,
+      ...(process.env.WINDOWS_NODE_TAG
+        ? {
+            windowsNodeTag: process.env.WINDOWS_NODE_TAG,
+            windowsNodeInstallerDigests: JSON.parse(
+              process.env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "",
+            ),
+          }
+        : {}),
+    }),
+  );
+  if (!publicationSelection) {
+    throw new Error("Publisher requires a publication selection.");
+  }
+  return subset
+    ? { ...publicationSelection, publishOpenclawNpm, pluginPublishScope: "selected", plugins }
+    : publicationSelection;
+}
+
 async function main() {
   const manifestPath = process.env.MANIFEST_FILE ?? "";
   if (!manifestPath) {
@@ -695,6 +891,10 @@ async function main() {
   const trustedMainRef = process.env.TRUSTED_MAIN_REF ?? "refs/remotes/origin/main";
   const consumer = process.env.PUBLICATION_CONSUMER ?? "";
   const coreProjection = consumer === "core-npm" || consumer === "docker-only";
+  const boundedOperation =
+    consumer === "publisher" &&
+    process.env.PLUGIN_PUBLISH_SCOPE === "selected" &&
+    manifest.sourceAdmission?.publicationSelection !== undefined;
   if (consumer && !["publisher", "core-npm", "docker-only"].includes(consumer)) {
     throw new Error("Unknown publication evidence consumer.");
   }
@@ -722,32 +922,17 @@ async function main() {
       ? { npmDistTag: process.env.RELEASE_NPM_DIST_TAG ?? "" }
       : undefined,
     expectedPublicationSelection:
-      consumer === "publisher"
-        ? () =>
-            normalizePublicationIntent(
-              "publish",
-              JSON.stringify({
-                route: process.env.PREPARED_PLUGINS?.trim()
-                  ? "prepared"
-                  : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
-                    ? "extended-stable"
-                    : "normal",
-                npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
-                publishOpenclawNpm: process.env.PUBLISH_OPENCLAW_NPM === "true",
-                pluginPublishScope: process.env.PLUGIN_PUBLISH_SCOPE,
-                plugins: (process.env.RELEASE_PLUGINS ?? "").split(/[\s,]+/u).filter(Boolean),
-                ...(process.env.WINDOWS_NODE_TAG
-                  ? {
-                      windowsNodeTag: process.env.WINDOWS_NODE_TAG,
-                      windowsNodeInstallerDigests: JSON.parse(
-                        process.env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "",
-                      ),
-                    }
-                  : {}),
-              }),
-            ).publicationSelection
-        : undefined,
+      consumer === "publisher" && !boundedOperation ? publisherOperationFromEnvironment : undefined,
+    expectedPublicationOperation: boundedOperation ? publisherOperationFromEnvironment : undefined,
     manifestPath,
+    npmPreflightLineage:
+      process.env.VERIFY_NPM_PREFLIGHT_LINEAGE === "true"
+        ? {
+            qualificationSha: process.env.PREFLIGHT_WORKFLOW_SHA,
+            producerRunId: process.env.PREFLIGHT_RUN_ID,
+            producerRunAttempt: process.env.PREFLIGHT_RUN_ATTEMPT,
+          }
+        : undefined,
     verifierSourceSha: process.env.WORKFLOW_SHA ?? process.env.GITHUB_SHA,
     verifierSourceContent: readFileSync(
       process.env.STRICT_VALIDATOR_FILE ??

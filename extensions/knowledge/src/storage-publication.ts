@@ -7,8 +7,9 @@ import { parseDocument, stringify } from "yaml";
 import type { VaultAccess } from "./access.js";
 import { annotationEvidence } from "./annotations.js";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
-import { EvidenceInspector, inspectEvidence } from "./evidence-files.js";
+import { EvidenceInspector, inspectEvidence, settledStamp } from "./evidence-files.js";
 import { parseYaml } from "./files.js";
+import { hashMatches } from "./hash-fence.js";
 import { lifecycleRecord, lifecycleImpact, assertLifecycleTarget } from "./lifecycle.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import { mergeRedirects } from "./merge.js";
@@ -209,7 +210,7 @@ export class StoragePublication extends StorageJournal {
         previous.lifecycle !== "active" ||
         !previous.valid ||
         previous.kind !== "page" ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash!) ||
         previous.revision !== input.expectedRevision)
     ) {
       throw new Error(
@@ -413,9 +414,6 @@ export class StoragePublication extends StorageJournal {
         );
       }
     }
-    if (!batch && new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-      throw new Error("Edit conflict: vault changed during validation.");
-    }
     const additional =
       corrected && correction
         ? [
@@ -472,6 +470,9 @@ export class StoragePublication extends StorageJournal {
         at: new Date().toISOString(),
         message: rejection.message,
         indexed: false,
+        ...(prepared.data.ontology
+          ? { ontologyFingerprint: prepared.data.ontology.fingerprint }
+          : {}),
         budget: rejection.budget,
       });
     }
@@ -495,9 +496,14 @@ export class StoragePublication extends StorageJournal {
           throw new Error("Source descriptor changed during validation.");
         }
       }
-      // Fence the exact snapshot used for schema and reference validation.
+      // Fence the exact snapshot used for schema and reference validation. The
+      // equal snapshot already fences every settled record by its change stamp;
+      // only a record rewritten too recently to trust its stamp is compared by content.
+      // SAFETY: the snapshot is the JSON [path, stamp] list PublicationFiles serialized.
+      const stamps = new Map(JSON.parse(prepared.snapshot) as [string, string][]);
       for (const r of prepared.data.records) {
-        if (files.hash(`${scope}/${r.path}`) !== r.hash) {
+        const stamp = stamps.get(`${scope}/${r.path}`);
+        if ((!stamp || !settledStamp(stamp)) && files.hash(`${scope}/${r.path}`) !== r.hash) {
           throw new Error("Edit conflict: vault changed during validation.");
         }
       }
@@ -552,13 +558,8 @@ export class StoragePublication extends StorageJournal {
       ) {
         throw new Error("Reference unavailable or inactive in this scope.");
       }
-      // Bind every descriptor used for validation and every resulting record.
-      // New sidecars are journaled; reused sidecars remain explicit replay dependencies.
-      for (const record of prepared.data.records) {
-        recordSourceDependencies(record, (p) =>
-          readSourceDescriptor(path.join(this.config.root, scope), p),
-        );
-      }
+      // Bind every descriptor of every resulting record. New sidecars are
+      // journaled; reused sidecars remain explicit replay dependencies.
       const descriptors: Record<string, string> = {};
       for (const record of [prepared.record, ...(prepared.additional ?? []).map((c) => c.after)]) {
         Object.assign(
@@ -614,6 +615,9 @@ export class StoragePublication extends StorageJournal {
         at: new Date().toISOString(),
         message: "Accepted for publication; not yet saved.",
         indexed: false,
+        ...(prepared.data.ontology
+          ? { ontologyFingerprint: prepared.data.ontology.fingerprint }
+          : {}),
       };
       if (prepared.batch) {
         receipt.items = prepared.batch.items;

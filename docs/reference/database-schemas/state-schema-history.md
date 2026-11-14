@@ -61,10 +61,41 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 | 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
+| 40      | Original requesting authority retained with pending worker provisioning                                                                                                                                                                                                                                                                        | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 40
+
+Schema 40 adds nullable `worker_environments.provision_source_json` through the
+existing environment writer. Manual creation records its original authenticated
+source with its allocation intent. Exact intent replay cannot replace or remove
+that source. Recovery checks the original source through the authentication owner
+before further provisioning; saved evidence alone does not authorize allocation.
+New independently owned internal work leaves the field `NULL`.
+
+Older unleased `requested` and `provisioning` rows and initial leased
+`bootstrapping` rows (owner epoch zero) cannot identify their original source.
+Migration marks only these pending initial creation rows with an explicit
+unavailable source. Unallocated requests fail without allocating; indeterminate provisioning retains
+its exact operation and resource identity for the existing cleanup owner. Initial
+bootstrap cannot continue without its original source and retains its lease for
+cleanup. This also applies to interrupted internal builds and reserves: recreate
+them after their old intent settles. Existing ready, idle, attached, terminal,
+and maintenance-bootstrap rows retain their bytes and behavior, with the new
+field `NULL`.
+
+SQLite and PostgreSQL publish the nullable column, targeted pending-row update,
+and schema/content markers in one migration transaction. Table-scoped verified
+backup and integrity checks cover `worker_environments` and schema publication
+metadata. Backup and pending-row processing cost scales with environment history;
+deployment qualification should record the affected row count. Unrelated state
+is unchanged. Package metadata and native shared-state readers advance to 40;
+older builds refuse the upgraded database instead of ignoring the original source.
+Rollback restores the verified pre-upgrade backup with its matching build. The
+agent schema is unchanged, and no earlier migration is rewritten.
 
 ### State schema 39
 

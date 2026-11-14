@@ -18,6 +18,7 @@ export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-op
 export {
   readSqliteDatabaseScopedWriteTokenForPath,
   readSqliteDatabaseWriteTokenForPath,
+  retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 export {
   openOpenClawAgentSqliteWorkerStore,

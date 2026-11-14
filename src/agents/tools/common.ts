@@ -282,10 +282,15 @@ export function readStringArrayParam(
   key: string,
   options: StringParamOptions = {},
 ) {
-  const { required = false, label = key } = options;
+  const { required = false, label = key, allowEmpty = false } = options;
   const values = normalizeSingleOrTrimmedStringList(readSnakeCaseParamRaw(params, key));
   if (values.length > 0) {
     return values;
+  }
+  // Callers that replace a collection (for example Discord applied tags) need an
+  // explicit empty array to survive instead of collapsing to undefined.
+  if (allowEmpty && Array.isArray(readSnakeCaseParamRaw(params, key))) {
+    return [];
   }
   if (required) {
     throw new ToolInputError(`${label} required`);
