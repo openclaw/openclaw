@@ -260,7 +260,8 @@ it.each([
   ["qwen", "rate_limit_error", "Rate limit exceeded", "rate_limit"],
   ["openai", quotaCode, exceeded, "billing"],
   ["qwen", quotaCode, "Free allocated quota exceeded.", "billing"],
-  ["qwen", quotaCode, "Unknown quota condition", "billing"],
+  // Bailian 429/insufficient_quota without a billing marker is a TPS/TPM throttle, not billing (#148236): the vendor hook owns this verdict.
+  ["qwen", quotaCode, "Unknown quota condition", "rate_limit"],
 ] as const)(
   "%s %s (%s) classifies as %s",
   async (...[provider, code, message, reason, metadata]) => {
