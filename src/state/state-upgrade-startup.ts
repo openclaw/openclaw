@@ -6,7 +6,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
-import { upgradeStateDirectory } from "./state-upgrade.js";
+import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const log = createSubsystemLogger("state/upgrade");
 
@@ -29,7 +29,7 @@ export async function upgradeStateOnGatewayStart(
   const modeValue =
     gateway && typeof gateway === "object" && "mode" in gateway ? gateway.mode : undefined;
   const mode = typeof modeValue === "string" ? modeValue : undefined;
-  if (!admits({ configExists: raw !== undefined, mode })) {
+  if (!admits({ configExists: raw !== undefined, mode }) || !isStateUpgradePending(env)) {
     return;
   }
   // File-only ownership: the old databases are not opened for writing.

@@ -108,6 +108,7 @@ function upgradedText(stateDir: string): string {
 const cases = [
   { release: "2026.7.1-blob", failStep: undefined },
   { release: "2026.8.35", failStep: undefined },
+  { release: "2026.9.37", failStep: undefined },
   { release: "2026.10.10", failStep: undefined },
   // The generic fallback cannot import 7.x session JSON files (a Doctor file import),
   // so forced-fallback cases use releases whose sessions already live in SQLite.
@@ -129,6 +130,13 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           recursive: true,
           force: true,
         });
+        // Releases write state owner-only; a checkout's directory modes follow its umask.
+        for (const { dirent, relativePath } of listDirectoryTreeStrictSync(instance.stateDir)) {
+          fs.chmodSync(
+            path.join(instance.stateDir, relativePath),
+            dirent.isDirectory() ? 0o700 : 0o600,
+          );
+        }
         restoreCorpusDeviceKeys(instance.stateDir);
         // The corpus was written in a container as /home/fixture.
         const corpus = fs
