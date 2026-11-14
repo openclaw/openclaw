@@ -140,7 +140,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "test/scripts/vitest-process-group.test.ts": 2.1,
   "test/scripts/vitest-worker-artifacts.test.ts": 170.3,
   "test/scripts/vitest-worker-artifacts.transforms.test.ts": 8.8,
-  "test/scripts/worker-deploy-build-plugin.test.ts": 49.5,
   "test/scripts/write-plugin-sdk-entry-dts.test.ts": 74.3,
   "test/scripts/write-unified-entry-dts.test.ts": 66.8,
 };

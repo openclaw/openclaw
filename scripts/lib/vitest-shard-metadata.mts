@@ -317,7 +317,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/update-cli.target-schema.test.ts", 186],
   ["test/scripts/pr-worktree-provision.test.ts", 206],
   ["src/gateway/managed-image-attachments.test.ts", 24],
-  ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
   ["test/scripts/test-projects-routing.test.ts", 21],
   // Single-worker Node file spans after splitting the sidebar's serial case groups.
