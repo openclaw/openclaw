@@ -66,6 +66,20 @@ for shared state. Missing or unreadable namespace identity also keeps ownership
 protected. A replacement container cannot verify that the previous owner died,
 even when its heartbeat is old; elapsed time never authorizes takeover.
 
+## CLI invocations against the Gateway
+
+CLI jobs can be expensive against a busy Gateway, and the cost depends on the command: several commands start plugin runtimes and open their own database connection, while others (for example `config file`) only resolve configuration and exit. Running them inside the Gateway container (`docker compose exec openclaw-gateway openclaw <command>`) and in the one-shot `openclaw-cli` service (`docker compose run --rm openclaw-cli <command>`) both consume the same host CPU and the same state directory, and the Compose file reserves neither CPU nor memory for them, so several overlapping jobs — scheduled status or list polls — can stall Gateway turns and drop channel connections. Avoid overlapping CLI jobs regardless of how they are invoked, and use the Gateway's [HTTP probes](/install/docker#health-checks) for routine health polling instead of repeated CLI calls.
+
+## Stop grace period
+
+Shutdown is bounded by a 325 s allowance (315 s drain plus a 10 s reserve), and the managed service stop timeout is 330 s. An ordinary Compose stop does not spend that allowance on admitted work: active work drains for at most 20 s, and the remaining time is kept for cancellation and durable cleanup. A short grace period therefore interrupts running work instead of letting it finish, and Docker's default 10 s or the 90 s many Compose files use can cut cleanup short: the agent database gets no clean-close seal, and the next start repeats the full session validation. Cover the whole allowance:
+
+```yaml
+services:
+  openclaw-gateway:
+    stop_grace_period: 340s
+```
+
 For a genuinely stopped or crashed foreign owner, stop the Gateway service and
 inspect its recorded holder using the same image and state mount:
 
