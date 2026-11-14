@@ -4478,7 +4478,6 @@
 ["src/gateway/server-discovery-runtime.test.ts","../infra/tailnet.js","02ce537edaf11c0cdc6785b9acb34e9f8a3cf26efc60c156709ba2921e9d5545",1]
 ["src/gateway/server-discovery-runtime.test.ts","../infra/widearea-dns.js","3897274553d45ff20947421581b0d59ddcac57a77f8a19db71f4cb4749dd3182",1]
 ["src/gateway/server-history-prewarm.test.ts","../config/sessions/session-sqlite-target.js","124c01de3a115abdb6579258b5070541e020a5590330df21dd71c62adacc0e30",1]
-["src/gateway/server-history-prewarm.test.ts","../config/sessions/session-transcript-worker-runtime.js","8d4d9ccdb6ef7d76948592afbc8bbc93684c6d79d3b8884e6b8d0e8663b03b33",1]
 ["src/gateway/server-http-plugin-auth.test.ts","../channels/plugins/gateway-auth-bypass.js","6cb8c1785b6980975f1312a56c64b46958ad72eecf7095377dc586c8a7636dad",1]
 ["src/gateway/server-http.control-ui-lazy.test.ts","./control-ui.js","0a35583a0b51149359ac00a74acb6c94e3e3a31e0dc617caac4f11423e186a5e",1]
 ["src/gateway/server-http.device-pairing-ingress.test.ts","../infra/device-pairing-join-code.js","b983b7be840a16b993f462de955b8b466917f30aff39fe890209467661ede18e",1]

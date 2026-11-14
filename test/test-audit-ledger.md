@@ -777,6 +777,23 @@ Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
 the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
 findings; no runtime result or production defect is claimed for those follow-ups.
 
+### WSL managed-dispatch ordering proof
+
+At `82e8cded772dcfc01c4f470b58f123ec7cb22266`, the managed-dispatcher WSL
+case checked the disable/restore setter sequence and eventual dispatch, but did
+not order dispatch between those calls. Both moving dispatch before policy
+activation and moving it after restoration still passed all 19 global-dispatcher
+and runtime cases. The repaired case spies on the existing managed dispatcher
+and checks that its call falls between the two policy writes. Each mutation now
+fails only the WSL case (one failed, 18 passed); restored production passes all
+19 cases in 2.64 seconds. Production was restored byte for byte.
+
+All 17 declarations and 19 expanded cases remain. The repair adds five test
+lines, no cases or production code. Timeout updates, helper/lifecycle binding,
+bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
+their existing cases. This proves the synchronous dispatch ordering under the
+WSL policy fixture; it does not claim live Windows or WSL network coverage.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
