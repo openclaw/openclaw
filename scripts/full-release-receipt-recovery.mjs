@@ -32,6 +32,10 @@ import { releaseChildDispatchInputs } from "./lib/full-release-child-request.mjs
 import { manifestContextFromEnvironment } from "./lib/full-release-manifest.mjs";
 import { validateQualificationBaselinePolicy } from "./lib/qualification-admission-baselines.mjs";
 import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
+import {
   evaluateReleaseChildPolicy,
   releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
@@ -40,18 +44,9 @@ import {
   validatePreparedNpmRelease,
 } from "./plugin-npm-prepared-release.mjs";
 import { createReleaseEvidenceClient } from "./release-ci-summary.mjs";
-import {
-  revalidateQualificationAdmissionAuthority,
-  verifyReleaseQualificationOperators,
-} from "./release-qualification-admission.mjs";
+import { revalidateQualificationAdmissionAuthority } from "./release-qualification-admission.mjs";
 import { validateQualificationJobs } from "./release-qualification-coverage.mjs";
-import {
-  runReleaseToolingGh,
-  verifyReleaseToolingIdentity,
-  verifyReleaseWorkflowRun,
-} from "./release-tooling-identity.mjs";
-
-export const RECEIPT_RECOVERY_WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
+import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 export const RECEIPT_RECOVERY_SCHEMA = "openclaw.full-release-receipt-recovery/v1";
 const ROLES = [
   "normalCi",
@@ -225,36 +220,6 @@ function producerFromManifest(manifest) {
     fullRef: manifest.workflowFullRef,
     sha: manifest.workflowSha,
   };
-}
-
-export function verifyReceiptRecoveryAuthority(
-  repository,
-  producer,
-  completed = true,
-  runGh = runReleaseToolingGh,
-) {
-  requireValue(producer.fullRef === "refs/heads/main", "recovery must execute trusted P on main");
-  verifyReleaseToolingIdentity({
-    repository,
-    workflowRef: "main",
-    workflowFullRef: producer.fullRef,
-    workflowSha: producer.sha,
-    runGh,
-  });
-  const run = verifyReleaseWorkflowRun({
-    repository,
-    workflowRef: "main",
-    workflowFullRef: producer.fullRef,
-    workflowSha: producer.sha,
-    runId: producer.runId,
-    runAttempt: String(producer.runAttempt),
-    workflowPath: RECEIPT_RECOVERY_WORKFLOW,
-    workflowEvent: "workflow_dispatch",
-    runStatePolicy: completed ? "success" : "active",
-    runGh,
-  });
-  verifyReleaseQualificationOperators(repository, run.actor, run.triggering_actor, runGh);
-  return run;
 }
 
 async function readPayload(repository, artifact, workflowSha, deps, mode, providedMetadata) {

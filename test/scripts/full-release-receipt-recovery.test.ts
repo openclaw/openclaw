@@ -15,7 +15,6 @@ import {
 import {
   authenticateReceiptRecovery,
   RECEIPT_RECOVERY_SCHEMA,
-  RECEIPT_RECOVERY_WORKFLOW,
   receiptRecoverySourceRequest,
   revalidateReceiptRecoveryRuns,
   validateReceiptRecoveryRequest,
@@ -24,7 +23,10 @@ import {
 import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import { releaseChildReuseSha256 } from "../../scripts/lib/full-release-child-request.mjs";
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
-import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
+import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  retainedPublicationArtifactSource,
+} from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import * as qualificationAuthority from "../../scripts/release-qualification-admission.mjs";
