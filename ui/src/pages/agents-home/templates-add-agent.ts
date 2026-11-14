@@ -5,7 +5,6 @@ import {
   selectNextTemplateAgentId,
   templateAgentCopyNumber,
 } from "../../../../src/templates/add-agent-id.js";
-import { toGatewayErrorInfo } from "../../api/gateway-connect-errors.ts";
 import { pathForTemplateCatalogEntry, routeIdFromPath } from "../../app-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -298,7 +297,7 @@ export async function addTemplateAgent(
         }
         const trustWarning =
           !acknowledgeClawHubRisk && isGatewayProtocolResponseError(error)
-            ? readClawHubRiskAcknowledgementRequiredError(toGatewayErrorInfo(error))?.warning
+            ? readClawHubRiskAcknowledgementRequiredError(error)?.warning
             : undefined;
         const failure: TemplateAddFailure = {
           entry: template.entry,
