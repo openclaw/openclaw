@@ -435,15 +435,18 @@ export function createHumanMentionPolicy(params: {
         });
         eligibleDirectory = { key, users, truncated: directory.truncated };
       }
-      const query = input.query?.trim().toLocaleLowerCase() ?? "";
+      // Match canonical text forms without changing profile labels or identity.
+      const query = input.query?.trim().toLocaleLowerCase().normalize("NFC") ?? "";
       const users = eligibleDirectory.users.filter(
         (candidate) =>
           (displayProfileIds
             ? displayProfileIds.includes(candidate.profileId)
             : candidate.profileId !== profile.profileId) &&
           (!query ||
-            candidate.displayName.toLocaleLowerCase().includes(query) ||
-            candidate.logins.some((login) => login.toLocaleLowerCase().includes(query))),
+            candidate.displayName.toLocaleLowerCase().normalize("NFC").includes(query) ||
+            candidate.logins.some((login) =>
+              login.toLocaleLowerCase().normalize("NFC").includes(query),
+            )),
       );
       const names = new Map<string, number>();
       for (const candidate of users) {

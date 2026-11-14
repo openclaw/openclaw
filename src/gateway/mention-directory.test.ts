@@ -291,6 +291,24 @@ it("resolves verified handles and optional full names without exposing account d
     });
   }));
 
+it.each(["NFC", "NFD"] as const)("matches canonical display names stored as %s", (form) =>
+  withInbox(async (f) => {
+    const displayName = "Café Person".normalize(form);
+    setDisplayName(f.bob.id, displayName);
+    const query = form === "NFC" ? " CAFE\u0301 " : " CAFÉ ";
+    const { users } = await searchDirectory(f, query);
+    expect(users).toEqual([
+      {
+        profileId: f.bob.id,
+        displayName,
+        avatarUrl: expect.any(String),
+        online: true,
+      },
+    ]);
+    expect(await searchDirectory(f, "Cafe")).toMatchObject({ users: [] });
+  }),
+);
+
 it("includes offline people without leaking administrative profile fields or binding raw presence", () =>
   withInbox(async (f) => {
     const offline = ensureProfileForEmail("offline@mentions.example.test");
