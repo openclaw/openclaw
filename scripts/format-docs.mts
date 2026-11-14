@@ -49,7 +49,8 @@ function commandFailureMessage(
 }
 
 function docsFiles(root: string) {
-  const result = spawnSync("git", ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"], {
+  const args = ["ls-files", "-z", ":(glob)docs/**/*.md", ":(glob)docs/**/*.mdx", "README.md"];
+  const result = spawnSync("git", args, {
     cwd: root,
     encoding: "utf8",
     maxBuffer: DOCS_FORMAT_MAX_BUFFER_BYTES,
@@ -58,12 +59,12 @@ function docsFiles(root: string) {
     throw new Error(
       commandFailureMessage("git ls-files", result, {
         command: "git",
-        args: ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"],
+        args,
       }),
     );
   }
   return spawnOutputText(result.stdout)
-    .split("\n")
+    .split("\0")
     .filter(Boolean)
     .filter((relativePath) => fs.existsSync(path.join(root, relativePath)));
 }
