@@ -495,7 +495,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   ...[
-    "src/agents/sessions/session-manager-bounded.test.ts",
     "src/agents/sessions/session-manager-model-context.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
