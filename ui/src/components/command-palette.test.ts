@@ -97,7 +97,7 @@ describe("CommandPalette search", () => {
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     const item = findPaletteOption(palette, "Nightly invoices");
     item?.click();
-    expect(palette.onNavigate).toHaveBeenCalledWith("cron");
+    expect(palette.onNavigate).toHaveBeenCalledWith("cron", { search: "?job=nightly-invoices" });
 
     await vi.advanceTimersByTimeAsync(60_000);
     await searchPalette(palette, "invoices");
@@ -114,6 +114,35 @@ describe("CommandPalette search", () => {
     setConnected(true);
     await vi.advanceTimersByTimeAsync(200);
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
+  });
+
+  it.each([
+    ["invoice /?&一", "?job=invoice%20%2F%3F%26%E4%B8%80"],
+    ["invoice-two", "?job=invoice-two"],
+  ])("opens duplicate-named automations by encoded job id: %s", async (jobId, search) => {
+    const { gateway } = createGateway(true, {
+      methods: ["cron.list"],
+      request: catalogRequest({
+        "models.list": { models: [] },
+        "cron.list": {
+          jobs: [
+            { id: "invoice /?&一", name: "Nightly invoices" },
+            { id: "invoice-two", name: "Nightly invoices" },
+          ],
+        },
+      }),
+    });
+    const { palette } = await mountPalette({
+      ...createContext(gateway, async () => null),
+      basePath: "/openclaw",
+    });
+    await searchPalette(palette, jobId);
+    await vi.waitFor(() => expect(findPaletteOption(palette, "Nightly invoices")).toBeDefined());
+    pressKey(paletteInput(palette), "Enter");
+    expect(palette.onNavigate).toHaveBeenCalledExactlyOnceWith("cron", {
+      search,
+    });
+    expect(palette.isOpen).toBe(false);
   });
 
   it("shows model results while another catalog is still pending", async () => {
