@@ -73,6 +73,7 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "SessionTranscriptReadFenceError",
   "SqliteWorkerError",
   "SessionCapabilityMetadataChangedError",
+  "SessionCapabilityReadRequiredError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
