@@ -8,6 +8,7 @@ import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { hasConflictingPluginPromptPolicy } from "./config-policy-quarantine.js";
 import { DEFAULT_PLUGINS_ENABLED } from "./default-enablement.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
@@ -153,8 +154,11 @@ function normalizePluginEntries(
     const entry = value;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
-      enabled:
-        typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      enabled: hasConflictingPluginPromptPolicy(entry.hooks)
+        ? false
+        : typeof entry.enabled === "boolean"
+          ? entry.enabled
+          : normalized[normalizedKey]?.enabled,
       hooks: normalizePluginHooks(entry.hooks) ?? normalized[normalizedKey]?.hooks,
       subagent:
         normalizePluginModelConfig(entry.subagent, "subagent") ??

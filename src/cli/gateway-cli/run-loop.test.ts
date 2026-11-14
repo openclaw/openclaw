@@ -74,6 +74,117 @@ function waitForCalls(mock: MockInstance, count: number) {
 }
 
 describe("runGatewayLoop", () => {
+  it("preserves a pending channel reload when an external restart is rejected", async () => {
+    const reload = await vi.importActual<
+      typeof import("../../gateway/server-reload-generation.js")
+    >("../../gateway/server-reload-generation.js");
+    const pendingReload = reload.beginGatewayReloadLifecycle();
+    mocks.abortPendingChannelReloads.mockImplementation(reload.abortPendingChannelReloads);
+    mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
+    mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(true);
+    try {
+      await mocks.withRunningGateway(
+        async ({ captureSignal, close, exited }) => {
+          try {
+            captureSignal("SIGUSR2")();
+            await waitForCalls(mocks.scheduleGatewayRestart, 1);
+            expect(pendingReload.aborted).toBe(false);
+            // The scheduler mock does not emit; deliver its authorized signal.
+            captureSignal("SIGUSR2")();
+            await testLoop.waitForLoopCondition(
+              () =>
+                mocks.gatewayLog.error.mock.calls.some(([message]) =>
+                  message.includes("Restart blocked"),
+                ),
+              "restart refusal",
+            );
+            expect(pendingReload.aborted).toBe(false);
+            expect(close).not.toHaveBeenCalled();
+          } finally {
+            captureSignal("SIGINT")();
+            await exited;
+          }
+        },
+        false,
+        {
+          beforeRestart: async () => {
+            throw new Error("invalid on-disk config");
+          },
+        },
+      );
+    } finally {
+      mocks.abortPendingChannelReloads.mockReset();
+      reload.abortPendingChannelReloads();
+    }
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "joins a slow restart preflight before closing on %s without a late restart",
+    async (signal) => {
+      const preflight = testLoop.createLifecycleGate();
+      await mocks.withRunningGateway(
+        async ({ captureSignal, close, start, runtime, exited }) => {
+          const stop = captureSignal(signal);
+          await testLoop.withLifecycleClock(async () => {
+            try {
+              captureSignal("SIGUSR2")();
+              await vi.advanceTimersByTimeAsync(0);
+              await preflight.entered;
+              stop();
+              // The later stop's intent deadline must not discard its pending predecessor.
+              await vi.advanceTimersByTimeAsync(1_001);
+              expect(gatewayWorkAdmissionActual.isGatewayRestartDraining()).toBe(true);
+              expect(close).not.toHaveBeenCalled();
+              expect(runtime.exit).not.toHaveBeenCalled();
+              preflight.release();
+              await vi.advanceTimersByTimeAsync(0);
+              await expect(exited).resolves.toBe(0);
+              testLoop.expectStopCloseCall(close);
+              expect(close).toHaveBeenCalledOnce();
+              expect(start).toHaveBeenCalledOnce();
+            } finally {
+              preflight.release();
+              await vi.advanceTimersByTimeAsync(0);
+              stop();
+              await vi.advanceTimersByTimeAsync(0);
+              await exited;
+            }
+          });
+        },
+        false,
+        { beforeRestart: preflight.wait },
+      );
+    },
+  );
+
+  it("keeps the serving Gateway open after failed restart admission and accepts a repaired retry", async () => {
+    const beforeRestart = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("invalid on-disk config"))
+      .mockResolvedValue(undefined);
+    await mocks.withRunningGateway(
+      async ({ captureSignal, close, start, exited }) => {
+        captureSignal("SIGUSR2")();
+        await testLoop.waitForLoopCondition(
+          () =>
+            mocks.gatewayLog.error.mock.calls.some(([message]) =>
+              message.includes("Restart blocked"),
+            ),
+          "restart refusal",
+        );
+        expect(close).not.toHaveBeenCalled();
+        expect(start).toHaveBeenCalledOnce();
+        expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
+        captureSignal("SIGUSR2")();
+        await waitForCalls(start, 2);
+        expect(close).toHaveBeenCalledOnce();
+        captureSignal("SIGINT")();
+        await expect(exited).resolves.toBe(0);
+      },
+      false,
+      { beforeRestart },
+    );
+  });
   it.each([
     { restartMode: "supervised", fatal: false },
     { restartMode: "disabled", fatal: false },

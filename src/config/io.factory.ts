@@ -1,5 +1,6 @@
 import path from "node:path";
 import { root } from "../infra/fs-safe.js";
+import { hasPluginPolicyQuarantine } from "../plugins/config-policy-quarantine.js";
 import { createConfigIoContext } from "./io.context.js";
 import { captureConfigHealthStateStore } from "./io.health-state.js";
 import { loadConfigFromContext, loadConfigFromContextAsync } from "./io.load.js";
@@ -69,7 +70,12 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
       if (resolveIsConfigReadOnly(deps.env)) {
         return false;
       }
-      if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
+      if (
+        !snapshot.exists ||
+        !snapshot.valid ||
+        hasPluginPolicyQuarantine(snapshot) ||
+        typeof snapshot.raw !== "string"
+      ) {
         return false;
       }
       const polluted = collectPollutedSecretPlaceholders(snapshot.parsed);

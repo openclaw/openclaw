@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasPluginPolicyQuarantine } from "../plugins/config-policy-quarantine.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   enqueueConfigAuditRecord,
@@ -88,7 +89,7 @@ function resolveHealthyObservationChanges(params: {
   current: ConfigHealthFingerprint;
   entry: ConfigHealthEntry;
 }): Pick<ConfigHealthEntry, "lastKnownGood" | "lastObservedSuspiciousSignature"> | null {
-  if (!params.snapshot.valid) {
+  if (!params.snapshot.valid || hasPluginPolicyQuarantine(params.snapshot)) {
     return null;
   }
   const changes = { lastKnownGood: params.current, lastObservedSuspiciousSignature: null };

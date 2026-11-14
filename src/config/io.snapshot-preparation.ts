@@ -58,6 +58,7 @@ export async function prepareConfigSnapshotValidation(
     validated: await validate(request.raw, {
       ...context.pathResolution,
       pluginValidation: context.options.pluginValidation,
+      quarantinePluginPolicy: request.prepareValidation !== "strict",
       loadPluginMetadataSnapshotAsync: metadata.loadAsync,
       sourceRaw: request.sourceRaw,
       preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,

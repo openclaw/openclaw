@@ -78,7 +78,7 @@ field map and defaults.
 ## Strict validation
 
 <Warning>
-OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. Run `openclaw doctor --fix` to repair legacy keys before starting the Gateway. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
+OpenClaw validates configuration before starting the Gateway. Unknown keys, malformed types, or invalid core settings normally cause startup to fail. Run `openclaw doctor --fix` to repair supported legacy keys. The only root-level metadata exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
 `openclaw config schema` prints the authoritative JSON Schema used by Control UI
@@ -99,7 +99,19 @@ settings. A leaf inherits the nearest ancestor tier when it has no direct hint.
 Paths with no declared ancestor default to advanced. This affects presentation
 only, not validation, defaults, reload behavior, or whether the key can be set.
 
-Startup migration uses the same fixed, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
+Doctor owns persistent legacy-key migrations. `openclaw doctor --fix` writes only when its complete repair candidate validates, including plugins, and preserves the previous config in the `.bak` ring. See [Legacy config key migrations](/gateway/doctor/config-migrations) for the conditions and fallback.
+
+One narrow runtime exception keeps an optional plugin inactive instead of stopping
+the core Gateway: opposite boolean values for a plugin's retired
+`hooks.allowPromptInjection` and current `hooks.allowPromptModification`. Neither
+permission wins. Startup and reload quarantine that plugin's hooks and capabilities
+while retaining other valid settings, authentication, and plugins. `config.get`
+reports a `PLUGIN_POLICY_QUARANTINED` warning identifying the conflicting keys.
+Source config, `$include` files, and the trusted last-known-good copy stay unchanged.
+Explicit validation and config writes still require a valid authored config.
+Resolve the permission values explicitly, then run Doctor or save the corrected
+config; reload makes the plugin available again. This exception does not repair
+malformed core authentication, access rules, or arbitrary invalid configuration.
 
 When validation still fails:
 
@@ -110,9 +122,12 @@ When validation still fails:
 
 The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
-does. If `openclaw.json` remains invalid after eligible startup migrations (including
-plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
-the current runtime keeps the last accepted config. When a write is blocked as an
+does. Outside the optional-plugin exception above, unresolved invalid configuration
+prevents cold startup. An invalid hot reload is skipped and the current runtime
+keeps the last accepted config. Ordinary `SIGUSR2` restarts validate the on-disk
+config before draining; a rejected restart leaves the serving Gateway and pending
+channel reloads intact. Update-owned handoffs retain their own admission checks.
+A quarantined runtime never promotes its conflicting source as last-known-good. When a write is blocked as an
 accidental clobber, OpenClaw attempts to save the rejected payload as
 `<path>.rejected.<timestamp>` for inspection. The warning reports whether that save
 succeeded. If it failed, the active config still stays unchanged.

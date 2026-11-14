@@ -3,6 +3,7 @@ import JSON5 from "json5";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasPluginPolicyQuarantine } from "../plugins/config-policy-quarantine.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
@@ -135,6 +136,7 @@ function* loadConfigWithEffects(
       env: deps.env,
     });
     const validationParams = {
+      quarantinePluginPolicy: true,
       ...pathResolution,
       pluginValidation: context.options.pluginValidation,
       sourceRaw: parsed,
@@ -196,6 +198,7 @@ function* loadConfigWithEffects(
     }
     if (
       deps.observe &&
+      !hasPluginPolicyQuarantine(validated) &&
       !options.skipSuspiciousRecovery &&
       !containsConfigIncludeDirective(parsed)
     ) {

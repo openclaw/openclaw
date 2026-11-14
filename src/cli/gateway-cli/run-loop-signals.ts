@@ -11,6 +11,7 @@ import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { beginGatewayRestartSignalAdmission } from "../../process/gateway-work-admission.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { createGatewaySignalObserver } from "./run-loop-exit.js";
+import { isUpdateProcessRestartReason } from "./run-loop-request.js";
 import type {
   GatewayRunSignalAction,
   GatewayRunSignalContext,
@@ -44,6 +45,7 @@ export function createGatewayRunSignals(params: {
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
+  beforeRestart?: () => Promise<void>;
   request: (
     action: GatewayRunSignalAction,
     signal: GatewayRunSignalRequest["signal"],
@@ -89,8 +91,8 @@ export function createGatewayRunSignals(params: {
   };
   const enqueueSignal = (
     readIntent: boolean,
-    handle: (intent: GatewayRestartIntent | null, acceptedAtMs: number) => void,
-    failed: (error: unknown, acceptedAtMs: number) => void,
+    handle: (intent: GatewayRestartIntent | null, acceptedAtMs: number) => void | Promise<void>,
+    failed: (error: unknown, acceptedAtMs: number) => void | Promise<void>,
   ) => {
     const iteration = params.getIteration();
     const acceptedAtMs = performance.now();
@@ -124,7 +126,7 @@ export function createGatewayRunSignals(params: {
     }
     const processSignal = async () => {
       if (!isCurrent() || controller.signal.aborted) {
-        return;
+        return undefined;
       }
       if (preparationFailure) {
         throw preparationFailure.error;
@@ -140,13 +142,16 @@ export function createGatewayRunSignals(params: {
       waitingFor = "restart-intent consumption";
       const restartIntent = consumeIntent ? await consumeIntent() : null;
       assertCurrent();
-      handle(restartIntent, acceptedAtMs);
+      // Invoke synchronous stop handlers before yielding, but do not spend the
+      // intent-read deadline on an asynchronous restart preflight.
+      return { handled: handle(restartIntent, acceptedAtMs) };
     };
     // Intent metadata must not spend the shutdown budget or prevent resume markers.
     // Native writes still settle with their owner; abort refuses any late consumption.
     const timeoutMs = Math.min(1_000, params.timeoutMs);
-    const settled = raceWithTimeout(
-      () => (signalSettlement ? signalSettlement.then(processSignal) : processSignal()),
+    const previousSettlement = signalSettlement;
+    const handled = raceWithTimeout(
+      () => (previousSettlement ? previousSettlement.then(processSignal) : processSignal()),
       Math.max(0, timeoutMs - (performance.now() - acceptedAtMs)),
       () => {
         const error = new Error(
@@ -156,11 +161,18 @@ export function createGatewayRunSignals(params: {
         throw error;
       },
       { ref: false },
-    ).catch((error: unknown) => {
-      if (isCurrent()) {
-        failed(error, acceptedAtMs);
-      }
-    });
+    )
+      .then((result) => result?.handled)
+      .catch(async (error: unknown) => {
+        if (isCurrent()) {
+          await failed(error, acceptedAtMs);
+        }
+      });
+    // A later signal can time out waiting for preflight and request a stop.
+    // Keep its predecessor joined so server cleanup cannot close resources still in use.
+    const settled = previousSettlement
+      ? Promise.all([previousSettlement, handled]).then(() => {})
+      : handled;
     signalSettlement = settled;
     void settled.then(() => {
       if (signalSettlement === settled) {
@@ -289,7 +301,11 @@ export function createGatewayRunSignals(params: {
       const reason = eagerLifecycleRuntime.peekGatewayRestartReason();
       const deferRestartDrain = params.isRuntimeResetPending();
       eagerLifecycleRuntime.markGatewayRestartHandled();
-      const handleRestart = (durableIntent: GatewayRestartIntent | null, acceptedAtMs: number) => {
+      const iteration = params.getIteration();
+      const handleRestart = (
+        durableIntent: GatewayRestartIntent | null,
+        acceptedAtMs: number,
+      ): void | Promise<void> => {
         const restartIntent = durableIntent
           ? {
               ...durableIntent,
@@ -312,29 +328,60 @@ export function createGatewayRunSignals(params: {
             gatewayLog.info("received SIGUSR2 during shutdown; ignoring");
             return;
           }
-          eagerLifecycleRuntime.abortPendingChannelReloads();
+          // Scheduling does not admit a restart. Cancel reloads only after the
+          // authorized signal passes preflight and actually requests drain.
           eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
           return;
         }
-        eagerLifecycleRuntime.abortPendingChannelReloads();
-        request(
-          "restart",
-          "SIGUSR2",
-          restartIntent?.reason ?? (durableIntent ? "gateway.restart" : reason),
-          restartIntent ?? undefined,
-          undefined,
-          { acceptedAtMs, deferRestartDrain },
-        );
+        const restart = () => {
+          eagerLifecycleRuntime.abortPendingChannelReloads();
+          request(
+            "restart",
+            "SIGUSR2",
+            restartIntent?.reason ?? (durableIntent ? "gateway.restart" : reason),
+            restartIntent ?? undefined,
+            undefined,
+            { acceptedAtMs, deferRestartDrain },
+          );
+        };
+        if (
+          params.beforeRestart &&
+          !params.isShuttingDown() &&
+          !params.isRuntimeResetPending() &&
+          !restartIntent?.successorOwner &&
+          !isUpdateProcessRestartReason(restartIntent?.reason ?? reason)
+        ) {
+          return params.beforeRestart().then(
+            () => {
+              // A stop or another iteration can win while the disk snapshot is read.
+              if (
+                signalsActive &&
+                !params.isTerminal() &&
+                !params.isShuttingDown() &&
+                params.getIteration() === iteration
+              ) {
+                restart();
+              }
+            },
+            (error: unknown) => {
+              gatewayLog.error(
+                `Restart blocked; keeping the current Gateway running: ${formatErrorMessage(error)}`,
+              );
+              eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
+            },
+          );
+        }
+        restart();
       };
       enqueueSignal(true, handleRestart, (error, acceptedAtMs) => {
         if (!authorized) {
           restartSignalFailed(error, false);
-          return;
+          return undefined;
         }
         gatewayLog.warn(
           `Restart intent could not be read; continuing the authorized local restart: ${formatErrorMessage(error)}`,
         );
-        handleRestart(null, acceptedAtMs);
+        return handleRestart(null, acceptedAtMs)?.catch(restartSignalFailed);
       });
     } catch (err) {
       restartSignalFailed(err);

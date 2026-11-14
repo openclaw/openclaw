@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayStartupPluginActivationConfig,
   resolveGatewayReloadPluginActivationCandidate,
 } from "./plugin-activation-runtime-config.js";
@@ -12,6 +13,36 @@ vi.mock("../config/plugin-auto-enable.js", () => ({ applyPluginAutoEnable: vi.fn
 const applyPluginAutoEnableMock = vi.mocked(applyPluginAutoEnable);
 const autoEnable = (config: OpenClawConfig) =>
   applyPluginAutoEnableMock.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
+
+it.each([true, false])(
+  "source activation cannot lift a conflicting plugin quarantine (%s)",
+  (legacy) => {
+    const source = {
+      plugins: {
+        entries: {
+          quarantined: {
+            enabled: true,
+            hooks: { allowPromptInjection: legacy, allowPromptModification: !legacy },
+          },
+          sibling: { enabled: true },
+        },
+      },
+    };
+    const runtime = {
+      plugins: {
+        entries: { quarantined: { enabled: false, hooks: { allowPromptModification: !legacy } } },
+      },
+    };
+    expect(
+      mergeActivationSectionsIntoRuntimeConfig({ runtimeConfig: runtime, activationConfig: source })
+        .plugins?.entries,
+    ).toEqual({
+      quarantined: { enabled: false, hooks: { allowPromptModification: !legacy } },
+      sibling: { enabled: true },
+    });
+    expect(source.plugins.entries.quarantined.enabled).toBe(true);
+  },
+);
 
 it.each([true, false])(
   "merges source enablement (%s) without replacing runtime config",

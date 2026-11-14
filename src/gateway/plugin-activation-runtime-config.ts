@@ -2,6 +2,7 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasConflictingPluginPromptPolicy } from "../plugins/config-policy-quarantine.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
@@ -13,6 +14,7 @@ import { isRecord } from "../utils.js";
 function mergeEnabledEntries(
   runtimeValue: unknown,
   activationValue: unknown,
+  pluginPolicy = false,
 ): Record<string, unknown> | undefined {
   if (!isRecord(activationValue)) {
     return undefined;
@@ -27,7 +29,10 @@ function mergeEnabledEntries(
     nextEntries ??= { ...runtimeEntries };
     nextEntries[id] = {
       ...(isRecord(runtimeEntry) ? runtimeEntry : {}),
-      enabled: activationEntry.enabled,
+      enabled:
+        pluginPolicy && hasConflictingPluginPromptPolicy(activationEntry.hooks)
+          ? false
+          : activationEntry.enabled,
     };
   }
   return nextEntries;
@@ -47,7 +52,11 @@ export function mergeActivationSectionsIntoRuntimeConfig(params: {
     if (Array.isArray(activationPlugins.allow)) {
       nextPlugins = { ...runtimePlugins, allow: [...activationPlugins.allow] };
     }
-    const nextEntries = mergeEnabledEntries(runtimePlugins.entries, activationPlugins.entries);
+    const nextEntries = mergeEnabledEntries(
+      runtimePlugins.entries,
+      activationPlugins.entries,
+      true,
+    );
     if (nextEntries !== undefined) {
       nextPlugins = { ...runtimePlugins, ...nextPlugins, entries: nextEntries };
     }

@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as doctorLegacy from "../commands/doctor/shared/legacy-config-issues.js";
 import * as channelPresence from "../plugins/channel-presence-policy.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import * as pluginIndexState from "../plugins/installed-plugin-index-record-state.js";
 import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -49,6 +50,110 @@ function fixture(
     observe: false,
   });
 }
+
+it.each([false, true])(
+  "keeps authored conflicting plugin permissions and LKG while quarantining runtime (legacy=%s)",
+  async (legacy) => {
+    const root = tempDirs.make("openclaw-plugin-policy-quarantine-");
+    const included = path.join(root, "plugin.json");
+    const source = {
+      gateway: { mode: "local", port: 19092 },
+      tools: { deny: ["exec"] },
+      plugins: { entries: { optional: { $include: "plugin.json" }, sibling: { enabled: true } } },
+    };
+    const validEntry = { enabled: true, hooks: { allowPromptModification: !legacy } };
+    fs.writeFileSync(included, JSON.stringify(validEntry));
+    const context = fixture(source, { root, pluginValidation: "core-only" });
+    const io = createConfigIO({ ...context.options, observe: false });
+    const healthy = await io.readConfigFileSnapshot();
+    expect(healthy.valid).toBe(true);
+    expect(await io.promoteConfigSnapshotToLastKnownGood(healthy)).toBe(true);
+    const lastGood = fs.readFileSync(`${context.configPath}.last-good`, "utf8");
+    const rejected = JSON.stringify({
+      enabled: true,
+      hooks: { allowPromptInjection: legacy, allowPromptModification: !legacy },
+    });
+    source.tools.deny.push("read");
+    const raw = JSON.stringify(source);
+    fs.writeFileSync(context.configPath, raw);
+    fs.writeFileSync(included, rejected);
+
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    expect(snapshot.config.plugins?.entries?.optional?.enabled).toBe(false);
+    expect(snapshot.config.plugins?.entries?.sibling?.enabled).toBe(true);
+    expect(snapshot.config.tools?.deny).toEqual(["exec", "read"]);
+    expect(snapshot.sourceConfig.plugins?.entries?.optional?.hooks).toEqual(
+      JSON.parse(rejected).hooks,
+    );
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({ errorCode: "PLUGIN_POLICY_QUARANTINED" }),
+    );
+    expect(normalizePluginsConfig(snapshot.sourceConfig.plugins).entries.optional?.enabled).toBe(
+      false,
+    );
+    expect(io.loadConfig().plugins?.entries?.optional?.enabled).toBe(false);
+    expect((await io.loadConfigAsync()).plugins?.entries?.optional?.enabled).toBe(false);
+    expect(
+      (await io.readConfigFileSnapshotWithPluginMetadata({ prepareValidation: "strict" })).snapshot
+        .valid,
+    ).toBe(false);
+    await expect(io.writeConfigFile(snapshot.sourceConfig)).rejects.toThrow();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(snapshot)).toBe(false);
+    expect(await io.prepareConfigRecovery(snapshot)).toBeNull();
+    expect(fs.readFileSync(context.configPath, "utf8")).toBe(raw);
+    expect(fs.readFileSync(included, "utf8")).toBe(rejected);
+    expect(fs.readFileSync(`${context.configPath}.last-good`, "utf8")).toBe(lastGood);
+
+    fs.writeFileSync(included, JSON.stringify(validEntry));
+    const repaired = await io.readConfigFileSnapshot();
+    expect(repaired.valid).toBe(true);
+    expect(repaired.config.plugins?.entries?.optional?.enabled).toBe(true);
+    expect(repaired.warnings.some((issue) => issue.errorCode === "PLUGIN_POLICY_QUARANTINED")).toBe(
+      false,
+    );
+    expect(repaired.config.tools?.deny).toEqual(["exec", "read"]);
+    expect(repaired.config.gateway?.port).toBe(19092);
+  },
+);
+
+it("does not hide malformed plugin enablement behind a permission quarantine", async () => {
+  const context = fixture(
+    {
+      plugins: {
+        entries: {
+          optional: {
+            enabled: "yes",
+            hooks: { allowPromptInjection: false, allowPromptModification: true },
+          },
+        },
+      },
+    },
+    { pluginValidation: "core-only" },
+  );
+  const snapshot = await readSnapshot(context);
+  expect(snapshot.valid).toBe(false);
+  expect(snapshot.issues.some((issue) => issue.path === "plugins.entries.optional.enabled")).toBe(
+    true,
+  );
+});
+
+it("does not quarantine a core authentication error alongside an optional permission conflict", async () => {
+  const context = fixture(
+    {
+      gateway: { auth: { mode: "not-an-auth-mode" } },
+      plugins: {
+        entries: {
+          optional: { hooks: { allowPromptInjection: false, allowPromptModification: true } },
+        },
+      },
+    },
+    { pluginValidation: "core-only" },
+  );
+  const snapshot = await readSnapshot(context);
+  expect(snapshot.valid).toBe(false);
+  expect(snapshot.issues.some((issue) => issue.path.startsWith("gateway.auth.mode"))).toBe(true);
+});
 
 it.skipIf(process.platform === "win32")(
   "reads captured root bytes with relative includes without following the live config alias",

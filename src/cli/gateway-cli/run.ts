@@ -13,6 +13,7 @@ import type {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
   createConfigReadError,
+  createInvalidConfigError,
   isConfigReadFailure,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
@@ -815,6 +816,20 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       beginBoot,
       completeBoot,
       onRestartStartupFailure: recoverStartupFailure,
+      beforeRestart: async () => {
+        const { readConfigFileSnapshot } = await import("../../config/io.js");
+        const restartSnapshot = await readConfigFileSnapshot({ observe: false, isolateEnv: true });
+        if (!restartSnapshot.valid) {
+          const { renderConfigValidationIssueLines } =
+            await import("../../config/issue-location.js");
+          throw isConfigReadFailure(restartSnapshot)
+            ? createConfigReadError(restartSnapshot)
+            : createInvalidConfigError(
+                restartSnapshot.path,
+                `${renderConfigValidationIssueLines(restartSnapshot).join("\n")}\nRun openclaw doctor --fix, then retry the restart.`,
+              );
+        }
+      },
       onProcessResourcesSettled: hooks.onProcessResourcesSettled,
       start: async (startOptions = {}) => {
         const { requestHotReloadRecovery, ...startupOptions } = startOptions;

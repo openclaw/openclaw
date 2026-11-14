@@ -52,7 +52,12 @@ Doctor preserves explicit `true` and `false` values and leaves an unset grant
 unset. It removes the old key only after copying its value, or confirming both
 keys have the same boolean value. Conflicting or invalid values stop the repair
 before config publication; resolve the reported keys and run Doctor again.
-Ordinary reads reject the retired key instead of ignoring a denial. Doctor also
+When both keys contain opposite booleans, ordinary runtime reads quarantine the
+affected optional plugin instead of choosing a permission or stopping an otherwise
+valid core Gateway. Its hooks and capabilities remain inactive until explicit
+repair. Source config, includes, and last-known-good remain unchanged; explicit
+validation and writes still reject the conflict. Other invalid or retired values
+remain validation errors. Doctor also
 keeps active legacy prompt policy ahead of last-known-good recovery, so an older
 backup cannot replace a newer grant or denial while an include needs repair. Existing
 include-write constraints still apply, and plugin-owned `config` fields are not
