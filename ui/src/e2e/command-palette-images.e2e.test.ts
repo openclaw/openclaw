@@ -47,6 +47,56 @@ function anchors(palette: Locator) {
 }
 
 suite.define(() => {
+  it("previews an image above the palette and preserves both drafts after dismissal", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, scenario());
+      const { palette, input, composer, url } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
+      await input.press("Tab");
+      await input.fill("Compare these images");
+      await pasteImages(input, 2);
+      const images = palette.locator(".chat-attachment-thumb img");
+      await expect.poll(() => images.count()).toBe(2);
+      const preview = page.getByRole("dialog", { name: "Image preview: image-0.png", exact: true });
+      const thumbnail = palette.getByRole("button", {
+        name: "Open image image-0.png",
+        exact: true,
+      });
+      await thumbnail.click();
+      await preview.waitFor({ state: "visible" });
+      expect(await preview.locator("img").getAttribute("src")).toBe(
+        await images.first().getAttribute("src"),
+      );
+      await page.keyboard.press("Escape");
+      await preview.waitFor({ state: "hidden" });
+      await expect
+        .poll(() => thumbnail.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      expect(await input.inputValue()).toBe("Compare these images");
+      expect(await images.count()).toBe(2);
+      await thumbnail.press("Enter");
+      await preview.waitFor({ state: "visible" });
+      await preview.getByRole("button", { name: "Close image preview", exact: true }).click();
+      await preview.waitFor({ state: "hidden" });
+      await palette.getByRole("button", { name: "Remove image-0.png", exact: true }).click();
+      await expect.poll(() => images.count()).toBe(1);
+      expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
+      await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
+      expect(await input.inputValue()).toBe("Compare these images");
+      expect(await images.count()).toBe(1);
+      expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
+      expect(page.url()).toBe(url);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      expect(await gateway.getRequests("sessions.create")).toEqual([]);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+    });
+  });
+
   it.each([1280, 390])(
     "keeps the card anchored through paste and restores it after removal at %s px",
     async (width) => {
