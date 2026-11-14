@@ -56,7 +56,12 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
         normalizedChannelId,
         process.env,
         normalizedAccountId,
-      ).catch(() => []);
+      ).catch((err: unknown) => {
+        changes.push(
+          `Warning: pairing store read failed for channel ${normalizedChannelId}, account ${normalizedAccountId}: ${String(err)}`,
+        );
+        return [];
+      });
       const recovered = normalizeUniqueStringEntries(fromStore);
       if (recovered.length === 0) {
         return;
