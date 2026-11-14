@@ -1558,6 +1558,13 @@ div.new-session-page__project-search {
     width: fit-content;
   }
 
+  /* Empty catalogs have no effort chip to fill the track. Keep that status by
+     the actions; loading and model selections retain their stable alignment. */
+  .new-session-page .agent-chat__composer-controls .chat-controls__model-trigger--empty {
+    display: flex;
+    margin-inline-start: auto;
+  }
+
   .new-session-page .chat-controls__trigger-provider-icon {
     display: none;
   }

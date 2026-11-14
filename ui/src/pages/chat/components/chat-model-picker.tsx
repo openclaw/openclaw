@@ -175,6 +175,8 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             "chat-controls__inline-select-trigger chat-controls__model-trigger",
             {
               "chat-controls__model-trigger--loading": params.triggerLoading,
+              "chat-controls__model-trigger--empty":
+                params.modelCatalogState?.hasSnapshot && params.modelOptions.length === 0,
             },
           ]}
           data-chat-model-select="true"
