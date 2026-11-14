@@ -2765,7 +2765,7 @@ export async function validateReleaseRunEvidence(
       throw new Error("Protected publication tooling tag changed");
     }
     const { authenticateReceiptRecovery } = await import("./full-release-receipt-recovery.mjs");
-    return authenticateReceiptRecovery({
+    const evidence = await authenticateReceiptRecovery({
       manifest: retained.manifest,
       artifact: retained.artifact,
       run: selectedRun,
@@ -2773,6 +2773,7 @@ export async function validateReleaseRunEvidence(
       verifier,
       expectedRunAttempts: remainingExpectedRunAttempts,
     });
+    return { ...evidence, qualification: qualificationFacts(evidence) };
   }
   const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
@@ -3321,7 +3322,7 @@ export async function validateReleaseRunEvidence(
   const childConclusions = Object.fromEntries(
     children.map((child) => [child.role, child.conclusion]),
   );
-  return sortReleaseJsonValueKeys({
+  const evidence = sortReleaseJsonValueKeys({
     children,
     waivers,
     conclusions: {
@@ -3367,6 +3368,26 @@ export async function validateReleaseRunEvidence(
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
     verifier,
   });
+  return { ...evidence, qualification: qualificationFacts(evidence) };
+}
+
+// Normalize only after the owner has authenticated the complete evidence graph.
+// Recovery retains its original admission here, never in the aggregate source field.
+function qualificationFacts(evidence) {
+  const admission = evidence.qualificationAdmission ?? null;
+  const manifest = evidence.current.manifest;
+  /** @type {"direct" | "recovery" | "historical"} */
+  const kind = admission ? (manifest.receiptRecovery ? "recovery" : "direct") : "historical";
+  return {
+    kind,
+    candidateSha: evidence.current.targetSha,
+    qualificationSha: admission?.request.qualificationSha ?? evidence.current.workflowSha,
+    admission,
+    coverage: admission?.coverage ?? null,
+    coveragePolicy: admission
+      ? manifest.sourceAdmission.coverage.coverage_policy || undefined
+      : manifest.validationInputs?.coveragePolicy,
+  };
 }
 
 function parseReleaseCiSummaryArgs(argv) {

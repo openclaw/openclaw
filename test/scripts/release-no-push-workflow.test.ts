@@ -2071,7 +2071,7 @@ describe("release validation no-push transport", () => {
       ["Extended-stable core npm publication stays on the canonical extended-stable release flow"],
     );
     expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
-    expect(validateEvidence.env?.EXPECTED_WORKFLOW_BRANCH).toBe("${{ github.ref_name }}");
+    expect(validateEvidence.env?.TRUSTED_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
     expectText(validateReleaseBranch.run, [
       'expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"',
       "must be reachable from ${EXPECTED_VALIDATION_BRANCH}",

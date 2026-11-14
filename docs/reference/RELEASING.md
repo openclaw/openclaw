@@ -255,6 +255,39 @@ the coordinated tooling cut; never rewrite an existing authenticated receipt or
 reuse its digest for different bytes. This tooling change does not authorize a
 release dispatch or publication.
 
+### Shared qualification validation
+
+`validateReleaseRunEvidence` in `scripts/release-ci-summary.mjs` owns the
+authenticated qualification verdict. It verifies the exact parent and child
+attempts, workflow provenance, retained artifacts, required coverage, and
+checked-in waiver policy. Its `qualification` facts distinguish direct
+admission, authenticated receipt recovery, and supported historical evidence.
+Direct and recovered qualification retain the same original admission, C/Q
+identity, and coverage; recovery never copies that admission into the aggregate
+manifest’s `sourceAdmission.qualificationAdmission`.
+
+`full-release-receipt-recovery.mjs` authenticates the recovery seal and original
+receipts at that boundary. `validate-full-release-validation-evidence.mjs`
+consumes the verdict and owns publication eligibility: exact tag, selected
+publication operations, and covered plugin subsets. Its authenticated handoff
+retains the same evidence and rechecks live authority; a serialized verdict or
+caller-provided success flag cannot replace authentication.
+
+Candidate readiness, publication preflight, prepared npm adoption, ClawHub,
+npm preflight, and Docker artifact consumers use this path. Transport adapters
+retrieve evidence and present failures; they do not decide qualification again.
+`release-publish-gates.mts` retains publication profile, soak, and performance
+requirements. It also applies the shared advisory policy for offline stable
+closeout, whose input is the original checksum-bound published snapshot rather
+than a new hosted qualification.
+
+Version 3/4 historical publication evidence retains its explicit strict-reader
+adapters; version 2 remains diagnostic-only. The existing strict JSON
+`qualificationAdmission` field and publication source labels remain readable
+for their CLI consumers. Raw manifests, receipts, reports, failures, and waiver
+scopes are unchanged. Updating these readers does not update a frozen release’s
+tooling or authorize a new qualification or publication.
+
 ### Frozen qualification identity
 
 New candidate qualification records three separate identities:

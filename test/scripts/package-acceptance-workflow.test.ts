@@ -6626,8 +6626,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       expect(step.run).toContain("^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$");
       expect(step.run).toContain('trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"');
       expect(step.run).toContain('git rev-parse "${trusted_publisher_ref}^{commit}")" != "${');
-      expect(step.run).toContain('"+refs/heads/main:${trusted_main_ref}"');
-      expect(step.run).toContain('TRUSTED_MAIN_REF="${trusted_main_ref}"');
+      // Ancestry is authenticated by the shared evidence reader, not local Git plumbing.
+      expect(step.run).not.toContain("TRUSTED_MAIN_REF");
       if (workflowPath === RELEASE_PUBLISH_WORKFLOW) {
         expect(step.env?.VALIDATOR_FILE).toBe(
           "${{ github.workspace }}/.release-validation-tooling/scripts/validate-full-release-validation-evidence.mjs",
@@ -15025,7 +15025,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
-      EXPECTED_WORKFLOW_BRANCH: "${{ github.ref_name }}",
       PUBLICATION_CONSUMER:
         "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
       PUBLISH_DOCKER_ONLY: "${{ inputs.publish_docker_only }}",

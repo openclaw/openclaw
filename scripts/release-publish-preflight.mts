@@ -47,10 +47,7 @@ import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
-import {
-  authenticateFullReleaseValidationEvidence,
-  validateFullReleaseValidationEvidence,
-} from "./validate-full-release-validation-evidence.mjs";
+import { authenticateFullReleaseValidationEvidence } from "./validate-full-release-validation-evidence.mjs";
 
 type PreflightContext = {
   manifest?: PublishPreflightRecord;
@@ -62,7 +59,7 @@ type PreflightContext = {
   npmManifest?: PublishPreflightRecord;
   npmManifestPath?: string;
   npmPreflightRun?: PublishPreflightRecord;
-  fullValidationEvidence?: unknown;
+  fullValidationEvidence?: Awaited<ReturnType<typeof authenticateFullReleaseValidationEvidence>>;
 };
 const SHA = /^[a-f0-9]{40}$/u;
 const POSITIVE_ID = /^[1-9][0-9]*$/u;
@@ -394,7 +391,6 @@ export async function runReleasePublishPreflight(
               expectedReleaseTag: options.tag,
               expectedTrustedWorkflowFullRef: `refs/${PUBLISH_REF.test(workflowRef) ? "tags" : "heads"}/${workflowRef}`,
               expectedTrustedWorkflowSha: toolingSha,
-              expectedWorkflowBranch: workflowRef,
               expectedPublicationSelection: selection,
               verifierSourceSha: execFileSync(
                 "git",
@@ -406,26 +402,11 @@ export async function runReleasePublishPreflight(
               verifierSourceContent: readFileSync(
                 new URL("./release-ci-summary.mjs", import.meta.url),
               ),
-              isTrustedMainAncestor: (sha: string) => {
-                const result = requirePreflightRecord(
-                  api(`compare/${sha}...main?per_page=1`),
-                  "ancestry",
-                );
-                return result.status === "ahead" || result.status === "identical";
-              },
             };
             if (context.fullValidationEvidence) {
-              const prior = requirePreflightRecord(
-                context.fullValidationEvidence,
-                "authenticated candidate evidence",
-              );
-              const evidence = requirePreflightRecord(prior.evidence, "strict candidate evidence");
-              const validated = validateFullReleaseValidationEvidence({
-                ...validationOptions,
-                getWorkflowSource: (sha: string) => client.getWorkflowSource(sha),
-                validateEvidenceReuseStrictly: () => evidence,
-              });
-              return { ...validated, evidence };
+              const prior = context.fullValidationEvidence;
+              const validated = prior.forPublication(validationOptions);
+              return { ...validated, evidence: prior.evidence };
             }
             return authenticateFullReleaseValidationEvidence(validationOptions, client);
           },

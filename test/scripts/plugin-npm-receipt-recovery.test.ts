@@ -41,7 +41,8 @@ it("uses original Q plugin bytes and policy after the aggregate owner authentica
   };
   const revalidateAuthority = vi.fn();
   authenticated.mockResolvedValue({
-    evidence: { current: { manifest, workflowRefProof: "receipt-backed-recovery-v1" } },
+    evidence: { current: { manifest } },
+    qualification: { kind: "recovery", candidateSha: q, qualificationSha: q },
     revalidateAuthority,
   });
   const policy = "original immutable Q policy";

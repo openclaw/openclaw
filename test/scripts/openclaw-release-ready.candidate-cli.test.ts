@@ -72,9 +72,9 @@ async function dispatchPrepare(revokeBeforeDispatch: boolean) {
     ...(await importOriginal<typeof import("../../scripts/release-ci-summary.mjs")>()),
     createReleaseEvidenceClient: () => client,
   }));
-  vi.doMock("node:child_process", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("node:child_process")>()),
-    execFileSync(command: string, args: string[]) {
+  vi.doMock("node:child_process", async (importOriginal) => {
+    const original = await importOriginal<typeof import("node:child_process")>();
+    const execFileSync = (command: string, args: string[]) => {
       if (command === "git" && args.join(" ") === "show " + qualification.q + ":package.json") {
         return JSON.stringify({ version });
       }
@@ -108,8 +108,11 @@ async function dispatchPrepare(revokeBeforeDispatch: boolean) {
         return JSON.stringify({ workflow_run_id: 9400 });
       }
       throw new Error("Unexpected GitHub transport: " + args.join(" "));
-    },
-  }));
+    };
+    // The tooling transport uses the builtin default export; local git uses
+    // the named export. Keep both at the same external-process boundary.
+    return { ...original, execFileSync, default: { ...original.default, execFileSync } };
+  });
   const errors: string[] = [];
   const errorOutput = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     errors.push(args.map(String).join(" "));

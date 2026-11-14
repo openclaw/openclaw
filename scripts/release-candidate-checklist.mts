@@ -35,6 +35,7 @@ import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
@@ -1839,35 +1840,6 @@ export function preflightDependencyTarballs(manifest: PreflightTarballs) {
   return preflightTarballs(manifest, "dependencyTarballs", "corePackageTarballs");
 }
 
-export function validateFullManifest(manifest: JsonRecord, params: JsonRecord) {
-  if (manifest.workflowName !== "Full Release Validation") {
-    throw new Error(`full validation workflow mismatch: ${formatJsonValue(manifest.workflowName)}`);
-  }
-  if (manifest.targetSha !== params.targetSha) {
-    throw new Error(
-      `full validation SHA mismatch: expected ${formatJsonValue(params.targetSha)}, got ${formatJsonValue(manifest.targetSha)}`,
-    );
-  }
-  if (manifest.releaseProfile !== params.releaseProfile) {
-    throw new Error(
-      `full validation profile mismatch: expected ${formatJsonValue(params.releaseProfile)}, got ${formatJsonValue(manifest.releaseProfile)}`,
-    );
-  }
-  if (manifest.rerunGroup !== "all") {
-    throw new Error(
-      `full validation must use rerun_group=all, got ${formatJsonValue(manifest.rerunGroup)}`,
-    );
-  }
-  if (
-    (params.releaseProfile === "stable" || params.releaseProfile === "full") &&
-    manifest.runReleaseSoak !== "true"
-  ) {
-    throw new Error(
-      `full validation must record runReleaseSoak=true for ${formatJsonValue(params.releaseProfile)} release candidates`,
-    );
-  }
-}
-
 export function candidateParallelsArgs(
   tarballPath: string,
   dependencyTarballPaths: string[] = [],
@@ -2365,9 +2337,9 @@ async function main() {
     expectedRunAttempt: fullRun.runAttempt,
     expectedTargetSha: targetSha,
     expectedReleaseTag: options.tag,
-    expectedWorkflowBranch: options.workflowRef,
+    expectedTrustedWorkflowFullRef: publishWorkflowIdentity?.fullRef,
+    expectedTrustedWorkflowSha: publishWorkflowIdentity?.sha,
     expectedPublicationSelection: () => publicationSelectionForChecklist(options),
-    isTrustedMainAncestor: (sha: string) => gitIsAncestor(sha, "refs/remotes/origin/main"),
     manifestPath: join(fullDir, "full-release-validation-manifest.json"),
     verifierSourceSha: toolingSha,
     verifierSourceContent: readFileSync(join(TOOLING_ROOT, "scripts/release-ci-summary.mjs")),
@@ -2507,10 +2479,17 @@ async function main() {
   const pluginClawHubPlan = publicationAdmission
     ? publicationAdmission.observations.plans.clawhub
     : await collectPluginPlanWithRetry("scripts/plugin-clawhub-release-plan.ts", options);
-  validateFullManifest(fullManifest, {
-    targetSha,
-    releaseProfile: options.releaseProfile,
-  });
+  const readinessFailures = evaluateReleasePublishGates({
+    manifest: fullValidationEvidence.evidence.current.manifest,
+    consumer: "publisher",
+    releaseTag: options.tag,
+    npmDistTag: options.npmDistTag,
+    expectedSha: targetSha,
+    expectedReleaseProfile: options.releaseProfile,
+  }).filter((gate) => gate.status === "FAIL");
+  if (readinessFailures.length > 0) {
+    throw new Error(readinessFailures.map((gate) => gate.message).join("\n"));
+  }
   const tarballPath = join(
     npmDir,
     requireString(npmManifest.tarballName, "npm preflight tarball name"),

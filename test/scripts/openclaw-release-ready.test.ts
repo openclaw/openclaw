@@ -987,6 +987,29 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  // Keep archive transport hermetic on hosts without unzip, while the real
+  // evidence reader still verifies the ZIP digest, entry list, and manifest.
+  const unzip = writeFixtureFile(
+    fixture.root,
+    "bin/unzip",
+    `#!${process.execPath}
+    import { readFileSync } from 'node:fs';
+    import JSZip from ${JSON.stringify(import.meta.resolve("jszip"))};
+    const args = process.argv.slice(2);
+    if (args.length !== 3 || !(
+      (args[0] === '-Z' && args[1] === '-1') || args[0] === '-p'
+    )) throw new Error('unexpected fixture unzip operation: ' + JSON.stringify(args));
+    const archive = await JSZip.loadAsync(readFileSync(args[0] === '-Z' ? args[2] : args[1]));
+    if (args[0] === '-Z') {
+      process.stdout.write(Object.keys(archive.files).join('\\n') + '\\n');
+    } else {
+      const entry = archive.file(args[2]);
+      if (!entry) throw new Error('fixture archive entry missing: ' + args[2]);
+      process.stdout.write(await entry.async('nodebuffer'));
+    }
+  `,
+  );
+  chmodSync(unzip, 0o755);
   const git = writeFixtureFile(
     fixture.root,
     "bin/git",

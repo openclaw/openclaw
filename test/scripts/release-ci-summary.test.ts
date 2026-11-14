@@ -669,7 +669,6 @@ describe("original publication admission reader", () => {
             expectedRunAttempt: fault === "wrong-attempt" ? 2 : 1,
             expectedTargetSha: fault === "wrong-target" ? "d".repeat(40) : fixture.targetSha,
             expectedReleaseTag: "v2026.8.28-beta.1",
-            isTrustedMainAncestor: () => true,
             verifierSourceContent: strictOptions.verifierSourceContent,
             verifierSourceSha: strictOptions.verifierSourceSha,
             ...(fault === "wrong-route"
@@ -1748,6 +1747,53 @@ describe("release CI summary child correlation", () => {
     expect(rerunJob).toHaveBeenCalledExactlyOnceWith(producerJob.id);
     expect(rerunParent).toHaveBeenCalledExactlyOnceWith(fixture.runId);
     expect((await verify.mock.results[0]!.value).children).toHaveLength(5);
+  });
+
+  it("consumes historical source-admitted operations without a registry-admission contract", async () => {
+    const fixture = trustedMainNpmFixture();
+    const sourceAdmission = publicationSourceFixture(fixture, true);
+    Object.assign(fixture.executionPlan, { sourceAdmissionContract: "1", sourceAdmission });
+    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+    const manifest = Object.assign(fixture.manifest, {
+      sourceAdmissionContract: "1",
+      sourceAdmission,
+      trustedWorkflow: fixture.executionPlan.trustedWorkflow,
+      executionPlanSha256: fixture.executionPlan.sha256,
+    });
+    Object.assign(manifest.validationInputs, publicationIntentInputs(sourceAdmission));
+    const manifestJson = JSON.stringify(manifest);
+    const retainedManifest = JSON.parse(manifestJson);
+    const client = {
+      ...createReleaseEvidenceClient("openclaw/openclaw"),
+      ...fixture.client,
+      getJobLog: async (jobId: number) => fixture.client.getJobLog(jobId),
+      getRun: async (runId: string) => fixture.client.getRun(runId),
+      getRunView: async (runId: string) => fixture.client.getRunView(runId),
+      getParentJobs: async (runId: string) => fixture.client.getParentJobs(runId),
+      getRunAttemptJobs: async (runId: string) => fixture.client.getRunAttemptJobs(runId),
+      loadManifest: () => ({ artifact: fixture.artifact, manifest: retainedManifest }),
+      getWorkflowSource: () => 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n',
+    };
+    const options = {
+      run: fixture.parentRun,
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: fixture.runId,
+      expectedRunAttempt: 1,
+      expectedTargetSha: fixture.targetSha,
+      expectedReleaseTag: "v2026.8.28-beta.1",
+      expectedPublicationOperation: expectDefined(
+        sourceAdmission.publicationSelection,
+        "selection",
+      ),
+      verifierSourceSha: fixture.workflowSha,
+      verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+    };
+    const result = await authenticateFullReleaseValidationEvidence(options, client);
+    expect(result.qualification.kind).toBe("historical");
+    expect(result.publicationAdmission).toBeNull();
+    expect(() =>
+      result.forPublication({ ...options, expectedReleaseTag: "v2026.8.28-beta.2" }),
+    ).toThrow("exact publication tag");
   });
 
   it.each(["deleted-manifest", "deleted-plan", "changed-plan", "deleted-publication"])(
