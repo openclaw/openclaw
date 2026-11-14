@@ -67,7 +67,8 @@ export function templateInitializationCheckpoints(
 
 /**
  * Remove an agent this request admitted when it was refused before any Template write.
- * Returns false, leaving the agent kept, when the removal itself fails.
+ * Returns false, leaving the agent kept, when removing the agent fails. Once the agent is
+ * removed the refusal stands; a conversation that could not be removed is only logged.
  */
 export async function discardAdmittedTemplateAgent(
   admitted: AdmittedTemplateAgent,
@@ -80,6 +81,7 @@ export async function discardAdmittedTemplateAgent(
   stateContext: OpenClawStateWorkerContext,
 ): Promise<boolean> {
   const { agentId, config, chat, workspace } = admitted;
+  let removed = false;
   try {
     await withOpenClawStateLeaseAsync(
       {
@@ -99,12 +101,18 @@ export async function discardAdmittedTemplateAgent(
           { ...config, id: agentId, workspace: config.workspace ?? workspace },
           [],
         );
+        removed = true;
         await chat();
       },
     );
   } catch (error) {
-    defaultRuntime.log(`Refused Template Add kept its new agent: ${coerceErrorMessage(error)}`);
-    return false;
+    if (!removed) {
+      defaultRuntime.log(`Refused Template Add kept its new agent: ${coerceErrorMessage(error)}`);
+      return false;
+    }
+    defaultRuntime.log(
+      `Refused Template Add removed its new agent but not its conversation: ${coerceErrorMessage(error)}`,
+    );
   }
   await rmdir(workspace).catch(() => {});
   return true;

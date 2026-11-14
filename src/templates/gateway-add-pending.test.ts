@@ -504,7 +504,7 @@ it("publishes the ordinary durable agent and empty canonical chat before resolvi
   });
 });
 
-it("removes the agent it admitted when the reviewed plan is blocked", async () => {
+it.each([false, true])("drops a blocked review's agent (chat cleanup fails: %s)", async (fails) => {
   await withOpenClawTestState({ label: "template-blocked-review" }, async (state) => {
     const root = state.path("template-source");
     await fs.mkdir(root);
@@ -594,7 +594,11 @@ it("removes the agent it admitted when the reviewed plan is blocked", async () =
           if (prepared.status !== "completed" || !prepared.rollback) {
             throw new Error("Session preparation failed");
           }
-          return prepared.rollback;
+          return fails
+            ? Object.assign(async () => {
+                throw new Error("Session store unavailable");
+              }, prepared.rollback)
+            : prepared.rollback;
         },
         waitForAgentRuntime: async () => {
           const admitted = (await readConfigFileSnapshot()).config.agents?.entries?.[
@@ -617,7 +621,9 @@ it("removes the agent it admitted when the reviewed plan is blocked", async () =
     expect((await readConfigFileSnapshot()).config.agents?.entries).not.toHaveProperty(
       "fixture-blocked",
     );
-    expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeUndefined();
-    await expect(fs.stat(admittedWorkspace!)).rejects.toMatchObject({ code: "ENOENT" });
+    if (!fails) {
+      expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeUndefined();
+      await expect(fs.stat(admittedWorkspace!)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 });
