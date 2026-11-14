@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import {
   setupModelAccountConnectTest,
   prepareUserProfileSelectionAuthority,
@@ -385,4 +391,51 @@ describe("users model-account control plane", () => {
       );
     },
   );
+});
+
+it("uses membership for administrator account access, not the profile default", async () => {
+  const config: OpenClawConfig = {
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: {
+          admin: {
+            scopes: ["operator.admin"],
+            agents: "*" as const,
+            sessions: { others: "write" as const },
+          },
+          reader: {
+            scopes: ["operator.read"],
+            agents: "*" as const,
+            sessions: { others: "none" as const },
+          },
+        },
+      },
+    },
+  };
+  setConfig(config);
+  setRuntimeConfigSnapshot(config);
+  let principal = {
+    kind: "member" as const,
+    peerKey: `iroh:${"ab".repeat(32)}`,
+    accountId: "account-admin",
+    role: "admin",
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  const admin = createClient("profile-admin", ["operator.admin"]);
+  admin.internal = { openclawIdPrincipal: principal };
+  listUserModelAccounts.mockReturnValue({ accounts: [] });
+  try {
+    expect(
+      await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin),
+    ).toHaveBeenCalledWith(true, { profileId: "profile-other", accounts: [], links: [] });
+    principal = { ...principal, role: "reader" };
+    admin.internal = { openclawIdPrincipal: principal };
+    expect(
+      await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin),
+    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+  } finally {
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    clearRuntimeConfigSnapshot();
+  }
 });

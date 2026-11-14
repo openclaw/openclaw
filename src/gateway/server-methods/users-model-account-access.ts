@@ -22,7 +22,10 @@ import {
   currentOwnerDevicePrincipal,
   openclawIdSubjectRolePolicy,
 } from "../openclaw-id/tunnel-principal.js";
-import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
+import {
+  resolveAdministratorMemberRolePolicy,
+  resolveOperatorRolePolicyForAssignment,
+} from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
@@ -109,13 +112,16 @@ export async function prepareUserModelAccountAction(
       throw new ModelAccountConnectAuthorityError();
     }
     // An owner device attributed to its linked profile keeps owner authority (OCF-510).
-    const role = openclawIdSubjectRolePolicy(currentOwnerDevicePrincipal(client), () =>
-      resolveOperatorRolePolicyForAssignment(
-        actor,
-        assignment ? assignment.role : actorIdentity.role,
-        context.getRuntimeConfig(),
-        actorIdentity.githubLogin ?? null,
-      ),
+    const role = openclawIdSubjectRolePolicy(
+      currentOwnerDevicePrincipal(client),
+      () =>
+        resolveAdministratorMemberRolePolicy(client, context.getRuntimeConfig()) ??
+        resolveOperatorRolePolicyForAssignment(
+          actor,
+          assignment ? assignment.role : actorIdentity.role,
+          context.getRuntimeConfig(),
+          actorIdentity.githubLogin ?? null,
+        ),
     );
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
     if (

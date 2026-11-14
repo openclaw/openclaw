@@ -292,6 +292,21 @@ export function resolveOperatorRolePolicy(
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
 }
 
+/** Administrator members use membership, while other callers keep their profile policy. */
+export function resolveAdministratorMemberRolePolicy(
+  client: GatewayClient | null | undefined,
+  cfg: OpenClawConfig,
+): GatewayOperatorRoleDefinition | undefined {
+  const principal =
+    client?.internal?.openclawIdPrincipal ??
+    client?.internal?.operatorRunAuthority?.openclawIdPrincipal;
+  if (!client || principal?.kind !== "member" || !client.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return undefined;
+  }
+  const policy = resolveOperatorRolePolicy(client, cfg);
+  return policy?.scopes.includes(ADMIN_SCOPE) ? policy : deniedOperatorRole;
+}
+
 /** A retained caller cannot keep grants removed by the current named role. */
 export function authorizeCurrentOperatorRoleScopes(
   client: GatewayClient | null,

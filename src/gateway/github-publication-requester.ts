@@ -191,6 +191,15 @@ function prepareRequesterPolicy(
     }
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
+    // Records with neither a principal nor a source cannot distinguish member and
+    // other sign-ins. Linked profiles must request those publications again.
+    if (
+      !snapshot.authenticationSource &&
+      !snapshot.openclawIdPrincipal &&
+      profile?.hasOpenClawIdIdentity
+    ) {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
     const principal = snapshot.openclawIdPrincipal;
     if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new GitHubPublicationRequesterUnavailableError();
@@ -394,6 +403,7 @@ export async function prepareGitHubPublicationRequesterV2(
         : undefined;
     const snapshot: GitHubPublicationRequesterSnapshot = Object.freeze({
       version: 1,
+      authenticationSource: principal ? "openclaw-id-member" : "non-member",
       actor: Object.freeze(
         source
           ? { kind: "operator" as const, profileId: source.authority.profileId }
