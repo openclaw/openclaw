@@ -14,31 +14,29 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import {
+  carriesTurnContext,
+  type ClaudeCliFinalizeContext,
+  privateInputHolds,
+  relayNativeStop,
+} from "./cli-runtime-hooks.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-// Same overall revision limit as the embedded runner, so a finalize hook cannot loop a turn.
-const MAX_FINALIZE_REVISIONS = 3;
 
 /**
  * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
  * whose history owner can change while the run lasts (a native login) passes a check for
  * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
  */
-export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
-  assertPrivateInputCurrent?: () => void;
-  prepareCredentialUse?: () => Promise<void>;
-  /** Present when a plugin registers before_agent_finalize; native Stop asks it to settle. */
-  runBeforeAgentFinalize?: (stop: {
-    stopHookActive: boolean;
-    lastAssistantMessage?: string;
-    transcriptPath?: string;
-    cwd?: string;
-  }) => Promise<{ action: "continue" | "finalize" } | { action: "revise"; reason: string }>;
-};
+export type ClaudeCliExecuteContext = CliBackendExecuteContext &
+  ClaudeCliFinalizeContext & {
+    assertPrivateInputCurrent?: () => void;
+    prepareCredentialUse?: () => Promise<void>;
+  };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
   controller: AbortController;
@@ -113,24 +111,6 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
-}
-
-function privateInputHolds(turn: ClaudeCliTurn): boolean {
-  try {
-    turn.context.assertPrivateInputCurrent?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
-  return (
-    request.callback_id === "UserPromptSubmit" &&
-    isRecord(response) &&
-    isRecord(response.hookSpecificOutput) &&
-    response.hookSpecificOutput.additionalContext !== undefined
-  );
 }
 
 async function authorizeTool(
@@ -221,24 +201,7 @@ async function handleRequest(
       : {};
   }
   if (request.callback_id === "Stop" && input.hook_event_name === "Stop") {
-    const finalize = turn?.context.runBeforeAgentFinalize;
-    if (!turn || signal.aborted || !finalize || turn.finalizeRevisions >= MAX_FINALIZE_REVISIONS) {
-      return {};
-    }
-    const decision = await finalize({
-      stopHookActive: input.stop_hook_active === true,
-      ...(typeof input.last_assistant_message === "string"
-        ? { lastAssistantMessage: input.last_assistant_message }
-        : {}),
-      ...(typeof input.transcript_path === "string" ? { transcriptPath: input.transcript_path } : {}),
-      ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
-    });
-    if (decision.action !== "revise") {
-      return {};
-    }
-    // A blocked Stop keeps the native turn going with the reason as its next instruction.
-    turn.finalizeRevisions++;
-    return { decision: "block", reason: decision.reason };
+    return relayNativeStop(turn, input, signal.aborted);
   }
   if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
     if (

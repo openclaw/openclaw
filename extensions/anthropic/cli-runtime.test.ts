@@ -720,7 +720,11 @@ describe("Claude native stdio boundary", () => {
   });
 
   it.each([
-    ["revise", { action: "revise", reason: "Finish the promised work." }, { decision: "block", reason: "Finish the promised work." }],
+    [
+      "revise",
+      { action: "revise", reason: "Finish the promised work." },
+      { decision: "block", reason: "Finish the promised work." },
+    ],
     ["continue", { action: "continue" }, {}],
     ["finalize", { action: "finalize" }, {}],
   ] as const)("relays native Stop to before_agent_finalize (%s)", async (_, decision, expected) => {
@@ -736,8 +740,13 @@ describe("Claude native stdio boundary", () => {
   });
 
   it("stops relaying native Stop revisions after three", async () => {
-    const runBeforeAgentFinalize = vi.fn(async () => ({ action: "revise" as const, reason: "Again." }));
-    const detail = await runDetail(await createContext("stop-hook-loop", { runBeforeAgentFinalize }));
+    const runBeforeAgentFinalize = vi.fn(async () => ({
+      action: "revise" as const,
+      reason: "Again.",
+    }));
+    const detail = await runDetail(
+      await createContext("stop-hook-loop", { runBeforeAgentFinalize }),
+    );
     expect(detail).toMatchObject({ stops: 4, lastStopDecision: {} });
     expect(runBeforeAgentFinalize).toHaveBeenCalledTimes(3);
   });

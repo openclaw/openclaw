@@ -10,7 +10,6 @@ import {
   resolveWindowsSpawnProgramCandidate,
 } from "../../plugin-sdk/windows-spawn.js";
 import type { CliBackendTurnStatus } from "../../plugins/cli-backend-turn-status.types.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   CliBackendExecute,
   CliBackendMessageInjection,
@@ -34,11 +33,11 @@ import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
-import { runAgentHarnessBeforeAgentFinalizeHook } from "../harness/lifecycle-hook-helpers.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { buildCliBeforeAgentFinalizeRelay } from "./before-agent-finalize.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
@@ -590,38 +589,7 @@ export async function executePluginOwnedProcess(params: {
                 historyWriter.checkNativeLoginBoundary(historyWriter.replaysHistory),
             }
           : {}),
-        // Host-internal too: the bundled Claude runtime relays its native Stop hook here.
-        ...(getGlobalHookRunner()?.hasHooks("before_agent_finalize")
-          ? {
-              runBeforeAgentFinalize: (stop: {
-                stopHookActive: boolean;
-                lastAssistantMessage?: string;
-                transcriptPath?: string;
-                cwd?: string;
-              }) => {
-                assertCurrent();
-                return runAgentHarnessBeforeAgentFinalizeHook({
-                  event: {
-                    ...stop,
-                    runId: run.runId,
-                    sessionId: run.sessionId,
-                    ...(run.sessionKey ? { sessionKey: run.sessionKey } : {}),
-                    provider: run.provider,
-                    model: params.context.modelId,
-                  },
-                  ctx: {
-                    ...(run.agentId ? { agentId: run.agentId } : {}),
-                    sessionId: run.sessionId,
-                    ...(run.sessionKey ? { sessionKey: run.sessionKey } : {}),
-                    runId: run.runId,
-                    ...(run.currentChannelId ? { channelId: run.currentChannelId } : {}),
-                    workspaceDir: params.context.workspaceDir,
-                    modelId: params.context.modelId,
-                  },
-                });
-              },
-            }
-          : {}),
+        ...buildCliBeforeAgentFinalizeRelay(params.context, assertCurrent),
         timeoutMs: run.timeoutMs,
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
