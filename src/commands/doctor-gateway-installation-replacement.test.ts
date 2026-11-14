@@ -7,6 +7,7 @@ import {
 } from "../flows/doctor-health-contribution.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import * as gatewayCall from "../gateway/call.js";
+import * as bootLifecycle from "../infra/gateway-boot-lifecycle.js";
 import {
   completeGatewayBootLifecycle,
   beginGatewayBootLifecycle,
@@ -118,7 +119,7 @@ describe("Doctor installation replacement diagnostics", () => {
   );
 
   it.each(["normal", "lint"])(
-    "reports unavailable history after cancellation without losing %s health results",
+    "reports unavailable history after cancellation in %s health checks",
     async (mode) => {
       const scope = new AsyncWorkScope();
       const pending = scope.run(() =>
@@ -128,13 +129,14 @@ describe("Doctor installation replacement diagnostics", () => {
       );
       scope.beginClose(new Error("History inspection deadline"));
       try {
-        const result = await pending;
+        const result = await pending.catch((error: unknown) => error);
         const message =
           "Previous installation replacement unavailable: History inspection deadline";
         if (mode === "lint") {
           expect(result).toContainEqual(expect.objectContaining({ severity: "warning", message }));
         } else {
-          expect(result).toMatchObject({ healthOk: true });
+          // Closing the scope stops Doctor, so the live check ends after noting the history.
+          expect(result).toEqual(new Error("History inspection deadline"));
           expect(mocks.note).toHaveBeenCalledWith(message, historyTitle);
         }
       } finally {
@@ -143,16 +145,26 @@ describe("Doctor installation replacement diagnostics", () => {
     },
   );
 
-  it.each([true, false])(
-    "reports historical replacement without changing current health (reachable: %s)",
-    async (reachable) => {
-      if (!reachable) {
+  it.each(["reachable", "offline", "unavailable"])(
+    "reports historical replacement without changing current health (%s)",
+    async (state) => {
+      if (state === "offline") {
         mocks.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+      }
+      if (state === "unavailable") {
+        vi.spyOn(bootLifecycle, "readGatewayLastInstallationReplacementAsync").mockRejectedValue(
+          new Error("History locked"),
+        );
       }
       const result = await checkGatewayHealth({ cfg: {}, runtime });
 
-      expect(result.healthOk).toBe(reachable);
-      expect(mocks.note).toHaveBeenCalledWith(historyMessage, historyTitle);
+      expect(result.healthOk).toBe(state !== "offline");
+      expect(mocks.note).toHaveBeenCalledWith(
+        state === "unavailable"
+          ? "Previous installation replacement unavailable: History locked"
+          : historyMessage,
+        historyTitle,
+      );
     },
   );
 

@@ -12,6 +12,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import * as restartHealth from "../cli/daemon-cli/restart-health.constants.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { expectText } from "../test-utils/text-assertions.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -120,6 +121,45 @@ describe("checkGatewayHealth", () => {
       "Gateway is still starting (phase: startup-sidecars).",
     );
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "readiness",
+    "status",
+    "channels.status",
+    "diagnostics.stability",
+    "doctor.memory.status",
+    "probe",
+  ])("cancels the pending %s read on Ctrl+C without reporting a finding", async (stage) => {
+    const scope = new AsyncWorkScope();
+    const reason = new Error("doctor interrupted");
+    const cancelled: string[] = [];
+    const read = (method: string, signal?: AbortSignal): undefined => {
+      if (method === stage) {
+        scope.beginClose(reason);
+      }
+      if (signal?.aborted) {
+        cancelled.push(method);
+        throw signal.reason;
+      }
+    };
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async (opts) =>
+      read("readiness", opts.signal),
+    );
+    callGateway.mockImplementation(async ({ method, signal }) => read(method, signal) ?? {});
+    if (stage === "probe") {
+      isGatewayCredentialsRequiredError.mockReturnValueOnce(true);
+      callGateway.mockRejectedValueOnce(new Error("gateway.auth.password unavailable"));
+      probeGatewayStatus.mockImplementationOnce(
+        async (opts) => read("probe", opts.signal) ?? { ok: true },
+      );
+    }
+    const run = stage === "doctor.memory.status" ? () => probeGatewayMemoryStatus({ cfg }) : check;
+    await scope.run<Promise<unknown>>(run).catch((error: unknown) => expect(error).toBe(reason));
+    expect(cancelled[0]).toBe(stage);
+    expect(note).not.toHaveBeenCalled();
+    expect(sharedRuntime.error).not.toHaveBeenCalled();
+    await scope.drain();
   });
 
   it("reports live paths when status RPC rejects", async () => {
