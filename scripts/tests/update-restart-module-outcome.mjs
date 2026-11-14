@@ -300,6 +300,7 @@ async function fixture({
     "../../logging/diagnostic-support-key-check",
     "../../logging/redact",
     "../../logging/redact-linear-matchers",
+    "../../logging/redact-encoded-url",
     "../../logging/redact-pem",
     "../../security/config-regex",
     "../../security/safe-regex",

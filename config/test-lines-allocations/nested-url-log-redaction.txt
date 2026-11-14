@@ -1,0 +1,4 @@
+# Security regressions for nested/encoded URL credentials across redaction entry
+# points, credential mask boundaries, and preservation of sibling JSON fields.
+# Exact net test-line growth: redact.test.ts +116; byte-identity comments +4.
+120

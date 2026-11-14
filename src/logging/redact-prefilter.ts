@@ -24,6 +24,7 @@ const FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE =
 export function couldMatchDefaultRedactPatterns(text: string): boolean {
   return (
     FIELD_KEY_PREFILTER_RE.test(text) ||
+    /%3d/iu.test(text) ||
     ((text.includes("-") || text.includes("_")) && SEPARATED_VENDOR_PREFILTER_RE.test(text)) ||
     DEFAULT_REDACT_PREFILTER_RE.test(text) ||
     (text.includes("://") && text.includes("@")) ||
