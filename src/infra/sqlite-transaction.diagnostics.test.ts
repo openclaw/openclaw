@@ -9,6 +9,7 @@ import {
   spySqliteExec,
   thrownBy,
 } from "./sqlite-maintenance-fixture.test-support.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   runSqliteDeferredTransactionSync,
@@ -188,6 +189,73 @@ it.each(["session.lifecycle.delete", "sessions.transcript-hydration.cron-model"]
   },
 );
 
+it.each(["success", "prepare-failure", "commit-failure"] as const)(
+  "correlates completion phases without payloads on %s",
+  (outcome) => {
+    const { db, advance, run, logger } = fixture();
+    const events: string[] = [];
+    const execSpy = spySqliteExec(db, (sql) => {
+      if (sql.startsWith("BEGIN")) {
+        advance(1_100);
+      }
+      if (sql === "COMMIT") {
+        advance(1_300);
+        if (outcome === "commit-failure") {
+          throw new Error("commit rejected");
+        }
+      }
+    });
+    // Logging itself must not inflate the measured db.exec call.
+    logger.warn.mockImplementation(() => advance(17));
+    const attempt = () =>
+      run(
+        () => {
+          db.prepare("INSERT INTO entries VALUES (?, ?)").run("private-session", "private-message");
+          stageSqliteTransactionState(db, {
+            prepareCommit() {
+              advance(250);
+              if (outcome === "prepare-failure") {
+                throw new Error("prepare rejected");
+              }
+            },
+            commit() {
+              events.push("published");
+            },
+            rollback() {
+              events.push("rolled-back");
+            },
+          });
+          advance(10);
+        },
+        { operationLabel: "session.transcript.locked-write", slowTransactionHoldMs: 0 },
+      );
+    if (outcome === "success") {
+      attempt();
+    } else {
+      expect(attempt).toThrow(
+        outcome === "prepare-failure" ? "prepare rejected" : "commit rejected",
+      );
+    }
+    expectSettledEntries(db, outcome === "success" ? ["private-session"] : []);
+    expect(events).toEqual([outcome === "success" ? "published" : "rolled-back"]);
+    const records = logger.warn.mock.calls.map(([, fields]) => fields);
+    const hold = records.at(-1);
+    expect(hold).toMatchObject({
+      transactionId: expect.any(String),
+      phases: {
+        prepareCommitMs: 250,
+        nativeCommitMs: outcome === "prepare-failure" ? 0 : 1_300,
+      },
+    });
+    expect(records.every((record) => record.transactionId === hold?.transactionId)).toBe(true);
+    expect(JSON.stringify(records)).not.toMatch(/private-session|private-message|INSERT INTO/);
+    logger.warn.mockClear();
+    execSpy.mockRestore();
+    run(() => advance(1_100));
+    expect(logger.warn.mock.calls.at(-1)?.[1].transactionId).not.toBe(hold?.transactionId);
+  },
+);
+
 it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (stage) => {
   const { db, advance, run, warning } = fixture();
   const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
@@ -226,6 +294,8 @@ it.each(["callback", "commit"])("attributes a metadata relay wait during %s", (s
       hostAdmissionWaitMs: 0,
       databaseAdmissionWaitMs: 1_000,
       commitMs: 3,
+      prepareCommitMs: 0,
+      nativeCommitMs: stage === "commit" ? 1_003 : 3,
     },
   });
 });
@@ -306,6 +376,8 @@ it("separates preparation, SQL, host wait and a failed COMMIT", () => {
       hostAdmissionWaitMs: 700,
       databaseAdmissionWaitMs: 0,
       commitMs: 500,
+      prepareCommitMs: 0,
+      nativeCommitMs: 500,
     },
   });
 });
@@ -362,6 +434,7 @@ it.each([
       elapsedMs: 1_500,
       context: { sessionId: "session-diagnostics", rows: 1 },
       step: "commit",
+      transactionId: expect.any(String),
     });
     warning("hold", {
       ...labels,

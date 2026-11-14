@@ -3978,11 +3978,27 @@ Admission transactions use `state.admission.fast-path` and
 caller-supplied labels still take precedence. Slow holds include `phases`:
 `sqlMs` covers synchronous transaction work (including JavaScript and rollback),
 `hostAdmissionWaitMs` measures in-transaction worker-to-host admission waits,
-and `commitMs` measures the physical COMMIT. These three account for the hold.
+`databaseAdmissionWaitMs` measures metadata-admission waits, and `commitMs`
+measures commit preparation plus the timed COMMIT step, excluding those
+metadata-admission waits. These four account for the hold.
 `beginMs` and, inside an operation scope, `prepareMs` report time outside the
 hold. Preparation starts at worker dispatch or the preceding transaction's
 settlement; it includes command loading and opening the database, not broker
 queue residence.
+
+Slow transaction steps, lock-wait failures, and holds share a random
+`transactionId` for the outer transaction; it is not a session or message ID.
+Slow holds also report `prepareCommitMs` for pre-commit preparation callbacks
+and `nativeCommitMs` for the elapsed `db.exec("COMMIT")` call, including failed
+attempts. These are raw elapsed subphases, not additional hold time: they may
+overlap `databaseAdmissionWaitMs`, whereas `commitMs` subtracts that wait and
+also includes step logging. The native-call boundary includes connection
+wrappers and worker descheduling; it does not isolate SQLite engine CPU,
+checkpointing, filesystem sync, or storage latency. Post-commit fact publication
+happens after this transaction wrapper returns and is outside these timings.
+Correlate an incident with worker, WAL/checkpoint, storage, and scheduler
+evidence before selecting a latency repair; these fields do not change
+durability, admission, or busy-timeout policy.
 
 Runtime connections reuse completed schema, integrity, and foreign-key admission
 from the shared-state file's process-wide record. The first opener validates the
