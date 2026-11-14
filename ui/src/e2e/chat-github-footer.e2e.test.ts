@@ -56,7 +56,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const surface = page.locator(".chat-text").filter({ hasText: "Bottom line:" }).first();
         await surface.waitFor();
-        const footer = surface.locator(".markdown-source-footer");
+        const footer = surface.locator("p").last();
         const frame = await takeControlUiScreenshotFrame(
           page,
           surface,

@@ -21,7 +21,7 @@ describe("GitHub source footer", () => {
 
 ${links}`),
       );
-      const footer = fragment.querySelector(".markdown-source-footer")!;
+      const footer = fragment.querySelector("p:last-child")!;
       expect(footer).not.toBeNull();
       expect(footer.querySelectorAll("div, br, details, summary")).toHaveLength(0);
       expect(footer.textContent).toBe(
@@ -41,16 +41,14 @@ ${links}`),
     const mixed =
       links +
       " [Other repository](https://github.com/other/project/issues/101) [Docs](https://docs.example.com/guide)";
-    const footer = htmlFragment(toSanitizedMarkdownHtml(mixed)).querySelector(
-      ".markdown-source-footer",
-    )!;
+    const footer = htmlFragment(toSanitizedMarkdownHtml(mixed)).querySelector("p:last-child")!;
     expect(footer.querySelector("a")?.textContent).toBe("example/project#101");
     expect(footer.querySelector('a[href*="other/project"]')?.textContent).toBe("other/project#101");
     expect(footer.querySelector('a[href*="docs.example"]')?.textContent).toBe("Docs");
     const pair =
       "[First fix](https://github.com/example/project/pull/1) [Second fix](https://github.com/example/project/pull/2)";
     const short = htmlFragment(toSanitizedMarkdownHtml(pair));
-    expect(short.querySelectorAll(".markdown-source-footer a")).toHaveLength(2);
+    expect(short.querySelectorAll("p:last-child a")).toHaveLength(2);
     expect(short.querySelector("a")?.textContent).toBe("First fix");
     expect(short.querySelector("details")).toBeNull();
   });
@@ -61,9 +59,7 @@ ${links}`),
       (_, i) => `[Fix ${i + 1}](https://github.com/example/project/pull/${i + 1})`,
     );
     for (const render of renderers) {
-      const footer = htmlFragment(render(sources.join("\n"))).querySelector(
-        ".markdown-source-footer",
-      )!;
+      const footer = htmlFragment(render(sources.join("\n"))).querySelector("p:last-child")!;
       expect(footer.textContent).toBe(
         sources.map((_, i) => (count >= 5 ? `#${i + 1}` : `Fix ${i + 1}`)).join(", "),
       );
@@ -78,15 +74,20 @@ ${links}`),
 
 More prose.`,
       `> ${links}`,
+      `https://github.com/example/project/pull/99 ${links}
+
+More prose.`,
     ]) {
-      expect(
-        htmlFragment(toSanitizedMarkdownHtml(text)).querySelector(".markdown-source-footer"),
-      ).toBeNull();
+      for (const render of renderers) {
+        expect(htmlFragment(render(text)).querySelector('a[href$="/pull/101"]')?.textContent).toBe(
+          "Fix session memory usage · Pull Request #101 · GitHub",
+        );
+      }
     }
     expect(
       htmlFragment(toSanitizedMarkdownHtml(links, { mode: "document" })).querySelector(
-        ".markdown-source-footer",
-      ),
-    ).toBeNull();
+        'a[href$="/pull/101"]',
+      )?.textContent,
+    ).toBe("Fix session memory usage · Pull Request #101 · GitHub");
   });
 });
