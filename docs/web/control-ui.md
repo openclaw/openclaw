@@ -124,8 +124,11 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette in the same
-app window returns to the mode you last chose, not to an automatic switch.
+Search again keeps it for the current draft. Reopening the palette returns to the
+mode you last chose, not to an automatic switch. That choice is remembered in this
+browser, including after a reload, when browser storage is available.
+**Cmd/Ctrl+Enter** starts a new background session from either mode using the
+current text and attachments; plain **Enter** still selects a search result.
 **Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop

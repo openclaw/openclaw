@@ -172,9 +172,7 @@ function handleKeydown(
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
-    if (props.mode === "compose") {
-      void props.draft.submit();
-    }
+    void props.draft.submit();
     return;
   }
   if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
