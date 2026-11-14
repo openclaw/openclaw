@@ -4,10 +4,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isMissingPathError } from "../../infra/errors.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { checkoutPathFromGitBytes, rawPathExists, rawPathStat } from "./git-path-inventory.js";
-import { requireGit, requireGitBuffer, resolveGitMetadataPath, runGit } from "./git.js";
+import {
+  requireGit,
+  requireGitBuffer,
+  requireGitPath,
+  resolveGitMetadataPath,
+  runGit,
+} from "./git.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { exactIndexObjects } from "./snapshot-index-objects.js";
 
@@ -171,10 +176,7 @@ export async function captureExactState(input: {
       const stat = await rawPathStat(path.join(cwd, relative));
       provisionedBytes += stat?.size ?? 0;
     }
-    const common = path.resolve(
-      cwd,
-      normalizeGitPathForFilesystem(await requireGit(cwd, ["rev-parse", "--git-common-dir"])),
-    );
+    const common = path.resolve(cwd, await requireGitPath(cwd, ["rev-parse", "--git-common-dir"]));
     await requestGitWorkerEffect<"worktree.snapshot-capacity">({
       type: "worktree.snapshot-capacity",
       input: {
@@ -209,10 +211,10 @@ export async function captureExactState(input: {
     mtimeMs: indexStat.mtimeMs,
   };
   const indexObjects = exactIndexObjects(indexBytes, head.length === 64 ? 32 : 20);
-  const sharedPath = await requireGit(cwd, ["rev-parse", "--shared-index-path"]);
+  const sharedPath = await requireGitPath(cwd, ["rev-parse", "--shared-index-path"]);
   let sharedIndex: ExactStateSnapshot["sharedIndex"];
   if (sharedPath) {
-    const source = path.resolve(cwd, normalizeGitPathForFilesystem(sharedPath));
+    const source = path.resolve(cwd, sharedPath);
     const name = path.basename(source);
     if (!/^sharedindex\.[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(name)) {
       throw new Error("Invalid split-index dependency");

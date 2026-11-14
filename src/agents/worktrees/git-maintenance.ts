@@ -25,7 +25,13 @@ import {
   withOpenClawStateLease,
 } from "../../state/openclaw-state-lease.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
-import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
+import {
+  listGitWorktrees,
+  requireGit,
+  requireGitPath,
+  resolveGitMetadataPath,
+  runGit,
+} from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
@@ -218,7 +224,7 @@ async function maintainWorktreePacks(
     await report(0, 0);
     return false;
   }
-  const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
+  const commonDir = await requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Content writers acquire their slot before publishing refs; keep that order
   // so maintenance cannot hold the ref queue while waiting for those writers.
   return await withContentGitSlot(async () => {

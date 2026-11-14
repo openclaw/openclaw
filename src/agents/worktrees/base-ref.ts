@@ -6,7 +6,6 @@ import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
   executeGitCommand,
-  normalizeGitPathForFilesystem,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -25,7 +24,7 @@ import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
-import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import { commandError, listGitWorktrees, requireGit, requireGitPath, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
@@ -164,9 +163,7 @@ export async function resolveWorktreeBase(
   const commonDir = await fs.realpath(
     path.resolve(
       repoRoot,
-      normalizeGitPathForFilesystem(
-        await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options),
-      ),
+      await requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options),
     ),
   );
   const checkout = await fs.realpath(repoRoot);
