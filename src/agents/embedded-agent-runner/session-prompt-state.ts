@@ -337,9 +337,9 @@ export function prepareSessionPublicationToolListing(
 }
 
 /**
- * The session pins every tool definition it has sent, so a turn that builds fewer
- * tools keeps the provider prefix: retained definitions refuse their calls. New or
- * changed definitions extend the pin once and are written with the next checkpoint.
+ * The session pins every tool definition it has sent: a turn that builds fewer tools keeps
+ * them (retained definitions refuse their calls), and a wider turn (a wake or handoff) does
+ * not extend an established pin, so the checkpoint and forks hold exactly what was sent.
  */
 export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentTool[] {
   const { known, historyId } = resolveSessionToolSurface(params);
@@ -347,11 +347,12 @@ export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentToo
   // Sibling guidance in a description follows the tools a turn built; the pin keeps
   // the session's wording while the parameters match.
   let changed = !known;
-  const tools = params.tools.map((tool) => {
+  const tools = params.tools.flatMap((tool) => {
     const pin = pinned.get(tool.name);
-    // Computer discovery supplies live execution facts, not a new session definition.
-    if (pin && tool.name === "computer") {
-      return copyAgentToolMetadata(tool, { ...tool, ...pin });
+    // A wider turn does not extend an established pin. Computer discovery supplies live
+    // execution facts, not a new session definition.
+    if (known && (!pin || tool.name === "computer")) {
+      return pin ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : [];
     }
     if (changed && pin?.description === tool.description) {
       return tool;
@@ -362,8 +363,8 @@ export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentToo
       ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
       : tool;
   });
-  const built = new Set(tools.map((tool) => tool.name));
-  const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
+  const sent = new Set(tools.map((tool) => tool.name));
+  const retained = [...pinned.values()].filter((tool) => !sent.has(tool.name));
   if (changed) {
     const current = tools.map(describeTool);
     params.state.pendingToolSurface = {

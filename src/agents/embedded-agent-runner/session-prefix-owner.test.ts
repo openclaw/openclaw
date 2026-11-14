@@ -81,7 +81,7 @@ describe("admitSessionPrefix", () => {
     expect(admitted.context.messages).toEqual(repaired);
   });
 
-  it("starts a new series when a sent tool result is corrected, with the proposed tools", () => {
+  it("starts a new series when a sent tool result is corrected", () => {
     const result = (text: string): Message => ({
       role: "toolResult",
       toolCallId: "call_1",
@@ -98,10 +98,9 @@ describe("admitSessionPrefix", () => {
     ).commit();
     // The pairing owner replaced the placeholder with the late real result.
     const corrected = [user("a", 1), call, result("real"), user("b", 4)];
-    const admitted = admitSessionPrefix("s", model, context(corrected, [tool("x"), tool("y")]));
+    const admitted = admitSessionPrefix("s", model, context(corrected, [tool("x")]));
     expect(admitted.report).toEqual({ kind: "rebuild", reason: "history", index: 2 });
     expect(admitted.context.messages).toEqual(corrected);
-    expect(admitted.context.tools?.map(({ name }) => name)).toEqual(["x", "y"]);
     admitted.commit();
     cleanupSessionResources("s");
     expect(admitSessionPrefix("s", model, context(corrected)).report).toEqual({ kind: "first" });
@@ -115,7 +114,7 @@ describe("admitSessionPrefix", () => {
     expect(admitSessionPrefix("s", model, context(retry)).context.messages).toEqual(retry);
   });
 
-  it("holds the series tool set when a later turn builds more tools", () => {
+  it("sends a changed tool set as proposed, as a new prefix", () => {
     admitSessionPrefix("s", model, context([user("a", 1)], [tool("x")])).commit();
     const wider = admitSessionPrefix(
       "s",
@@ -125,8 +124,9 @@ describe("admitSessionPrefix", () => {
         [tool("x"), tool("skills_read")],
       ),
     );
-    expect(wider.report).toEqual({ kind: "toolsHeld", added: ["skills_read"] });
-    expect(wider.context.tools?.map(({ name }) => name)).toEqual(["x"]);
+    // The session tool pin decides the set; this owner never sends tools it was not given.
+    expect(wider.report).toEqual({ kind: "rebuild", reason: "prefix" });
+    expect(wider.context.tools?.map(({ name }) => name)).toEqual(["x", "skills_read"]);
   });
 
   it("keeps the first tool order and lets a sanctioned thinking removal through", () => {

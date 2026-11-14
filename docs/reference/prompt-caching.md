@@ -53,8 +53,11 @@ The existing route and history-boundary refresh contracts remain in effect.
 
 The `sessions_yield` description does not change with sibling tool availability.
 Per-turn prompt-hook tool restrictions gate execution while retaining the session's
-provider definitions. Genuine config, skill, and tool refreshes still apply; the
-tool set is not permanently frozen to the first request.
+provider definitions. A turn that builds more tools, such as a wake or handoff,
+does not add them to an established session tool set; the session checkpoint and
+forks keep the definitions that were sent. A changed definition of a sent tool
+still replaces it, and a tool-policy change, model or route change, compaction, or
+reset starts a new tool set.
 
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.

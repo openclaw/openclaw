@@ -14,6 +14,7 @@ import {
   prepareSessionSystemPrompt,
   prepareSessionToolSurface,
   persistSessionSystemPrompt,
+  readToolSurfaceCheckpoint,
   retainEmbeddedSessionPromptState,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
@@ -526,7 +527,7 @@ describe("session tool surface", () => {
     expect(JSON.stringify(refused.content)).toContain("gateway is not available in this turn");
   });
 
-  it("preserves pins across prompt admission and checkpoints, and extends restored pins", async () => {
+  it("preserves pins across prompt admission and checkpoints, and does not widen restored pins", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
     await retireSessionSystemPrompt(fixture.state, routeKey, () => undefined);
@@ -542,11 +543,13 @@ describe("session tool surface", () => {
     await persist(entries, "Base.\n\n## Skills\nrefreshed");
     fixture.reload();
     expect(names(surface([tool("read")], entries))).toEqual(["gateway", "read"]);
-    const extended = surface([tool("read"), tool("heartbeat_respond")], entries);
-    expect(names(extended)).toEqual(["gateway", "heartbeat_respond", "read"]);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+    // A wake or handoff turn that builds more tools keeps the sent set, and so does the checkpoint.
+    const wider = surface([tool("read"), tool("heartbeat_respond")], entries);
+    expect(names(wider)).toEqual(["gateway", "read"]);
+    expect(fixture.state.pendingToolSurface).toBeUndefined();
+    await persist(entries);
+    expect(readToolSurfaceCheckpoint(entries)?.tools.map((entry) => entry.name)).toEqual([
       "gateway",
-      "heartbeat_respond",
       "read",
     ]);
   });
