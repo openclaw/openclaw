@@ -168,12 +168,26 @@ function stableTaskIdPart(value: string, slugValue = value): string {
   return `${(slug || "task").slice(0, 48)}_${suffix}`;
 }
 
+/** Native task id of a line that carries its own id; content-keyed lines have none until rendered. */
+export function resolveSlackNativeLineTaskId(
+  line: Pick<ChannelProgressDraftLine, "id">,
+): string | undefined {
+  return line.id?.trim() ? stableTaskIdPart(line.id) : undefined;
+}
+
+/** 1-based card number behind a native task id minted for a `reasoning:<n>` line. */
+export function resolveSlackReasoningTaskIndex(id: string): number | undefined {
+  const match = /^reasoning_(\d+)_[0-9a-f]{8}$/u.exec(id);
+  return match ? Number(match[1]) : undefined;
+}
+
 function resolveLineTaskIdentity(
   line: ChannelProgressDraftLine,
   contentIdOccurrences: Map<string, number>,
 ): string {
-  if (line.id?.trim()) {
-    return stableTaskIdPart(line.id);
+  const ownId = resolveSlackNativeLineTaskId(line);
+  if (ownId) {
+    return ownId;
   }
   const contentKey = [line.kind, line.toolName, line.label, line.text].join("\0");
   const id = stableTaskIdPart(contentKey, line.toolName ?? line.kind ?? line.label);
@@ -210,6 +224,8 @@ export function buildSlackProgressStreamChunks(params: {
   finalInProgressStatus?: "complete" | "error";
   diffStat?: SlackProgressDiffStat;
   sessionLinks?: readonly SlackProgressSessionLink[];
+  /** Plan title when neither a headline nor a work row supplies one. */
+  fallbackTitle?: string;
 }): AnyChunk[] | undefined {
   const approvals = params.lines.filter((line) => line.kind === "approval");
   const taskLines = params.summaryRow
@@ -278,6 +294,7 @@ export function buildSlackProgressStreamChunks(params: {
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
       (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
+      params.fallbackTitle ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
     SLACK_PROGRESS_CHUNK_TEXT_MAX,
   );

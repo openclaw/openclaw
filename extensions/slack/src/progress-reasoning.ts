@@ -1,4 +1,5 @@
 import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 /**
  * Streamed reasoning rendered as native task cards: fixed-size segments, one
@@ -7,19 +8,19 @@ import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbo
  */
 
 /**
- * Reasoning characters per card. With the lane prefix this stays under the
- * 256-character limit Slack documents per `task_update` title
- * (https://docs.slack.dev/reference/methods/chat.appendStream/).
+ * Reasoning text per card in UTF-8 bytes, the unit Slack's message size check
+ * counts. With the 5-byte lane prefix a card stays within 250 bytes, under
+ * the 256-character limit Slack documents per `task_update` title
+ * (https://docs.slack.dev/reference/methods/chat.appendStream/) and under the
+ * title cap in `progress-blocks.ts`, so no segment is ever truncated.
  */
 const SLACK_REASONING_CARD_CHARS = 240;
-// Slack's plan block renders at most 50 tasks
-// (https://docs.slack.dev/reference/block-kit/blocks/plan-block/). Tool rows,
-// the receipt row and attention rows share that budget with reasoning cards.
-const SLACK_REASONING_CARD_MAX = 47;
-const SLACK_REASONING_CARD_MIN = 8;
 const SLACK_REASONING_CARD_LINE_ID_PREFIX = "reasoning:";
-const SLACK_REASONING_TAIL_CARD_LINE_ID = `${SLACK_REASONING_CARD_LINE_ID_PREFIX}tail`;
 const SLACK_REASONING_CARD_TEXT_PREFIX = "🧠 ";
+/** Plan title of a message whose think continues on the next message. */
+export const SLACK_REASONING_ROLLED_TITLE = "Thinking, continued below";
+/** Running plan title of a continuation message. */
+export const SLACK_REASONING_CONTINUED_TITLE = "Thinking, continued";
 
 export type SlackReasoningCardLine = ChannelProgressDraftLine & { id: string };
 
@@ -28,13 +29,17 @@ export type SlackReasoningCardState = {
   sealed: string[];
   /** Reasoning text of the phase still streaming. */
   open: string;
+  /**
+   * Leading part of `open` already sealed by a message rollover. The merge
+   * keeps accumulating the whole phase (cumulative snapshots would otherwise
+   * restart it), so only text after this prefix forms new cards.
+   */
+  openSealedPrefix: string;
   toolCalls: number;
-  /** Segment cards already pushed; Slack cannot remove rows, so ids never shrink. */
-  cardsEmitted: number;
 };
 
 export function createSlackReasoningCardState(): SlackReasoningCardState {
-  return { sealed: [], open: "", toolCalls: 0, cardsEmitted: 0 };
+  return { sealed: [], open: "", openSealedPrefix: "", toolCalls: 0 };
 }
 
 export function isSlackReasoningCardLine(line: Pick<ChannelProgressDraftLine, "id">): boolean {
@@ -46,53 +51,115 @@ function normalizeReasoningText(text: string): string {
 }
 
 /**
- * Splits reasoning into segments of at most `maxChars` code points, cutting at
- * the last space in the second half of each window. Cuts depend only on the
- * text before them, so segments already shown never change as the text grows.
+ * Splits reasoning into segments of at most `maxChars` UTF-8 bytes, never
+ * splitting a code point, cutting at the last space in the second half of
+ * each window. Cuts depend only on the text before them, so segments already
+ * shown never change as the text grows.
  */
-export function segmentReasoningText(
-  text: string,
-  maxChars = SLACK_REASONING_CARD_CHARS,
-): string[] {
+function segmentReasoningText(text: string, maxChars = SLACK_REASONING_CARD_CHARS): string[] {
   const chars = Array.from(normalizeReasoningText(text));
+  return segmentReasoningChars(chars, maxChars).map((segment) =>
+    chars.slice(segment.start, segment.end).join("").trim(),
+  );
+}
+
+/** Windows (code-point indexes) of each segment of an already normalized text, sized in UTF-8 bytes. */
+function segmentReasoningChars(
+  chars: readonly string[],
+  maxChars: number,
+): Array<{ start: number; end: number }> {
   if (chars.length === 0) {
     return [];
   }
-  const segments: string[] = [];
+  const offsets = [0];
+  for (const char of chars) {
+    offsets.push((offsets.at(-1) ?? 0) + countSlackTextUtf8Bytes(char));
+  }
+  const units = (from: number, to: number) => (offsets[to] ?? 0) - (offsets[from] ?? 0);
+  const segments: Array<{ start: number; end: number }> = [];
   let start = 0;
-  while (chars.length - start > maxChars) {
-    let cut = start + maxChars;
-    for (let index = start + maxChars; index > start + Math.floor(maxChars / 2); index -= 1) {
+  while (units(start, chars.length) > maxChars) {
+    let end = start;
+    while (end < chars.length && units(start, end + 1) <= maxChars) {
+      end += 1;
+    }
+    let cut = end;
+    for (let index = end; units(start, index) > Math.floor(maxChars / 2); index -= 1) {
       if (chars[index] === " ") {
         cut = index;
         break;
       }
     }
-    segments.push(chars.slice(start, cut).join("").trim());
+    segments.push({ start, end: cut });
     start = cut;
     // Windows start on a word so a boundary cut cannot shift the next segment by one.
     while (chars[start] === " ") {
       start += 1;
     }
   }
-  segments.push(chars.slice(start).join("").trim());
-  return segments.filter((segment) => segment.length > 0);
+  if (start < chars.length) {
+    segments.push({ start, end: chars.length });
+  }
+  return segments;
 }
 
-/** Latest `maxChars` of overflow text, cut at a word boundary and marked as a tail. */
-export function tailReasoningSnippet(text: string, maxChars = SLACK_REASONING_CARD_CHARS): string {
-  const normalized = normalizeReasoningText(text);
-  const chars = Array.from(normalized);
-  if (chars.length <= maxChars) {
-    return normalized;
+// Code points of the normalized open text and where the unsealed part begins.
+function resolveOpenReasoningWindow(state: SlackReasoningCardState): {
+  chars: string[];
+  start: number;
+} {
+  const chars = Array.from(normalizeReasoningText(state.open));
+  const prefix = Array.from(state.openSealedPrefix);
+  let start = 0;
+  while (start < prefix.length && start < chars.length && chars[start] === prefix[start]) {
+    start += 1;
   }
-  const tail = chars.slice(-(maxChars - 1)).join("");
-  const boundary = tail.indexOf(" ");
-  const body =
-    boundary >= 0 && boundary < Math.floor(maxChars * 0.4)
-      ? tail.slice(boundary + 1).trimStart()
-      : tail;
-  return `…${body}`;
+  while (chars[start] === " ") {
+    start += 1;
+  }
+  return { chars, start };
+}
+
+/** Open text not yet sealed by a rollover. */
+function resolveOpenReasoningText(state: SlackReasoningCardState): string {
+  const { chars, start } = resolveOpenReasoningWindow(state);
+  return chars.slice(start).join("").trim();
+}
+
+/** Closes the open phase: a tool call or the end of reasoning starts new cards afterwards. */
+export function sealSlackReasoningCards(state: SlackReasoningCardState): void {
+  state.sealed.push(...segmentReasoningText(resolveOpenReasoningText(state)));
+  state.open = "";
+  state.openSealedPrefix = "";
+}
+
+/**
+ * Closes the cards through `throughCard` (1-based, across the turn) without
+ * closing the phase: the message they are on is finished. Cards after it and
+ * text streamed later stay open and continue on the next message, while the
+ * compositor keeps merging the same phase. Segments are cut where they were,
+ * because a cut depends only on the text before it.
+ */
+export function rolloverSlackReasoningCards(
+  state: SlackReasoningCardState,
+  throughCard: number,
+): void {
+  const openCards = throughCard - state.sealed.length;
+  if (openCards <= 0) {
+    return;
+  }
+  const { chars, start } = resolveOpenReasoningWindow(state);
+  const remainder = chars.slice(start);
+  const windows = segmentReasoningChars(remainder, SLACK_REASONING_CARD_CHARS);
+  state.sealed.push(
+    ...windows
+      .slice(0, openCards)
+      .map((window) => remainder.slice(window.start, window.end).join("").trim()),
+  );
+  const nextOpen = windows[openCards];
+  state.openSealedPrefix = chars
+    .slice(0, nextOpen ? start + nextOpen.start : chars.length)
+    .join("");
 }
 
 function reasoningCardLine(id: string, text: string, done: boolean): SlackReasoningCardLine {
@@ -108,44 +175,20 @@ function reasoningCardLine(id: string, text: string, done: boolean): SlackReason
 
 /**
  * Card rows for the current reasoning state. Every segment but the newest is
- * complete. Past the card budget the remaining text rolls through one tail
- * card so a long think cannot exhaust the plan block.
+ * complete. Ids number the segments across the whole turn; the stream
+ * pipeline decides which message each card lands on.
  */
-export function planSlackReasoningCards(state: SlackReasoningCardState): {
-  lines: SlackReasoningCardLine[];
-  cardsEmitted: number;
-} {
-  const openSegments = segmentReasoningText(state.open);
+export function planSlackReasoningCards(state: SlackReasoningCardState): SlackReasoningCardLine[] {
+  const openSegments = segmentReasoningText(resolveOpenReasoningText(state));
   const segments = [...state.sealed, ...openSegments];
-  if (segments.length === 0) {
-    return { lines: [], cardsEmitted: state.cardsEmitted };
-  }
   const openIndex = openSegments.length > 0 ? segments.length - 1 : -1;
-  const budget = Math.max(
-    state.cardsEmitted,
-    SLACK_REASONING_CARD_MIN,
-    SLACK_REASONING_CARD_MAX - state.toolCalls,
+  return segments.map((segment, index) =>
+    reasoningCardLine(
+      `${SLACK_REASONING_CARD_LINE_ID_PREFIX}${index + 1}`,
+      segment,
+      index !== openIndex,
+    ),
   );
-  const cardCount = Math.min(segments.length, budget);
-  const lines = segments
-    .slice(0, cardCount)
-    .map((segment, index) =>
-      reasoningCardLine(
-        `${SLACK_REASONING_CARD_LINE_ID_PREFIX}${index + 1}`,
-        segment,
-        index !== openIndex,
-      ),
-    );
-  if (segments.length > cardCount) {
-    lines.push(
-      reasoningCardLine(
-        SLACK_REASONING_TAIL_CARD_LINE_ID,
-        tailReasoningSnippet(segments.slice(cardCount).join(" ")),
-        openIndex < cardCount,
-      ),
-    );
-  }
-  return { lines, cardsEmitted: Math.max(state.cardsEmitted, cardCount) };
 }
 
 export function formatReasoningSummaryTitle(params: {

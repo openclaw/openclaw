@@ -325,15 +325,23 @@ function extractSlackErrorCode(err: unknown): string | undefined {
   return match?.[1];
 }
 
+/**
+ * Drops text Slack rejected from the session and from the SDK's private
+ * buffer (@slack/web-api 7.16.0 retains it after a failed flush), so a later
+ * append or stop cannot resend it. Leaves the stream open.
+ */
+export function discardSlackStreamPendingText(session: SlackStreamSession): void {
+  session.pendingText = "";
+  (session.streamer as unknown as { buffer: string }).buffer = "";
+}
+
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
   if (applySlackStreamStop(session)) {
     return;
   }
   const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
-  session.pendingText = "";
-  // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
   // Clear fallback-owned text before retrying stop(), or the SDK resends it.
-  (session.streamer as unknown as { buffer: string }).buffer = "";
+  discardSlackStreamPendingText(session);
   // A visible native stream still needs stop() to leave streaming state. If no
   // native call succeeded, there is no Slack stream to finalize.
   session.stopped = !nativeStreamWasStarted;

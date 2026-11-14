@@ -12,6 +12,7 @@ import {
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
+import { planSlackStreamUpdateFit, SlackStreamMessageLedger } from "../../stream-size.js";
 import {
   createDraftStreamStub,
   emitSlackToolProgressTestEvent,
@@ -30,7 +31,7 @@ import {
 // transport mocked: every start, append and stop is recorded in call order.
 
 export const FINAL_REPLY_TEXT = "final answer";
-const THREAD_TS = "thread-1";
+export const THREAD_TS = "thread-1";
 const STREAM_MESSAGE_TS = "171234.567";
 
 const mocks = vi.hoisted(() => {
@@ -68,6 +69,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+export const TestSlackStreamNotDeliveredError = mocks.TestSlackStreamNotDeliveredError;
 export const TestSlackStreamMessageTooLongError = mocks.TestSlackStreamMessageTooLongError;
 export const appendSlackStreamMock = mocks.appendSlackStream;
 export const startSlackStreamMock = mocks.startSlackStream;
@@ -95,6 +97,12 @@ const normalDeliveryResult = {
 
 function createNativeStreamSession() {
   return { channel: "C123", threadTs: THREAD_TS, stopped: false, delivered: true, pendingText: "" };
+}
+
+// The shared default session is stopped by the first rollover; real starts
+// return a new session per message.
+export function useFreshStreamSessions() {
+  startSlackStreamMock.mockImplementation(async () => createNativeStreamSession());
 }
 
 // mock-isolation: No human-like delay between scripted replies.
@@ -192,6 +200,9 @@ vi.mock("../../stream-mode.js", () => ({
 
 // mock-isolation: The Slack stream transport is the recorded boundary under test.
 vi.mock("../../streaming.js", () => ({
+  discardSlackStreamPendingText: (session: { pendingText: string }) => {
+    session.pendingText = "";
+  },
   markSlackStreamFallbackDelivered: (session: {
     delivered: boolean;
     pendingText: string;
@@ -202,12 +213,26 @@ vi.mock("../../streaming.js", () => ({
   },
   SlackStreamMessageTooLongError: mocks.TestSlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError: mocks.TestSlackStreamNotDeliveredError,
-  appendSlackStream: mocks.appendSlackStream,
-  startSlackStream: async (input: unknown) =>
-    Object.assign(await mocks.startSlackStream(input), { streamer: { ts: STREAM_MESSAGE_TS } }),
+  appendSlackStream: async (input: { session?: { stopped?: boolean } }) => {
+    // Like the real helper, an append to a stopped stream never reaches Slack.
+    if (input.session?.stopped) {
+      return;
+    }
+    await mocks.appendSlackStream(input);
+    chargeStreamBudget(input.session, "append", input);
+  },
+  startSlackStream: async (input: unknown) => {
+    const session = Object.assign(await mocks.startSlackStream(input), {
+      streamer: { ts: STREAM_MESSAGE_TS },
+    });
+    chargeStreamBudget(session, "start", input);
+    return session;
+  },
   stopSlackStream: async (params: { session: { stopped: boolean } }) => {
     params.session.stopped = true;
-    return await mocks.stopSlackStream(params);
+    const result = await mocks.stopSlackStream(params);
+    chargeStreamBudget(params.session, "stop", params);
+    return result;
   },
 }));
 
@@ -378,6 +403,130 @@ export async function dispatchNativeProgressScenario(params: {
   );
 }
 
+// Every accepted start, append and stop is charged to its message with the
+// production ledger; a message past the row cap or the byte budget fails the
+// test in afterEach, so no scenario may overfill one message. The budget is
+// read back from the planner (no production export): the row cap is how many
+// tiny rows a fresh message admits, the byte budget the longest text a
+// message that already holds text still takes.
+const SLACK_STREAM_MESSAGE_BUDGET = (() => {
+  const rows = planSlackStreamUpdateFit(new SlackStreamMessageLedger(), {
+    chunks: Array.from({ length: 200 }, (_, index) => ({
+      type: "task_update" as const,
+      id: `r${index}`,
+      title: "x",
+      status: "complete" as const,
+    })),
+  }).admittedTaskIds.size;
+  const held = new SlackStreamMessageLedger();
+  held.recordText("x");
+  let low = 1;
+  let high = 100_000;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (planSlackStreamUpdateFit(held, { text: "y".repeat(mid) }).textFits) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return { tasks: rows, chars: low + held.size };
+})();
+const streamLedgers = new WeakMap<object, SlackStreamMessageLedger>();
+let streamBudgetViolations: string[] = [];
+function chargeStreamBudget(session: unknown, call: string, update: unknown) {
+  if (!session || typeof session !== "object") {
+    return;
+  }
+  const params = update as { text?: unknown; chunks?: unknown };
+  let ledger = streamLedgers.get(session);
+  if (!ledger) {
+    ledger = new SlackStreamMessageLedger();
+    streamLedgers.set(session, ledger);
+  }
+  ledger.record({
+    ...(typeof params.text === "string" ? { text: params.text } : {}),
+    ...(Array.isArray(params.chunks)
+      ? { chunks: params.chunks as Parameters<SlackStreamMessageLedger["record"]>[0]["chunks"] }
+      : {}),
+  });
+  if (
+    ledger.taskCount > SLACK_STREAM_MESSAGE_BUDGET.tasks ||
+    ledger.size > SLACK_STREAM_MESSAGE_BUDGET.chars
+  ) {
+    streamBudgetViolations.push(
+      `${call}: message holds ${ledger.taskCount} rows and ${ledger.size} weighted bytes (budget ${SLACK_STREAM_MESSAGE_BUDGET.tasks} rows, ${SLACK_STREAM_MESSAGE_BUDGET.chars} bytes)`,
+    );
+  }
+}
+
+export type NativeStreamCall = {
+  kind: "start" | "append" | "stop";
+  params: Record<string, unknown>;
+};
+
+/** Every native stream call in the order it was made. */
+export function collectNativeStreamTimeline(): NativeStreamCall[] {
+  const entries: Array<NativeStreamCall & { order: number }> = [];
+  const collect = (
+    kind: NativeStreamCall["kind"],
+    mock: { mock: { calls: unknown[][]; invocationCallOrder: number[] } },
+  ) => {
+    mock.mock.calls.forEach((call, index) => {
+      entries.push({
+        kind,
+        params: requireRecord(call[0], `${kind} call`),
+        order: mock.mock.invocationCallOrder[index] ?? 0,
+      });
+    });
+  };
+  collect("start", startSlackStreamMock);
+  collect("append", appendSlackStreamMock);
+  collect("stop", stopSlackStreamMock);
+  return entries
+    .toSorted((left, right) => left.order - right.order)
+    .map(({ kind, params }) => ({ kind, params }));
+}
+
+export function chunksOf(params: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(params.chunks)
+    ? params.chunks.map((chunk) => requireRecord(chunk, "chunk"))
+    : [];
+}
+
+/** Splits the timeline at each start: one entry per stream message. */
+export function splitNativeStreamMessages(timeline: NativeStreamCall[]): NativeStreamCall[][] {
+  const messages: NativeStreamCall[][] = [];
+  for (const call of timeline) {
+    if (call.kind === "start" || messages.length === 0) {
+      messages.push([]);
+    }
+    messages.at(-1)?.push(call);
+  }
+  return messages;
+}
+
+export function reasoningIdsOf(message: NativeStreamCall[]): number[] {
+  const ids = new Set<number>();
+  for (const call of message) {
+    for (const chunk of chunksOf(call.params)) {
+      const match = /^reasoning_(\d+)_[a-f0-9]{8}$/u.exec(String(chunk.id));
+      if (match) {
+        ids.add(Number(match[1]));
+      }
+    }
+  }
+  return [...ids].toSorted((left, right) => left - right);
+}
+
+export function planTitlesOf(message: NativeStreamCall[]): string[] {
+  return message.flatMap((call) =>
+    chunksOf(call.params)
+      .filter((chunk) => chunk.type === "plan_update")
+      .map((chunk) => String(chunk.title)),
+  );
+}
+
 export function collectNativeTaskUpdates() {
   return nativeChunks([
     ...startSlackStreamMock.mock.calls,
@@ -438,6 +587,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  const violations = streamBudgetViolations;
+  streamBudgetViolations = [];
   vi.useRealTimers();
   resetPluginRuntimeStateForTest();
+  expect(violations).toEqual([]);
 });

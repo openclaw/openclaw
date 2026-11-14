@@ -81,3 +81,23 @@ it("stops the native stream without its closeout when Slack rejects it with msg_
   expect(requireRecord(stopSlackStreamMock.mock.calls[0]?.[0], "closeout").chunks).toBeDefined();
   expect(requireRecord(stopSlackStreamMock.mock.calls[1]?.[0], "retry").chunks).toBeUndefined();
 });
+
+it("keeps every step of an oversized initial plan in default narration mode", async () => {
+  // Twenty 120-character CJK steps are about 7,200 bytes: past the 6,000-byte
+  // row budget a cards-mode message holds, but narration has no such budget.
+  const steps = Array.from({ length: 20 }, (_, index) => ({
+    step: `${index + 1}`.padEnd(120, "漢"),
+    status: "pending" as const,
+  }));
+  await dispatchNativeProgressScenario({
+    events: [{ kind: "plan", phase: "update", explanation: "Plan", steps }],
+    finalPayload: { text: FINAL_REPLY_TEXT },
+  });
+
+  expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+  const opening = requireRecord(startSlackStreamMock.mock.calls[0]?.[0], "start");
+  const planRows = (opening.chunks as Array<{ id?: unknown }>).filter((chunk) =>
+    String(chunk.id).startsWith("plan_step_"),
+  );
+  expect(planRows).toHaveLength(20);
+});
