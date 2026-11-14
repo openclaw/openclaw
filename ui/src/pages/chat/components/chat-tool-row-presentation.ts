@@ -80,7 +80,12 @@ export function resolveToolOperationLabel(
     if (command?.trim()) {
       return outcome === "running"
         ? t("chat.toolCards.runningCommand", { command: commandPreview(command) })
-        : `$ ${commandPreview(command)}`;
+        : t(
+            outcome === "succeeded" || (outcome === "failed" && card.exitCode !== undefined)
+              ? "chat.toolCards.ranCommand"
+              : "chat.toolCards.runCommand",
+            { command: commandPreview(command) },
+          );
     }
     if (
       call.name.trim().toLowerCase() === "exec" &&

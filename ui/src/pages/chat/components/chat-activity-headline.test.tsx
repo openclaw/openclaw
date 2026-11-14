@@ -135,7 +135,7 @@ it.each([
   ["web_search", { query: "new plugin APIs" }, "start", 'Web Search for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "Lookup Record release notes…"],
   ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
-  ["exec", {}, "result", "Code execution"],
+  ["exec", {}, "result", "Run code"],
   ["session_status", {}, "result", "Session Status"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({
@@ -304,7 +304,24 @@ it("settles an earlier activity headline when narration follows in the same live
   activityRoot.render([activity], { ...liveOptions, ...before });
   advanceTimersByTime(200);
   expect(before.activityGroupKey).toBe("current");
-  const after = projectTranscriptActivity([activity, narration], props);
+  const headline = query("label");
+  const steer = createToolGroup(
+    "steer",
+    [
+      createMessageEntry("steer:entry", {
+        role: "user",
+        content: "Continue with the same operation",
+        __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "active-run" },
+      }),
+    ],
+    { role: "user" },
+  );
+  const steering = projectTranscriptActivity([activity, steer], props);
+  expect(steering.activityGroupKey).toBe("current");
+  activityRoot.render([activity], { ...liveOptions, ...steering });
+  expect(query("label")).toBe(headline);
+  expect(container.querySelector(".text-shimmer")).not.toBeNull();
+  const after = projectTranscriptActivity([activity, steer, narration], props);
   expect(after.activityGroupKey).toBeNull();
   activityRoot.render([activity], { ...liveOptions, ...after });
   expect(container.querySelector(".text-shimmer")).toBeNull();
@@ -580,4 +597,59 @@ it("defers transient replacements and refreshes a held container after its child
   expect(container.querySelector(".text-shimmer")).toBeNull();
   advanceTimersByTime(960);
   expect(label()).toBe("Reading child.ts…");
+});
+
+it("keeps an expanded execution active between sequential child commands", async () => {
+  const draw = (parentStatus: AgentActivityItem["status"], second?: "exec" | "read") => {
+    const parent = { ...prepared("parent", parentStatus), name: "exec" };
+    const children = [
+      { ...prepared("first", "completed"), name: "exec" },
+      ...(second ? [{ ...prepared("second", "running"), name: second }] : []),
+    ];
+    activityRoot.render(
+      [
+        entryGroup(
+          "current",
+          createAssistantMessage(
+            [
+              createToolCall(
+                "parent",
+                "exec",
+                { title: "Check both", code: "await first(); await second();" },
+                { runId: "active-run" },
+              ),
+              ...children.map((child) =>
+                createToolCall(
+                  child.toolCallId!,
+                  child.name,
+                  child.name === "read"
+                    ? { path: "result.txt" }
+                    : { command: `printf ${child.toolCallId}` },
+                  { runId: "active-run", parentToolCallId: "parent" },
+                ),
+              ),
+            ],
+            { runId: "active-run", activity: [parent, ...children] },
+          ),
+        ),
+      ],
+      {
+        ...liveOptions,
+        isToolMessageExpanded: () => true,
+      },
+    );
+    flush();
+  };
+  draw("running");
+  expect(label()).toBe("Running commands");
+  const disclosure = query("summary");
+  draw("running", "exec");
+  expect(query("summary")).toBe(disclosure);
+  expect(label()).toBe("Running commands");
+  draw("running", "read");
+  expect(query("summary")).toBe(disclosure);
+  expect(label()).toBe("Ran commands, reading files");
+  draw("completed");
+  expect(query("summary")).toBe(disclosure);
+  expect(label()).toBe("Ran commands");
 });

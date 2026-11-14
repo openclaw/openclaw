@@ -42,7 +42,7 @@ import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts"
 import {
   resetToolStream,
   resetToolStreamRun,
-  retireToolStreamLiveOutput,
+  retireToolStreamLiveState,
 } from "./tool-stream-state.ts";
 
 registerChatQuestionsEnglish();
@@ -551,7 +551,7 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
     clearRunIndicators(host, runId);
   }
   if (options.outcome && runId) {
-    retireToolStreamLiveOutput(host, runId);
+    retireToolStreamLiveState(host, runId);
   }
   if (options.clearLocalRun) {
     host.chatStream = null;

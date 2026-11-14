@@ -1,6 +1,8 @@
 import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { keepVolatileQueuedMessage, removeQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
@@ -416,4 +418,36 @@ describe("chat run publication", () => {
     expect(state.chatToolMessages).toEqual([]);
     expect(activity).toHaveBeenCalledOnce();
   });
+});
+
+it("settles unfinished tool activity when Stop ends the owning run", () => {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+  const { state } = createSessionEventState({ chatRunId: "run" });
+  agentEvent(state, "run", 1, "tool", {
+    name: "exec",
+    toolCallId: "slow",
+    phase: "start",
+    args: { command: "sleep 30" },
+  });
+  agentEvent(state, "run", 2, "item", {
+    itemId: "tool:slow",
+    toolCallId: "slow",
+    name: "exec",
+    kind: "tool",
+    title: "Exec",
+    phase: "start",
+    status: "running",
+  });
+  vi.advanceTimersByTime(80);
+  expect(summarizeToolGroup(state.chatToolMessages.flatMap(readPreparedActivity))).toBe(
+    "Running commands",
+  );
+  chatEvent(state, "run", "aborted", "");
+  const cards = state.chatToolMessages.flatMap(extractToolCardsCached);
+  expect(cards).toHaveLength(1);
+  expect(resolveToolCardOutcome(cards[0]!, false)).toBe("unrecorded");
+  expect(summarizeToolGroup(state.chatToolMessages.flatMap(readPreparedActivity))).not.toContain(
+    "Running",
+  );
 });

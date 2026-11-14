@@ -125,7 +125,14 @@ function ToolRowContent(props: {
     >
       <Match when={props.view.kind === "command" && props.view.command}>
         <span class="chat-tool-row__prompt">
-          {props.outcome === "running" ? t("chat.toolCards.running") : "$"}
+          {t(
+            props.outcome === "running"
+              ? "chat.toolCards.running"
+              : props.outcome === "succeeded" ||
+                  (props.outcome === "failed" && props.card.exitCode !== undefined)
+                ? "chat.toolCards.ran"
+                : "chat.toolCards.run",
+          )}
         </span>
         <code class={["chat-tool-row__cmd", { "text-shimmer": props.running }]}>
           <HighlightedCommand command={shellCommandPreview(props.view.command!)} />

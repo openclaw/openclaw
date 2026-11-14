@@ -1,4 +1,5 @@
 import { expect, expectTypeOf, onTestFinished, test } from "vitest";
+import { makeMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -302,6 +303,17 @@ test("marks only unpaired history calls as provisional, including terminal unkno
   expect(missing).toMatchObject({ phase: "end", unpairedCall: true });
   expect(missing).not.toHaveProperty("summary");
   expect(missing?.status).toBeUndefined();
+  const repaired = projectAgentHistoryActivity([
+    unpaired,
+    {
+      messageId: "repair",
+      message: makeMissingToolResult({ toolCallId: "command", toolName: "exec", text: "aborted" }),
+    },
+  ]);
+  for (const entry of repaired) {
+    expect(entry.items[0]).toMatchObject({ unpairedCall: true });
+    expect(entry.items[0]?.status).toBeUndefined();
+  }
   const result = resultEntry("result", "command", {
     details: {
       status: "completed",

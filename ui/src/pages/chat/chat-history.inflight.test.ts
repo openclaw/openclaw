@@ -33,8 +33,9 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { applyChatCacheSnapshot } from "./session-message-cache.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
-import { buildInitialChatSubmission } from "./user-message-content.ts";
+import { buildLocalUserMessage, buildInitialChatSubmission } from "./user-message-content.ts";
 
 function assistant(
   state: TestState,
@@ -594,4 +595,45 @@ describe("chat history run ownership recovery", () => {
       expect(first.chatRunId).toBeNull();
     }
   });
+});
+
+it("reconciles cached identical steers by send identity after reload", async () => {
+  const runId = "active-run";
+  const state = createState(activeSnapshot(runId));
+  const sends = ["a", "b", "c"];
+  const cached = sends.map((sendId) =>
+    buildLocalUserMessage({
+      text: "Keep going",
+      runId: sendId,
+      steerTargetRunId: runId,
+      createdAt: 1,
+      sender: { id: "owner" },
+    }),
+  );
+  applyChatCacheSnapshot(state, {
+    messages: cached,
+    sessionId: "session-one",
+    pagination: state.chatHistoryPagination,
+  });
+  const receipts = sends.map((sendId, index) =>
+    message("user", "Keep going", {
+      id: `durable-${sendId}`,
+      seq: index + 1,
+      idempotencyKey: `${sendId}:user`,
+    }),
+  );
+  for (const [index, receipt] of receipts.entries()) {
+    publish(state, runId, { message: receipt });
+    publish(state, runId, {
+      message: {
+        ...receipt,
+        __openclaw: { ...receipt["__openclaw"], steerTargetRunId: runId },
+      },
+    });
+    expect(renderedText(state)).toEqual(["Keep going", "Keep going", "Keep going"]);
+    expect(state.chatMessages.slice(0, index + 1)).toMatchObject(receipts.slice(0, index + 1));
+  }
+  vi.spyOn(state.client!, "request").mockResolvedValue({ messages: receipts });
+  await loadChatHistory(state);
+  expect(state.chatMessages).toEqual(receipts);
 });

@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -101,4 +102,123 @@ async function verifyCustody(page: Page) {
 suite.define(() => {
   it("moves a deferred steer into the queue on custody publication without another reply", () =>
     suite.withPage({ viewport: { width: 393, height: 852 } }, ({ page }) => verifyCustody(page)));
+  it("replaces cached steers with their receipts while reload history is pending", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:main";
+      const runId = "reload-run";
+      const messages: unknown[] = [
+        {
+          role: "user",
+          content: "Run the long check",
+          timestamp: Date.now(),
+          __openclaw: { id: "initial", seq: 1, idempotencyKey: runId + ":user" },
+        },
+      ];
+      const sessionInfo = {
+        key: sessionKey,
+        sessionId: "reload-session",
+        kind: "direct",
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+      };
+      const history = () => ({
+        ...prepareChatHistoryFixture(messages),
+        sessionId: sessionInfo.sessionId,
+        sessionInfo,
+        inFlightRun: { runId, text: "Checking now." },
+      });
+      let holdHistory = false;
+      let releaseHistory: (() => void) | undefined;
+      const held = new Promise<void>((resolve) => {
+        releaseHistory = resolve;
+      });
+      const readHistory = async () => {
+        if (holdHistory) {
+          await held;
+        }
+        return history();
+      };
+      const gateway = await installMockGateway(
+        page,
+        {
+          sessionKey,
+          sessionInfo,
+          sessions: [sessionInfo],
+          awaitInitialRoster: false,
+          inFlightRun: { runId, text: "Checking now." },
+          historyMessages: messages,
+        },
+        {
+          requestHandlers: {
+            "chat.history": readHistory,
+            "chat.startup": readHistory,
+          },
+        },
+      );
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.locator('[data-test-id="send-shortcut-enter"]').click();
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+      const composer = page.locator(".agent-chat__input textarea");
+      const steers = page
+        .locator(".chat-group.user")
+        .getByText("Keep the same command running", { exact: true });
+      const ids: string[] = [];
+      for (let index = 0; index < 3; index++) {
+        await composer.fill("Keep the same command running");
+        await gateway.deferNext("chat.send");
+        await composer.press("Control+Enter");
+        const request = await gateway.waitForRequest("chat.send", { after: index });
+        const id = (request.params as { idempotencyKey: string }).idempotencyKey;
+        ids.push(id);
+        await gateway.resolveDeferred("chat.send", { runId: id, status: "started" });
+        await expectCount(steers, index + 1);
+      }
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...sessionInfo,
+        sessionKey,
+        reason: "agent.progress",
+        updatedAt: Date.now(),
+      });
+      await page
+        .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+        .waitFor({ state: "attached" });
+      const cached = await page.evaluate(persistColdLoadWarmState, {
+        sessionKey,
+        sidebarView: "sessions",
+      });
+      expect(cached.messages).toBe(4);
+      holdHistory = true;
+      await page.reload();
+      await expectCount(steers, 3);
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      for (const [index, id] of ids.entries()) {
+        const receipt = {
+          role: "user",
+          content: "Keep the same command running",
+          __openclaw: { id: `saved-${index}`, seq: index + 2, idempotencyKey: id + ":user" },
+        };
+        for (const extra of [{}, { steerTargetRunId: runId }]) {
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            messageId: `saved-${index}`,
+            messageSeq: index + 2,
+            message: { ...receipt, __openclaw: { ...receipt["__openclaw"], ...extra } },
+          });
+          await expectCount(steers, 3);
+        }
+        messages.push({
+          ...receipt,
+          __openclaw: { ...receipt["__openclaw"], steerTargetRunId: runId },
+        });
+      }
+      holdHistory = false;
+      releaseHistory!();
+      await expectCount(steers, 3);
+      await page.reload();
+      await expectCount(steers, 3);
+    });
+  });
 });

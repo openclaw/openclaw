@@ -92,7 +92,7 @@ describe("summarizeToolGroup", () => {
     const codeExecutions = new Set(["code"]);
     expect(summarizeToolGroup([code, command], { codeExecutions })).toBe("Ran code, ran commands");
     expect(summarizeToolGroup([{ ...code, status: "failed" }], { codeExecutions })).toBe(
-      "Code execution",
+      "Run code",
     );
   });
 
@@ -102,8 +102,9 @@ describe("summarizeToolGroup", () => {
         prepared("command", "Exec", { name: "exec" }),
         prepared("search", "Skill Search", { name: "skills_search" }),
         prepared("read", "Skill Read", { name: "skills_read" }),
+        prepared("wait", "Wait for Agents", { name: "agents_wait" }),
       ]),
-    ).toBe("Ran commands, searched skills, read skills");
+    ).toBe("Ran commands, searched skills, read skills, waited for agents");
     expect(
       summarizeToolGroup([
         prepared("search", "Skill Search", { name: "skills_search", status: "running" }),

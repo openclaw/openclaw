@@ -461,10 +461,8 @@ it.each([
     [history.messages[0], false],
   ] as const) {
     const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
-    view.render([group], { showReasoning: false, runActive });
+    view.render([group], { showReasoning: false, runActive, isToolMessageExpanded: () => false });
     await settleToolBridges(container);
-    // The collapsed group leaves outcomes to its rows; the expanded row below reports it.
-    expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(0);
     view.render([group], {
       showReasoning: false,
       runActive,
@@ -485,6 +483,7 @@ it.each([
 it.each([
   [2, "completed", false, "Exit code 2"],
   [0, "error", true, "failed"],
+  [undefined, "error", true, "failed"],
 ] as const)("shows prepared failure (%s)", async (exitCode, status, isError, label) => {
   const host = createHost({ chatRunId: "command-run" });
   const args = { command: "check-report" };
@@ -501,9 +500,9 @@ it.each([
     agentEvent("command-run", 3, "item", projectAgentToolActivity({ ...end, args })),
   );
   const card = extractToolCardsCached(host.chatToolMessages[0])[0]!;
+  expect(card.exitCode).toBe(exitCode);
   expect(card).toMatchObject({
     isError,
-    exitCode,
     completed: true,
     outputText: "Validation report",
     details: result.details,
@@ -515,6 +514,7 @@ it.each([
     expanded: false,
   });
   expect(textOf(container, ".chat-tool-msg-summary")).toContain(label);
+  expect(textOf(container, ".chat-tool-row__prompt")).toBe(exitCode === undefined ? "Run" : "Ran");
   await mountCard(card, { messageKey: "result", runActive: true }, container);
   expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
   expect(query(container, ".chat-tool-row--running")).toBeNull();
@@ -903,7 +903,7 @@ it("previews live command output without inferring completion and retains detail
   await mountCard(card, options, container);
   await waitForSolid(() => {
     expect(textOf(container, ".chat-tool-row__cmd")).toBe("npm test");
-    expect(textOf(container, ".chat-command-trail__status")).toBe("Running");
+    expect(textOf(container, ".chat-tool-row__prompt")).toBe("Running");
   });
   expect(textOf(container, ".chat-command-trail__preview pre")).toBe("third\nfourth\nfifth");
   expect(container.textContent).not.toContain("Earlier output omitted");

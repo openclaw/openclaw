@@ -68,6 +68,7 @@ describe("a launched subagent", () => {
     // History keeps the result as text; a live result still carries details.
     for (const result of [
       { outputText: accepted(story.key) },
+      { outputText: accepted(story.key), details: { sessionKey: story.key } },
       { details: { status: "accepted", childSessionKey: story.key } },
     ]) {
       expect(resolveSpawnedSubagent(launch(result), roster)).toEqual({ label, session: finished });

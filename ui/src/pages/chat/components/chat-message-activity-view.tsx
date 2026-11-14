@@ -198,6 +198,15 @@ export function prepareActivityGroup(
         summaryByCard.set(card, item);
         return item;
       });
+  const activeGroup = source
+    ? source.activeGroup
+    : Boolean(
+        opts.runActive &&
+        (opts.activityGroupKey === undefined ||
+          groups.some((group) => group.key === opts.activityGroupKey)) &&
+        (!opts.activityRunId ||
+          entries.some(({ message }) => transcriptRunId(message) === opts.activityRunId)),
+      );
   const codeExecutions = new Set<string>();
   const executedCommands = new Set<string>();
   for (const card of cards) {
@@ -219,6 +228,32 @@ export function prepareActivityGroup(
       executedCommands.add(key);
     }
   }
+  const continuingExecutions = new Set<string>();
+  if (activeGroup && !visibleActivity.some((item) => item.status === "running")) {
+    for (const group of cardGroups) {
+      if (
+        !group.executionCards?.some(
+          (card) => (preparedByCard.get(card) ?? card.activity)?.status === "running",
+        )
+      ) {
+        continue;
+      }
+      const operations = [group.card, ...descendantCards(group)];
+      // A running child owns the current activity. Only bridge the gap between
+      // command children; do not revive completed reads or edits in a mixed batch.
+      for (const card of operations) {
+        const call = unwrapToolCallForDisplay(card);
+        if (resolveToolCallInput(call.name, asNullableRecord(call.args)).kind !== "command") {
+          continue;
+        }
+        const item = summaryByCard.get(card);
+        const key = item && activityKeys.get(item);
+        if (key) {
+          continuingExecutions.add(key);
+        }
+      }
+    }
+  }
   const groupSummaryLabel = summarizeToolGroup(summaryActivity, {
     ownSessionLaunches: new Set(
       summaryActivity
@@ -228,6 +263,7 @@ export function prepareActivityGroup(
     activityKeys,
     executedCommands,
     codeExecutions,
+    continuingExecutions,
   });
   const toolCardOverrides = new Map<ToolCard, ActivityOperationProps | null>();
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
@@ -256,15 +292,6 @@ export function prepareActivityGroup(
   const stepCall = step && unwrapToolCallForDisplay(step.card);
   const stepInput =
     stepCall && resolveToolCallInput(stepCall.name, asNullableRecord(stepCall.args));
-  const activeGroup = source
-    ? source.activeGroup
-    : Boolean(
-        opts.runActive &&
-        (opts.activityGroupKey === undefined ||
-          groups.some((group) => group.key === opts.activityGroupKey)) &&
-        (!opts.activityRunId ||
-          entries.some(({ message }) => transcriptRunId(message) === opts.activityRunId)),
-      );
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const soleStep =
     !activeGroup &&

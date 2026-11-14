@@ -27,6 +27,8 @@ type ToolGroupOptions = {
   executedCommands?: ReadonlySet<string>;
   /** Executions with source but no shell command have their own factual category. */
   codeExecutions?: ReadonlySet<string>;
+  /** Visible operations whose enclosing execution is still producing children. */
+  continuingExecutions?: ReadonlySet<string>;
 };
 
 export function describeToolGroup(
@@ -58,9 +60,12 @@ export function describeToolGroup(
   const skillReads = current.filter(
     (item) => !item.hideFromChannelProgress && item.name === "skills_read",
   );
-  const skillItems = new Set([...skillSearches, ...skillReads]);
+  const waits = current.filter(
+    (item) => !item.hideFromChannelProgress && item.name === "agents_wait",
+  );
+  const semanticItems = new Set([...skillSearches, ...skillReads, ...waits]);
   const ordinary = current.filter(
-    (item) => !codeIds.has(item.toolCallId ?? item.itemId) && !skillItems.has(item),
+    (item) => !codeIds.has(item.toolCallId ?? item.itemId) && !semanticItems.has(item),
   );
   const { other, subagents, ...categories } = summarizeAgentActivity(ordinary, options).counts;
   const counts = {
@@ -68,6 +73,7 @@ export function describeToolGroup(
     ...categories,
     skillSearches: skillSearches.length,
     skillReads: skillReads.length,
+    waits: waits.length,
     other,
     subagents,
   };
@@ -84,7 +90,11 @@ export function describeToolGroup(
   const runningKinds = new Set(
     Object.entries(
       summarizeAgentActivity(
-        ordinary.filter((item) => item.status === "running"),
+        ordinary.filter(
+          (item) =>
+            item.status === "running" ||
+            options.continuingExecutions?.has(item.toolCallId ?? item.itemId),
+        ),
         options,
       ).counts,
     )
@@ -124,11 +134,12 @@ export function describeToolGroup(
     .filter(([, count]) => count > 0)
     .map(([kind], index) => {
       const continuation = index > 0 ? "Continuation" : "";
-      if (kind === "skillSearches" || kind === "skillReads") {
-        const skills = kind === "skillSearches" ? skillSearches : skillReads;
-        const phase = skills.some((item) => item.status === "running")
+      if (kind === "skillSearches" || kind === "skillReads" || kind === "waits") {
+        const actions =
+          kind === "skillSearches" ? skillSearches : kind === "skillReads" ? skillReads : waits;
+        const phase = actions.some((item) => item.status === "running")
           ? "Running"
-          : skills.some((item) => item.status === "completed")
+          : actions.some((item) => item.status === "completed")
             ? "Summary"
             : "Pending";
         return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);

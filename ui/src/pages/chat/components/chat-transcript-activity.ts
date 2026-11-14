@@ -5,6 +5,7 @@ import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/cha
 import { sumRunOutputTokens } from "../chat-progress.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { getChatItemsGeneration, type buildCachedChatItems } from "../chat-thread.ts";
+import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
@@ -26,11 +27,22 @@ export function projectTranscriptActivity(
     chatItems,
     [generation, activityRunId, props.runActive],
     () => {
-      // A later narrative, question, or notice closes the activity segment.
+      // A steer does not finish the operation it addresses. A later narrative,
+      // question, or notice still closes the activity segment.
       // The working indicator is status for the run, not another transcript action.
       const group =
         props.runActive && activityRunId
-          ? chatItems.findLast((item) => item.kind !== "reading-indicator")
+          ? chatItems.findLast(
+              (item) =>
+                item.kind !== "reading-indicator" &&
+                !(
+                  item.kind === "group" &&
+                  item.role === "user" &&
+                  item.messages.every(
+                    ({ message }) => persistedSteerTargetRunId(message) === activityRunId,
+                  )
+                ),
+            )
           : undefined;
       if (group?.kind !== "group") {
         return undefined;
