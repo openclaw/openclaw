@@ -1,0 +1,2 @@
+# Real AgentSession/Code Mode comparison proves delivery starvation inside a polling cell versus steering admission between cells; live fixture preserves all work identity and completion assertions. Adapted from 73fa00252811.
+144
