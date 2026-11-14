@@ -1,14 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { formatEd25519PublicKey } from "@openclaw/openclaw-id-protocol";
 import { render } from "@solidjs/web";
 import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPeopleMotion } from "./people-motion.js";
 import { PeoplePage } from "./people-page.js";
+import { button, linked, pendingInvite } from "./people-page.test-support.js";
 import { InviteForm } from "./people-sections.js";
-import type { Invite, StatusResult } from "./types.js";
+import type { StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -22,56 +22,6 @@ vi.mock("./owner-signing.js", () => ({
 
 const { default: plugin } = await import("./index.js");
 const disposers: Array<() => void> = [];
-
-const pendingInvite: Invite = {
-  inviteId: "inv-1",
-  label: "member@example.test",
-  role: "operator",
-  audience: { kind: "email", value: "member@example.test" },
-  createdAt: 1_800_000_000,
-  expiresAt: 1_800_600_000,
-  status: "pending",
-  pending: {
-    accountId: "acct-member",
-    devicePub: formatEd25519PublicKey(new Uint8Array(32).fill(7)),
-    peerKey: "iroh:member",
-    requestedAt: 1_800_000_100,
-    decideBy: 1_800_086_400,
-    reported: { email: "member@example.test", displayName: "Mia", locationHint: "Falkenstein, DE" },
-  },
-};
-
-function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
-  return {
-    status: { state: "on" },
-    channel: "tunnel",
-    owner: true,
-    link: {
-      linked: true,
-      clawId: "claw-1",
-      hostname: "studio-e61zr.crabd.xyz",
-      rootPub: "ed25519:root",
-      seq: 4,
-      ownerDevices: [
-        { devicePub: "ed25519:mine", label: "This browser", peerKeys: ["iroh:a"], cert: {} },
-        { devicePub: "ed25519:old-laptop", label: "Old laptop", peerKeys: ["iroh:b"], cert: {} },
-      ],
-      roles: [
-        {
-          name: "operator",
-          defined: true,
-          sessions: "write",
-          requiresSandbox: false,
-          admin: false,
-        },
-        { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
-      ],
-      members: [],
-      invites: [pendingInvite],
-      ...overrides,
-    },
-  };
-}
 
 // The host owns picker behavior; this adapter exposes its public selection contract here.
 const mountSelectPicker: UI.ControlUiHost["components"]["mountSelectPicker"] = (
@@ -185,9 +135,6 @@ async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
   disposers.push(dispose);
   return { ...harness, request, container, dispose };
 }
-
-const button = (container: HTMLElement, label: string) =>
-  [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
 
 describe("Access page", () => {
   afterEach(() => {
