@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import {
   prepareForeignLiveSessionPendingInputEntries,
@@ -80,6 +81,16 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
     : undefined;
   // Operational notices do not complete the foreground user turn.
   if (delivery?.kind === PLUGIN_NOTICE_KIND || delivery?.kind === MODEL_FALLBACK_NOTICE_KIND) {
+    return true;
+  }
+  // A mirrored command exchange (a stop or another delivered command) is
+  // operational history, not an agent turn input: it can land between a queued
+  // turn's user row and that turn's replay admission.
+  const idempotencyKey = readStringValue(Reflect.get(message, "idempotencyKey"));
+  if (
+    idempotencyKey !== undefined &&
+    (idempotencyKey.startsWith("command-input:") || idempotencyKey.startsWith("command-reply:"))
+  ) {
     return true;
   }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
