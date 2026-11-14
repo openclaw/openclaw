@@ -1,7 +1,10 @@
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
+import {
+  resolveGatewayNativeServiceIdentityConflict,
+  resolveGatewaySystemdServiceNameCandidates,
+} from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
@@ -104,9 +107,12 @@ export function compareCliGatewayStateDirs(params: {
       `Fix: run OPENCLAW_STATE_DIR=${quoteCliArg(gatewayStateDir)} OPENCLAW_CONFIG_PATH=${quoteCliArg(gatewayConfigPath)} ${params.command ?? "openclaw configure"}.`,
       params.source === "live Gateway"
         ? "To write another local store intentionally, stop the running Gateway first."
-        : params.serviceSelector
-          ? `This shell selects that service with ${params.serviceSelector}, usually inherited from another Gateway. To write this store, remove ${params.serviceSelector.split("=")[0]} from this shell's environment and retry.`
-          : "To write another local store intentionally, uninstall or reconfigure the divergent Gateway service first.",
+        : "To write another local store intentionally, uninstall or reconfigure the divergent Gateway service first.",
+      ...(params.serviceSelector
+        ? [
+            `This shell selects that service with ${params.serviceSelector}; if it was inherited from another Gateway, remove ${params.serviceSelector.split("=")[0]} from this shell's environment and retry.`,
+          ]
+        : []),
     ].join(" "),
   };
 }
@@ -161,9 +167,15 @@ export async function checkCliGatewayStateDir(params: {
   if (servicePaths.kind === "known") {
     // Name the active backend's selector only when clearing it would pick this profile's service.
     const conflict = resolveGatewayNativeServiceIdentityConflict(process.env);
-    const redirectingSelector = conflict
-      ? `${conflict.envKey}=${process.env[conflict.envKey]?.trim()}`
-      : undefined;
+    const selectorValue = conflict && process.env[conflict.envKey]?.trim();
+    // Systemd discovery also finds this profile's legacy unit name; clearing a selector for it changes nothing.
+    const selectsLegacyUnit =
+      conflict?.envKey === "OPENCLAW_SYSTEMD_UNIT" &&
+      resolveGatewaySystemdServiceNameCandidates(process.env.OPENCLAW_PROFILE).some(
+        (name) => selectorValue === name || selectorValue === `${name}.service`,
+      );
+    const redirectingSelector =
+      conflict && !selectsLegacyUnit ? `${conflict.envKey}=${selectorValue}` : undefined;
     return compareCliGatewayStateDirs({
       cliStateDir,
       cliConfigPath,
