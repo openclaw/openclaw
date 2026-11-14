@@ -76,6 +76,30 @@ function deferred() {
 }
 
 describe("runtime-owned transport host", () => {
+  it("shares default and scoped host policy with duplicated transport modules", async () => {
+    const duplicate = (await import(
+      /* @vite-ignore */ new URL("./host.ts?duplicate-host-scope", import.meta.url).href
+    )) as typeof import("./host.js");
+    const registry = registryFor(async () => {
+      await Promise.resolve();
+      return duplicate.getAiTransportHost().resolveSecretSentinel("request");
+    });
+    const runtime = createLlmRuntime(registry);
+    duplicate.configureAiTransportHost({ resolveSecretSentinel: (value) => "default:" + value });
+    expect((await runtime.completeSimple(model, { messages: [] })).content).toEqual([
+      { type: "text", text: "default:request" },
+    ]);
+    const scoped = createNodeLlmRuntime(registry, {
+      resolveSecretSentinel: (value) => "scoped:" + value,
+    });
+    expect((await scoped.completeSimple(model, { messages: [] })).content).toEqual([
+      { type: "text", text: "scoped:request" },
+    ]);
+    expect(duplicate.getDefaultAiTransportHost().resolveSecretSentinel("request")).toBe(
+      "default:request",
+    );
+  });
+
   it.each([false, true])("accepts frozen provider streams (scoped=%s)", async (scoped) => {
     const observations: string[] = [];
     const observe = (operation: string) =>

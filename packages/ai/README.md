@@ -31,7 +31,8 @@ provider plugin hooks, and diagnostics logging) can be injected with
 `configureAiTransportHost`; the defaults are inert. Node callers that need
 runtime-local policy can use `createNodeLlmRuntime`; it preserves that host across
 provider work without replacing the process default. `createLlmRuntime` continues
-to use the process-default host.
+to use the process-default host. The default host and its asynchronous scope are
+shared across duplicate package module instances, including native plugins.
 
 OpenAI HTTP adapters report rejected response status and headers through
 `onResponse` before consuming the error body. Successful streaming responses
