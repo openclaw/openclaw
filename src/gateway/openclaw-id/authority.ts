@@ -776,8 +776,7 @@ export function createOpenClawIdAuthority(
         return [];
       }
       const now = nowSeconds();
-      // SAFETY: nodes is keyed by IrohEndpointKey. The admission filter below keeps only
-      // nodes whose bound owner no longer authorizes them, alongside expired human keys.
+      // SAFETY: nodes is keyed by IrohEndpointKey; the admission filter below removes active nodes.
       const expired = new Set(Object.keys(state.nodes) as IrohEndpointKey[]);
       for (const device of Object.values(state.owner_devices)) {
         if (!isOwnerDeviceActive(device, now)) {

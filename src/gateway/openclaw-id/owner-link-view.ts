@@ -77,9 +77,9 @@ export async function readOwnerLinkStatus(params: {
     members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
     nodes: Object.entries(state?.nodes ?? {})
-      // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
       .filter(
         ([key]) =>
+          // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
           state && isAdmitted(state, key as IrohEndpointKey, Math.floor(Date.now() / 1000)),
       )
       .map(([peerKey, node]) => ({
