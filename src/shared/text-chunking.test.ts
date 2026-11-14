@@ -9,21 +9,21 @@ it("returns empty for blank input and preserves text that needs no split", () =>
 
 it("resolves bounded chunks while retaining clusters and trimming whole separators", () => {
   const cases: [text: string, limit: number, expected: string[], breakIndex?: number][] = [
-    ["alpha beta gamma", 10, ["alpha", "beta gamma"]],
+    ["alpha beta gamma", 10, ["alpha ", "beta gamma"]],
     ["abcd efgh", 4, ["abcd", "efgh"], 4],
     ["abcdefghij", 4, ["abcd", "efgh", "ij"], Number.NaN],
     ["abcdefghij", 4, ["abcd", "efgh", "ij"], 99],
     ["abcdefghij", 4, ["abcd", "efgh", "ij"], 0],
     ["abcdefghij", 4, ["abcd", "efgh", "ij"], 0.5],
     ["word     next", 5, ["word", "next"]],
-    ["abc   def", 6, ["abc", "def"]],
+    ["abc   def", 6, ["abc   ", "def"]],
     ["ab \u0301cd", 2, ["ab", " \u0301", "cd"]],
     ["ab  \u0301cd", 2, ["ab", " \u0301", "cd"]],
-    ["ab\u0600  cd", 5, ["ab\u0600 ", "cd"]],
+    ["ab\u0600  cd", 5, ["ab\u0600  ", "cd"]],
     [" \u0301x", 1, [" ", "\u0301", "x"]],
-    ["  ! ", 2, ["!"]],
-    ["a b ", 2, ["a", "b"]],
-    ["alpha beta   ", 8, ["alpha", "beta"]],
+    ["  ! ", 2, ["  ", "!"]],
+    ["a b ", 2, ["a ", "b"]],
+    ["alpha beta   ", 8, ["alpha ", "beta"]],
     ["ab\u0600  ", 3, ["ab", "\u0600 "]],
     ["aaaaa👨‍👩‍👧‍👦Z", 16, ["aaaaa", "👨‍👩‍👧‍👦Z"], 7],
     ["👨‍👩‍👧‍👦AB", 12, ["👨‍👩‍👧‍👦A", "B"], 2],
@@ -60,5 +60,23 @@ it("keeps hard cuts and CJK or CRLF soft breaks on cluster boundaries", () => {
     for (const preserveWhitespace of modes) {
       expect(splitLongTextLine(text, limit, { preserveWhitespace })).toEqual(expected);
     }
+  }
+});
+
+it("keeps a separator at the cut only when it fits inside the limit", () => {
+  const resolver = (window: string) => window.lastIndexOf(" ");
+  const cases: [text: string, limit: number, expected: string[]][] = [
+    // The run fits the budget, so the text survives instead of being rewritten.
+    ["alpha beta", 6, ["alpha ", "beta"]],
+    ["alpha beta gamma", 10, ["alpha ", "beta gamma"]],
+    ["abc   def", 6, ["abc   ", "def"]],
+    // The run overflows the budget, so the hard limit wins and the run is trimmed as before.
+    ["alpha beta", 5, ["alpha", "beta"]],
+    ["word     next", 5, ["word", "next"]],
+  ];
+  for (const [text, limit, expected] of cases) {
+    const chunks = chunkTextByBreakResolver(text, limit, resolver);
+    expect(chunks).toEqual(expected);
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
   }
 });
