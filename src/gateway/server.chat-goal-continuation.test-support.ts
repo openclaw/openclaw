@@ -8,7 +8,18 @@ import {
   maybeNotifyOnExit,
   prepareExecExitNotification,
 } from "../agents/bash-tools.exec-notify.js";
+import {
+  expectComplete,
+  resolveTerminal,
+  textAssistant,
+} from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import * as runs from "../agents/embedded-agent-runner/runs.js";
+import { handleToolExecutionStart } from "../agents/embedded-agent-subscribe.handlers.tools.start.js";
+import {
+  createTestContext,
+  endTool,
+  resultWithDetails,
+} from "../agents/embedded-agent-subscribe.handlers.tools.test-support.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { CommandOwnerRevokedError } from "../auto-reply/command-owner-authority.js";
@@ -71,13 +82,34 @@ export function registerGoalAutomaticContinuationCases(
   });
 
   it("waits for a new user instruction after a required action is unresolved", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "ask-user-goal-continuation";
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId,
+      args: {},
+    });
+    await endTool(ctx, {
+      toolName: "ask_user",
+      toolCallId,
+      result: resultWithDetails({ status: "action_unresolved", reason: "declined" }),
+    });
     runEmbeddedAgent.mockImplementation(async (params) => {
       if (runEmbeddedAgent.mock.calls.length > 1) {
         await setGoalStatus("paused");
       }
-      return Object.assign(result(params.sessionId), {
-        didEncounterUnresolvedRequiredAction: true as const,
+      const text = "The dependent step remains blocked.";
+      const resolved = await resolveTerminal({
+        assistant: textAssistant(text),
+        finalAssistantRawText: text,
+        finalAssistantVisibleText: text,
+        payloadsWithToolMedia: [{ text }],
+        attemptOverrides: { toolMetas: ctx.state.toolMetas },
+        runParams: { sessionId: params.sessionId },
       });
+      expectComplete(resolved);
+      return resolved.result;
     });
     await start("Wait for a new instruction before retrying the required step");
     await expectDrained();
