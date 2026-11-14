@@ -33,6 +33,7 @@ struct OnboardingReachabilityContent: View {
 
 struct OnboardingOpenClawIDView: View {
     @Bindable var model: OnboardingOpenClawIDModel
+    var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -54,7 +55,13 @@ struct OnboardingOpenClawIDView: View {
                     Button("Try again") { self.model.perform(.retry) }.disabled(self.model.busy)
                 }
             }
-            Button("Close") { self.dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Close") {
+                if let onClose = self.onClose {
+                    onClose()
+                } else {
+                    self.dismiss()
+                }
+            }.keyboardShortcut(.cancelAction)
         }
         .padding(28)
         .frame(width: 574)
@@ -133,6 +140,8 @@ struct OnboardingOpenClawIDContent: View {
                 }
                 .buttonStyle(.plain).disabled(!claw.online)
             }
+            Button("Use a different account") { self.action(.switchAccount) }
+                .buttonStyle(.link)
         case let .recoveryKit(hostname, saved):
             self.heading("Save your recovery kit", subtitle: "Keep the recovery kit for \(hostname) somewhere safe.")
             self.row(
@@ -335,6 +344,8 @@ struct OnboardingOpenClawIDContent: View {
                 or set up OpenClaw on this Mac.
                 """,
                 icon: "person.crop.circle.badge.questionmark")
+            Button("Use a different account") { self.action(.switchAccount) }
+                .buttonStyle(.link)
         case let .memberNeedsInvite(claw):
             self.problemHeading(
                 "Ask for an invite to \(claw)",

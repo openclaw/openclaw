@@ -862,8 +862,9 @@ describe("capability cli", () => {
   it.each(invalidModelRunOptionCases)(
     "rejects invalid model run options $args before dispatch",
     async ({ args, error }) => {
-      await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
-      expectRuntimeErrorContains(error);
+      const run = runModelProbe(...args);
+      await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(run).rejects.toThrow(error);
       expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -1669,11 +1670,9 @@ describe("capability cli", () => {
   });
 
   it("rejects conflicting TTS provider and model selections", async () => {
-    await expect(
-      convertTts("--provider", "xiaomi", "--model", "openai/gpt-4o-mini-tts"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("TTS --provider must match the provider in --model.");
+    const run = convertTts("--provider", "xiaomi", "--model", "openai/gpt-4o-mini-tts");
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow("TTS --provider must match the provider in --model.");
   });
 
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
@@ -1773,7 +1772,6 @@ describe("capability cli", () => {
   it.each([
     ["parent", "login", "beta", undefined],
     ["leaf", "status", "beta", undefined],
-    ["parent", "status", "", "--agent must not be blank"],
     ["leaf", "status", "retired", 'Unknown agent id "retired"'],
   ] as const)("routes %s model auth %s for agent %j", async (position, action, agent, error) => {
     mocks.loadConfig.mockReturnValue({

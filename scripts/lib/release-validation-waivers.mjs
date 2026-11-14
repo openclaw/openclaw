@@ -4,7 +4,7 @@ import { compareAscii } from "./canonical-json.mjs";
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
-export const RELEASE_VALIDATION_WAIVERS = [
+const RELEASE_VALIDATION_WAIVERS = [
   {
     targetVersion: "2026.11.5-beta.3",
     childRole: "productPerformance",

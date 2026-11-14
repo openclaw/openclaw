@@ -3,6 +3,7 @@ import SwiftUI
 
 /// What Settings shows about this Mac's OpenClaw ID access. Display data only.
 enum OpenClawIDSettingsPresentation: Equatable {
+    case signIn(removal: MacOpenClawIDRemoval?)
     /// Connected through another route (Tailscale, token, SSH); offer to switch.
     case migrate(claw: String, route: String, address: String)
     /// `needsSignIn`: without a node, the route re-reads the claw with the person's Discovery
@@ -32,7 +33,6 @@ final class OpenClawIDSettingsModel {
     }
 
     var confirmation: Confirmation?
-    var signIn: OnboardingOpenClawIDModel?
     private(set) var busy = false
     private(set) var error: String?
     private(set) var revision = 0
@@ -59,11 +59,29 @@ final class OpenClawIDSettingsModel {
                     ? "Approved with your recovery kit" : "Approved from your other device",
                 needsSignIn: enrolled.nodeEnrollmentID == nil && self.store.session() == nil)
         }
-        guard state.connectionMode == .remote, MacOpenClawIDConfiguration.current() != nil else { return nil }
-        if state.remoteTransport == .ssh {
-            return .migrate(claw: state.remoteTarget, route: "SSH", address: state.remoteTarget)
+        return Self.unenrolledPresentation(
+            available: MacOpenClawIDConfiguration.current() != nil,
+            mode: state.connectionMode,
+            transport: state.remoteTransport,
+            target: state.remoteTarget,
+            url: state.remoteUrl,
+            removal: self.store.lastRemoval())
+    }
+
+    static func unenrolledPresentation(
+        available: Bool,
+        mode: AppState.ConnectionMode,
+        transport: AppState.RemoteTransport,
+        target: String,
+        url: String,
+        removal: MacOpenClawIDRemoval?) -> OpenClawIDSettingsPresentation?
+    {
+        guard available else { return nil }
+        guard mode == .remote else { return .signIn(removal: removal) }
+        if transport == .ssh {
+            return .migrate(claw: target, route: "SSH", address: target)
         }
-        guard let url = URL(string: state.remoteUrl), let host = url.host else { return nil }
+        guard let host = URL(string: url)?.host else { return .signIn(removal: removal) }
         let route = host.hasSuffix(".ts.net") || host.hasPrefix("100.") ? "Tailscale" : "a Gateway token"
         return .migrate(claw: host, route: route, address: host)
     }
@@ -72,15 +90,7 @@ final class OpenClawIDSettingsModel {
         self.confirmation = nil
         switch confirmation {
         case .migrate:
-            let model = OnboardingOpenClawIDModel(
-                service: OnboardingOpenClawIDSignInService(),
-                onJoined: { [weak self] claw in
-                    try self?.completeJoin(claw)
-                    self?.signIn = nil
-                    self?.revision += 1
-                })
-            model.begin(.connect)
-            self.signIn = model
+            MacOpenClawIDSignInPresenter.shared.present()
         case .stopTools: self.run { try await self.stopTools() }
         case .startTools: self.run { try await self.startTools() }
         case .remove: self.run { try await self.removeDevice() }
@@ -169,6 +179,8 @@ final class OpenClawIDSettingsModel {
 
     private func removeDevice() async throws {
         guard let device = self.store.load() else { return }
+        self.store.beginLocalRemoval(device)
+        defer { self.store.endLocalRemoval(device) }
         do {
             try await self.actions(device).removeDevice()
         } catch let refused as OpenClawIDOwnerDeviceActionError {
@@ -178,10 +190,7 @@ final class OpenClawIDSettingsModel {
             // answer can be lost after it succeeded. Finish locally once the claw no longer lists it.
             guard await self.removed(device) else { throw error }
         }
-        MacOpenClawIDOperatorRoute.shared.stop()
-        MacNodeModeCoordinator.shared.selectOpenClawIDTarget(nil)
-        await self.store.forget(device)
-        try? AppStateStore.shared.setPrimaryGateway(.clear)
+        await self.store.remove(device, origin: .here)
     }
 
     /// Whether the claw's verified snapshot no longer lists this Mac's peer key.
@@ -221,6 +230,19 @@ struct OpenClawIDSettingsSection: View {
     var body: some View {
         Section("OpenClaw ID") {
             switch self.presentation {
+            case let .signIn(removal):
+                if let removal {
+                    self.header(
+                        "Removed from \(removal.hostname)", detail: removal.settingsMessage(), icon: "info.circle")
+                }
+                HStack {
+                    self.header(
+                        "Sign in with OpenClaw ID",
+                        detail: "Reach your claw from anywhere with your own approval, no VPN or shared token.",
+                        icon: "person.crop.circle")
+                    Spacer()
+                    Button("Sign in…") { MacOpenClawIDSignInPresenter.shared.present() }
+                }
             case let .migrate(claw, route, address):
                 self.header(
                     "Sign in with OpenClaw ID",
@@ -286,12 +308,6 @@ struct OpenClawIDSettingsSection: View {
         }
         .sheet(item: self.$model.confirmation) { confirmation in
             OpenClawIDConfirmationSheet(kind: confirmation) { self.model.confirm(confirmation) }
-        }
-        .sheet(isPresented: Binding(
-            get: { self.model.signIn != nil },
-            set: { if !$0 { self.model.signIn = nil } }))
-        {
-            if let signIn = self.model.signIn { OnboardingOpenClawIDView(model: signIn) }
         }
     }
 

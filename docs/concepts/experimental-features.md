@@ -93,16 +93,24 @@ index**, or set the Boolean in config:
 ```
 
 The default is **off**; only explicit `true` enables it. The embedded OpenClaw
-runtime ranks the [Code Mode index](/tools/code-mode) and the
-[Tool Search deferred-schema directory](/tools/tool-search), not MCP directories
-or Codex-native surfaces. It does not enable Code Mode or Tool Search, authorize
-any tool, or change search results. Core coding tools retain their pinned places.
-Each surface reserves part of its existing budget for new tools, and selected
-entries render in canonical order.
+runtime ranks the [Code Mode index](/tools/code-mode), the
+[Tool Search deferred-schema directory](/tools/tool-search), and the
+[MCP tool directory](/tools/tool-search#mcp-tool-directory) in the `tool_search`
+description, including MCP servers installed as plugins. Codex-native surfaces
+are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
+does not enable Code Mode or Tool Search, authorize any tool, or change search
+results. Core coding tools retain their pinned places. Each surface reserves part
+of its existing budget for new tools, and selected entries render in canonical
+order.
 
 Successful calls contribute to a score with a 14-day half-life. Failed,
 cancelled, pending, client-delegated, and incognito calls do not count. Nested
 calls count the target tool rather than the Tool Search or Code Mode wrapper.
+MCP calls, including Code Mode `MCP` namespace calls, count under their exact
+catalog ID, such as `mcp:granola:granola__list_meetings`, never under a
+same-named OpenClaw or client tool. Scores follow that ID, so renaming an MCP
+server produces new IDs that start without history; the old IDs expire with
+normal retention.
 Subagents inherit the parent's frozen preference, filtered to their own
 available catalog; calls contribute to the agent that executes them.
 
@@ -134,7 +142,10 @@ openclaw tools usage reset --agent main
 - `import` scans retained transcripts from the last `--since` days (1–90,
   default 90), resolves names against the current authorized agent catalog, and
   imports only history not already covered by live recording or an earlier
-  import. Repeating the same import does not count the same history twice.
+  import. MCP calls are counted when history names their exact catalog ID, or
+  when their recorded result identifies the MCP server that owns the name.
+  Calls whose name also belongs to an OpenClaw tool, or to a server whose safe
+  name needed a collision suffix, are reported as unknown tools. Repeating the same import does not count the same history twice.
   The report includes scanned and counted calls, exclusions, errors,
   cancellations, pending calls, wrappers, and top scores. Missing or archived
   history that cannot be scanned is reported rather than inferred. Nested results
