@@ -1,5 +1,4 @@
 import { webcrypto } from "node:crypto";
-import { signAsync as signNoble } from "@noble/ed25519";
 import { build } from "esbuild";
 import { chromium, firefox, webkit } from "playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +33,14 @@ const fixtures = [
   },
 ];
 
+function verifies(signature: Uint8Array, message: Uint8Array, publicKeyHex: string): boolean {
+  return verifyEd25519SignatureBytes({
+    publicKey: Buffer.from(publicKeyHex, "hex").toString("base64url"),
+    payload: Buffer.from(message),
+    signatureBase64Url: Buffer.from(signature).toString("base64url"),
+  });
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.stubGlobal("crypto", webcrypto);
@@ -44,22 +51,22 @@ afterEach(() => {
 });
 
 describe("device Ed25519 signing", () => {
-  it.each(fixtures)("preserves RFC 8032 bytes for seed $seed", async (fixture) => {
-    const { getPublicKeyAsync, signAsync } = await import("./device-signing.runtime.ts");
-    const seed = Uint8Array.fromHex(fixture.seed);
-    const message = Uint8Array.fromHex(fixture.message);
-    const publicKey = await getPublicKeyAsync(seed);
-    expect(publicKey.toHex()).toBe(fixture.publicKey);
-    const signature = await signAsync(message, seed);
-    expect(signature.toHex()).toBe(fixture.signature);
-    expect(signature).toEqual(await signNoble(message, seed));
-    const verifier = await crypto.subtle.importKey("raw", publicKey, "Ed25519", false, ["verify"]);
-    await expect(crypto.subtle.verify("Ed25519", verifier, signature, message)).resolves.toBe(true);
+  it.each(fixtures)(
+    "preserves RFC public identity and deterministic fallback for seed $seed",
+    async (fixture) => {
+      const { getPublicKeyAsync, signAsync } = await import("./device-signing.runtime.ts");
+      const seed = Uint8Array.fromHex(fixture.seed);
+      const message = Uint8Array.fromHex(fixture.message);
+      const publicKey = await getPublicKeyAsync(seed);
+      expect(publicKey.toHex()).toBe(fixture.publicKey);
+      const signature = await signAsync(message, seed);
+      expect(verifies(signature, message, fixture.publicKey)).toBe(true);
 
-    vi.stubGlobal("crypto", undefined);
-    expect(await signAsync(message, seed)).toEqual(signature);
-    expect(await getPublicKeyAsync(seed)).toEqual(publicKey);
-  });
+      vi.stubGlobal("crypto", undefined);
+      expect((await signAsync(message, seed)).toHex()).toBe(fixture.signature);
+      expect(await getPublicKeyAsync(seed)).toEqual(publicKey);
+    },
+  );
 
   it("reuses a non-extractable import without mixing interleaved identities", async () => {
     const { signAsync } = await import("./device-signing.runtime.ts");
@@ -74,10 +81,10 @@ describe("device Ed25519 signing", () => {
       signAsync(message, second),
     ]);
     expect(imports).toHaveBeenCalledTimes(2);
-    expect(signatures[0]).toEqual(await signNoble(message, first));
-    expect(signatures[1]).toEqual(signatures[0]);
-    expect(signatures[2]).toEqual(await signNoble(message, second));
-    expect(await signAsync(message, first)).toEqual(signatures[0]);
+    signatures.push(await signAsync(message, first));
+    for (const [i, signature] of signatures.entries()) {
+      expect(verifies(signature, message, fixtures[i === 2 ? 1 : 0]!.publicKey)).toBe(true);
+    }
     expect(imports).toHaveBeenCalledTimes(3);
     const key = signs.mock.calls[0]?.[1];
     if (!key) {
@@ -95,10 +102,9 @@ describe("device Ed25519 signing", () => {
       .spyOn(crypto.subtle, "importKey")
       .mockRejectedValue(new DOMException("Ed25519 unavailable", "NotSupportedError"));
     const seed = Uint8Array.fromHex(fixtures[0]!.seed);
-    const message = new TextEncoder().encode("unsupported-engine");
-    const expected = await signNoble(message, seed);
-    expect(await signAsync(message, seed)).toEqual(expected);
-    expect(await signAsync(message, seed)).toEqual(expected);
+    const message = new Uint8Array();
+    expect((await signAsync(message, seed)).toHex()).toBe(fixtures[0]!.signature);
+    expect((await signAsync(message, seed)).toHex()).toBe(fixtures[0]!.signature);
     expect(imports).toHaveBeenCalledTimes(1);
   });
 
@@ -108,8 +114,8 @@ describe("device Ed25519 signing", () => {
       new DOMException("native failed", "OperationError"),
     );
     const seed = Uint8Array.fromHex(fixtures[0]!.seed);
-    const message = new TextEncoder().encode("native-failure");
-    expect(await signAsync(message, seed)).toEqual(await signNoble(message, seed));
+    const message = new Uint8Array();
+    expect((await signAsync(message, seed)).toHex()).toBe(fixtures[0]!.signature);
     await expect(signAsync(message, new Uint8Array(31))).rejects.toThrow();
   });
 
@@ -183,11 +189,11 @@ describe("device Ed25519 signing", () => {
           const fixture = fixtures[i]!;
           expect(result.publicKey).toBe(fixture.publicKey);
           expect(
-            verifyEd25519SignatureBytes({
-              publicKey: Buffer.from(result.publicKey, "hex").toString("base64url"),
-              payload: Buffer.from(fixture.message, "hex"),
-              signatureBase64Url: Buffer.from(result.signature, "hex").toString("base64url"),
-            }),
+            verifies(
+              Uint8Array.fromHex(result.signature),
+              Uint8Array.fromHex(fixture.message),
+              result.publicKey,
+            ),
           ).toBe(true);
         }
       } finally {

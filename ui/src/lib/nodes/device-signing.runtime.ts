@@ -1,7 +1,15 @@
-export async function getPublicKeyAsync(seed: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
-  const { getPublicKeyAsync: derivePublicKey } = await import("./device-signing.noble.ts");
-  return derivePublicKey(seed);
-}
+import { hashes, signAsync as signNoble } from "@noble/ed25519";
+
+export { getPublicKeyAsync } from "@noble/ed25519";
+
+// Insecure contexts cannot use WebCrypto for the fallback's SHA-512 digest.
+const subtleSha512Async = hashes.sha512Async;
+hashes.sha512Async = async (message: Uint8Array) => {
+  if (globalThis.crypto?.subtle && subtleSha512Async) {
+    return await subtleSha512Async(message);
+  }
+  return Uint8Array.from((await import("@noble/hashes/sha2.js")).sha512(message));
+};
 
 // Keep only this document's most recent identity; another seed must import its own key.
 let signingKey: { seed: string; key: Promise<CryptoKey> } | undefined;
@@ -32,6 +40,5 @@ export async function signAsync(
       // A rejected import stays cached for this identity until the document ends.
     }
   }
-  const { signAsync: signNoble } = await import("./device-signing.noble.ts");
   return signNoble(message, seed);
 }

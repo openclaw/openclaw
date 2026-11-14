@@ -919,7 +919,7 @@ describe("Control UI build chunking", () => {
         "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
         "phone-runtime",
       ],
-      ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "device-signing-noble"],
+      ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "device-signing-runtime"],
       ["/repo/ui/src/lib/gateway-methods.ts", undefined],
       [modulePath("../components/sidebar-update-card.tsx"), "sidebar-update-runtime"],
       [modulePath("../styles/sidebar-update-card.css"), "sidebar-update-runtime"],

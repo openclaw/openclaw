@@ -337,8 +337,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-outputs";
     case "ui/src/pages/chat/components/chat-details-people-list.tsx":
       return "chat-details-people-list";
-    case "ui/src/lib/nodes/device-signing.noble.ts":
-      return "device-signing-noble";
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
@@ -580,9 +578,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "phone-runtime";
   }
 
-  // Stored identities sign natively; public-key derivation and fallback math load on demand.
+  // Keep fallback digests separate so secure contexts only download the signer.
   if (moduleIdIncludesPackage(id, "@noble/ed25519")) {
-    return "device-signing-noble";
+    return "device-signing-runtime";
   }
 
   return undefined;
