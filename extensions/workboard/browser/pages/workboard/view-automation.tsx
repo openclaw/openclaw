@@ -148,7 +148,9 @@ function BoardAutomationHeadingContent(props: {
                 <dt>{t("workboard.automationState")}</dt>
                 <dd>
                   {t(
-                    loaded().enabled ? "workboard.automationEnabled" : "workboard.automationPaused",
+                    loaded().enabled
+                      ? "workboard.automationEnabled"
+                      : "workboard.automationDisabled",
                   )}
                 </dd>
                 <dt>{t("workboard.automationFrequency")}</dt>
@@ -166,7 +168,9 @@ function BoardAutomationHeadingContent(props: {
               </dl>
             </div>
             <span class="workboard-heading__automation-meta">
-              <span>{loaded().enabled ? updated(loaded()) : t("workboard.automationPaused")}</span>
+              <span>
+                {loaded().enabled ? updated(loaded()) : t("workboard.automationDisabled")}
+              </span>
               <Show when={loaded().enabled && loaded().state.nextRunAtMs}>
                 {(nextRun) => (
                   <span class="workboard-heading__automation-next-run">
@@ -236,7 +240,7 @@ function BoardAutomationContent(props: {
                 <strong>{loaded().displayName ?? loaded().name}</strong>
                 <span>{automationSchedule(loaded())}</span>
                 {!loaded().enabled ? (
-                  <small>{t("workboard.automationPaused")}</small>
+                  <small>{t("workboard.automationDisabled")}</small>
                 ) : loaded().schedule.kind === "event" ? (
                   <small>{t("workboard.automationWaitingForEvent")}</small>
                 ) : loaded().state.nextRunAtMs ? (
