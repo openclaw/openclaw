@@ -17,6 +17,8 @@ import { startFlakyNetworkProxy } from "./flaky-network-proxy.ts";
 // BOOT_OUT stays in .artifacts; BOOT_PAIRS defaults to 20. BOOT_ENGINES selects
 // chromium,webkit,firefox. BOOT_RTT_MS adds TCP round-trip latency (default 0).
 // BOOT_TRACE=1 is diagnostic, never timing proof.
+// BOOT_VERIFY_NATIVE=50 instead proves native signatures reach real Gateway admission;
+// it adds instrumentation and must not be used for timing claims.
 // Service workers are blocked to match the engine census. No model is invoked.
 // Requires the built Gateway and plugin metadata in dist, as well as both UI builds.
 // BOOT_BASE=.artifacts/base BOOT_HEAD=dist/control-ui node --import ./scripts/tsx.mjs scripts/perf/control-ui-live-boot.ts
@@ -27,6 +29,7 @@ type Rpc = {
   responseBytes: number;
   ok?: boolean;
   historyMessages?: number | null;
+  nativeSignature?: boolean;
 };
 type BootProbe = {
   rpcs: Rpc[];
@@ -43,7 +46,13 @@ type WireFrame = {
   method: string;
   event: string;
   ok: boolean;
-  payload?: { initialHistory?: { payload?: { messages?: unknown[] } }; messages?: unknown[] };
+  params?: { device?: { signature: string } };
+  error?: { details?: { reason?: string } };
+  payload?: {
+    type?: string;
+    initialHistory?: { payload?: { messages?: unknown[] } };
+    messages?: unknown[];
+  };
 };
 const out = path.resolve(process.env.BOOT_OUT ?? ".artifacts/control-ui-live-boot");
 const observations: unknown[] = [];
@@ -63,6 +72,10 @@ if (!Number.isSafeInteger(pairs) || pairs < 1 || pairs > 60) {
 const rttMs = Number(process.env.BOOT_RTT_MS ?? "0");
 if (!Number.isSafeInteger(rttMs) || rttMs < 0 || rttMs > 1000) {
   throw new Error("BOOT_RTT_MS must be an integer from 0 to 1000");
+}
+const nativeProofCount = Number(process.env.BOOT_VERIFY_NATIVE ?? "0");
+if (!Number.isSafeInteger(nativeProofCount) || nativeProofCount < 0 || nativeProofCount > 1000) {
+  throw new Error("BOOT_VERIFY_NATIVE must be an integer from 0 to 1000");
 }
 await mkdir(out, { recursive: true });
 async function createRig(bundle: string, directory: string) {
@@ -256,7 +269,7 @@ async function createRig(bundle: string, directory: string) {
     close,
   };
 }
-function probe(profileStyles: boolean) {
+function probe(profileStyles: boolean, nativeProof: boolean) {
   if (window !== window.top) {
     return;
   }
@@ -278,6 +291,26 @@ function probe(profileStyles: boolean) {
     navigationOffsetMs: performance.timeOrigin - origin,
   };
   Reflect.set(window, "__liveBoot", data);
+  const nativeSignatures = new Set<string>();
+  if (nativeProof) {
+    const subtle = crypto.subtle;
+    const sign = subtle.sign.bind(subtle);
+    subtle.sign = async (algorithm, key, message) => {
+      const signature = await sign(algorithm, key, message);
+      if (
+        (typeof algorithm === "string" ? algorithm : algorithm.name) === "Ed25519" &&
+        key.type === "private" &&
+        !key.extractable &&
+        key.usages.length === 1 &&
+        key.usages[0] === "sign"
+      ) {
+        nativeSignatures.add(
+          new Uint8Array(signature).toBase64({ alphabet: "base64url", omitPadding: true }),
+        );
+      }
+      return signature;
+    };
+  }
   if (profileStyles) {
     console.timeStamp("control-ui-live-boot:document");
   }
@@ -295,6 +328,9 @@ function probe(profileStyles: boolean) {
           const f: WireFrame = JSON.parse(body);
           if (f.type === "req") {
             const r: Rpc = { method: f.method, requestMs: now(), responseMs: 0, responseBytes: 0 };
+            if (nativeProof && f.method === "connect") {
+              r.nativeSignature = nativeSignatures.delete(f.params?.device?.signature ?? "");
+            }
             if (profileStyles && f.method === "connect") {
               console.timeStamp("control-ui-live-boot:connect");
             }
@@ -409,7 +445,78 @@ try {
     );
     const variants = ["base", "head", "control"];
     const cells = engines.flatMap((engine) => variants.map((variant) => ({ engine, variant })));
-    for (let pair = 0; pair < pairs; pair++) {
+    if (nativeProofCount) {
+      const { admission } = rigs[1]!;
+      for (const engine of engines) {
+        const context = await browsers.get(engine)!.newContext({ serviceWorkers: "block" });
+        try {
+          await context.addCookies([admission.browserCookie]);
+          await context.addInitScript({
+            content: ";(()=>{const __name=(fn)=>fn;(" + probe.toString() + ")(false,true);})();",
+          });
+          const page = await context.newPage();
+          for (let trial = 0; trial < nativeProofCount; trial++) {
+            const accepted = page.waitForEvent("websocket").then((socket) =>
+              socket.waitForEvent("framereceived", {
+                predicate: ({ payload }) => {
+                  const frame: WireFrame = JSON.parse(String(payload));
+                  return frame.type === "res" && frame.ok && frame.payload?.type === "hello-ok";
+                },
+                timeout: 30000,
+              }),
+            );
+            await page.goto(
+              admission.origin +
+                "/__openclaw__/session-entry?path=" +
+                encodeURIComponent("/chat/main/interaction-a"),
+              { waitUntil: "domcontentloaded" },
+            );
+            await accepted;
+            const connect = await page.evaluate(() => {
+              const data: BootProbe = Reflect.get(window, "__liveBoot");
+              return data.rpcs.find((rpc) => rpc.method === "connect" && rpc.ok);
+            });
+            if (!connect?.nativeSignature) {
+              throw new Error(
+                `${engine} trial ${trial}: accepted connect did not use native signing`,
+              );
+            }
+            observations.push({ engine, trial, connect });
+            console.log("NATIVE_ACCEPTED", engine, trial);
+          }
+          // A failed signature must reach the actual verifier even with proxy admission.
+          await page.addInitScript(() => {
+            const sign = crypto.subtle.sign.bind(crypto.subtle);
+            crypto.subtle.sign = async (...args) => {
+              const result = await sign(...args);
+              const bytes = new Uint8Array(result);
+              bytes[0] = bytes[0]! ^ 1;
+              return result;
+            };
+          });
+          const rejected = page.waitForEvent("websocket").then((socket) =>
+            socket.waitForEvent("framereceived", {
+              predicate: ({ payload }) => {
+                const frame: WireFrame = JSON.parse(String(payload));
+                return (
+                  frame.type === "res" &&
+                  !frame.ok &&
+                  frame.error?.details?.reason === "device-signature"
+                );
+              },
+              timeout: 30000,
+            }),
+          );
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await rejected;
+          observations.push({ engine, rejectedTamperedSignature: true });
+          console.log("NATIVE_TAMPER_REJECTED", engine);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+    for (let pair = 0; pair < (nativeProofCount ? 0 : pairs); pair++) {
       const order = cells.slice(pair % cells.length).concat(cells.slice(0, pair % cells.length));
       if (pair % 2) {
         order.reverse();
@@ -431,7 +538,7 @@ try {
             probe.toString() +
             ")(" +
             Boolean(process.env.BOOT_TRACE) +
-            ");})();",
+            ",false);})();",
         });
         const page = await context.newPage();
         const errors: string[] = [];
