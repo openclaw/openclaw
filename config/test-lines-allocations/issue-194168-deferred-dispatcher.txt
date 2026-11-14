@@ -1,0 +1,3 @@
+# Regression for retracting a running deferred dispatcher row when its nested target starts,
+# and for keeping the dispatcher when the nested target is routine.
+87
