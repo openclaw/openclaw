@@ -3,15 +3,26 @@ type LayoutRead = () => (() => void) | void;
 const pending = new Map<object, LayoutRead>();
 let frame = 0;
 
+// One owner's failure must not drop the other owners' work for this frame:
+// nothing re-queues it, so a dropped transcript reveal stays a skeleton.
+function runIsolated<T>(callback: () => T): T | undefined {
+  try {
+    return callback();
+  } catch (error) {
+    reportError(error);
+    return undefined;
+  }
+}
+
 /** Read every owner's geometry before publishing any layout-changing state. */
 function flushLayout(): void {
   frame = 0;
   const reads = [...pending.values()];
   pending.clear();
-  const writes = reads.map((measure) => measure());
+  const writes = reads.map((measure) => runIsolated(measure));
   for (const write of writes) {
     if (write) {
-      write();
+      runIsolated(write);
     }
   }
 }
