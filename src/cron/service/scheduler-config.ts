@@ -47,7 +47,7 @@ export async function captureCronSchedulerSnapshot(
       cronEnabled: state.deps.cronEnabled,
       preparingAgentIds: preparingCronAgentIds(state.deps.env),
       busyConversationJobIds: busyConversationCronJobIds(state),
-      maxConcurrentRuns: resolveCronRunSlots(),
+      maxConcurrentRuns: resolveCronRunSlots(state.deps.cronConfig),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner
         ? preparedOwner.defaultAgentId

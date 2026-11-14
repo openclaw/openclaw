@@ -1,6 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import { sanitizeForConsole } from "../../agents/console-sanitize.js";
-import { MIN_CRON_RUN_SLOTS } from "../../config/cron-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
@@ -42,18 +43,22 @@ export function resetCronRunSlots(): void {
 }
 
 /**
- * Run slots automation may hold right now. Automation shares the agent concurrency limit with
- * conversations and yields to them, and holds back further after provider or memory pushback,
- * down to the floor it always keeps. Conversations are never held back by automation.
+ * Run slots automation may hold right now: eight, unless `cron.dynamicConcurrency` is on. Then
+ * automation shares the agent concurrency limit with conversations and yields to them, and holds
+ * back further after provider or memory pushback, down to the eight it always keeps.
+ * Conversations are never held back by automation.
  */
-export function resolveCronRunSlots(): number {
+export function resolveCronRunSlots(cron: CronConfig | undefined): number {
+  if (cron?.dynamicConcurrency !== true) {
+    return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
+  }
   if (adaptive.ceiling !== undefined && Date.now() - adaptive.pushbackAtMs >= FORGET_AFTER_MS) {
     delete adaptive.ceiling;
     log.info("automation is back to its whole run limit after an hour without pushback");
   }
   const conversations = getCommandLaneSnapshot(CommandLane.Main);
   const free = conversations.maxConcurrent - conversations.activeCount;
-  return Math.max(MIN_CRON_RUN_SLOTS, Math.min(free, adaptive.ceiling ?? free));
+  return Math.max(DEFAULT_CRON_MAX_CONCURRENT_RUNS, Math.min(free, adaptive.ceiling ?? free));
 }
 
 /**
@@ -65,10 +70,10 @@ export function resolveCronRunSlots(): number {
 function reduceCronRunSlots(cause: string): void {
   adaptive.pushbackAtMs = Date.now();
   const inFlight = getCommandLaneSnapshot(CommandLane.CronNested).activeCount;
-  if (inFlight <= MIN_CRON_RUN_SLOTS || inFlight > (adaptive.ceiling ?? inFlight)) {
+  if (inFlight <= DEFAULT_CRON_MAX_CONCURRENT_RUNS || inFlight > (adaptive.ceiling ?? inFlight)) {
     return;
   }
-  adaptive.ceiling = Math.max(MIN_CRON_RUN_SLOTS, Math.floor(inFlight / 2));
+  adaptive.ceiling = Math.max(DEFAULT_CRON_MAX_CONCURRENT_RUNS, Math.floor(inFlight / 2));
   log.warn(
     `automation limited to ${adaptive.ceiling} runs at once after ${cause}; it adds one about every minute while runs wait and nothing pushes back`,
   );

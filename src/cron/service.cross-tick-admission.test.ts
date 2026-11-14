@@ -415,6 +415,42 @@ it.each([
   }
 });
 
+it.each([
+  ["eight automations at once by default", undefined, 8],
+  ["as many as the agent limit allows with dynamic concurrency", true, 12],
+])("runs %s", async (_name, dynamicConcurrency, expected) => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const finish = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { dynamicConcurrency },
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      await finish.promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  setCommandLaneConcurrency(CommandLane.Main, 32);
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(expected));
+    await running.wake(state);
+    expect(started).toHaveLength(expected);
+  } finally {
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    stop(state);
+  }
+});
+
 it("runs as many automations as the agent limit leaves free of conversations", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
@@ -428,6 +464,7 @@ it("runs as many automations as the agent limit leaves free of conversations", a
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
+    cronConfig: { dynamicConcurrency: true },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       await (started.push(job.id) === 1 ? release : finish).promise;
       return { status: "ok" as const, summary: job.id };
@@ -479,6 +516,7 @@ it("halves automation's sessions on a provider rate limit and adds a slot a minu
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
+    cronConfig: { dynamicConcurrency: true },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       await (started.push(job.id) === 1 ? release : finish).promise;
       return { status: "ok" as const, summary: job.id };
@@ -513,10 +551,10 @@ it("halves automation's sessions on a provider rate limit and adds a slot a minu
 
     // A model attempt reports that its provider rate-limited it: half the sessions in flight.
     rateLimited();
-    expect(resolveCronRunSlots()).toBe(11);
+    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(11);
     // Those sessions keep retrying; their pushback does not halve the limit again.
     rateLimited();
-    expect(resolveCronRunSlots()).toBe(11);
+    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(11);
 
     // A run ends: its slot is not handed to a queued run.
     release.resolve();
@@ -528,15 +566,15 @@ it("halves automation's sessions on a provider rate limit and adds a slot a minu
 
     // One more slot a minute while runs wait, but not within a minute of pushback.
     await tickAfter(60_000);
-    expect(resolveCronRunSlots()).toBe(12);
+    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(12);
     rateLimited();
     await tickAfter(30_000);
-    expect(resolveCronRunSlots()).toBe(12);
+    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(12);
     await tickAfter(30_000);
-    expect(resolveCronRunSlots()).toBe(13);
+    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(13);
     // After an hour without pushback the reduction lapses.
     vi.setSystemTime(Date.now() + 60 * 60_000);
-    expect(resolveCronRunSlots()).toBe(30);
+    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(30);
   } finally {
     release.resolve();
     finish.resolve();
@@ -561,7 +599,7 @@ it("runs a fired payload when a conversation turn ending frees a run slot", asyn
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { triggers: { enabled: true } },
+    cronConfig: { dynamicConcurrency: true, triggers: { enabled: true } },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       started.push(job.id);
       if (job.id.startsWith("long-")) {
