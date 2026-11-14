@@ -11,7 +11,7 @@ import { ToolInputError } from "./common.js";
 
 export const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
 export const REQUIRED_ACTION_READY = "Ready to recheck";
-export const REQUIRED_ACTION_STOP = "Stop this task";
+const REQUIRED_ACTION_STOP = "Stop this task";
 export const QUESTION_RPC_GRACE_MS = 10_000;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
