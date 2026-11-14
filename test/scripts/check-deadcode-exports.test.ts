@@ -245,6 +245,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
         "scripts/control-ui-parity/vitest.config.ts",
         "scripts/control-ui-retention/vitest.config.ts",
         "test/vitest.codex-worker-authority.config.ts",
+        "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
       ],
     });
   });
