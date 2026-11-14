@@ -375,6 +375,7 @@ model_list:
       timeout: 120
 
 litellm_settings:
+  callbacks: ["langfuse_trace_context", "langfuse_otel"]
   # Retry the same model a couple times before falling over.
   num_retries: 2
   request_timeout: 120
