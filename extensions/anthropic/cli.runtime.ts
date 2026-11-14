@@ -14,6 +14,12 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import {
+  carriesTurnContext,
+  type ClaudeCliFinalizeContext,
+  privateInputHolds,
+  relayNativeStop,
+} from "./cli-runtime-hooks.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -26,10 +32,11 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
  * whose history owner can change while the run lasts (a native login) passes a check for
  * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
  */
-export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
-  assertPrivateInputCurrent?: () => void;
-  prepareCredentialUse?: () => Promise<void>;
-};
+export type ClaudeCliExecuteContext = CliBackendExecuteContext &
+  ClaudeCliFinalizeContext & {
+    assertPrivateInputCurrent?: () => void;
+    prepareCredentialUse?: () => Promise<void>;
+  };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
   controller: AbortController;
@@ -44,6 +51,7 @@ type ClaudeCliTurn = {
   promptInputUuid: string;
   sawTerminalResult: boolean;
   interrupted: boolean;
+  finalizeRevisions: number;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
@@ -103,24 +111,6 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
-}
-
-function privateInputHolds(turn: ClaudeCliTurn): boolean {
-  try {
-    turn.context.assertPrivateInputCurrent?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
-  return (
-    request.callback_id === "UserPromptSubmit" &&
-    isRecord(response) &&
-    isRecord(response.hookSpecificOutput) &&
-    response.hookSpecificOutput.additionalContext !== undefined
-  );
 }
 
 async function authorizeTool(
@@ -209,6 +199,9 @@ async function handleRequest(
     return additionalContext
       ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
       : {};
+  }
+  if (request.callback_id === "Stop" && input.hook_event_name === "Stop") {
+    return turn && !signal.aborted ? relayNativeStop(turn, input) : {};
   }
   if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
     if (
@@ -628,6 +621,7 @@ export async function* executeClaudeCli(
     promptInputUuid: inputUuid,
     sawTerminalResult: false,
     interrupted: false,
+    finalizeRevisions: 0,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
@@ -662,6 +656,7 @@ export async function* executeClaudeCli(
             hooks: {
               UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+              Stop: [{ hookCallbackIds: ["Stop"] }],
             },
           },
           onMessage: (message) => acceptMessage(session, message),

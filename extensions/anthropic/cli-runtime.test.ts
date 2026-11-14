@@ -719,6 +719,43 @@ describe("Claude native stdio boundary", () => {
     expect(context.requestToolPermission).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "revise",
+      { action: "revise", reason: "Finish the promised work." },
+      { decision: "block", reason: "Finish the promised work." },
+    ],
+    ["continue", { action: "continue" }, {}],
+    ["finalize", { action: "finalize" }, {}],
+  ] as const)("relays native Stop to before_agent_finalize (%s)", async (_, decision, expected) => {
+    const runBeforeAgentFinalize = vi.fn(async () => decision);
+    const context = await createContext("stop-hook", { runBeforeAgentFinalize });
+    const detail = await runDetail(context);
+    expect(detail.stopDecision).toEqual(expected);
+    expect(runBeforeAgentFinalize).toHaveBeenCalledWith({
+      stopHookActive: false,
+      lastAssistantMessage: "I'll pick up the tests next.",
+      cwd: expect.any(String),
+    });
+  });
+
+  it("stops relaying native Stop revisions after three", async () => {
+    const runBeforeAgentFinalize = vi.fn(async () => ({
+      action: "revise" as const,
+      reason: "Again.",
+    }));
+    const detail = await runDetail(
+      await createContext("stop-hook-loop", { runBeforeAgentFinalize }),
+    );
+    expect(detail).toMatchObject({ stops: 4, lastStopDecision: {} });
+    expect(runBeforeAgentFinalize).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets native Stop settle when no finalize hook is registered", async () => {
+    const detail = await runDetail(await createContext("stop-hook"));
+    expect(detail.stopDecision).toEqual({});
+  });
+
   it("ignores replayed records until the current input UUID starts", async () => {
     const context = await createContext("input-lifecycle", {
       requestToolPermission: permission(allowInput),
