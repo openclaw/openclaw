@@ -61,21 +61,7 @@ function fixture() {
 describePosix("current-main compiler integration admission", () => {
   it("rejects disjoint export-removal/new-consumer interaction through the existing compiler planner", () => {
     const f = fixture();
-    // Only compiler dependencies; offline preparation never downloads or executes lifecycle scripts.
-    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-      devDependencies: Record<string, string>;
-    };
-    f.put(
-      "package.json",
-      JSON.stringify({
-        private: true,
-        type: "module",
-        devDependencies: {
-          tsrs: pkg.devDependencies.tsrs,
-          typescript: pkg.devDependencies.typescript,
-        },
-      }),
-    );
+    f.put("package.json", JSON.stringify({ private: true, type: "module" }));
     f.put("pnpm-workspace.yaml", "packages: []\n");
     f.put("smoke.ts", "export {};\n");
     for (const graph of [

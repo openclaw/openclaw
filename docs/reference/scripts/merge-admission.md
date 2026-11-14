@@ -21,39 +21,17 @@ title: "PR merge admission"
 
 ## Current-main static integration proof
 
-A conflict-free merge tree does not prove compiler compatibility. When both the
-prepared PR delta and main's delta from their merge base contain compiler inputs,
-merge admission materializes that exact merge tree in a disposable checkout and
-uses the existing changed-CI compiler planner for every immediate merge method
-(squash, merge, and rebase). Only squash rejects a no-net-change tree; an
-ancestry-recording merge still receives the applicable compiler proof. The proof
-identifies the merge base, current main, prepared head, and merge tree; it is reused only for that
-identity within the same admission attempt. Source files, TypeScript configs,
-package manifests, dependency locks, workspace settings, and npm settings count
-as compiler inputs. No path-overlap assumption is made: an export removal and a
-new consumer can live in different files.
+When both the PR and main changed compiler inputs, immediate merge admission runs
+the existing affected compiler checks on their exact merge tree, after an offline,
+frozen install without lifecycle scripts. Missing dependencies or a required full
+fallback stop admission: run `prepare-sync-head` and the existing gates. If main
+moves during final authority verification and needs new proof, rerun admission.
 
-The checkout receives an offline, frozen, lifecycle-script-free dependency
-install using the prepared checkout's pnpm store. Missing cached dependencies or
-metadata refuse admission with a preparation error. Only the planner's affected
-graphs run, through the existing compiler/resource owner. Unsupported inputs,
-deletions, ambient declarations, or an incomplete graph selection require the
-planner's full fallback: admission stops and requests `prepare-sync-head` plus
-existing gates instead of silently starting a full suite. This does not replace
-live required-check, review, security, or admin-authority verification. A newly
-required proof in the final local-only authority window stops before dispatch;
-rerun admission rather than install or fetch after authority verification.
-
-Compiler-input PRs cannot submit asynchronous auto-merge or queue requests from
-this wrapper: such a request has no fixed eventual base to test. Admission
-returns `PENDING` without intent or dispatch; the caller retains ownership of
-observing the existing CI/review checks and rerunning admission when an immediate
-route is available. Noncompiler requests retain their existing routes. This is
-not a server-wide policy or a guarantee against all semantic interactions. In
-particular, GitHub has no base-SHA precondition: main can still advance in the
-small interval between the final observation and immediate merge. That race is
-accepted; head matching, live authority checks, and receipt verification remain
-unchanged.
+Compiler-input PRs cannot submit asynchronous auto-merge or queue requests: their
+eventual base cannot be tested. Admission returns `PENDING` without dispatch;
+observe CI and retry an immediate route. Existing authority and receipt checks
+remain unchanged. Accepted limitation: GitHub has no base-SHA precondition, so
+main can still advance between final verification and immediate merge.
 
 ## Complete check-suite reads
 

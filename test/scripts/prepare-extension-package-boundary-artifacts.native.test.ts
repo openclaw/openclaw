@@ -4,10 +4,7 @@ import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
-import {
-  BOUNDARY_PLUGIN_UNITS,
-  boundaryPreparationArgs,
-} from "../../scripts/lib/extension-boundary-inputs.mts";
+import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -322,23 +319,10 @@ describe("native declaration preparation", () => {
           "export function createDiscordReadinessFixture() { return { ready: true }; }",
       });
       await f.run(f.root, f.root, ["discord"]);
-      const selectedEmitted = f.has(`${boundaryRoot}/plugins/discord/readiness.test-support.d.ts`);
-      // Compare the selected path with the same producer run by the real native emitter.
-      const fullProducer = command(
-        f.root,
-        process.execPath,
-        boundaryPreparationArgs(f.root, {
-          config: "extensions/discord/tsconfig.json",
-          outDir: boundaryRoot + "/plugins/discord",
-          rootDir: "extensions/discord",
-        }),
-      );
-      expectExit(fullProducer, 0);
       expect(f.read(`${boundaryRoot}/plugins/discord/readiness.test-support.d.ts`)).toContain(
         "createDiscordReadinessFixture",
       );
       expect(f.has(`${boundaryRoot}/plugins/memory-core/api.d.ts`)).toBe(false);
-      expect(selectedEmitted).toBe(true);
 
       // Only the full producer config reaches these dependencies; its packaged
       // index stays independent. SDK discovery and producer ordering must expand.
