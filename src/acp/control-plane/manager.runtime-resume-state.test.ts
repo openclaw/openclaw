@@ -65,6 +65,24 @@ describe("tryPrepareFreshManagerRuntimeSession", () => {
   });
 });
 
+it("propagates an invoked fresh-session preparation failure", async () => {
+  const error = new Error("session store unavailable");
+  const backend: AcpRuntimeBackend = {
+    id: "acpx",
+    runtime: {
+      ownerAwareSessions: 1,
+      ensureSession: vi.fn(),
+      async *runTurn() {},
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      prepareFreshSession: vi.fn(async () => {
+        throw error;
+      }),
+    },
+  };
+  await expect(tryPrepareFreshManagerRuntimeSession(callParams(backend))).rejects.toBe(error);
+});
+
 it("does not turn an owner migration rejection into successful fresh preparation", async () => {
   const error = new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "run doctor --fix", {
     detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
