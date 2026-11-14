@@ -169,6 +169,7 @@ all four slots:
   an array index.
 - **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
   Numeric operators require both sides to coerce to finite numbers.
+  Empty or whitespace-only values do not match numeric comparisons; use `0` for zero.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
 - **Wildcards** — `*` (single sub-segment) and `**` (zero-or-more,
   recursive). `find` accepts these; `resolve` and `set` reject them as

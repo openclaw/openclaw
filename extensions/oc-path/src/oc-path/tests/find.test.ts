@@ -316,6 +316,31 @@ describe("quoted segment validation", () => {
 });
 
 describe("numeric predicates", () => {
+  it.each([
+    { file: "f.json", parse: parseJsonc, suffix: "/rows", lines: false },
+    { file: "f.yaml", parse: parseYaml, suffix: "/rows", lines: false },
+    { file: "f.jsonl", parse: parseJsonl, suffix: "", lines: true },
+  ])("does not treat blank fields or bounds as zero in $file", ({ file, parse, suffix, lines }) => {
+    const rows = [
+      { id: "empty", score: "" },
+      { id: "spaces", score: "   " },
+      { id: "zero", score: 0 },
+      { id: "positive", score: " 2 " },
+      { id: "negative", score: -1 },
+      { id: "missing" },
+      { id: "null", score: null },
+    ];
+    const ast = parse(
+      lines ? rows.map((row) => JSON.stringify(row)).join("\n") : JSON.stringify({ rows }),
+    );
+    const prefix = "oc://" + file + suffix;
+    expect(leafValues(find(ast, prefix + "/[score<=0]/id"))).toEqual(["zero", "negative"]);
+    expect(leafValues(find(ast, prefix + "/[score>=0]/id"))).toEqual(["zero", "positive"]);
+    expect(find(ast, prefix + "/[score< ]/id")).toEqual([]);
+    expect(find(ast, prefix + "/[score> ]/id")).toEqual([]);
+    expect(leafValues(find(ast, prefix + "/[score=   ]/id"))).toEqual(["spaces"]);
+  });
+
   const ast = parseJsonc(
     '{"models":[{"id":"medium","contextWindow":1000000,"maxTokens":128000},{"id":"large","contextWindow":1000000,"maxTokens":240000},{"id":"small","contextWindow":200000,"maxTokens":64000},{"id":"unknown","contextWindow":"unknown","maxTokens":"unknown"}]}',
   );
