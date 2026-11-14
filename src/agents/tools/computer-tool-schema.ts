@@ -90,8 +90,8 @@ function buildComputerToolSchema(
             {
               description:
                 targetScope === "paired"
-                  ? "Computer host. Omit target for automatic selection: the configured Gateway desktop, otherwise the sole connected computer-capable node. target: gateway selects the Gateway desktop; target: node selects a paired node. Later calls retain the selected host."
-                  : "Computer host. The Gateway has no computer provider configured, so target: gateway is unavailable. Omit target for automatic selection of the sole connected computer-capable node, or use target: node. Later calls retain the selected host.",
+                  ? "Computer host. Omit target for automatic host selection: configured Gateway, otherwise a paired node. Use target: gateway or node to choose explicitly. Later calls retain the host."
+                  : "Gateway is not configured, so target: gateway is unavailable. Omit target for automatic node selection, or use target: node. Later calls retain the host.",
             },
           ),
           node: describedString(
