@@ -217,6 +217,7 @@ export async function prepareWebSearchStatus(
         entry,
         evaluation,
         pluginRegistry: catalog.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       });
       status.model.runtime = runtime?.id ?? "openclaw";
       status.model.runtimeLabel =

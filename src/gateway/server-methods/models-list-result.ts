@@ -366,6 +366,7 @@ async function prepareOwnedModelsListResult({
               entry,
               evaluation,
               pluginRegistry: preparedPluginRegistry,
+              resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
             });
         const agentRuntime = selectedRuntime
           ? preparedPluginRegistry
@@ -566,6 +567,7 @@ async function prepareOwnedModelsListResult({
               modelId: entry.id,
               modelApi: entry.api,
               modelBaseUrl: entry.baseUrl,
+              resolveOpenAIProviderRoutes: projector.resolveOpenAIProviderRoutes,
             }).runtime
           : undefined;
         const preparedHost = evaluateEntry(entry, variants, baseRuntime);

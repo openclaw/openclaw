@@ -9,6 +9,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -215,10 +216,12 @@ export type ModelCatalogViewFacts = {
   profileProvider?: string;
   view?: ModelCatalogBrowseView;
   retainedModel?: ModelRef;
+  resolveOpenAIProviderRoutes?: ReturnType<typeof createProviderModelRoutesResolver>;
 };
 
 /** Projects captured catalog facts while keeping native observations revocable. */
 export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
+  let preparedOpenAIProviderRoutes = params.resolveOpenAIProviderRoutes;
   const defaultModel = resolveNativeModelPrimary(params.cfg, params.agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, params.agentId);
   const catalog = [...params.snapshot.entries];
@@ -296,6 +299,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           modelBaseUrl: entry.baseUrl,
           config: params.cfg,
           agentScope: { kind: "prepared", agentId: params.agentId },
+          resolveOpenAIProviderRoutes: (observed) =>
+            (preparedOpenAIProviderRoutes ??= createProviderModelRoutesResolver({
+              provider: "openai",
+              config: params.cfg,
+            }))(observed),
         });
         if (
           !policy.forcedByEnvironment &&

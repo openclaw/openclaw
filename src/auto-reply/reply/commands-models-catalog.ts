@@ -209,6 +209,7 @@ export async function loadModelsProviderData(
             entry,
             evaluation,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisionsForEntry(entry).resolveOpenAIProviderRoutes,
           })?.id
         : undefined,
     });

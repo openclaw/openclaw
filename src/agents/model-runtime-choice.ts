@@ -211,6 +211,7 @@ export async function prepareModelChoice(params: {
             entry,
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
           })?.id;
           const config = auth.selectedRoute
             ? projectProviderModelRouteConfig({

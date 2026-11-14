@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createProviderModelRoutesResolver } from "../../plugins/provider-model-routes.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { resolveOpenAIModelRoutes } from "../openai-model-routes.js";
 import { resolveAgentHarnessPolicy as resolveAgentHarnessPolicyBase } from "./policy.js";
@@ -29,6 +30,45 @@ function openAIProviderConfig(overrides: Record<string, unknown>): OpenClawConfi
 }
 
 describe("resolveAgentHarnessPolicy", () => {
+  it("keeps model and agent request params per selection with shared provider indexes", () => {
+    const config = createCanonicalAgentConfigFixture({
+      ...openAIProviderConfig({
+        models: [{ id: "gpt-5.4-mini", params: { store: false } }],
+      }),
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: { "openai/gpt-5.4": { params: { store: false } } },
+        },
+        entries: { main: {}, custom: { params: { temperature: 0.2 } } },
+      },
+    }).config;
+    const resolveOpenAIProviderRoutes = createProviderModelRoutesResolver({
+      provider: "openai",
+      config,
+      env: {},
+    });
+    for (const [agentId, modelId, runtime] of [
+      ["main", "gpt-5.5", "codex"],
+      ["main", "gpt-5.4", "openclaw"],
+      ["main", "gpt-5.4-mini", "openclaw"],
+      ["custom", "gpt-5.5", "openclaw"],
+      ["main", "gpt-5.5", "codex"],
+    ] as const) {
+      expect(
+        resolveAgentHarnessPolicyBase({
+          provider: "openai",
+          config,
+          env: {},
+          agentId,
+          modelId,
+          resolveOpenAIProviderRoutes,
+        }),
+      ).toEqual({ runtime, runtimeSource: "implicit" });
+    }
+  });
+
   it.each([
     {
       name: "official Responses route",

@@ -9,11 +9,13 @@ export type RuntimeCredentialOverlay = {
   overlay: (profileId: string, credential: AuthProfileCredential) => AuthProfileCredential;
   /** Profiles whose secret value came from the runtime snapshot. */
   hydratedProfileIds: ReadonlySet<string>;
+  orderStore: AuthProfileStore;
 };
 
 /** Overlays prepared runtime secrets onto persisted profiles with the same secret ref. */
 export function createRuntimeCredentialOverlay(params: {
   cfg: OpenClawConfig;
+  authStore: AuthProfileStore;
   runtimeStore: Pick<AuthProfileStore, "profiles"> | undefined;
   now: number;
 }): RuntimeCredentialOverlay {
@@ -64,5 +66,26 @@ export function createRuntimeCredentialOverlay(params: {
       ? { ...credential, key: value }
       : { ...credential, token: value };
   };
-  return { overlay, hydratedProfileIds };
+  const orderProfiles = params.runtimeStore
+    ? Object.fromEntries(
+        Object.entries(params.authStore.profiles).map(([profileId, credential]) => [
+          profileId,
+          overlay(profileId, credential),
+        ]),
+      )
+    : params.authStore.profiles;
+  const orderBaseStore =
+    orderProfiles === params.authStore.profiles
+      ? params.authStore
+      : { ...params.authStore, profiles: orderProfiles };
+  // Preserve this release's private usage projection: ordering may update its statistics.
+  const orderStore = orderBaseStore.usageStats
+    ? {
+        ...orderBaseStore,
+        usageStats: Object.fromEntries(
+          Object.entries(orderBaseStore.usageStats).map(([id, stats]) => [id, { ...stats }]),
+        ),
+      }
+    : orderBaseStore;
+  return { overlay, hydratedProfileIds, orderStore };
 }
