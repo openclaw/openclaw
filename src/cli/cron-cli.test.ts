@@ -891,6 +891,7 @@ it.each([
   ],
 ])("passes the async work signal to %s reads", async (_name, run) => {
   const scope = new AsyncWorkScope();
+  callGatewayFromCli.mockClear();
   callGatewayFromCli.mockResolvedValueOnce({ enabled: true, platform: "linux" });
   const running = scope.track(async () => {
     await run();
