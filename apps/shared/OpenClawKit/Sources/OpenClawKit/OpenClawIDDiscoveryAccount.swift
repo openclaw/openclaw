@@ -223,6 +223,7 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
     }
 }
 
+// periphery:ignore - thrown above; app callers match it by status and code (OpenClaw ID invite join, #198499).
 /// A refused Discovery call: HTTP status and the protocol's error code, never remote text.
 public struct OpenClawIDDiscoveryAccountError: Error, Sendable, Equatable {
     public let status: Int
