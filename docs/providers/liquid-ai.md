@@ -19,11 +19,10 @@ the package metadata alone does not mean it is available on npm or ClawHub.
 
 ## Set up the provider
 
-From that checkout, install the local plugin and restart the Gateway:
+From that checkout, install the local plugin:
 
 ```bash
 pnpm openclaw plugins install ./extensions/liquid-ai
-pnpm openclaw gateway restart
 pnpm openclaw models auth login --provider liquid-ai --method api-key
 ```
 
