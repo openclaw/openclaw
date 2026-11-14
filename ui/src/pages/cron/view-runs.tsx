@@ -1,4 +1,4 @@
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -7,6 +7,7 @@ import { Menu } from "../../components/solid/menu.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
@@ -15,10 +16,13 @@ import {
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { LiveOutput } from "./live-output.tsx";
 import type { CronProps } from "./view-types.ts";
 registerEnglishCatalog(registerCronEnglish);
 type CronRunsSectionProps = Pick<
   CronProps,
+  | "gateway"
+  | "editingJob"
   | "runs"
   | "runsState"
   | "highlightedRunId"
@@ -198,6 +202,16 @@ export function RunsSection(props: CronRunsSectionProps) {
     const ascending = props.runsSortDir === "asc";
     return props.runs.toSorted((a, b) => (ascending ? a.ts - b.ts : b.ts - a.ts));
   });
+  // Only a command job keeps a live tail; one panel per run, gone when the run ends.
+  const liveRun = createMemo(
+    () => {
+      const job = props.editingJob;
+      return job?.payload.kind === "command" && isCronJobRunning(job)
+        ? { jobId: job.id, runningAtMs: job.state?.runningAtMs }
+        : undefined;
+    },
+    { equals: (a, b) => a?.jobId === b?.jobId && a?.runningAtMs === b?.runningAtMs },
+  );
   const hasRunFilters = () =>
     Boolean(props.highlightedRunId) ||
     props.runsQuery.trim().length > 0 ||
@@ -210,6 +224,9 @@ export function RunsSection(props: CronRunsSectionProps) {
       {props.conditionActivity ? (
         <ConditionActivity activity={props.conditionActivity} />
       ) : undefined}
+      <Show when={liveRun()} keyed>
+        {(run) => <LiveOutput gateway={props.gateway} jobId={run.jobId} />}
+      </Show>
       {props.highlightedRunId ? (
         <div class="row">
           <span>{t("cron.linkedRun.label")}</span>
