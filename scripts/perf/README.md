@@ -5219,7 +5219,7 @@ sides between pairs. Run at least five pairs using the host production guard.
 The append-normalized case should eliminate repeated nested-argument hashing;
 sealed history should remain at zero warm hash bytes, and mutable SDK content
 must still be inspected. Diagnostic output and in-place mutation coverage live
-in `prompt-cache-observability.history.test.ts`.
+in `prompt-cache-observability.test.ts`.
 
 `prompt-cache-observation-measure.ts` measures the complete observation boundary:
 append-shaped frozen messages → `cloneTranscriptView` → `convertToLlm` →
