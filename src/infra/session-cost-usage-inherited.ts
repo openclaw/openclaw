@@ -1,3 +1,4 @@
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { readInheritedThrough } from "../config/sessions/transcript-header.js";
 import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import {
@@ -14,6 +15,12 @@ export function projectUsageScanFields(
   projectTranscriptNavigationFields(event, record);
   if (event.type === "session" && event.inheritedThrough !== undefined) {
     record.inheritedThrough = readInheritedThrough(event);
+  }
+  // A maintenance rewrite re-appends one turn as a copy. Keep the supersession
+  // link so billing can recognize the copies of a single turn.
+  const supersedes = readNonBlankString(event.supersedesEntryId);
+  if (supersedes) {
+    record.supersedesEntryId = supersedes;
   }
 }
 
@@ -56,12 +63,27 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
       addPath(previousTip);
     }
   }
+  // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
+  // and publishes its own leaf control, so both the copy and the original become
+  // reachable. They are one spend, not two: drop every selected row that another
+  // selected row supersedes, which also collapses a chain of rewrites. A rewind
+  // and regenerate bills twice, because the regenerated turn supersedes nothing.
+  const superseded = new Set(
+    selected.flatMap((record) => readNonBlankString(record.supersedesEntryId) ?? []),
+  );
+  const billed =
+    superseded.size === 0
+      ? selected
+      : selected.filter((record) => {
+          const id = readNonBlankString(record.id);
+          return !id || !superseded.has(id);
+        });
   // Rows an older appender wrote without an id carry no navigation, so no path
   // reaches them. Without a leaf control the whole transcript is still one
   // branch, and `selectVisibleTranscriptEventEntries` bills it flat; keep that.
   return dropInheritedTranscriptEvents(
     records,
-    selected.length === 0 && !tree.hasLeafControl ? [...records] : selected,
+    billed.length === 0 && !tree.hasLeafControl ? [...records] : billed,
   );
 }
 

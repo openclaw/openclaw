@@ -20,6 +20,61 @@ type HeadlineCandidate = { seq: number; previous: HeadlineCandidate | undefined 
 type BranchPathSummary = { messageCount: number; candidate: HeadlineCandidate | undefined };
 type SessionBranchSummaries = { branches: SessionBranchSummary[]; appendSafe: boolean };
 
+/**
+ * Scan one session's canonical navigation tree from navigation-only rows.
+ *
+ * This is the single owner of canonical ancestry and tip relationships for
+ * indexed callers: branch listing below, and the in-place message cut, which
+ * must publish the same paths and accept the same tips. Raw `parentId` links are
+ * not canonical on their own, because the scanner normalizes parentless
+ * continuations, disjoint append cursors (side appends), leaf references and
+ * reset boundaries in file order.
+ */
+export function scanSessionTranscriptNavigationTree(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+): { tree: BranchTree; appendSafe: boolean } {
+  const db = getSessionKysely(database.db);
+  let navigationCount = 0;
+  let identityCount: number | null = 0;
+  let appendSafe = true;
+  const tree = scanSessionTranscriptTree(
+    (function* () {
+      const query = db
+        .selectFrom("transcript_events")
+        .select(["seq", transcriptEventNavigationSql(database.db).as("event_json")])
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc")
+        .select((eb) =>
+          eb
+            .selectFrom("transcript_event_identities")
+            .select((identity) => identity.fn.countAll<number>().as("count"))
+            .where("session_id", "=", sessionId)
+            .as("identity_count"),
+        );
+      for (const row of iterateSqliteQuerySync(database.db, query)) {
+        navigationCount++;
+        identityCount = row.identity_count;
+        const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
+        appendSafe &&=
+          typeof entry?.id === "string" && entry.id.length > 0 && entry.id.trim() === entry.id;
+        yield entry;
+      }
+    })(),
+  );
+  // Missing/forward parents can change old paths when a later append supplies their ID.
+  // Writers preserve identity membership; counting once also excludes legacy unindexed rows.
+  appendSafe &&=
+    identityCount === navigationCount &&
+    !tree.hasInvalidLeafControl &&
+    tree.nodes.length === tree.byId.size &&
+    tree.nodes.every(
+      (node) =>
+        node.parentId === null || (tree.byId.get(node.parentId)?.index ?? Infinity) < node.index,
+    );
+  return { tree, appendSafe };
+}
+
 /** Read navigation and selected headlines inside the branch snapshot owner's transaction. */
 export function readSessionBranchSummaries(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -104,38 +159,8 @@ export function readSessionBranchSummaries(
       };
     }
   }
-  let appendSafe = true;
-  let navigationCount = 0;
-  let identityCount: number | null = 0;
-  function* navigationEntries() {
-    const query = navigationQuery.select((eb) =>
-      eb
-        .selectFrom("transcript_event_identities")
-        .select((identity) => identity.fn.countAll<number>().as("count"))
-        .where("session_id", "=", sessionId)
-        .as("identity_count"),
-    );
-    for (const row of iterateSqliteQuerySync(database.db, query)) {
-      navigationCount++;
-      identityCount = row.identity_count;
-      const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
-      appendSafe &&=
-        typeof entry?.id === "string" && entry.id.length > 0 && entry.id.trim() === entry.id;
-      yield entry;
-    }
-  }
   // Finish parsing every row before accepting any headline, including malformed unused tails.
-  const tree = scanSessionTranscriptTree(navigationEntries());
-  // Missing/forward parents can change old paths when a later append supplies their ID.
-  // Writers preserve identity membership; counting once also excludes legacy unindexed rows.
-  appendSafe &&=
-    identityCount === navigationCount &&
-    !tree.hasInvalidLeafControl &&
-    tree.nodes.length === tree.byId.size &&
-    tree.nodes.every(
-      (node) =>
-        node.parentId === null || (tree.byId.get(node.parentId)?.index ?? Infinity) < node.index,
-    );
+  const { tree, appendSafe } = scanSessionTranscriptNavigationTree(database, sessionId);
   const paths = new Map<string, BranchPathSummary>();
   const headlines = new Map<HeadlineCandidate, string | undefined>();
   const branches: SessionBranchSummary[] = [];

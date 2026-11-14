@@ -61,19 +61,16 @@ it("does not retain decoded payloads while refreshing memory usage", async () =>
   if (process.env.OPENCLAW_USAGE_HEAP_PROOF !== "1") {
     return;
   }
-  // Isolate decoded expansion from the already resident immutable input: run the
-  // opt-in 640 MiB scan with a 512 MiB heap after preparing the test compiler
-  // cache. One resident 1 MiB payload is parsed 640 times, so retaining any
-  // decoded payload exhausts the heap. The copies share one id, so only the one
-  // billed row reaches the rollup.
+  // Opt-in 640 MiB scan under a 512 MiB heap: one resident 1 MiB payload parsed
+  // 640 times, so retaining any decoded payload exhausts the heap. The copies
+  // share one id, so only the single billed row reaches the rollup.
   const shared = rowJson(0, "🌞".repeat(256 * 1024));
   expect((await scan(Array<string>(640).fill(shared))).parsedRecords).toBe(1);
 });
 
 it("bills a flat transcript whose rows carry no navigation ids", async () => {
-  // An older appender wrote rows without an id, so no path reaches them. With no
-  // leaf control the transcript is still one branch and base bills all 8 rows
-  // (72 tokens), so the flat fallback must keep doing that.
+  // Rows without an id carry no navigation, so no path reaches them; with no leaf
+  // control the transcript is one branch and base bills all 8 rows (72 tokens).
   const result = await scan(Array<string>(8).fill(JSON.stringify(message(7))));
   expect(result.parsedRecords).toBe(8);
   expect(Object.values(result.rollup.buckets)[0]!.totals).toMatchObject({

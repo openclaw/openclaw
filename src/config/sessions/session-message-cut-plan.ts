@@ -61,8 +61,10 @@ export type SessionMessageCutTarget = {
 
 export type SessionMessageCutReader = {
   readTarget(entryId: string): SessionMessageCutTarget | undefined;
-  /** True when no non-control event continues past this entry. */
+  /** True when the canonical navigation owner lists this entry as a branch tip. */
   isBranchTip(entryId: string): boolean;
+  /** Canonical path to this leaf, as physical sequences; indexed readers only. */
+  canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
   activeLeafEventId(): string | null;
   /** Physical append cursor: the newest identity row, which the leaf control chains onto. */
   tailEventId(): string | null;

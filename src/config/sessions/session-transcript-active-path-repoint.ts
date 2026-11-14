@@ -5,6 +5,11 @@
 // `chat.history` wait for `needs_rebuild`, so this plans the exact row
 // difference instead: the removed suffix after the common ancestor, plus the
 // selected branch back to it. Cost follows the divergence, not transcript size.
+//
+// Ancestry is never derived from raw `parentId` links here. The selected
+// branch's path comes from the canonical navigation owner
+// (`scanSessionTranscriptNavigationTree`), the same scan branch listing uses, so
+// a published projection always matches what a full rebuild would produce.
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -68,14 +73,18 @@ function kysely(db: EngineConnection) {
 /**
  * Plans the repoint against the current, clean projection.
  *
- * Returns undefined when the projection cannot serve as the baseline (missing,
- * lagging or unclassified) or when the divergence exceeds its bound; the caller
- * then leaves reconciliation to the existing owner.
+ * `readCanonicalPath` is consulted only when the selected leaf is not already on
+ * the active path; a rewind therefore costs no navigation scan. Returns
+ * undefined when the projection cannot serve as the baseline (missing, lagging
+ * or unclassified), when the canonical path is unavailable, or when the
+ * divergence exceeds its bounds; the caller then leaves reconciliation to the
+ * existing owner.
  */
 export function prepareSessionTranscriptActivePathRepoint(
   db: EngineConnection,
   sessionId: string,
   leafEventId: string | null,
+  readCanonicalPath: (leafEventId: string) => readonly number[] | undefined,
 ): SessionTranscriptActivePathRepoint | undefined {
   const state = executeSqliteQueryTakeFirstSync(
     db,
@@ -85,66 +94,56 @@ export function prepareSessionTranscriptActivePathRepoint(
     return undefined;
   }
   const db2 = kysely(db);
-  const readNode = (eventId: string) =>
+  const readActivePosition = (eventSeq: number) =>
     executeSqliteQueryTakeFirstSync(
       db,
       db2
-        .selectFrom("transcript_event_identities as identity")
-        .leftJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
-        .select([
-          "identity.seq",
-          "identity.parent_id",
-          "identity.event_type",
-          "active.active_position",
-        ])
-        .where("identity.session_id", "=", sessionId)
-        .where("identity.event_id", "=", eventId),
-    );
-  // The transcript's first identity row is the only row whose absent parent is
-  // canonically null; every later parentless row continues from the leaf that
-  // was active when it was written.
-  const rootSeq = executeSqliteQueryTakeFirstSync(
-    db,
-    db2
-      .selectFrom("transcript_event_identities")
-      .select("seq")
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc")
-      .limit(1),
-  )?.seq;
+        .selectFrom("session_transcript_active_events")
+        .select("active_position")
+        .where("session_id", "=", sessionId)
+        .where("event_seq", "=", eventSeq),
+    )?.active_position ?? null;
+  const readLeafSeq = (eventId: string) =>
+    executeSqliteQueryTakeFirstSync(
+      db,
+      db2
+        .selectFrom("transcript_event_identities")
+        .select("seq")
+        .where("session_id", "=", sessionId)
+        .where("event_id", "=", eventId),
+    )?.seq;
   const branchSeqs: number[] = [];
   let commonPosition = -1;
-  let cursor = leafEventId;
-  while (cursor !== null) {
-    const node = readNode(cursor);
-    if (!node) {
+  if (leafEventId !== null) {
+    const leafSeq = readLeafSeq(leafEventId);
+    if (leafSeq === undefined) {
       return undefined;
     }
-    if (node.active_position !== null) {
-      commonPosition = node.active_position;
-      break;
+    const leafPosition = readActivePosition(leafSeq);
+    if (leafPosition !== null) {
+      // A rewind selects a predecessor that is already active: no divergence.
+      commonPosition = leafPosition;
+    } else {
+      const path = readCanonicalPath(leafEventId);
+      // An empty canonical path for a named leaf means the scanner rejected it
+      // (missing ancestor or cycle); only its own owner may publish that.
+      if (!path || path.length === 0) {
+        return undefined;
+      }
+      for (let index = path.length - 1; index >= 0; index -= 1) {
+        const position = readActivePosition(path[index]!);
+        if (position !== null) {
+          commonPosition = position;
+          break;
+        }
+        if (branchSeqs.length >= MAX_REPOINT_BRANCH_EVENTS) {
+          return undefined;
+        }
+        branchSeqs.push(path[index]!);
+      }
+      branchSeqs.reverse();
     }
-    // Raw parent links answer ancestry only for a plain continuation. A leaf
-    // control points at its physical append tail rather than its target, a reset
-    // re-roots its descendants, and a parentless row continues from whichever
-    // leaf was active when it was written. The canonical tree owns all three, so
-    // defer to the reconcile owner instead of guessing here.
-    if (
-      (node.parent_id === null && node.seq !== rootSeq) ||
-      node.event_type === "leaf" ||
-      node.event_type === "reset" ||
-      branchSeqs.length >= MAX_REPOINT_BRANCH_EVENTS
-    ) {
-      return undefined;
-    }
-    branchSeqs.push(node.seq);
-    cursor = node.parent_id;
   }
-  branchSeqs.reverse();
   if (branchSeqs.length > 0) {
     const bytes = executeSqliteQueryTakeFirstSync(
       db,

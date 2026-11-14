@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
@@ -33,6 +34,10 @@ import {
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import { readTranscriptPayload } from "./transcript-payload.js";
+import {
+  selectSessionTranscriptTreePathNodes,
+  selectSessionTranscriptTreeTipNodes,
+} from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type MessageCutProjection = {
@@ -55,6 +60,11 @@ export function createSessionMessageCutReader(
 ): SessionMessageCutReader {
   reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   const db = getActiveTranscriptKysely(database);
+  // One canonical navigation scan per cut, shared by the tip decision and the
+  // repoint's path, and only paid when one of them needs it: a rewind selects an
+  // already-active predecessor and never builds it.
+  let scanned: ReturnType<typeof scanSessionTranscriptNavigationTree> | undefined;
+  const navigation = () => (scanned ??= scanSessionTranscriptNavigationTree(database, sessionId));
   // The active projection is the canonical path owner: it is built by the
   // transcript tree scan, which normalizes parentless continuations, leaf
   // references and reset boundaries. Its order, not the raw payload parent,
@@ -121,21 +131,16 @@ export function createSessionMessageCutReader(
       };
     },
     isBranchTip(entryId) {
-      // No (session_id, parent_id) index exists, so this narrows the session's
-      // identity rows without decoding any event payload.
-      return (
-        executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("transcript_event_identities as child")
-            .select("child.event_id")
-            .where("child.session_id", "=", sessionId)
-            .where("child.parent_id", "=", entryId)
-            .where((eb) =>
-              eb.or([eb("child.event_type", "is", null), eb("child.event_type", "<>", "leaf")]),
-            )
-            .limit(1),
-        ) === undefined
+      // Raw child links are not canonical: a parentless continuation, a side
+      // cursor or a reset boundary re-parents rows the scanner owns. Ask the same
+      // canonical owner branch listing and the memory reader ask.
+      return selectSessionTranscriptTreeTipNodes(navigation().tree).some(
+        (tip) => tip.id === entryId,
+      );
+    },
+    canonicalBranchPathSeqs(leafEventId) {
+      return selectSessionTranscriptTreePathNodes(navigation().tree, leafEventId).flatMap((node) =>
+        typeof node.entry?.seq === "number" ? [node.entry.seq] : [],
       );
     },
     activeLeafEventId() {
@@ -225,9 +230,12 @@ export function installInPlaceSessionMessageCut(
     return { status: "missing-session" };
   }
   const sessionId = currentEntry.sessionId;
+  // One reader per cut: its canonical navigation scan, when a switch needs it, is
+  // shared by the tip decision and the repoint's path.
+  const reader = createSessionMessageCutReader(database, sessionId);
   const plan = planInPlaceSessionMessageCut(
     currentEntry,
-    createSessionMessageCutReader(database, sessionId),
+    reader,
     params,
     projection?.sourceRepositoryWorkspaceId,
   );
@@ -242,6 +250,7 @@ export function installInPlaceSessionMessageCut(
     database.db,
     sessionId,
     plan.leafTargetId,
+    (leafEventId) => reader.canonicalBranchPathSeqs?.(leafEventId),
   );
   const appended = appendTranscriptEventsInTransaction(
     database,

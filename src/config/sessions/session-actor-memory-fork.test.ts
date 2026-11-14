@@ -186,9 +186,8 @@ describe("memory actor fork and cut", () => {
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    // The cut keeps the transcript identity, so the pre-cut handle stays usable
-    // and reads the rotated incarnation. Its writer claim is what is retired: an
-    // append carrying the pre-cut lifecycle revision is fenced, as on SQLite.
+    // The cut keeps the transcript identity, so the pre-cut handle stays usable;
+    // its writer claim is what is retired, as on SQLite.
     expect(await readMemory(storage(parent), "session.entry.read", {})).toMatchObject({
       sessionId: "parent-session",
     });
@@ -200,22 +199,24 @@ describe("memory actor fork and cut", () => {
         limits: { cursor: drained.cursor },
       }),
     ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+    const staleScope = {
+      agentId: "main",
+      sessionKey: parentKey,
+      storePath,
+      sessionId: expectedState.sessionId,
+      expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
+    };
+    const staleEvent = {
+      type: "custom",
+      id: "stale-append",
+      customType: "synthetic",
+      parentId: "a2",
+      timestamp: "2026-01-01T00:00:05.000Z",
+      data: {},
+    };
     const stale = await mutateMemory(storage(parent), "session.event.append", {
-      scope: {
-        agentId: "main",
-        sessionKey: parentKey,
-        storePath,
-        sessionId: expectedState.sessionId,
-        expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
-      },
-      eventJson: JSON.stringify({
-        type: "custom",
-        id: "stale-append",
-        customType: "synthetic",
-        parentId: "a2",
-        timestamp: "2026-01-01T00:00:05.000Z",
-        data: {},
-      }),
+      scope: staleScope,
+      eventJson: JSON.stringify(staleEvent),
     });
     assert(stale.kind === "rolled-back", "Stale writer was admitted after the cut");
     expect(stale.error.message).toMatch(/writer claim changed/);
@@ -225,8 +226,7 @@ describe("memory actor fork and cut", () => {
     });
     expect(old.kind).toBe("full");
     if (old.kind === "full") {
-      // The original window is retained inside the same transcript: every seeded
-      // event, plus the one appended control that selected u2's predecessor.
+      // The original window is retained: every seeded event plus the one control.
       expect(old.snapshot.events.slice(0, transcript.length)).toEqual(transcript);
       expect(old.snapshot.events.slice(transcript.length)).toMatchObject([
         { type: "leaf", parentId: "a2", targetId: "a1" },

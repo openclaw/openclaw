@@ -13,6 +13,7 @@ import {
   planSessionMessageCut,
 } from "../config/sessions/session-message-cut-plan.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
+import { selectBilledTranscriptEvents } from "./session-cost-usage-inherited.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
@@ -268,6 +269,69 @@ it.each([
     expect(billedTokens(await scanWithNewTurn(copy, newTurnParent))).toBe(expected);
   },
 );
+
+// A maintenance rewrite re-appends one turn as a copy carrying `supersedesEntryId`
+// and publishes its own leaf control, so the original and every copy become
+// reachable billed paths. They are one spend: no model call happened.
+it("bills a rewritten turn once and a regenerated turn twice", async () => {
+  const turn: TranscriptEvent[] = [
+    createSessionTranscriptHeader({ sessionId: "source" }),
+    userEvent("u1", null),
+    answerEvent("a1", "u1", 10),
+  ];
+  const rewritten = [...turn];
+  let superseded = "a1";
+  for (const round of [1, 2]) {
+    const copy = `a1-copy-${round}`;
+    rewritten.push(
+      { ...answerEvent(copy, "u1", 10), supersedesEntryId: superseded },
+      {
+        type: "leaf",
+        id: `leaf-${round}`,
+        parentId: superseded,
+        targetId: copy,
+      },
+    );
+    superseded = copy;
+  }
+  // Two rewrites of one 10-token turn: one spend, no model call.
+  expect(
+    billedTokens(
+      await scan(rewritten.map((event, seq) => ({ seq, event: event as Row["event"] }))),
+    ),
+  ).toBe(10);
+  // A rewind and regenerate is two real turns: 10 displaced + 5 new.
+  expect(billedTokens(await scanWithNewTurn(applyInPlaceCut(turn, "rewind", "u1"), "u1"))).toBe(15);
+});
+
+// Rows produced by switch-then-rewind on the merge base, where each cut copied the
+// whole tree: entry ids are copied verbatim, so one billed turn appears in all three
+// windows and `inheritedThrough` names the paths each source counted. The merge base
+// reported 70 tokens (10 + 40 + 20, each turn once) for this family.
+it("bills a legacy copied family exactly once per turn", () => {
+  const window = (sessionId: string, inheritedThrough: string[], leaves: TranscriptEvent[]) => [
+    createSessionTranscriptHeader({
+      sessionId,
+      ...(inheritedThrough.length && { inheritedThrough }),
+    }),
+    ...branchedSource().slice(1),
+    ...leaves,
+  ];
+  const switchLeaf = { type: "leaf", id: "97c81933", parentId: "a2", targetId: "a2b" };
+  const rewindLeaf = { type: "leaf", id: "7d3f38f6", parentId: "97c81933", targetId: "a1" };
+  const family = [
+    window("legacy-source", [], []),
+    window("legacy-after-switch", ["a2"], [switchLeaf]),
+    window("legacy-after-rewind", ["a2", "a2b"], [switchLeaf, rewindLeaf]),
+  ];
+  const tokensOf = (rows: TranscriptEvent[]) =>
+    selectBilledTranscriptEvents(rows.filter(isRecord)).reduce((total, row) => {
+      const usage = isRecord(row.message) ? row.message.usage : undefined;
+      const tokens = isRecord(usage) ? usage.totalTokens : undefined;
+      return total + (typeof tokens === "number" ? tokens : 0);
+    }, 0);
+  expect(family.reduce((sum, rows) => sum + tokensOf(rows), 0)).toBe(70);
+});
 
 /** The real in-place install: one appended leaf control on the same transcript. */
 function applyInPlaceCut(
