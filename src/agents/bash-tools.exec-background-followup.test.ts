@@ -437,10 +437,16 @@ test("completions pending behind a completion turn share the next turn", async (
   }
   await withinTest(waitForExecScope(sessionKey), signal);
   await withinTest(firstTurn.promise, signal);
+  const jobs = (prompt: string) => prompt.match(/BATCH_\d/g) ?? [];
+  const [firstJob] = jobs(prompts[0] ?? "");
   // Exit notification follows process settlement; wait until both later exits are queued.
-  await vi.waitFor(() => expect(peekSystemEventEntries(sessionKey)).toHaveLength(2), {
-    timeout: 30_000,
-  });
+  await vi.waitFor(
+    () =>
+      expect(
+        peekSystemEventEntries(sessionKey).filter((event) => !event.text.includes(firstJob ?? "")),
+      ).toHaveLength(2),
+    { timeout: 30_000 },
+  );
   // The later exits wait for the running completion turn instead of queueing their own.
   expect(receipts).toHaveLength(1);
   gate.resolve();
@@ -448,7 +454,6 @@ test("completions pending behind a completion turn share the next turn", async (
   await completion(signal);
   // One turn for the first exit; the two exits that arrived during it share the next.
   expect(model).toHaveBeenCalledTimes(2);
-  const jobs = (prompt: string) => prompt.match(/BATCH_\d/g) ?? [];
   expect(jobs(prompts[0] ?? "")).toHaveLength(1);
   expect(jobs(prompts[1] ?? "")).toHaveLength(2);
   expect(prompts.flatMap(jobs).toSorted()).toEqual(["BATCH_1", "BATCH_2", "BATCH_3"]);
