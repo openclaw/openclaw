@@ -452,6 +452,62 @@ it.each([
   },
 );
 
+it.each(["activate", "verify"] as const)(
+  "uses an already configured store-backed token profile: %s",
+  async (entrypoint) => {
+    const cfg = (await readSnapshot()).sourceConfig;
+    const profileId = "fixture:setup-00000000-0000-4000-8000-000000000001";
+    const agentDir = resolveAgentDir(cfg, "main");
+    upsertAuthProfile({
+      agentDir,
+      profileId,
+      credential: { type: "token", provider: "fixture", tokenRef: secretRef },
+    });
+    cfg.agents!.defaults!.model = `fixture/test-model@${profileId}`;
+    cfg.auth = { profiles: { [profileId]: { provider: "fixture", mode: "token" } } };
+    delete cfg.models!.providers!.fixture!.apiKey;
+    await saveConfig(cfg);
+    // Gateway startup materializes agent auth-store refs into the active runtime.
+    const snapshot = await readSnapshot();
+    activateSecretsRuntimeSnapshotWithSource(
+      await prepareSecretsRuntimeSnapshot({
+        config: snapshot.runtimeConfig,
+        env: process.env,
+        agentDirs: [agentDir],
+        manifestRegistry: { plugins: [] },
+        loadablePluginOrigins: new Map(),
+      }),
+      snapshot.sourceConfig,
+    );
+    vi.mocked(runEmbeddedAgentOwner).mockImplementation(async (params) => {
+      expect(params.authProfileId).toBe(profileId);
+      const auth = await resolveApiKeyForProviderCore({
+        cfg: params.config,
+        provider: "fixture",
+        ...modelTransport,
+        agentDir: params.agentDir,
+        store: ensureAuthProfileStore(params.agentDir),
+        profileId,
+        lockedProfile: true,
+        secretSentinels: true,
+      });
+      params.onSuccessfulAuthBinding?.({
+        agentHarnessId: "openclaw",
+        ...modelTransport,
+        authProfileId: profileId,
+        authFingerprint: fingerprintResolvedProviderAuth(auth),
+      });
+      return probeResult;
+    });
+    const runtime = createNonExitingRuntime();
+    const result =
+      entrypoint === "verify"
+        ? await verifySetupInference({ agentId: "main", runtime })
+        : await activateSetupInference({ kind: "existing-model", surface: "gateway", runtime });
+    expect(result.ok, result.ok ? undefined : result.error).toBe(true);
+  },
+);
+
 it.each([
   { field: "destination", saved: false },
   { field: "destination", saved: true },

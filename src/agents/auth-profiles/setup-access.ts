@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { serializeAuthProfileCredential } from "./persisted-credential.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./runtime-snapshots.js";
 import type { AuthProfileCredential } from "./types.js";
 
@@ -58,7 +59,12 @@ export function getSetupCredentialRuntimeProfile(params: {
   if (
     !access.isActive() ||
     runtime.credentialsRevision !== getRuntimeAuthProfileStoreCredentialsRevision() ||
-    !isDeepStrictEqual(runtime.source, params.profile)
+    // Callers may pass the profile overlaid with the global value for its SecretRef;
+    // ownership is the persisted shape, which never stores a ref's literal.
+    !isDeepStrictEqual(
+      serializeAuthProfileCredential(runtime.source),
+      serializeAuthProfileCredential(params.profile),
+    )
   ) {
     // A revoked scoped owner cannot borrow a replacement global materialization.
     return null;
