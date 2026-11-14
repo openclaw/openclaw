@@ -437,7 +437,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         try {
           followup.assertCurrent();
           return true;
-        } catch {
+        } catch (error) {
+          if (isGatewayOperatorAccessUnavailable(error)) {
+            throw error;
+          }
           return false;
         }
       }
