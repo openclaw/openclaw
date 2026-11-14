@@ -22,14 +22,13 @@ jobs:
   native-activity:
     runs-on: xcode-27
     timeout-minutes: 30
-    env:
-      PROOF: ${{ runner.temp }}/native-activity-5eb2
     defaults:
       run:
         shell: bash
     steps:
       - name: Require hosted immutable workflow identity
         env:
+          PROOF: ${{ runner.temp }}/native-activity-5eb2
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
@@ -37,6 +36,7 @@ jobs:
           [[ "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$WORKFLOW_SHA" == "$EXPECTED_WORKFLOW_SHA" && "$GITHUB_SHA" == "$WORKFLOW_SHA" ]]
           umask 077
+          printf 'PROOF=%s\n' "$PROOF" >> "$GITHUB_ENV"
           mkdir -p "$PROOF"
           printf 'target=%s\ntree=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$TARGET_SHA" "$TARGET_TREE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$PROOF/identity.txt"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
