@@ -76,11 +76,10 @@ export async function addTemplateAgent(
   acknowledgeClawHubRisk: boolean,
 ) {
   const { source } = template;
-  const client = context.gateway.snapshot.client;
+  let client = context.gateway.snapshot.client;
   const scopeKey = gatewayPresentationScope(context.gateway).key;
-  const isCurrent = () =>
-    context.gateway.snapshot.client === client &&
-    gatewayPresentationScope(context.gateway).key === scopeKey;
+  const ownsScope = () => gatewayPresentationScope(context.gateway).key === scopeKey;
+  const isCurrent = () => context.gateway.snapshot.client === client && ownsScope();
   if (!client) {
     throw new Error(t("templatesCatalog.addFailed"));
   }
@@ -137,7 +136,7 @@ export async function addTemplateAgent(
     displayName: name,
     message: null,
     canDisplay: () =>
-      isCurrent() && context.router.getState().location.pathname === displayPathname,
+      ownsScope() && context.router.getState().location.pathname === displayPathname,
   });
   context.navigate("chat", target.options);
   const location = context.router.getState().location;
@@ -207,7 +206,9 @@ export async function addTemplateAgent(
   const apply = async () => {
     if (
       applying ||
-      !isCurrent() ||
+      !ownsScope() ||
+      context.gateway.snapshot.phase !== "connected" ||
+      !context.gateway.snapshot.client ||
       setupComplete ||
       (durable &&
         (!composer.canDisplay() ||
@@ -216,6 +217,9 @@ export async function addTemplateAgent(
     ) {
       return;
     }
+    // A settled setup keeps its input owner across a same-scope reconnect. Each
+    // explicit retry captures the current transport; in-flight results stay fenced.
+    client = context.gateway.snapshot.client;
     applying = true;
     const retry = durable;
     if (composer.recovery) {
