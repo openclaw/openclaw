@@ -28,8 +28,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
 }));
 
@@ -353,6 +352,60 @@ describe("nostr-profile-http", () => {
       expect(data.successes).toContain(TEST_PROFILE_RELAY_URL);
       expect(data.persisted).toBe(true);
       expect(ctx.updateConfigProfile).toHaveBeenCalled();
+    });
+
+    it("publishes a name-only form with blank optional fields", async () => {
+      mockPublishSuccess();
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: {
+            name: "renamed",
+            displayName: "",
+            about: "",
+            picture: "",
+            banner: "",
+            website: "",
+            nip05: "",
+            lud16: "",
+          },
+        },
+      );
+
+      await run();
+
+      expect(expectOkResponse(res).persisted).toBe(true);
+      const expected = { name: "renamed", displayName: "", about: "" };
+      expect(vi.mocked(publishNostrProfile).mock.calls[0]?.[1]).toStrictEqual(expected);
+      expect(vi.mocked(ctx.updateConfigProfile).mock.calls[0]?.[1]).toStrictEqual(expected);
+    });
+
+    it("clears submitted empty values without clearing omitted fields", async () => {
+      mockPublishSuccess();
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: { picture: "", banner: "", nip05: "", lud16: "" },
+          ctx: {
+            getConfigProfile: () => ({
+              picture: "https://example.com/avatar.png",
+              banner: "https://example.com/banner.png",
+              website: "https://example.com",
+              nip05: "bot@example.com",
+              lud16: "bot@example.com",
+            }),
+          },
+        },
+      );
+
+      await run();
+
+      expect(expectOkResponse(res).persisted).toBe(true);
+      const expected = { website: "https://example.com" };
+      expect(vi.mocked(publishNostrProfile).mock.calls[0]?.[1]).toStrictEqual(expected);
+      expect(vi.mocked(ctx.updateConfigProfile).mock.calls[0]?.[1]).toStrictEqual(expected);
     });
 
     it.each([
