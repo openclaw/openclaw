@@ -61,9 +61,11 @@ export async function prepareRestartCompletionCustody(
   return {
     assertCurrent,
     resume: () => {
-      assertCurrent();
-      for (const runId of recovered) {
-        resumeSubagentRun(runId);
+      signal.throwIfAborted();
+      if (!isGatewayRestartDraining()) {
+        for (const runId of recovered) {
+          resumeSubagentRun(runId);
+        }
       }
     },
   };
