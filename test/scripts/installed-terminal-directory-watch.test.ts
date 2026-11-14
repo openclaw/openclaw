@@ -304,7 +304,7 @@ it("admits the real sanitized helper only as a closed native lifetime", () => {
   const original = readJsonLines<Row>(filename);
   for (const changed of [
     { ...created, command: path.join(f.base, "foreign-node") },
-    { ...created, argv: [path.join(f.root, helper), String(Number(created.pid) + 1)] },
+    { ...created, argv: [path.join(f.root, helper), String(created.pid + 1)] },
     { ...created, argv: [path.join(f.root, "foreign-worker.js"), String(created.pid)] },
   ]) {
     rewrite(
@@ -463,8 +463,59 @@ it("joins a real retained-runtime producer before admitting its copied helper", 
   const f = fixture();
   const result = run(f, "retained");
   expect(result.status, result.stderr).toBe(0);
-  records(f);
-  const rows = readInstalledTerminalEvents(f.directory, f.spec);
+  const observed = records(f);
+  const owner = observed.find(
+    (row) => row.event === "startup" && row.thread === 0 && row.entry === f.entry,
+  );
+  assert(owner && typeof owner.pid === "number");
+  const ownerFile = path.join(f.directory, `${owner.pid}-0.jsonl`);
+  const ownerRows = readJsonLines<Row>(ownerFile);
+  const terminal = ownerRows.at(-1);
+  assert(terminal?.event === "exit" && typeof terminal.time === "string");
+  // Like the observer's native-teardown fixture, place already-joined setup
+  // before a synthetic reader window. No worker exit or runtime handoff is claimed.
+  const scope = { time: String(BigInt(terminal.time) - 1n), child: -1, databases: [] };
+  const lastEvent = ownerRows.at(-2);
+  assert(lastEvent && typeof lastEvent.time === "string");
+  assert(BigInt(lastEvent.time) < BigInt(scope.time));
+  writeJson(path.join(f.directory, "handoff.json"), scope);
+  rewrite(ownerFile, [
+    ...ownerRows.slice(0, -1),
+    { ...terminal, event: "handoff", ...scope },
+    terminal,
+  ]);
+  let rows: Row[];
+  try {
+    rows = readInstalledTerminalEvents(f.directory, f.spec);
+  } catch (error) {
+    // Preserve original native ancestry before fixture cleanup. The synthetic
+    // reader scope is separate; diagnostic output grants no admission.
+    const lifecycle = JSON.stringify({
+      scope,
+      rows: observed.filter((row) =>
+        [
+          "startup",
+          "thread",
+          "thread-exit",
+          "spawn",
+          "spawn-exit",
+          "spawn-close",
+          "exit",
+          "handoff",
+        ].includes(String(row.event)),
+      ),
+    });
+    try {
+      process.stderr.write(
+        `[retained-runtime-lifecycle] ${
+          Buffer.byteLength(lifecycle) <= 128 * 1024
+            ? lifecycle
+            : JSON.stringify({ error: "Lifecycle diagnostic exceeded 128 KiB" })
+        }\n`,
+      );
+    } catch {}
+    throw error;
+  }
   const creator = rows.find((row) => row.event === "spawn" && row.retainedRuntime);
   assert(
     creator &&
@@ -499,7 +550,7 @@ it("joins a real retained-runtime producer before admitting its copied helper", 
   const childRows = readJsonLines<Row>(childFile);
   rewrite(
     childFile,
-    childRows.map((row) => (row.event === "startup" ? { ...row, ppid: -1 } : row)),
+    childRows.map((row) => (row.event === "startup" ? Object.assign({}, row, { ppid: -1 }) : row)),
   );
   expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow();
 });
