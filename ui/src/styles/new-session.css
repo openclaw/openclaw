@@ -1603,6 +1603,11 @@ div.new-session-page__project-search {
   corner-shape: superellipse(1.5);
 }
 
+/* The tray is secondary: dark themes' small shadow is strong enough to outline it. */
+:root[data-theme-mode="dark"] .new-session-page__context-tray {
+  box-shadow: none;
+}
+
 .new-session-page__composer > .agent-chat__input {
   position: relative;
   z-index: 2;
@@ -1616,7 +1621,7 @@ div.new-session-page__project-search {
   border-color: var(--chat-composer-light-outline);
   box-shadow:
     0 1px 2px -1px var(--chat-composer-light-outline),
-    0 2px 4px rgb(0 0 0 / 4%);
+    0 2px 4px rgb(0 0 0 / 3%);
 }
 
 :root[data-theme-mode="light"]
@@ -1627,7 +1632,7 @@ div.new-session-page__project-search {
   border-color: rgb(0 0 0 / 8%);
   box-shadow:
     0 1px 2px -1px rgb(0 0 0 / 8%),
-    0 2px 4px rgb(0 0 0 / 6%);
+    0 2px 4px rgb(0 0 0 / 4%);
 }
 
 .new-session-page__context-tray .new-session-page__triggers {
