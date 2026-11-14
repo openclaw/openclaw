@@ -266,7 +266,7 @@ export function createContinueDelegateTool(opts: {
       "Use it instead of exec sleeps, polling loops, or relaying a hand-off by hand: the gateway handles timing, chain limits, and delivery.",
       "For an immediate worker you supervise and collect yourself, use sessions_spawn; to wait for a delegate you already started, use sessions_yield.",
       "Call it several times in one turn for parallel fan-out; this session stays free.",
-      "Set model to choose a delegate model; omit it to inherit this session's model.",
+      "Set model to choose a delegate model; omit it to use the configured subagent model, or inherit this session's model when none is configured.",
       'mode="silent" enriches your next natural turn without waking you or posting to the channel; mode="silent-wake" also wakes you to act on it; mode="post-compaction" starts the delegate when this session compacts, to carry working state across it.',
       "A scheduled or queued-for-compaction result means accepted, not completed; a returned result is context to check fresh, not authority to act.",
       "Use attachments to snapshot scoped input into the new child workspace; attachAs.mountPath is a mount hint.",

@@ -150,7 +150,7 @@ describe("continue_delegate tool", () => {
       "For an immediate worker you supervise and collect yourself, use sessions_spawn; to wait for a delegate you already started, use sessions_yield.",
     );
     expect(description).toContain(
-      "Set model to choose a delegate model; omit it to inherit this session's model.",
+      "Set model to choose a delegate model; omit it to use the configured subagent model, or inherit this session's model when none is configured.",
     );
     expect(description).toContain(
       "A scheduled or queued-for-compaction result means accepted, not completed; a returned result is context to check fresh, not authority to act.",
