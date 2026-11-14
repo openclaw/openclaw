@@ -71,6 +71,7 @@ type SessionResolution = {
   previousSessionId?: string;
   automaticReset?: {
     reason: "idle" | "daily" | "reset";
+    tailMessages: number;
     expectedLifecycleRevision?: string;
   };
   persistedThinking?: ThinkLevel;
@@ -700,6 +701,7 @@ export async function resolveSession(
     isNewSession && sessionEntry && !terminalMainTranscriptNewerThanRegistry
       ? {
           reason: freshness?.staleReason ?? "reset",
+          tailMessages: resetPolicy.tailMessages,
           expectedLifecycleRevision: sessionEntry.lifecycleRevision,
         }
       : undefined;

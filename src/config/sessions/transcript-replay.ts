@@ -1,7 +1,7 @@
 // Selects safe user/assistant tails for in-log lifecycle boundaries.
 
-/** Tail kept so DM continuity survives silent session rotations. */
-const DEFAULT_REPLAY_MAX_MESSAGES = 6;
+/** Default reset tail; kept here so this module stays dependency-free. */
+export const DEFAULT_RESET_TAIL_MESSAGES = 6;
 
 type SessionRecord = {
   type?: unknown;
@@ -38,7 +38,11 @@ function replayableTranscriptRole(record: SessionRecord | null): "user" | "assis
   return role === "user" || role === "assistant" ? role : undefined;
 }
 
-export function selectRecentUserAssistantReplayRecords(records: readonly unknown[]): unknown[] {
+/** Tail kept so DM continuity survives silent session rotations. */
+export function selectRecentUserAssistantReplayRecords(
+  records: readonly unknown[],
+  maxMessages = DEFAULT_RESET_TAIL_MESSAGES,
+): unknown[] {
   const kept: KeptParsedRecord[] = [];
   for (const record of records) {
     const role = replayableTranscriptRole(record as SessionRecord | null);
@@ -46,7 +50,7 @@ export function selectRecentUserAssistantReplayRecords(records: readonly unknown
       kept.push({ role, record });
     }
   }
-  let startIdx = Math.max(0, kept.length - DEFAULT_REPLAY_MAX_MESSAGES);
+  let startIdx = Math.max(0, kept.length - maxMessages);
   while (startIdx < kept.length && kept[startIdx]?.role === "assistant") {
     startIdx += 1;
   }

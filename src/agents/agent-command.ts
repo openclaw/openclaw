@@ -336,6 +336,7 @@ async function agentCommandInternalOwned(
                 resetBoundary: {
                   context: "preserve-tail" as const,
                   reason: automaticReset.reason,
+                  tailMessages: automaticReset.tailMessages,
                   cwd: cwd ?? workspaceDir,
                 },
               }

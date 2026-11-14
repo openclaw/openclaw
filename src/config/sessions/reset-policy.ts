@@ -4,6 +4,7 @@ import {
   asFiniteNumberInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
+import { DEFAULT_RESET_TAIL_MESSAGES } from "./transcript-replay.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
 type SessionStaleReason = Exclude<SessionResetMode, "none">;
@@ -13,6 +14,8 @@ export type SessionResetPolicy = {
   mode: SessionResetMode;
   atHour: number;
   idleMinutes?: number;
+  /** Recent user/assistant messages an automatic reset carries into the new session. */
+  tailMessages: number;
   configured?: boolean;
 };
 
@@ -68,7 +71,13 @@ export function resolveSessionResetPolicy(params: {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
-  return { mode, atHour, idleMinutes, configured };
+  const tailMessagesRaw = typeReset?.tailMessages ?? baseReset?.tailMessages;
+  const tailMessages =
+    tailMessagesRaw != null && Number.isFinite(tailMessagesRaw)
+      ? Math.max(Math.floor(tailMessagesRaw), 0)
+      : DEFAULT_RESET_TAIL_MESSAGES;
+
+  return { mode, atHour, idleMinutes, tailMessages, configured };
 }
 
 /** Evaluates whether a persisted session is still fresh under the resolved reset policy. */
@@ -77,7 +86,7 @@ export function evaluateSessionFreshness(params: {
   sessionStartedAt?: number;
   lastInteractionAt?: number;
   now: number;
-  policy: SessionResetPolicy;
+  policy: Omit<SessionResetPolicy, "tailMessages">;
 }): SessionFreshness {
   // Older releases persisted updatedAt=0 as an explicit pending reset marker.
   // Honor that one-time tombstone even when automatic resets are disabled.

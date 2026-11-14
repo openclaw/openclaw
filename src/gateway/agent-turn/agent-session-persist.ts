@@ -361,6 +361,7 @@ export async function persistAgentSessionPhase(
             boundaryId: resetBoundaryId,
             context: "preserve-tail",
             reason: resetReason,
+            tailMessages: patchBuild.resetTailMessages,
             cwd:
               params.entry?.spawnedCwd ??
               resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId),
