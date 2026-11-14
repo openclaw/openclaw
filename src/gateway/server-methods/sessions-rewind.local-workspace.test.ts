@@ -14,11 +14,19 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as entryMutations from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -47,6 +55,7 @@ it.each([
   { method: "sessions.rewind", failure: "invalid worker" },
   { method: "sessions.rewind", failure: "invalid native" },
   { method: "sessions.rewind", failure: "invalid memory" },
+  { method: "sessions.rewind", failure: "invalid lagging projection" },
   { method: "sessions.branches.switch", failure: "none" },
   { method: "sessions.rewind", failure: "conflict" },
   { method: "sessions.rewind", failure: "revoked commit" },
@@ -106,6 +115,20 @@ it.each([
                   .mockReturnValue(false)
               : undefined;
           try {
+            const database = toDatabaseOptions(resolveSqliteScope(scope));
+            // A lagging active-path projection must not turn an invalid selection into a
+            // retired runtime: the preflight reconciles through the projection owner and
+            // still refuses before the workspace is touched.
+            const lag = () => {
+              if (failure !== "invalid lagging projection") {
+                return;
+              }
+              runOpenClawAgentWriteTransaction(
+                (current) =>
+                  markSessionTranscriptIndexDirtyInTransaction(current.db, scope.sessionId),
+                database,
+              );
+            };
             for (const [invalidMethod, entryId, message] of [
               ["sessions.rewind", "missing", "message entry not found"],
               ["sessions.rewind", "assistant-1", "entry is not a user message"],
@@ -113,6 +136,7 @@ it.each([
               ["sessions.branches.switch", "user-2", "branch is already active"],
               ["sessions.branches.switch", "user-1", "entry is not a branch tip"],
             ] as const) {
+              lag();
               const params = messageCutParams(invalidMethod, scope.sessionKey, entryId);
               const reply = await invokeHandler(invalidMethod, entryId, {
                 params,

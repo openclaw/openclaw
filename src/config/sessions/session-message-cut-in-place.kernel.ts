@@ -46,23 +46,35 @@ type MessageCutProjection = {
  *
  * The active-path projection is this path's source of truth for "on the active
  * branch". A lagging projection is reconciled through its own owner, which
- * streams rows in SQL, rather than by hydrating events here.
+ * streams rows in SQL, rather than by hydrating events here, so every reader
+ * this returns answers from a current projection.
  */
 export function createSessionMessageCutReader(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: { reconcile?: boolean } = {},
-): SessionMessageCutReader | undefined {
-  if (options.reconcile === false) {
-    // A read-only caller cannot reconcile, so a lagging projection has no
-    // trustworthy active path and the caller must defer to the committing write.
-    if (sessionTranscriptIndexNeedsReconcile(database.db, sessionId)) {
-      return undefined;
-    }
-  } else {
-    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
-  }
+): SessionMessageCutReader {
+  reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   const db = getActiveTranscriptKysely(database);
+  // The active projection is the canonical path owner: it is built by the
+  // transcript tree scan, which normalizes parentless continuations, leaf
+  // references and reset boundaries. Its order, not the raw payload parent,
+  // answers "what precedes this entry".
+  const readActivePredecessorId = (activePosition: number) =>
+    activePosition <= 0
+      ? null
+      : (executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_transcript_active_events as active")
+            .innerJoin("transcript_event_identities as identity", (join) =>
+              join
+                .onRef("identity.session_id", "=", "active.session_id")
+                .onRef("identity.seq", "=", "active.event_seq"),
+            )
+            .select("identity.event_id")
+            .where("active.session_id", "=", sessionId)
+            .where("active.active_position", "=", activePosition - 1),
+        )?.event_id ?? null);
   const readIdentity = (entryId: string) =>
     executeSqliteQueryTakeFirstSync(
       database.db,
@@ -104,9 +116,8 @@ export function createSessionMessageCutReader(
         ),
         eventType: row.event_type,
         onActivePath: row.active_position !== null,
-        // Appends chain onto the active tip, so a target on the active path has
-        // its stored parent on that path too.
-        repointTargetId: row.parent_id,
+        repointTargetId:
+          row.active_position === null ? null : readActivePredecessorId(row.active_position),
       };
     },
     isBranchTip(entryId) {
@@ -163,10 +174,12 @@ export function createSessionMessageCutReader(
 }
 
 /**
- * Best-effort semantic precheck before a local workspace is retired.
+ * Semantic precheck before a local workspace is retired.
  *
- * Reads are indexed and read-only, so a lagging active-path projection defers
- * to the committing transaction, which owns reconciliation and revalidation.
+ * An invalid history selection must leave the retained runtime and its workspace
+ * edits untouched (#190219), so this answer has to be trustworthy: the caller
+ * runs it inside a write transaction whenever the active-path projection lags,
+ * and the reader reconciles that projection through its owner before reading.
  */
 export function refuseInPlaceSessionMessageCutInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -175,12 +188,21 @@ export function refuseInPlaceSessionMessageCutInDatabase(
   intent: SessionMessageCutIntent & { mode: "rewind" | "switch" },
   sourceRepositoryWorkspaceId?: string,
 ): Exclude<SessionMessageCutResult, { status: "created" }> | undefined {
-  const reader = createSessionMessageCutReader(database, sessionId, { reconcile: false });
-  if (!reader) {
-    return undefined;
-  }
-  const plan = planInPlaceSessionMessageCut(entry, reader, intent, sourceRepositoryWorkspaceId);
+  const plan = planInPlaceSessionMessageCut(
+    entry,
+    createSessionMessageCutReader(database, sessionId),
+    intent,
+    sourceRepositoryWorkspaceId,
+  );
   return plan.status === "prepared" ? undefined : plan;
+}
+
+/** True when the precheck above needs its own write transaction to stay trustworthy. */
+export function inPlaceSessionMessageCutPreflightNeedsWrite(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+): boolean {
+  return sessionTranscriptIndexNeedsReconcile(database.db, sessionId);
 }
 
 /**
@@ -203,13 +225,9 @@ export function installInPlaceSessionMessageCut(
     return { status: "missing-session" };
   }
   const sessionId = currentEntry.sessionId;
-  const reader = createSessionMessageCutReader(database, sessionId);
-  if (!reader) {
-    throw new Error(`Session transcript projection is unavailable for ${sessionId}`);
-  }
   const plan = planInPlaceSessionMessageCut(
     currentEntry,
-    reader,
+    createSessionMessageCutReader(database, sessionId),
     params,
     projection?.sourceRepositoryWorkspaceId,
   );

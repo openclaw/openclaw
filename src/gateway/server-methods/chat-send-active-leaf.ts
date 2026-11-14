@@ -20,14 +20,21 @@ export function assertExpectedLeafActive(
   if (activePathRelation === undefined) {
     throw new Error("Chat admission omitted its worker-prepared active path");
   }
-  // Branch switches preserve entry ids while rotating session ids. A supplied session id
-  // fences exact and ancestor matches; omission remains legacy exact-only compatibility.
+  // A supplied session id fences exact and ancestor matches; omission remains legacy
+  // exact-only compatibility.
   const matchesRequestedSession =
     requestedSessionId === undefined || requestedSessionId === session.entry?.sessionId;
+  // Rewind and branch switch keep the session id and append a `leaf` control, so the
+  // session id no longer fences a branch change. An ancestor view is admitted only when
+  // the active branch reached its current leaf by appends alone: once a navigation control
+  // landed after the caller's view, the displayed branch may not be the branch this message
+  // would join, and only an exact leaf match is accepted.
+  const navigationMoved = session.transcript?.activePathNavigationMoved ?? true;
   // Only message admission treats a pinned empty root as an ancestor.
   const matchesActivePath =
     activePathRelation === "exact" ||
     (requestedSessionId !== undefined &&
+      !navigationMoved &&
       (activePathRelation === "ancestor" ||
         (options?.allowEmptyAncestor === true && expectedLeafEntryId === null)));
   if (!matchesRequestedSession || !matchesActivePath) {

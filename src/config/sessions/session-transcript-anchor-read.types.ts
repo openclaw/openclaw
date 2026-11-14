@@ -15,6 +15,8 @@ export type SessionTranscriptAnchorEntry = Pick<
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
   activePathRelation?: "exact" | "ancestor" | "off-path";
+  /** A `leaf` control landed after the requested anchor, so the active branch moved. */
+  activePathNavigationMoved?: boolean;
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   watermark?: SessionTranscriptWatermark;

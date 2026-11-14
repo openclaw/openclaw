@@ -224,7 +224,9 @@ export function executeSessionActorMemoryForkCommand(
         }
         const target = context.edit(targetKey);
         const entry = installSessionActorMemoryEntry(target, plan.result.entry);
-        createSessionActorMemoryEvents({ ...context, state: target }).appendRaw(plan.leafEvent);
+        createSessionActorMemoryEvents({ ...context, state: target }).appendNavigationControl(
+          plan.leafEvent,
+        );
         return { ...plan.result, entry };
       }
       const plan = planSessionMessageCut(

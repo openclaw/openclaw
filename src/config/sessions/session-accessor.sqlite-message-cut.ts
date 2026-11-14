@@ -1,6 +1,7 @@
 import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -37,6 +38,7 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import {
+  inPlaceSessionMessageCutPreflightNeedsWrite,
   installInPlaceSessionMessageCut,
   refuseInPlaceSessionMessageCutInDatabase,
 } from "./session-message-cut-in-place.kernel.js";
@@ -345,13 +347,22 @@ export async function mutateSqliteSessionAtMessage(
     );
   if (mode !== "fork" && preparedEntry) {
     if (preparedEntry.worktree) {
-      const refused = refuseInPlaceSessionMessageCutInDatabase(
-        database,
-        preparedEntry.sessionId,
-        preparedEntry,
-        { ...intent, mode, expectedState: preparedExpectedState },
-        preconditions?.sourceRepositoryWorkspaceId,
-      );
+      const refuse = () =>
+        refuseInPlaceSessionMessageCutInDatabase(
+          database,
+          preparedEntry.sessionId,
+          preparedEntry,
+          { ...intent, mode, expectedState: preparedExpectedState },
+          preconditions?.sourceRepositoryWorkspaceId,
+        );
+      // A lagging projection is reconciled through its owner before this answer is
+      // trusted, so an invalid selection refuses while the workspace is intact.
+      const refused = inPlaceSessionMessageCutPreflightNeedsWrite(database, preparedEntry.sessionId)
+        ? runSqliteImmediateTransactionSync(database.db, refuse, {
+            databaseLabel: "agent sessions",
+            operationLabel: "session.transcript.message-cut-preflight",
+          })
+        : refuse();
       assertCurrent();
       if (refused) {
         return refused;

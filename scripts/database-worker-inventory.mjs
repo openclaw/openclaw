@@ -1481,6 +1481,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
+        operations: ["readActivePathNavigationMovedFromProjection"],
+        evidence:
+          "Only session-transcript-anchor-read.kernel.ts reads this fact, beside the active-path relation it already resolves there; that kernel is reached by entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts registered in execution.worker.ts. chat-send admission consumes the prepared boolean, never this query, and the incognito route resolves it in the memory actor before SQLite opens.",
+      },
+      {
+        tier: "T3",
         operations: ["readActiveTranscriptEntryIdentityInSnapshot"],
         evidence:
           "Current-turn, anchor, activity and entry-patch reads execute in workers. The native entry-patch branch requires !useWorker; execution-scope permits durable native work only under maintenance/cleanup custody. chat-send-active-leaf.ts calls the relation helper only for incognito, whose database opener rejects before SQLite. No SDK value export; the sibling anchor-facts query remains mixed.",

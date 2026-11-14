@@ -9,11 +9,13 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   appendTranscriptEvent as appendEvent,
+  appendTranscriptMessage as appendMessage,
   forkSessionAtMessage as fork,
   listSessionBranches as branches,
   listSessionParticipantsReadOnly as participantsFor,
@@ -24,6 +26,7 @@ import {
   rewindSessionToMessage as rewind,
   switchSessionBranch as switchBranch,
   updateSessionEntry as updateEntry,
+  upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
 import {
   agentId,
@@ -32,11 +35,15 @@ import {
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { prepareSessionTranscriptActivePathRepoint as prepareRepoint } from "./session-transcript-active-path-repoint.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const { createSession } = useSessionMessageCutFixtures();
+const { createSession, tempDirs } = useSessionMessageCutFixtures();
 
 async function retainLegacyCheckpoints(
   scope: Parameters<typeof updateEntry>[0] & { sessionId: string },
@@ -328,6 +335,117 @@ it("repoints an oversized transcript without a rebuilding wait", async () => {
       },
     ).totalMessages,
   ).toBe(2);
+});
+
+// A selected branch can hold more payload than the projection may hydrate inside
+// one transaction. The repoint refuses by retained bytes, not only by row count,
+// so a branch of large events cannot materialize inside the shared database
+// worker: the streaming reconcile owner publishes it instead.
+it("switches to an oversized branch without hydrating it in one transaction", async () => {
+  const { env, scope } = await createSession();
+  await appendEvent(scope, {
+    type: "custom",
+    id: "oversized-branch-tip",
+    customType: "synthetic",
+    parentId: "off-path-user",
+    timestamp: "2026-07-18T02:00:00.000Z",
+    data: { padding: "x".repeat(SYNC_REBUILD_MAX_BYTES) },
+  });
+
+  // The append made the oversized row the active leaf; leave it, then select it
+  // again so the repoint has to plan that whole branch back onto the active path.
+  const left = await switchBranch({ agentId, env, sessionKey, leafEntryId: "assistant-2" });
+  expect(left).toMatchObject({ status: "created" });
+  const stateDir = env.OPENCLAW_STATE_DIR as string;
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  const planned = (leafEventId: string) =>
+    prepareRepoint(openOpenClawAgentDatabase({ agentId, env }).db, scope.sessionId, leafEventId);
+  // The clean projection does plan a small divergence, so the refusal below is
+  // the retained-byte bound and not a lagging projection.
+  expect(planned("assistant-2")).toBeDefined();
+  expect(planned("oversized-branch-tip")).toBeUndefined();
+  const switched = await switchBranch({
+    agentId,
+    env,
+    sessionKey,
+    leafEntryId: "oversized-branch-tip",
+  });
+
+  expect(switched).toMatchObject({ status: "created" });
+  assert(switched.status === "created");
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  expect(
+    readMessages(scope).flatMap(({ event }) =>
+      event && typeof event === "object" && "id" in event ? [event.id] : [],
+    ),
+  ).toEqual(["user-1", "off-path-user"]);
+});
+
+// Older appenders wrote canonical rows with no `parentId` at all. The canonical
+// tree hangs such a row off whichever leaf was active when it was written, so
+// `u1 -> a1` followed by a parentless `u2` keeps all three on the active path.
+// Rewinding u2 must therefore restore a1, which the raw payload parent (null)
+// does not name: that selected an empty branch and dropped u1 and a1.
+it("rewinds a parentless continuation to its canonical predecessor", async () => {
+  const stateDir = tempDirs.make("openclaw-message-cut-parentless-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const sessionId = "parentless-continuation";
+  const key = "agent:main:parentless-continuation";
+  const scope = { agentId, env, sessionId, sessionKey: key };
+  const startedAt = Date.parse("2026-07-19T00:00:00.000Z");
+  await upsertEntry(scope, {
+    sessionId,
+    lifecycleRevision: "parentless-revision",
+    updatedAt: startedAt,
+  });
+  await appendEvent(scope, {
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp: new Date(startedAt).toISOString(),
+  });
+  await appendMessage(scope, {
+    eventId: "u1",
+    parentId: null,
+    message: { role: "user", content: "first prompt" },
+    now: startedAt + 1_000,
+  });
+  await appendMessage(scope, {
+    eventId: "a1",
+    parentId: "u1",
+    message: { role: "assistant", content: "first answer" },
+    now: startedAt + 2_000,
+  });
+  // Only an older appender produces a canonical row with no `parentId` key, so
+  // this one is written through the store's in-transaction append owner.
+  runOpenClawAgentWriteTransaction(
+    (database) =>
+      appendTranscriptEventsInTransaction(database, { ...resolveSqliteScope(scope), sessionId }, [
+        {
+          type: "message",
+          id: "u2",
+          timestamp: new Date(startedAt + 3_000).toISOString(),
+          message: { role: "user", content: "second prompt" },
+        },
+      ]),
+    toDatabaseOptions(resolveSqliteScope(scope)),
+  );
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+  const activeIds = () =>
+    readMessages(scope).flatMap(({ event }) =>
+      event && typeof event === "object" && "id" in event ? [event.id] : [],
+    );
+  expect(activeIds()).toEqual(["u1", "a1", "u2"]);
+
+  const result = await rewind(
+    { agentId, env, sessionKey: key, entryId: "u2" },
+    { sessionId, lifecycleRevision: "parentless-revision" },
+  );
+
+  expect(result).toMatchObject({ status: "created" });
+  assert(result.status === "created");
+  expect(result.entry.sessionId).toBe(sessionId);
+  expect(activeIds()).toEqual(["u1", "a1"]);
 });
 
 it("forks an exact active-path prefix without changing the source", async () => {

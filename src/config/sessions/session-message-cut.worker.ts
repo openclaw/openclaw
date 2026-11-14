@@ -6,7 +6,10 @@ import { readSessionIdentitySnapshot } from "./session-accessor.sqlite-entry-sto
 import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
-import { refuseInPlaceSessionMessageCutInDatabase } from "./session-message-cut-in-place.kernel.js";
+import {
+  inPlaceSessionMessageCutPreflightNeedsWrite,
+  refuseInPlaceSessionMessageCutInDatabase,
+} from "./session-message-cut-in-place.kernel.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutCommit,
@@ -22,18 +25,29 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
  *
  * The commit transaction revalidates the same preconditions through the same
  * reader, so this read only avoids retiring custody for a cut that must refuse.
+ * A lagging active-path projection would make that answer untrustworthy, so it
+ * is reconciled through its owner inside a write transaction first.
  */
 export function preflightSessionMessageCut(
   input: SessionMessageCutPreflight,
   context: AgentWorkerOperationContext,
 ) {
-  return refuseInPlaceSessionMessageCutInDatabase(
-    context.open(),
-    input.sessionId,
-    input.entry,
-    input.intent,
-    input.sourceRepositoryWorkspaceId,
-  );
+  const refuse = (database: OpenClawAgentDatabase) =>
+    refuseInPlaceSessionMessageCutInDatabase(
+      database,
+      input.sessionId,
+      input.entry,
+      input.intent,
+      input.sourceRepositoryWorkspaceId,
+    );
+  const database = context.open();
+  return inPlaceSessionMessageCutPreflightNeedsWrite(database, input.sessionId)
+    ? context.writeTransaction(
+        "session.transcript.message-cut-preflight",
+        "Session history navigation",
+        refuse,
+      )
+    : refuse(database);
 }
 
 export function commitSessionForkMessageCut(

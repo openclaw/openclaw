@@ -17,6 +17,7 @@ import {
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   readActivePathEntryRelationFromProjection,
+  readActivePathNavigationMovedFromProjection,
   readActiveTranscriptEntryAnchorFromProjection,
   readActiveTranscriptEntryAnchorInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
@@ -275,6 +276,10 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         selection.activePathEntryId !== undefined && currentProjection
           ? {
               activePathRelation: readActivePathEntryRelationFromProjection(
+                currentProjection,
+                selection.activePathEntryId,
+              ),
+              activePathNavigationMoved: readActivePathNavigationMovedFromProjection(
                 currentProjection,
                 selection.activePathEntryId,
               ),
