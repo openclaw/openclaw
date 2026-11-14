@@ -306,7 +306,7 @@ describe("renderModelProviders", () => {
     expect(text(fastRow)).not.toContain("Default: Model policy");
     const thinkingHelp = thinkingRow.querySelector('openclaw-tooltip [slot="content"]');
     const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
-    expect(thinkingHelp?.textContent).toContain("model's thinking policy");
+    expect(thinkingHelp?.textContent).toContain("model’s own effort setting");
     expect(fastModeHelp?.textContent).toContain("Unlike Auto");
     expect(thinkingRow.querySelector(".settings-segmented__btn button")).toBeNull();
     expect(fastRow.querySelector(".settings-segmented__btn button")).toBeNull();
@@ -362,7 +362,7 @@ describe("renderModelProviders", () => {
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
     expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
-      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; conversational models aren’t used as a fallback.",
+      "Handles structured choices and scores. Select a decision model to enable it; chat models are not used as fallback.",
     );
   });
 

@@ -208,6 +208,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       messageChannel: projected.messageChannel,
       hookRunner: projected.hookRunner,
       reasoningMode: projected.reasoningMode,
+      getUserTranscriptContexts: projected.getUserTranscriptContexts,
       thinkingLevel: projected.thinkingLevel,
       hasDeliveredMessageToolOnlySourceReply: projected.hasDeliveredMessageToolOnlySourceReply,
       onDeliveredMessageToolOnlySourceReply: projected.onDeliveredMessageToolOnlySourceReply,
@@ -401,7 +402,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(prepared.queueHandle.readSessionForkContext?.()?.messages).toBe(session.messages);
 
     const { prepareEmbeddedSessionForkContext } = await import("../session-fork-context.js");
-    const context = await prepareEmbeddedSessionForkContext({
+    const { context } = await prepareEmbeddedSessionForkContext({
       target: {
         agentId: "main",
         sessionId: "session-output-schema",
@@ -591,6 +592,7 @@ describe("prepareEmbeddedAttemptStream", () => {
             execute: async () => ({ content: [{ type: "text", text: "clean" }] }),
           } as never,
           toolName: "exec",
+          toolId: "openclaw:core:exec",
           source: "openclaw",
           toolCallId: "progress-detail-exec",
           input: { command: "git status" },

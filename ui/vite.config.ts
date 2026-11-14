@@ -70,6 +70,7 @@ export const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/typescript",
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
+  "qrcode",
 ] as const;
 // npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
 // maps that the browser never needs during normal runtime.
@@ -103,6 +104,16 @@ export async function createControlUiPrecompressedAssetVariants(
   if (!shouldPrecompressControlUiAsset(fileName, body.byteLength, bootAssets.has(fileName))) {
     return [];
   }
+  let compressedGzip = gzip(body, 12);
+  if (bootAssets.has(fileName)) {
+    // Compression levels are not monotonic. Keep the smallest first-load encoding.
+    for (const level of [10, 11]) {
+      const candidate = gzip(body, level);
+      if (candidate.byteLength < compressedGzip.byteLength) {
+        compressedGzip = candidate;
+      }
+    }
+  }
   const variants = [
     {
       fileName: `${fileName}.br`,
@@ -117,8 +128,8 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.gz`,
       // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
-      // Prefer maximum gzip effort for shipped assets; benchmark the added build cost.
-      source: Buffer.from(gzip(body, 12)),
+      // Deferred assets use maximum effort; boot assets keep their smallest encoding.
+      source: Buffer.from(compressedGzip),
     },
   ];
   return variants.filter((variant) => variant.source.byteLength < body.byteLength);

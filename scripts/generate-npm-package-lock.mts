@@ -2253,6 +2253,7 @@ export {
   parsePnpmPackageKey,
   parseLockPackagePath,
   readNpmLockOverrides,
+  runtimePnpmLock,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
 };

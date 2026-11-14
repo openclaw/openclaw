@@ -46,28 +46,28 @@ export function createChatModelSearchView(
   // Selection resets provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
-    groups: Record<string, { open?: boolean; more: boolean }>;
+    selected?: string;
+    groups: Record<string, { more: boolean }>;
   }>(
     (draft) => {
       const current = scope();
       const selectionChanged = draft.active !== current.active;
       draft.active = current.active;
+      if (selectionChanged || !current.providers.includes(draft.selected ?? "")) {
+        draft.selected = current.active ?? current.providers[0];
+      }
       for (const provider of Object.keys(draft.groups)) {
         if (!current.providers.includes(provider)) {
           delete draft.groups[provider];
         }
       }
       for (const provider of current.providers) {
-        const group = (draft.groups[provider] ??= { more: false });
-        if (selectionChanged) {
-          delete group.open;
-        }
+        draft.groups[provider] ??= { more: false };
       }
     },
     { active: undefined, groups: {} },
   );
-  const providerOpen = (provider: string) =>
-    disclosure.groups[provider]?.open ?? disclosure.active === provider;
+  const providerOpen = (provider: string) => disclosure.selected === provider;
   const matches = createMemo(
     () => {
       const term = normalizeSearch(query().trim());
@@ -101,13 +101,12 @@ export function createChatModelSearchView(
     },
   );
   const selectable = createMemo(() => matches().filter(({ row }) => !row.disabled));
-  // Keep a surviving choice on refresh; a removed choice adopts the current fallback.
+  // Browsing providers is neutral; typing or arrow navigation establishes a highlight.
   const [highlighted, highlight] = createSignal<string | undefined>((previous) => {
     const rows = selectable();
     return (
       rows.find(({ row }) => row.key === previous)?.row.key ??
-      (query().trim() ? undefined : rows.find(({ row }) => row.selected)?.row.key) ??
-      rows[0]?.row.key
+      (query().trim() ? rows[0]?.row.key : undefined)
     );
   });
   // A highlight move changes only its old and new rows, including offscreen choices.
@@ -155,9 +154,8 @@ export function createChatModelSearchView(
       return rowStates[key] ?? { hidden: true, rank: undefined, shortcut: undefined };
     },
     toggleProvider(provider: string) {
-      const next = !providerOpen(provider);
       updateDisclosure((draft) => {
-        draft.groups[provider]!.open = next;
+        draft.selected = provider;
       });
     },
     expandMore(provider: string, event: MouseEvent) {
@@ -190,16 +188,6 @@ export function createChatModelSearchView(
   return view;
 }
 
-export function handleModelOptionMouseEnter(event: MouseEvent): void {
-  const state = chatModelSearchState(event.currentTarget);
-  if (event.currentTarget instanceof HTMLButtonElement) {
-    const key = event.currentTarget.dataset.chatModelKey;
-    if (key) {
-      state?.view?.highlight(key);
-    }
-  }
-}
-
 export function updateModelSearch(input: HTMLInputElement): void {
   const state = chatModelSearchState(input);
   if (state) {
@@ -230,9 +218,15 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
     }
     return;
   }
-  const index = rows.findIndex(({ row }) => row.key === view.highlighted());
+  const highlighted = view.highlighted();
+  const index = rows.findIndex(({ row }) =>
+    highlighted === undefined ? row.selected : row.key === highlighted,
+  );
   const offset = event.key === "ArrowDown" ? 1 : rows.length - 1;
-  const next = rows[index < 0 ? 0 : (index + offset) % rows.length];
+  const next =
+    rows[
+      index < 0 ? (event.key === "ArrowDown" ? 0 : rows.length - 1) : (index + offset) % rows.length
+    ];
   if (next) {
     view.highlight(next.row.key);
     view.reveal(next.row.key);

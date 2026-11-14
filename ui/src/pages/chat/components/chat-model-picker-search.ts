@@ -1,5 +1,5 @@
 import { createContext, createSignal, createUniqueId, onCleanup, onSettled } from "solid-js";
-import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { findMenuShortcut, registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 export type ChatModelSearchRow = {
@@ -11,7 +11,7 @@ export type ChatModelSearchRow = {
   reference: string;
   disabled: boolean;
   selected: boolean;
-  /** Rows without keycaps still consume digit positions, but do not advertise global shortcuts. */
+  /** Rows without global shortcuts still consume digit positions. */
   hasShortcut: boolean;
   provider?: string;
   more?: boolean;
@@ -53,7 +53,7 @@ type ModelSearchState = {
   summary?: HTMLElement;
   input?: HTMLInputElement;
   focusRow?: string;
-  rows: Map<string, HTMLButtonElement>;
+  rows: Map<string, HTMLElement>;
   query(): string;
   setQuery(value: string): void;
   view?: ChatModelSearchView;
@@ -70,12 +70,17 @@ export function createChatModelSearch() {
   const listId = (key: string) => `${prefix}-list-${encodeURIComponent(key)}`;
   onSettled(() =>
     state.details
-      ? registerMenuShortcuts(state.details, () =>
-          (state.view?.selectable() ?? []).slice(0, 9).flatMap(({ row }, index) => {
+      ? registerMenuShortcuts(state.details, () => {
+          const items = (state.view?.selectable() ?? []).slice(0, 9).flatMap(({ row }, index) => {
             const element = state.rows.get(row.key);
             return row.hasShortcut && element ? [{ element, key: String(index + 1) }] : [];
-          }),
-        )
+          });
+          // The document-level typing handler must leave search activation to this picker.
+          if (state.input) {
+            items.push({ element: state.input, key: "/" });
+          }
+          return items;
+        })
       : undefined,
   );
   return {
@@ -103,7 +108,7 @@ export function createChatModelSearch() {
       });
     },
     rowRef(readKey: () => string) {
-      let element: HTMLButtonElement;
+      let element: HTMLElement;
       onSettled(() => {
         // The keyed row keeps this identity for its mounted lifetime.
         const initialKey = readKey();
@@ -120,7 +125,7 @@ export function createChatModelSearch() {
           }
         };
       });
-      return (node: HTMLButtonElement) => (element = node);
+      return (node: HTMLElement) => (element = node);
     },
     row(key: string) {
       return state.view?.row(key);
@@ -157,10 +162,8 @@ export function resetModelSearch(details: HTMLDetailsElement): void {
   if (state) {
     state.focusRow = undefined;
   }
-  const rows = state?.view?.selectable() ?? [];
-  // An unchanged empty query cannot invalidate the writable highlight derivation.
-  const fallback = rows.find(({ row }) => row.selected) ?? rows[0];
-  state?.view?.highlight(state.query().trim() ? undefined : fallback?.row.key);
+  // Clear explicit navigation even when the query is already empty.
+  state?.view?.highlight(undefined);
   state?.setQuery("");
 }
 
@@ -193,6 +196,11 @@ export function handleModelPickerKeydown(event: KeyboardEvent): void {
     !state ||
     event.defaultPrevented ||
     !details?.open ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
     event.target instanceof HTMLInputElement ||
     event
       .composedPath()
@@ -201,14 +209,19 @@ export function handleModelPickerKeydown(event: KeyboardEvent): void {
           target instanceof HTMLElement &&
           target !== details &&
           target.matches('[role="menu"][popover], details[data-chat-native-picker]'),
-      ) ||
-    !/^[1-9]$/u.test(event.key)
+      )
   ) {
     return;
   }
+  const target = findMenuShortcut(details, event.key);
+  if (!target) {
+    return;
+  }
   event.preventDefault();
-  const row = state.view?.selectable()[Number(event.key) - 1]?.row;
-  if (row) {
-    state.rows.get(row.key)?.click();
+  event.stopPropagation();
+  if (target instanceof HTMLInputElement) {
+    target.focus({ preventScroll: true });
+  } else {
+    target.click();
   }
 }

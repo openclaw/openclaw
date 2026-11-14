@@ -11,6 +11,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
+import { readCustodiedDrainedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
 import {
   assertChildRuntimeAvailable,
   classifyChildRuntimeFailure,
@@ -327,8 +328,11 @@ export function runSqliteReadOnlyWorker(
 ): Promise<SqliteReadOnlyWorkerValue> {
   const options: SqliteReadOnlyWorkerOptions =
     (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
+    inputOptions.source === "canonical" &&
     isArtifactPreservingStateRead("agent", pathname)
-      ? { ...inputOptions, artifactPreserving: true }
+      ? inputOptions.mode === "auth-profile-rows" && readCustodiedDrainedSqliteSource(pathname)
+        ? { ...inputOptions, artifactPreserving: true, immutable: true }
+        : { ...inputOptions, artifactPreserving: true }
       : inputOptions;
   return runScopedSqliteInspection(options.signal, (signal) => {
     const scope = readOnlyWorkerScope.getStore();
@@ -437,6 +441,7 @@ export function runOneShotSqliteInspection<T>(params: {
       status: null,
     };
     let stopped = false;
+    let nativeClosed = false;
     const child = execFile(
       process.execPath,
       params.argv,
@@ -470,14 +475,32 @@ export function runOneShotSqliteInspection<T>(params: {
     );
     const runtimeFailure = observeChildRuntime(child);
     const abort = () => {
-      if (!stopped) {
+      if (!stopped && !nativeClosed) {
         stopped = true;
         child.kill("SIGKILL");
       }
     };
     const closed = retainSnapshotWork(
       new Promise<void>((resolveClosed) => {
-        child.once("close", () => resolveClosed());
+        // Retain snapshot and generation custody through diagnosis and result publication.
+        const finishClose = async () => {
+          nativeClosed = true;
+          try {
+            const failure = await runtimeFailure();
+            if (failure) {
+              throw failure;
+            }
+            resolve(params.read(output));
+          } catch (workerError) {
+            reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
+          } finally {
+            params.signal?.removeEventListener("abort", abort);
+            resolveClosed();
+          }
+        };
+        child.once("close", () => {
+          void finishClose();
+        });
       }),
       abort,
     );
@@ -488,20 +511,6 @@ export function runOneShotSqliteInspection<T>(params: {
     if (params.signal?.aborted) {
       abort();
     }
-    // execFile can report an abort/error before close. Ownership ends only
-    // after the process and its pipes have closed, including failed launches.
-    child.once("close", () => {
-      params.signal?.removeEventListener("abort", abort);
-      try {
-        const failure = runtimeFailure();
-        if (failure) {
-          throw failure;
-        }
-        resolve(params.read(output));
-      } catch (workerError) {
-        reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
-      }
-    });
   });
 }
 

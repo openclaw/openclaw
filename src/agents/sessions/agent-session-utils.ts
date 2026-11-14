@@ -34,3 +34,8 @@ export function replaceAgentMessageInPlace(target: AgentMessage, replacement: Ag
 export function estimateMessagesFromContent(messages: AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
 }
+
+export function compactionErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim() ? message : fallback;
+}

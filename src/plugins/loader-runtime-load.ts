@@ -25,6 +25,7 @@ import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcr
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
+import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { isCachedPluginRegistryLoad, isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -286,20 +287,23 @@ export async function loadAndActivateRootPluginRegistry(
 export async function acquirePluginRegistryForInspection(
   options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  return acquireRegistryResources((resources) =>
-    runPluginLoadStepsAsync(
-      loadOpenClawPluginsSteps(
-        { ...options, activate: false, cache: false },
-        loaderBindings,
-        undefined,
-        resources,
+  return acquireRegistryResources(
+    (resources) =>
+      runPluginLoadStepsAsync(
+        loadOpenClawPluginsSteps(
+          { ...options, activate: false, cache: false },
+          loaderBindings,
+          undefined,
+          resources,
+        ),
       ),
-    ),
+    options,
   );
 }
 
 async function acquireRegistryResources(
   load: (resources: PluginRegistryInspectionResources) => PluginRegistry | Promise<PluginRegistry>,
+  options: Pick<PluginLoadOptions, "metadataSnapshot" | "env">,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   const cache = createPluginCache();
   const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
@@ -344,7 +348,14 @@ async function acquireRegistryResources(
   });
   try {
     inheritPluginNativeAdmissions(getPluginCache(), cache);
-    const registry = await withPluginCache(cache, () => load(resources));
+    const loadRegistry = () => load(resources);
+    // Compose the supplied generation before entering the private registration cache.
+    const registry = await (options.metadataSnapshot
+      ? withPluginMetadataSnapshotScope(options.metadataSnapshot, loadRegistry, {
+          cache,
+          env: options.env,
+        })
+      : withPluginCache(cache, loadRegistry));
     // An inline closure shares the retirement callback's context, including the cache.
     return { registry, release: resources.release.bind(resources) };
   } catch (error) {
@@ -383,8 +394,12 @@ export function acquirePluginRegistryWithInternalOverrides(
   options: PluginLoadOptions & { cache: false; activate: false },
   overrides: ScopedRuntimeOverrides,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  return acquireRegistryResources((resources) =>
-    runPluginLoadStepsAsync(loadRegistryWithInternalOverridesSteps(options, overrides, resources)),
+  return acquireRegistryResources(
+    (resources) =>
+      runPluginLoadStepsAsync(
+        loadRegistryWithInternalOverridesSteps(options, overrides, resources),
+      ),
+    options,
   );
 }
 

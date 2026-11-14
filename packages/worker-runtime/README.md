@@ -259,5 +259,10 @@ control to those paths. Add one only for a caller that can pause before bufferin
 or allocating its next input, and observe actual admission release, including
 retained ownership, rather than task-result completion.
 
+Admission errors identify the exhausted pool or shared-compute task/byte budget,
+its current count and limit, and the rejected input's reported bytes. Host-classified
+worker/operation labels provide context without exposing task input or private paths.
+The error code remains `overloaded`; diagnostics do not change admission or retry behavior.
+
 Memory-driven recycling needs evidence of growth after garbage collection and
 must weigh recovered heap and external memory against worker startup cost.

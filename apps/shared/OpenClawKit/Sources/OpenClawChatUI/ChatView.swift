@@ -6,6 +6,10 @@ import AppKit
 import UIKit
 #endif
 
+extension EnvironmentValues {
+    @Entry public var openClawChatIsObscured: Bool = false
+}
+
 enum ChatReaderUserTransition: Equatable {
     case unchanged
     case added(UUID)
@@ -111,6 +115,7 @@ public struct OpenClawChatView: View {
     private let viewModel: OpenClawChatViewModel
     private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openClawChatIsObscured) private var isObscured
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -130,8 +135,10 @@ public struct OpenClawChatView: View {
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
     @State private var composerFocusRequest = 0
+    @State private var isOnScreen = false
     #if os(macOS)
     @Environment(\.openClawChatWindowCommands) private var windowCommands
+    @Environment(\.appearsActive) private var appearsActive
     #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     @State private var reactionPickerMessage: OpenClawChatMessage?
@@ -264,11 +271,20 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
+            self.isOnScreen = true
             self.viewModel.refreshSourceContext()
             self.viewModel.load()
         }
         .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
             self.viewModel.refreshSourceContext()
+            self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
+            self.viewModel.setComposerPresentationActive(self.isComposerPresentationActive)
+        }
+        .onChange(of: self.isComposerPresentationActive, initial: true) { _, active in
+            self.viewModel.setComposerPresentationActive(active)
+        }
+        .onChange(of: self.isObscured, initial: true) { _, obscured in
+            self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
         }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
@@ -316,9 +332,15 @@ extension OpenClawChatView {
                     .padding(.horizontal, self.usesExpandedLayout ? 0 : Layout.outerPaddingHorizontal)
             if !self.usesInlineProgressCard {
                 self.progressCard
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, self.composerHorizontalMargin)
-                    .padding(.top, Layout.stackSpacing)
+                    // The composer draws its surface this far inside its frame; share its edges.
+                        .padding(
+                            .horizontal,
+                            self.showsComposer
+                                ? OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
+                                : 0)
+                        .frame(maxWidth: self.readingColumnWidth)
+                        .padding(.horizontal, self.composerHorizontalMargin)
+                        .padding(.top, Layout.stackSpacing)
             }
             if self.showsComposer {
                 self.turnRecapRow
@@ -333,6 +355,7 @@ extension OpenClawChatView {
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
                 self.composer
+                    .chatBehaviorProbe(.composer)
                     .frame(maxWidth: self.readingColumnWidth)
                     .padding(.horizontal, self.composerHorizontalMargin)
                     .padding(.top, Layout.stackSpacing)
@@ -516,6 +539,7 @@ extension OpenClawChatView {
                     }
                 }
             }
+            .chatBehaviorProbeScroll()
 
             if self.viewModel.isLoading, self.composerChrome == .full {
                 ProgressView()
@@ -565,6 +589,8 @@ extension OpenClawChatView {
             self.viewModel.resumeFromForeground()
         }
         .onDisappear {
+            self.isOnScreen = false
+            self.viewModel.setComposerPresentationActive(false)
             self.speech?.stop()
             self.scrollCommand.cancel()
         }
@@ -673,6 +699,7 @@ extension OpenClawChatView {
                 isGrouped: isGrouped,
                 answerID: answerID)
                 .id(row.id)
+                .chatBehaviorProbe(.row(row))
         case let .tool(tool):
             ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
                 .padding(4)
@@ -721,6 +748,31 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private var liveAssistantContent: some View {
+        // The transcript decides whether the bubble shows (from live-content shape), in the same
+        // pass that adds the durable row replacing it. Deciding inside the bubble's own observation
+        // scope removed it a layout pass early and collapsed the transcript for a frame.
+        if self.hasVisibleStreamingAssistantText {
+            ChatLiveAssistantText(viewModel: self.viewModel) { text in
+                let preparedText = ChatStreamingAssistantText(
+                    sourceText: text,
+                    includesThinking: self.displayOptions.contains(.reasoning))
+                if !preparedText.segments.isEmpty {
+                    ChatStreamingAssistantBubble(
+                        text: preparedText,
+                        markdownVariant: self.markdownVariant,
+                        assistantName: self.assistantName,
+                        assistantAvatarText: self.assistantAvatarText,
+                        assistantAvatarTint: self.assistantAvatarTint,
+                        showsAssistantAvatar: self.showsAssistantAvatars,
+                        isClean: self.composerChrome == .clean)
+                        .equatable()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .chatBehaviorProbe(.live)
+                }
+            }
+        }
+        // Below the words, where the finished turn's recap appears: above them, its removal
+        // shifted the whole reply up as the final row replaced the live bubble.
         ChatRunStatusContent {
             if self.showsWorkingIndicator {
                 ChatTypingIndicatorBubble(
@@ -734,24 +786,6 @@ extension OpenClawChatView {
                     outputTokens: self.viewModel.liveRunOutputTokens,
                     status: self.viewModel.runStartupStatus)
                     .equatable()
-            }
-        }
-
-        ChatLiveAssistantText(viewModel: self.viewModel) { text in
-            let preparedText = ChatStreamingAssistantText(
-                sourceText: text,
-                includesThinking: self.displayOptions.contains(.reasoning))
-            if !preparedText.segments.isEmpty {
-                ChatStreamingAssistantBubble(
-                    text: preparedText,
-                    markdownVariant: self.markdownVariant,
-                    assistantName: self.assistantName,
-                    assistantAvatarText: self.assistantAvatarText,
-                    assistantAvatarTint: self.assistantAvatarTint,
-                    showsAssistantAvatar: self.showsAssistantAvatars,
-                    isClean: self.composerChrome == .clean)
-                    .equatable()
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -810,11 +844,21 @@ extension OpenClawChatView {
                     kind: kind,
                     playback: playback)
             })
-            .frame(
-                maxWidth: .infinity,
-                alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-            bubble
+            Group {
+                #if os(iOS)
+                // Streaming revisions invalidate the transcript container. Keep completed
+                // iPhone bubbles out of that hot path unless their render inputs changed.
+                if bubble.canUseIOSRenderGate {
+                    bubble.equatable()
+                } else {
+                    bubble
+                }
+                #else
+                bubble
+                #endif
+            }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             if msg.presentationOwnsFooter {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }
@@ -835,12 +879,10 @@ extension OpenClawChatView {
                         .help("Copy message")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                     self.replyMessageButton(for: actionMessage)
-                        .help("Reply")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                     self.listenMessageButton(for: actionMessage)
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                     self.messageActionsMenu(for: actionMessage)
-                        .help("Message actions")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                 }
                 .labelStyle(.iconOnly)
@@ -862,6 +904,15 @@ extension OpenClawChatView {
             }
         }
         row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
+    }
+
+    /// A rejected message returns to the composer only while the user can see it.
+    private var isComposerPresentationActive: Bool {
+        #if os(macOS)
+        self.isOnScreen && self.appearsActive && !self.isObscured
+        #else
+        self.isOnScreen && self.scenePhase == .active && !self.isObscured
+        #endif
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
@@ -888,21 +939,8 @@ extension OpenClawChatView {
         self.messageSessionActions(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
-            if outboxState.isFailed {
-                Button {
-                    self.viewModel.retryOutboxMessage(message.id)
-                } label: {
-                    Label("Retry Send", systemImage: "arrow.clockwise")
-                }
-            }
-            // In-flight sends may still reach canonical history; hiding them
-            // would make a real send look as though it had been cancelled.
-            if !outboxState.preventsDeletion {
-                Button(role: .destructive) {
-                    self.viewModel.deleteOutboxMessage(message.id)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
+            ChatOutboxMessageActions(viewModel: self.viewModel, messageID: message.id, state: outboxState) {
+                self.composerFocusRequest += 1
             }
         }
     }
@@ -1530,14 +1568,12 @@ private struct ChatNoticeBanner: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Refresh")
 
             Button(action: self.dismiss) {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("Dismiss")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -1596,7 +1632,7 @@ private struct ChatLiveAssistantText<Content: View>: View {
     @ViewBuilder var content: (String) -> Content
 
     var body: some View {
-        if let text = self.viewModel.liveAssistantDisplayText {
+        if let text = self.viewModel.displayedStreamingAssistantText {
             self.content(text)
         }
     }

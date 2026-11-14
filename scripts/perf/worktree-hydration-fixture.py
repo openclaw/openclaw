@@ -18,6 +18,8 @@ requires a changed-tip refresh from a valid shallow boundary. --negotiation-tip
 compares restricted hydration tips against the prior all-ref scan during --creation.
 --refresh-negotiation compares restricted default-branch refresh instead; both
 arms retain the current hydration command. Pass the saved baseline base-ref.ts.
+--linked-worktrees 2437 adds valid no-checkout linked worktree metadata backed by
+the synthetic session branches; no product or operator checkout is registered.
 Acceptance: identical commit/bytes and one batch fetch, fewer pack reads and lower
 hydration CPU/wall time; no >20% owner regression. Use five AB/BA and five A/A pairs.
 """
@@ -277,7 +279,26 @@ if "--advancing" in sys.argv:
         for suffix in (".pack", ".idx", ".rev", ".promisor"):
             pack.with_suffix(suffix).unlink(missing_ok=True)
     git(seed, "read-tree", "--reset", "-u", "HEAD")
+linked = int(sys.argv[sys.argv.index("--linked-worktrees") + 1]) if "--linked-worktrees" in sys.argv else 0
+assert 0 <= linked <= extra_refs
+if linked:
+    # Seed the native layout once, then construct the same no-checkout metadata.
+    # Running worktree-add N times also scans the growing list N times during setup.
+    directory = root / "linked"
+    directory.mkdir()
+    git(seed, "worktree", "add", "--no-checkout", str(directory / "session-0"), "synthetic-0")
+    for index in range(1, linked):
+        checkout = directory / f"session-{index}"
+        admin = seed / ".git/worktrees" / f"session-{index}"
+        checkout.mkdir()
+        admin.mkdir()
+        (checkout / ".git").write_text(f"gitdir: {admin}\n")
+        (admin / "gitdir").write_text(f"{checkout / '.git'}\n")
+        (admin / "commondir").write_text("../..\n")
+        (admin / "HEAD").write_text(f"ref: refs/heads/synthetic-{index}\n")
+    assert sum(line.startswith("worktree ") for line in git(seed, "worktree", "list", "--porcelain").splitlines()) == linked + 1
 print(json.dumps({"root": str(root), "files": 62000, "targetBytes": 62000 * 18432,
                   "unrelatedHistoricalBlobs": 600000, "missingTargetObjects": 1,
-                  "extraRefs": extra_refs, "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
+                  "extraRefs": extra_refs, "linkedWorktrees": linked,
+                  "packs": len(list((seed / ".git/objects/pack").glob("*.pack"))),
                   "commit": git(seed, "rev-parse", "HEAD")}))

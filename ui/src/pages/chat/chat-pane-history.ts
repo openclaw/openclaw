@@ -354,8 +354,8 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   }
 
   protected handleTranscriptHistoryIntent(event: Event): void {
-    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    const upward = this.historyInput.isUpward(event);
+    const root = this.transcript.scrollElement;
+    const upward = this.historyInput.isUpward(event, root);
     if (
       !root ||
       !this.presented ||
@@ -381,9 +381,12 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     const load = (async () => {
       // A sparse or overlapping page is cursor progress, not a visible result.
-      // Keep boot autofill to one page; reader actions may cross three pages,
-      // then yield so a long hidden interval cannot monopolize the connection.
-      for (let page = 0; page < (readerIntent ? 3 : 1); page += 1) {
+      // A trimmed cache needs a boundary probe before its one boot-fill page.
+      // Reader actions may cross three pages, then yield so a long hidden
+      // interval cannot monopolize the connection.
+      const pagination = this.state?.chatHistoryPagination;
+      const limit = readerIntent ? 3 : pagination?.hasMore && pagination.needsBoundary ? 2 : 1;
+      for (let page = 0; page < limit; page += 1) {
         const loaded = await this.performOlderMessagesLoad(readerIntent);
         if (loaded !== "empty") {
           return loaded;
@@ -446,7 +449,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
           result = this.takeStagedOlderPage(state);
         }
         const pagination = state.chatHistoryPagination;
-        if (!pagination.hasMore || (!readerIntent && pagination.needsBoundary)) {
+        if (!pagination.hasMore) {
           return false;
         }
         const expectedSessionId = state.currentSessionId?.trim() ?? "";

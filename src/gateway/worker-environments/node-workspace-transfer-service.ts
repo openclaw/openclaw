@@ -432,6 +432,7 @@ export function createNodeWorkspaceTransferService(options: {
       environmentId: string,
       snapshot: NodeWorkspaceTransferSnapshot,
       authorize?: () => void,
+      advanceWorkspace = true,
     ): string {
       authorize?.();
       const context = contexts.get(environmentId);
@@ -439,9 +440,14 @@ export function createNodeWorkspaceTransferService(options: {
         throw new Error("Node workspace transfer context is unavailable");
       }
       context.snapshots.set(snapshot.manifestRef, snapshot);
-      context.currentManifestRef = snapshot.manifestRef;
+      if (advanceWorkspace) {
+        context.currentManifestRef = snapshot.manifestRef;
+      }
+      const token = mintDownload(context, snapshot.manifestRef, () =>
+        isOperationAuthorized(authorize),
+      );
       pruneSnapshots(context);
-      return mintDownload(context, snapshot.manifestRef, () => isOperationAuthorized(authorize));
+      return token;
     },
 
     async revoke(environmentId: string, token: string): Promise<void> {

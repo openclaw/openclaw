@@ -22,6 +22,11 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
   For version metadata, fetch from GitHub release/tag or unpack the tag tarball
   under `/tmp`.
+- Verify selected npm plugins published successfully before core npm.
+- Report ClawHub separately from core release readiness. Its pending or failed
+  publication/verification never blocks core, GitHub finalization, main
+  closeout, or the retrospective PR. Keep its exact run/attempt, owner, and next
+  action visible; do not call ClawHub complete without public-byte proof.
 - Never print secrets.
 - Keep the final terse: `yes/no`, evidence bullets, caveats, cleanup.
 
@@ -64,8 +69,10 @@ Use these checks only for the regular orchestrated release track.
    - For each expected npm plugin, verify the planned version and npm selector
      from that immutable publication plan. A regular beta publishes to `beta`;
      do not require it to move `latest`. Verify any planned mirror tags separately.
-4. ClawHub:
+4. ClawHub (independent status, not a core or closeout gate):
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
+     If pending or failed, record that state and its follow-up separately;
+     continue core verification and closeout without waiting.
    - Use OpenClaw itself for live registry proof:
      `openclaw plugins search <known-plugin> --json`.
    - Install one official plugin at the exact requested release version from
@@ -76,8 +83,9 @@ Use these checks only for the regular orchestrated release track.
 5. Release workflows:
    - Verify conclusions for release notes evidence links:
      Full Release Validation, OpenClaw Release Checks, OpenClaw NPM Release,
-     Plugin NPM Release, Plugin ClawHub Release, mac preflight/validation/publish
-     when stable mac assets are expected.
+     Plugin NPM Release, mac preflight/validation/publish when stable mac assets
+     are expected. Report Plugin ClawHub Release independently, even when its
+     result is still pending or failed.
    - For stable, verify `OpenClaw Stable Main Closeout` succeeded and its
      manifest records the matching release tag, current rollback drill, stable
      soak, and blocking performance evidence.
@@ -144,8 +152,9 @@ the live tag, workflow, registry, provenance, and image state.
 
 ## Published package smoke
 
-After the track-specific publication checks pass, use a disposable
-installation/cache with isolated OpenClaw state:
+After the track-specific core publication checks pass, use a disposable
+installation/cache with isolated OpenClaw state. Do not wait for independent
+ClawHub verification to run this smoke:
 
 - `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
 - Run at least one harmless command that touches the published CLI surface,
@@ -161,6 +170,9 @@ Run additional manual live checks only when explicitly requested.
 - Dist-tag caveat: stable `latest` is release truth; if optional `beta` mirrors
   still point at a beta version, report it as a caveat, not a stable-release
   blocker, unless the user asked to verify beta promotion.
+- ClawHub caveat: distinguish “core release verified; ClawHub pending/failed”
+  from “all selected publication surfaces verified.” The former still permits
+  main closeout and the retrospective PR.
 - Track caveat: name the track and intentionally absent surfaces. Do not call
   missing regular-release artifacts an extended-stable failure.
 - Divergent checkout caveat: say when local source SHA differs from release tag

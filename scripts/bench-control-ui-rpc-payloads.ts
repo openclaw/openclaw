@@ -15,7 +15,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import { buffer } from "node:stream/consumers";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import {
@@ -48,7 +48,6 @@ import {
   waitForInitialProbe,
   writePluginFixtures,
 } from "./lib/gateway-bench-runtime.ts";
-import { generateTeamShapeFixture, parseTeamShapeOptions } from "./perf/team-shape-fixture.ts";
 
 const { values } = parseArgs({
   options: {
@@ -57,7 +56,10 @@ const { values } = parseArgs({
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
     "compare-entry": { type: "string" },
+    "fixture-source-root": { type: "string" },
+    "compare-fixture-source-root": { type: "string" },
     "restart-gateway-per-sample": { type: "boolean", default: false },
+    "fresh-browser": { type: "boolean", default: false },
     "fixture-now": { type: "string" },
     "cold-only": { type: "boolean", default: false },
     controlled: { type: "boolean", default: false },
@@ -128,8 +130,47 @@ const routes = (
     return selectedRoute;
   });
 const output = path.resolve(values.output);
-await mkdir(output, { recursive: false });
 const entry = path.resolve(values.entry);
+// Offline writers must use the schema owners that built this arm's Gateway.
+const fixtureSourceRoot = path.resolve(
+  values["fixture-source-root"] ?? path.dirname(path.dirname(entry)),
+);
+const fixtureSourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: fixtureSourceRoot,
+  encoding: "utf8",
+}).trim();
+const runtimeBuildInfo: { commit?: unknown } = JSON.parse(
+  await readFile(path.join(path.dirname(entry), "build-info.json"), "utf8"),
+);
+assert.equal(
+  fixtureSourceCommit,
+  runtimeBuildInfo.commit,
+  "Fixture source HEAD must match the selected runtime build-info commit",
+);
+const fixtureModule = (relativePath: string) =>
+  pathToFileURL(path.join(fixtureSourceRoot, relativePath)).href;
+const {
+  generateTeamShapeFixture,
+  parseTeamShapeOptions,
+}: typeof import("./perf/team-shape-fixture.ts") = await import(
+  fixtureModule("scripts/perf/team-shape-fixture.ts")
+);
+const {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+}: {
+  OPENCLAW_AGENT_SCHEMA_VERSION: number;
+  OPENCLAW_STATE_SCHEMA_VERSION: number;
+} = await import(fixtureModule("src/state/openclaw-schema-versions.ts"));
+const fixtureSource = {
+  root: fixtureSourceRoot,
+  commit: fixtureSourceCommit,
+  schemaVersions: {
+    agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+    state: OPENCLAW_STATE_SCHEMA_VERSION,
+  },
+};
+await mkdir(output, { recursive: false });
 const port = await getFreePort();
 const proxyPort = await getFreePort();
 const providerPort = await getFreePort();
@@ -162,8 +203,9 @@ const fixtureOptions = parseTeamShapeOptions([
   String(fixtureNow),
 ]);
 const configPath = path.join(root, "openclaw.json");
-await mkdir(root, { recursive: true });
-if (!values["first-run"]) {
+if (values["first-run"]) {
+  await mkdir(root);
+} else {
   await generateTeamShapeFixture(fixtureOptions);
 }
 const config = values["first-run"]
@@ -294,8 +336,11 @@ const identity = {
 const previousEnv = process.env;
 try {
   process.env = env;
-  const { requestDevicePairing } = await import("../src/infra/device-pairing.js");
-  const { approveDevicePairing } = await import("../src/infra/device-pairing-approval.js");
+  const { requestDevicePairing }: typeof import("../src/infra/device-pairing.js") = await import(
+    fixtureModule("src/infra/device-pairing.ts")
+  );
+  const { approveDevicePairing }: typeof import("../src/infra/device-pairing-approval.js") =
+    await import(fixtureModule("src/infra/device-pairing-approval.ts"));
   const scopes = [
     "operator.admin",
     "operator.read",
@@ -315,8 +360,12 @@ try {
     "approved",
   );
   // Keep host account names and portraits out of synthetic first-run captures.
-  const { ensureCanonicalGatewayOwnerProfile, setCanonicalUserProfileAvatar } =
-    await import("../src/state/user-profile-writes.js");
+  const {
+    ensureCanonicalGatewayOwnerProfile,
+    setCanonicalUserProfileAvatar,
+  }: typeof import("../src/state/user-profile-writes.js") = await import(
+    fixtureModule("src/state/user-profile-writes.ts")
+  );
   const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic RPC operator", { env });
   await setCanonicalUserProfileAvatar(
     owner.id,
@@ -327,13 +376,24 @@ try {
     "image/png",
     { env },
   );
-  const { closeOpenClawStateDatabaseAsync, runOpenClawStateWriteTransaction } =
-    await import("../src/state/openclaw-state-db.js");
+  const {
+    closeOpenClawStateDatabaseAsync,
+    runOpenClawStateWriteTransaction,
+  }: typeof import("../src/state/openclaw-state-db.js") = await import(
+    fixtureModule("src/state/openclaw-state-db.ts")
+  );
   if (!values["first-run"]) {
-    const { recordCronRunInDatabase } = await import("../src/cron/store/run-history.kernel.js");
-    const { cronRunLogEntryToDetail, cronRunStorageStatus } =
-      await import("../src/cron/run-history-detail.js");
-    const { cronStoreKey } = await import("../src/cron/store/key.js");
+    const { recordCronRunInDatabase }: typeof import("../src/cron/store/run-history.kernel.js") =
+      await import(fixtureModule("src/cron/store/run-history.kernel.ts"));
+    const {
+      cronRunLogEntryToDetail,
+      cronRunStorageStatus,
+    }: typeof import("../src/cron/run-history-detail.js") = await import(
+      fixtureModule("src/cron/run-history-detail.ts")
+    );
+    const { cronStoreKey }: typeof import("../src/cron/store/key.js") = await import(
+      fixtureModule("src/cron/store/key.ts")
+    );
     const storeKey = cronStoreKey(path.join(root, "cron", "jobs.json"));
     // Exclusive offline fixture custody; the compiled Gateway has not started.
     runOpenClawStateWriteTransaction(({ db }) => {
@@ -748,9 +808,11 @@ const report: {
   fixture: unknown;
   profile: string;
   entry: string;
+  fixtureSource: typeof fixtureSource;
   rpcObserver: boolean;
   serverProfile: boolean;
   restartGatewayPerSample: boolean;
+  freshBrowser: boolean;
   fixtureNow: number;
   observations: unknown[];
   journeys: unknown[];
@@ -768,9 +830,11 @@ const report: {
     : JSON.parse(await readFile(path.join(root, "team-shape-summary.json"), "utf8")),
   profile: values.profile,
   entry,
+  fixtureSource,
   rpcObserver: !values["no-rpc-observer"],
   serverProfile: values["server-profile"],
   restartGatewayPerSample: values["restart-gateway-per-sample"],
+  freshBrowser: values["fresh-browser"],
   fixtureNow,
   observations: [],
   journeys: [],
@@ -797,14 +861,16 @@ try {
       "CPU throttle requires Chromium",
     );
     const engineName = engine;
-    const browser = await (engine === "webkit"
-      ? webkit.launch({ headless: true })
-      : engine === "firefox"
-        ? firefox.launch({ headless: true })
-        : chromium.launch({
-            headless: true,
-            executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-          }));
+    const launchBrowser = () =>
+      engine === "webkit"
+        ? webkit.launch({ headless: true })
+        : engine === "firefox"
+          ? firefox.launch({ headless: true })
+          : chromium.launch({
+              headless: true,
+              executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+            });
+    let browser = await launchBrowser();
     activeBrowser = browser;
     try {
       for (let sample = 0; sample < Number(values.samples); sample++) {
@@ -818,6 +884,11 @@ try {
             break;
           }
           assert.equal(command.value, "sample");
+        }
+        if (values["fresh-browser"] && sample > 0) {
+          await browser.close();
+          browser = await launchBrowser();
+          activeBrowser = browser;
         }
         if (values["restart-gateway-per-sample"]) {
           await startGateway();
@@ -1355,6 +1426,11 @@ async function compare() {
   process.on("SIGTERM", interruptWorkers);
   try {
     for (const side of sides) {
+      const selectedFixtureSourceRoot =
+        side === "head"
+          ? values["fixture-source-root"]
+          : (values["compare-fixture-source-root"] ??
+            (values["compare-entry"] ? undefined : values["fixture-source-root"]));
       const childArgs = [
         "--output",
         path.join(destination, side),
@@ -1364,6 +1440,9 @@ async function compare() {
         path.resolve(side === "head" ? values.entry : (values["compare-entry"] ?? values.entry)),
         "--fixture-now",
         comparisonFixtureNow,
+        ...(selectedFixtureSourceRoot
+          ? ["--fixture-source-root", path.resolve(selectedFixtureSourceRoot)]
+          : []),
         "--engines",
         values.engines,
         "--routes",
@@ -1408,6 +1487,7 @@ async function compare() {
         "--prepare-ms",
         values["prepare-ms"],
         ...(values["restart-gateway-per-sample"] ? ["--restart-gateway-per-sample"] : []),
+        ...(values["fresh-browser"] ? ["--fresh-browser"] : []),
       ];
       const worker = spawn(
         process.execPath,

@@ -1,2 +1,0 @@
-# Regression coverage for bounded usage refresh and revoked read-schema admission.
-276

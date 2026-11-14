@@ -20,6 +20,7 @@ import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -57,6 +58,10 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import * as sourcePolicy from "./operator-role-source-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -71,9 +76,14 @@ import {
 } from "./operator-run-recovery.js";
 import {
   createOperatorRecoveryFixture,
+  expectCurrent,
+  expectRevoked,
   pairedOperator,
   persistDevices,
   recoveryFixture,
+  restoreFixture,
+  type RecoveryFixture,
+  withRecovery,
 } from "./operator-run-recovery.test-support.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -90,29 +100,6 @@ function modelRef(model: string) {
   return { provider: "fixture", model };
 }
 
-function expectCurrent(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.signal?.aborted).toBe(false);
-  expect(authority.assertCurrent).not.toThrow();
-}
-
-type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
-function withRecovery(
-  run: (
-    fixture: RecoveryFixture,
-    stateDir: string,
-    profile: ReturnType<typeof ensureProfileForEmail>,
-  ) => Promise<void>,
-  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
-) {
-  return withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-    const profile = ensureProfileForEmail("recovery@example.test");
-    await run(
-      await recoveryFixture(stateDir, profile.id, { device: pairedOperator(), ...overrides }),
-      stateDir,
-      profile,
-    );
-  });
-}
 function acceptedCaller(fixture: RecoveryFixture) {
   const caller = captureGatewayDeviceRevocation(
     fixture.context,
@@ -134,17 +121,47 @@ function acceptedCaller(fixture: RecoveryFixture) {
       }),
   };
 }
-function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.assertCurrent).toThrow();
-  expect(authority.signal?.aborted).toBe(true);
-}
-
-async function restoreFixture(fixture: RecoveryFixture) {
-  const source = expectDefined(await fixture.restore(), "restored operator source");
-  return { ...source, [Symbol.dispose]: source.release };
-}
 
 describe("scheduled authenticated operator source", () => {
+  it("refuses retained and recovered runs for an opaque role with no Gateway policy", () =>
+    withRecovery(async (fixture) => {
+      const principal: OpenClawIdTunnelPrincipal = {
+        kind: "member",
+        peerKey: `iroh:${"ab".repeat(32)}`,
+        accountId: "acct-guest",
+        role: "guest",
+        authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        fixture.client.internal!.openclawIdPrincipal = principal;
+        const caller = acceptedCaller(fixture);
+        try {
+          await expect(caller.capture()).rejects.toThrow(/authority/);
+        } finally {
+          caller.release();
+        }
+        const snapshot = expectDefined(
+          normalizeGatewayOperatorRecoverySnapshot({
+            ...fixture.snapshot,
+            openclawIdPrincipal: principal,
+          }),
+          "opaque role survives recovery decoding",
+        );
+        expect(snapshot.openclawIdPrincipal).toEqual(principal);
+        await expect(
+          restoreGatewayOperatorSource({
+            snapshot,
+            target: fixture.target,
+            context: fixture.context,
+            assertCurrent: () => {},
+          }),
+        ).rejects.toThrow("OpenClaw ID membership authority changed");
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
+    }));
+
   it.each(["pending", "uncertain"] as const)(
     "refuses cached profile facts while their mutation is %s",
     (outcome) =>
@@ -538,7 +555,7 @@ describe("scheduled authenticated operator source", () => {
           await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
           await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
           expect(restored.authority.assertCurrent).toThrow();
-          await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+          await expect(restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
         } finally {
           restored.release();
         }
@@ -568,6 +585,40 @@ describe("scheduled authenticated operator source", () => {
       },
       { tokenlessDevice: true },
     ));
+  it("recovers a source with a handshake-attested OpenClaw ID origin marker", () =>
+    withRecovery(async (fixture) => {
+      fixture.client.authPolicy = captureGatewayAuthPolicy(fixture.context.getRuntimeConfig(), {
+        ...fixture.client.authPolicy,
+        browserOrigin: {
+          requestHost: "localhost",
+          origin: "http://localhost",
+          isLocalClient: true,
+          openclawIdTunnel: true,
+        },
+      });
+      const caller = acceptedCaller(fixture);
+      const captured = expectDefined(await caller.capture(), "captured source");
+      try {
+        const source = expectDefined(
+          captureQueuedOperatorRecoverySource(captured.authority),
+          "captured recovery source",
+        );
+        expect(source.kind).toBe("gateway");
+        const restored = await restoreGatewayQueuedOperatorRecovery({
+          source,
+          context: fixture.context,
+          assertCurrent: () => {},
+        });
+        try {
+          expectCurrent(restored.authority);
+        } finally {
+          restored.release();
+        }
+      } finally {
+        captured.release();
+        caller.release();
+      }
+    }));
   it.each(["before capture", "after admission", "after restoration"] as const)(
     "revokes the original device authority on Gateway retirement %s",
     (timing) =>
@@ -695,7 +746,9 @@ describe("scheduled authenticated operator source", () => {
           owner.publish({ current: generation, required: null });
           expect(restored.authority.assertCurrent).toThrow("authority changed");
         } else {
-          await expect(fixture.restore()).rejects.toThrow("authentication owner changed");
+          await expect(fixture.restore()).rejects.toThrow(
+            GatewayOperatorRecoveryAuthorizationError,
+          );
         }
       }),
   );
@@ -763,7 +816,7 @@ describe("scheduled authenticated operator source", () => {
             gatewayAccessGrant: original,
           });
           permitted = false;
-          await expect(fixture.restore()).rejects.toThrow("Gateway access is not active");
+          await expect(fixture.restore()).rejects.toThrow("[access-cause=grant-revoked]");
           permitted = true;
           resume.mockClear();
           using restored = await restoreFixture(fixture);
@@ -946,7 +999,7 @@ describe("scheduled authenticated operator source", () => {
       } satisfies GatewayOperatorRoleDefinition;
       const cfg = {
         agents: { defaults: { model: "fixture/a" } },
-        gateway: { roles: { definitions: { operator } } },
+        gateway: { roles: { default: "operator", definitions: { operator } } },
       } satisfies OpenClawConfig;
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,

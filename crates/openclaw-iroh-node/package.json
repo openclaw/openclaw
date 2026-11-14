@@ -7,7 +7,7 @@
   "main": "index.js",
   "types": "index.d.ts",
   "scripts": {
-    "build": "npx --yes @napi-rs/cli@3.10.9 build --platform --release --strip",
+    "build": "npx --yes --package=@napi-rs/cli@3.10.9 -- napi build --platform --release --strip",
     "test": "node --test test/*.test.cjs"
   },
   "engines": {

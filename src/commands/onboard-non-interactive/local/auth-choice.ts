@@ -9,7 +9,7 @@ import type {
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderNonInteractiveApiKeyResult,
   ProviderResolveNonInteractiveApiKeyParams,
-} from "../../../plugins/provider-authentication.types.js";
+} from "../../../plugins/provider-auth-types.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import { ExitError, type RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";

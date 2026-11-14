@@ -80,14 +80,13 @@ it("filters by URL or resource type and clears the full network buffer", async (
   const requests = [byUrl, byType, { id: "3", url: "https://x/logo", resourceType: "image" }];
   const state = {
     ...session.ensurePageState(),
-    requests: new Map(requests.map((request) => [request.id, request])),
-    requestIds: new WeakMap(),
+    readNetworkRequests: vi.fn(() => requests),
   };
   session.ensurePageState.mockReturnValueOnce(state);
   expect(await readRequests({ ...target, filter: "fetch", clear: true })).toEqual({
     requests: [byUrl, byType],
   });
-  expect(state.requests).toEqual(new Map());
+  expect(state.readNetworkRequests).toHaveBeenCalledWith(true);
 });
 
 it("treats warn as warning priority", async () => {

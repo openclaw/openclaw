@@ -49,11 +49,10 @@ async function fixture() {
   })) {
     vi.stubEnv(key, value);
   }
-  const { plan } = await makeProvenancePlan(
-    home,
-    { schemaVersion: 1, agent: { id: "worker" } },
-    { openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["read"] } } } },
-  );
+  const { plan } = await makeProvenancePlan(home, {
+    schemaVersion: 1,
+    agent: { id: "worker", tools: { allow: ["read"] } },
+  });
   seedLegacyTemplateInstall(plan, { env: process.env });
   const { id, ...agent } = plan.agent.config;
   const config = {

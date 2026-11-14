@@ -37,13 +37,13 @@ import {
 } from "./launchd-install.test-support.js";
 import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
 import * as launchdRuntime from "./launchd-runtime.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   isLaunchAgentEnabled,
   readLaunchAgentProgramArguments,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
-  resolveLaunchAgentPlistPath,
   startLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -855,6 +855,29 @@ describe("launchd install", () => {
     expect(state.cleanupProtectedPids).toEqual([4242]);
     expectCommands("print print print");
     expect(state.files.get(plistPath)).toBe(originalPlist);
+    expect(state.fileWrites).toHaveLength(0);
+  });
+
+  it("reloads the LaunchAgent when Doctor restoration fails on an unowned listener", async () => {
+    const env = createLaunchdEnvWithGatewayPort("19002");
+    setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    cleanStaleGatewayProcessesSync.mockImplementationOnce(() => []);
+    mockPort(19002, "busy", [{ pid: 5151, address: "TCP 127.0.0.1:19002 (LISTEN)" }]);
+
+    await expect(
+      restartLaunchAgent(
+        launchAgentControlFixture(env, {
+          preserveDefinition: true,
+          preserveAutoStart: true,
+        }),
+      ),
+    ).rejects.toThrow("is loaded; launchd can retry its KeepAlive job");
+
+    expect(state.serviceLoaded).toBe(true);
+    expect(state.launchctlCalls.some(([command]) => command === "bootstrap")).toBe(true);
+    expect(state.launchctlCalls.some(([command]) => command === "kickstart")).toBe(false);
     expect(state.fileWrites).toHaveLength(0);
   });
 

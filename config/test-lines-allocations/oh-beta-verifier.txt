@@ -1,2 +1,0 @@
-163
-# Direct verifier regression: official ClawHub digest shapes, source rejection, and exact retained artifact/version.

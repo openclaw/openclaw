@@ -98,6 +98,7 @@ suite.define(() => {
       await page.keyboard.press("ControlOrMeta+K");
       const palette = page.locator("openclaw-command-palette");
       const input = palette.locator(".cmd-palette__input");
+      await input.press("Tab");
       await input.fill("Keep preparation out of errors");
       const start = palette.locator(".cmd-palette__create");
       expect(await start.isDisabled()).toBe(true);
