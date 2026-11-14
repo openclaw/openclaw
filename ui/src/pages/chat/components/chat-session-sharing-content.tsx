@@ -321,6 +321,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     visibility() !== "shared" &&
     visibility() !== "draft" &&
     props.membersAvailable !== false &&
+    (!props.state?.error || Boolean(result())) &&
     (!result() ||
       Boolean(props.state?.read) ||
       Boolean(props.state?.error) ||
