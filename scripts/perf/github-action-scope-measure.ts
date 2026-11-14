@@ -220,7 +220,9 @@ if (values.counts) {
         needle,
         counter === "sharing.deepEqual"
           ? `${key}?.count?.(${JSON.stringify(counter)});\n${needle}`
-          : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
+          : counter === "sharing.currency"
+            ? `${needle}\n${key}?.count?.(${JSON.stringify(counter)});\n${key}?.currency?.(readCurrent);`
+            : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
       ),
     );
   }
@@ -261,6 +263,7 @@ import { it, expect } from "vitest";
 import fs from "node:fs/promises";
 import { loadavg } from "node:os";
 import { Session } from "node:inspector/promises";
+import { createHook, executionAsyncId } from "node:async_hooks";
 import { startVisitorPublicationFixture, createRequesterPublicationFixture, capturePublicationGuest } from "./github-publication-requester.test-support.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -296,7 +299,8 @@ it("measures actions at the registered boundary with a large authority inventory
  const cpuProfile=process.env.LANE2458_CPU_PROFILE==="1";
  const heap=process.env.LANE2450_ALLOC==="1" || cpuProfile ? new Session():undefined;heap?.connect();
  if(cpuProfile)await heap.post("Profiler.enable");
- const state = {arm:"baseline",count:undefined};
+ const state = {arm:"baseline",count:undefined,currency:undefined};
+ const censusHook=process.env.LANE2450_COUNTS==="1" ? createHook({before(){}}).enable():undefined;
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
  const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
  let i=0;
@@ -328,7 +332,11 @@ it("measures actions at the registered boundary with a large authority inventory
   i++;state.arm=arm;
   if(publication)await fs.writeFile(f.local!.cwd+"/artifact.txt",\`Publication fixture \${i}\\n\`);
   const counts={};
-  if(process.env.LANE2450_COUNTS==="1")state.count=(key)=>counts[key]=(counts[key]??0)+1;
+  const currencySteps=new Map();
+  if(process.env.LANE2450_COUNTS==="1"){
+   state.count=(key)=>counts[key]=(counts[key]??0)+1;
+   state.currency=(owner)=>{const id=executionAsyncId();let seen=currencySteps.get(id);if(!seen)currencySteps.set(id,seen=new Set());if(!seen.has(owner)){seen.add(owner);state.count("sharing.uniqueCurrencyPerAsyncStep");}};
+  }
   let maxSegment=0,last=performance.now();
   const synchronous=action==="assert" || action==="model";
   const timer=synchronous ? undefined : setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
@@ -338,6 +346,7 @@ it("measures actions at the registered boundary with a large authority inventory
   const iterations=synchronous ? Math.ceil(1024/depth) : 1;
   let result;
   for(let iteration=0;iteration<iterations;iteration++){
+  currencySteps.clear();
   const callStarted=performance.now();
   result=action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
   if(synchronous)maxSegment=Math.max(maxSegment,performance.now()-callStarted);
@@ -347,6 +356,7 @@ it("measures actions at the registered boundary with a large authority inventory
   let allocatedBytes;
   if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);}
   state.count=undefined;
+  state.currency=undefined;
   if(synchronous)expect(result).toBeUndefined();
   else if(publication)expect(result.status).toBe("published");
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
@@ -357,7 +367,7 @@ it("measures actions at the registered boundary with a large authority inventory
  if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".depth"+depth+".cpuprofile",JSON.stringify(profile));}
  } finally {for(const release of releases.toReversed())release();}
  }
- heap?.disconnect();subagentRuns.clear();
+ heap?.disconnect();censusHook?.disable();subagentRuns.clear();
  delete globalThis[Symbol.for("openclaw.benchmark.githubActionScope")];
  await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,rows},null,2));
 },600000);
