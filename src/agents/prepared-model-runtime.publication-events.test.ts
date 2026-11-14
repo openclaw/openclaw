@@ -38,6 +38,35 @@ describe("catalog attempt status publication", () => {
     },
   );
 
+  it("discloses recorded acquisition failures as unavailable provider outcomes", () => {
+    const reporter = createCatalogAttemptReporter(
+      {},
+      { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+      () => true,
+      () => {},
+    );
+    const catalog = reporter.withRefreshStatus({
+      entries: [],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "healthy", status: "ready" }],
+    });
+    expect(catalog.providerOutcomes).toHaveLength(1);
+    reporter.failed(new Error("catalog request timed out"), ["unreachable"], "provider");
+    const disclosed = (catalog.providerOutcomes ?? []).filter(
+      (outcome) => outcome.provider === "unreachable",
+    );
+    expect(disclosed).toEqual([{ provider: "unreachable", status: "unavailable" }]);
+    // A provider with its own determinate outcome is not shadowed by the aggregate.
+    expect(
+      (catalog.providerOutcomes ?? []).find((outcome) => outcome.provider === "healthy")?.status,
+    ).toBe("ready");
+    // Settling the failed provider withdraws the synthesized disclosure.
+    reporter.published(["unreachable"], "provider");
+    expect(
+      (catalog.providerOutcomes ?? []).some((outcome) => outcome.provider === "unreachable"),
+    ).toBe(false);
+  });
+
   it("reports partial and complete native settlement without marking model facts changed", () => {
     const kind = "native";
     const events = vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();

@@ -133,6 +133,30 @@ export function createCatalogAttemptReporter(
       ) {
         catalog.authoritative = false;
       }
+      // Recorded acquisition failures carry no discovery outcome of their own;
+      // surface them so consumers can disclose the failing provider scope
+      // behind the aggregate refreshFailed flag instead of a bare flag.
+      const ownOutcomes = catalog.providerOutcomes;
+      Object.defineProperty(catalog, "providerOutcomes", {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+          // Undefined entries record failures before a provider scope starts;
+          // they cannot be attributed to a provider outcome.
+          const attributedFailed = [
+            ...attempt.failedProviders.provider,
+            ...attempt.failedProviders.native,
+          ].filter((provider): provider is string => provider !== undefined);
+          if (!attributedFailed.length) {
+            return ownOutcomes;
+          }
+          const covered = new Set((ownOutcomes ?? []).map((o) => o.provider));
+          const synthesized = attributedFailed
+            .filter((provider) => !covered.has(provider))
+            .map((provider) => ({ provider, status: "unavailable" as const }));
+          return synthesized.length ? [...(ownOutcomes ?? []), ...synthesized] : ownOutcomes;
+        },
+      });
       Object.defineProperty(catalog, "pendingProviders", {
         enumerable: true,
         configurable: true,
