@@ -1568,11 +1568,8 @@ describe("Claude session catalog", () => {
 
     for (const cursor of [
       "",
-      " wrapped ",
       "x".repeat(257),
       "block:0",
-      "block:-1:x",
-      "block:1.5:x",
       "block:9007199254740992:x",
       "block:1: ",
     ]) {

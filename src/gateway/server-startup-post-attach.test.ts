@@ -112,8 +112,8 @@ function composeTrackedPublisher(
 
 function createSidecarParams(
   overrides: Partial<GatewaySidecarsParams> = {},
+  params: PostAttachParams = createPostAttachParams(),
 ): GatewaySidecarsParams {
-  const params = createPostAttachParams();
   return {
     scheduler: params.scheduler,
     cfg: params.gatewayPluginConfigAtStart,
@@ -133,8 +133,11 @@ function createSidecarParams(
   };
 }
 
-function startGatewaySidecars(overrides: Partial<GatewaySidecarsParams> = {}) {
-  return startGatewaySidecarsImpl(createSidecarParams(overrides));
+function startGatewaySidecars(
+  overrides: Partial<GatewaySidecarsParams> = {},
+  params?: PostAttachParams,
+) {
+  return startGatewaySidecarsImpl(createSidecarParams(overrides, params));
 }
 
 function transferBeforeStop(sidecar: SidecarHandle): void {
@@ -415,19 +418,15 @@ describe("startGatewayPostAttachRuntime", () => {
       return loading.promise;
     });
     const params = createPostAttachParams();
-    const starting = startGatewaySidecars({
-      cfg: { hooks: { internal: { enabled: true } } },
-      pluginRegistry: params.pluginRegistry,
-      defaultWorkspaceDir: params.defaultWorkspaceDir,
-      deps: params.deps,
-      startChannels: params.startChannels,
-      shouldStartChannels: () => !closing,
-      shouldCreatePostReadySidecars: () => !closing,
-      shouldStartPluginServices: () => !closing,
-      log: params.log,
-      logHooks: params.logHooks,
-      logChannels: params.logChannels,
-    });
+    const starting = startGatewaySidecars(
+      {
+        cfg: { hooks: { internal: { enabled: true } } },
+        shouldStartChannels: () => !closing,
+        shouldCreatePostReadySidecars: () => !closing,
+        shouldStartPluginServices: () => !closing,
+      },
+      params,
+    );
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -1045,20 +1044,25 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("does not start plugin services when close begins while scheduling channels", async () => {
+  it("does not publish services or post-ready sidecars when close begins while scheduling channels", async () => {
     const channels = createDeferred();
     let closing = false;
     const onPluginServices = vi.fn();
     const onSidecarsReady = vi.fn();
+    const onPostReadySidecars = vi.fn<SidecarPublisher>();
     const startChannels = vi.fn(() => {
       closing = true;
       return channels.promise;
     });
     const runtime = await startGatewayPostAttachRuntime(
       createPostAttachParams({
+        gatewayPluginConfigAtStart: {
+          hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+        },
         sidecarStartup: "defer",
         onPluginServices,
         onSidecarsReady,
+        onPostReadySidecars,
         startChannels,
         isClosing: () => closing,
       }),
@@ -1070,6 +1074,9 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(onSidecarsReady).not.toHaveBeenCalled();
       expect(hoisted.startPluginServices).not.toHaveBeenCalled();
       expect(onPluginServices).not.toHaveBeenCalled();
+      expect(publishedPostReadySidecars.size).toBe(0);
+      expect(onPostReadySidecars).not.toHaveBeenCalled();
+      expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     } finally {
       channels.resolve();
       await runtime.startupSettled;
@@ -1125,19 +1132,16 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     let closing = false;
     const base = createPostAttachParams();
-    const sidecarsPromise = startGatewaySidecars({
-      cfg: base.cfgAtStart,
-      pluginRegistry: registry,
-      defaultWorkspaceDir: base.defaultWorkspaceDir,
-      deps: base.deps,
-      shouldStartPluginServices: () => !closing,
-      shouldCreatePostReadySidecars: () => false,
-      onPluginServices,
-      broadcastPluginEvent,
-      log: base.log,
-      logHooks: base.logHooks,
-      logChannels: base.logChannels,
-    });
+    const sidecarsPromise = startGatewaySidecars(
+      {
+        pluginRegistry: registry,
+        shouldStartPluginServices: () => !closing,
+        shouldCreatePostReadySidecars: () => false,
+        onPluginServices,
+        broadcastPluginEvent,
+      },
+      base,
+    );
     try {
       await siblingStarted.promise;
       const owner = generation.currentServices();
@@ -1202,19 +1206,16 @@ describe("startGatewayPostAttachRuntime", () => {
     const connectionWork = new GatewayConnectionWork();
     const base = createPostAttachParams();
     const operation = Promise.resolve().then(() =>
-      startGatewaySidecars({
-        cfg: base.cfgAtStart,
-        pluginRegistry: registry,
-        defaultWorkspaceDir: base.defaultWorkspaceDir,
-        deps: base.deps,
-        shouldCreatePostReadySidecars: () => false,
-        onPluginServices: (handle) => {
-          generation.setServices(handle);
+      startGatewaySidecars(
+        {
+          pluginRegistry: registry,
+          shouldCreatePostReadySidecars: () => false,
+          onPluginServices: (handle) => {
+            generation.setServices(handle);
+          },
         },
-        log: base.log,
-        logHooks: base.logHooks,
-        logChannels: base.logChannels,
-      }),
+        base,
+      ),
     );
     const starting = connectionWork.track(() => operation);
     let replacing: Promise<unknown> | undefined;
@@ -1660,81 +1661,85 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("runs Gmail watcher after sidecars are ready", async () => {
-    let resolveWatcher: (() => void) | undefined;
-    let watcherSignal: AbortSignal | undefined;
-    hoisted.startGmailWatcherWithLogs.mockImplementationOnce(
-      async (...args: unknown[]) =>
-        await new Promise<void>((resolve) => {
-          const [params] = args as [{ signal?: AbortSignal }];
-          watcherSignal = params.signal;
-          resolveWatcher = resolve;
-        }),
-    );
-    let sidecarStartReturned = false;
-    const onPostReadySidecars = vi.fn<SidecarPublisher>();
-    const log = { warn: vi.fn() };
-
-    const result = await startGatewaySidecars({
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-      } as never,
-      onPostReadySidecars: (...sidecars) => {
-        expect(sidecarStartReturned).toBe(false);
-        onPostReadySidecars(...sidecars);
-      },
-      log,
-    });
-    sidecarStartReturned = true;
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-    expect(onPostReadySidecars).toHaveBeenCalledWith(...publishedPostReadySidecars);
-
-    await waitForGatewayTestState(() => {
-      expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledTimes(1);
-    });
-    expect(watcherSignal?.aborted).toBe(false);
-    expect(log.warn).not.toHaveBeenCalled();
-
-    if (!resolveWatcher) {
-      throw new Error("Expected gmail watcher resolver to be initialized");
-    }
-    const postReadySidecars = [...publishedPostReadySidecars];
-    for (const sidecar of postReadySidecars) {
-      await stopTrackedSidecar(sidecar);
-    }
-    expect(watcherSignal?.aborted).toBe(true);
-    resolveWatcher();
-  });
-
-  it("does not create post-ready sidecars when close begins while scheduling channels", async () => {
-    const channels = createDeferred();
-    let closing = false;
-    const startChannels = vi.fn(() => {
-      closing = true;
-      return channels.promise;
-    });
-    const onPostReadySidecars = vi.fn<SidecarPublisher>();
-    const starting = startGatewaySidecars({
-      cfg: { hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } } },
-      startChannels,
-      onPostReadySidecars,
-      shouldCreatePostReadySidecars: () => !closing,
-    });
-    try {
-      await waitForGatewayTestState(() => expect(startChannels).toHaveBeenCalledOnce());
-      channels.resolve();
-      expect(await starting).toBe(0);
-      expect(publishedPostReadySidecars.size).toBe(0);
-      expect(onPostReadySidecars).not.toHaveBeenCalled();
+  it.each(["running", "failed"] as const)(
+    "publishes Gmail watcher and model validation after readiness (%s watcher)",
+    async (outcome) => {
+      const watcher = createDeferred();
+      let watcherSignal: AbortSignal | undefined;
+      hoisted.startGmailWatcherWithLogs.mockImplementationOnce(async (...args: unknown[]) => {
+        watcherSignal = (args[0] as { signal?: AbortSignal }).signal;
+        if (outcome === "failed") {
+          throw new Error("boom");
+        }
+        await watcher.promise;
+      });
+      hoisted.resolveHooksGmailModel.mockReturnValueOnce({ provider: "openai", model: "gpt-5.4" });
+      hoisted.loadModelCatalog.mockImplementationOnce(async (options: unknown) => {
+        const scoped = options as {
+          readOnly?: boolean;
+          providerDiscoveryProviderIds?: string[];
+          scopedLiveProviderDiscovery?: boolean;
+        };
+        if (
+          scoped.readOnly !== true ||
+          scoped.scopedLiveProviderDiscovery !== undefined ||
+          scoped.providerDiscoveryProviderIds !== undefined
+        ) {
+          return await hoisted.loadFullModelCatalog();
+        }
+        return [];
+      });
+      let sidecarStartReturned = false;
+      const onPostReadySidecars = vi.fn<SidecarPublisher>();
+      const log = { warn: vi.fn() };
+      const result = await startGatewaySidecars({
+        cfg: {
+          hooks: {
+            enabled: true,
+            internal: { enabled: false },
+            gmail: { account: "me", model: "openai/gpt-5.4" },
+          },
+        },
+        onPostReadySidecars: (...sidecars) => {
+          expect(sidecarStartReturned).toBe(false);
+          onPostReadySidecars(...sidecars);
+        },
+        log,
+      });
+      sidecarStartReturned = true;
+      expect(result).toBe(4);
+      expect(publishedPostReadySidecars.size).toBe(4);
       expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
-    } finally {
-      channels.resolve();
-      await starting;
-    }
-  });
+      expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
+      expect(onPostReadySidecars).toHaveBeenCalledWith(...publishedPostReadySidecars);
+      try {
+        await waitForGatewayTestState(() => {
+          expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledOnce();
+          expect(hoisted.getModelRefStatus).toHaveBeenCalledWith(
+            expect.objectContaining({ ref: { provider: "openai", model: "gpt-5.4" } }),
+          );
+          if (outcome === "failed") {
+            expect(log.warn).toHaveBeenCalledWith(
+              "sidecars.gmail-watch failed after gateway ready: Error: boom",
+            );
+          }
+        });
+        expect(hoisted.loadModelCatalog).toHaveBeenCalledExactlyOnceWith({
+          config: expect.any(Object),
+          readOnly: true,
+        });
+        expect(hoisted.loadFullModelCatalog).not.toHaveBeenCalled();
+        expect(watcherSignal?.aborted).toBe(false);
+        if (outcome === "running") {
+          expect(log.warn).not.toHaveBeenCalled();
+        }
+      } finally {
+        await stopTrackedSidecars(publishedPostReadySidecars);
+        watcher.resolve();
+      }
+      expect(watcherSignal?.aborted).toBe(true);
+    },
+  );
 
   it("retires queued producers before received work permits sidecar cleanup", async () => {
     vi.useFakeTimers();
@@ -1865,17 +1870,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.hasInternalHookListeners.mockReturnValueOnce(true);
     hoisted.triggerInternalHook.mockReturnValueOnce(hook.promise);
     const params = createPostAttachParams();
-    await startGatewaySidecars({
-      cfg: params.cfgAtStart,
-      pluginRegistry: params.pluginRegistry,
-      defaultWorkspaceDir: params.defaultWorkspaceDir,
-      deps: params.deps,
-      startChannels: params.startChannels,
-      shouldCreatePostReadySidecars: () => !closing,
-      log: params.log,
-      logHooks: params.logHooks,
-      logChannels: params.logChannels,
-    });
+    await startGatewaySidecars({ shouldCreatePostReadySidecars: () => !closing }, params);
     try {
       await vi.advanceTimersByTimeAsync(250);
       expect(hoisted.triggerInternalHook).toHaveBeenCalledOnce();
@@ -1893,44 +1888,6 @@ describe("startGatewayPostAttachRuntime", () => {
         await stopTrackedSidecar(sidecar);
       }
     }
-  });
-
-  it("logs post-ready Gmail watcher failures without delaying sidecar readiness", async () => {
-    const log = { warn: vi.fn() };
-    hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("boom"));
-
-    const result = await startGatewaySidecars({
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-      } as never,
-      log,
-    });
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    await waitForGatewayTestState(() => {
-      expect(log.warn).toHaveBeenCalledWith(
-        "sidecars.gmail-watch failed after gateway ready: Error: boom",
-      );
-    });
-  });
-
-  it("cancels a post-ready Gmail watcher before the immediate starts", async () => {
-    const result = await startGatewaySidecars({
-      cfg: {
-        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
-      } as never,
-    });
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    const postReadySidecars = [...publishedPostReadySidecars];
-    for (const sidecar of postReadySidecars) {
-      await stopTrackedSidecar(sidecar);
-    }
-    await nextEventLoopTurn();
-
-    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
 
   it.each(["sidecar stop", "close prelude"] as const)(
@@ -2257,32 +2214,35 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
-  it("cancels registered gateway startup hooks when close starts", async () => {
-    vi.useFakeTimers();
-    hoisted.hasInternalHookListeners.mockReturnValue(true);
-    const trace = createStartupTraceRecorder();
-    const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
-
-    const result = await startGatewaySidecars({
-      cfg: {} as never,
-      startupTrace: trace.startupTrace,
-      waitForPostReadyWork: () => postReadyWork,
-    });
-
-    expect(result).toBe(3);
-    expect(publishedPostReadySidecars.size).toBe(3);
-    const postReadySidecars = [...publishedPostReadySidecars];
-    for (const sidecar of postReadySidecars) {
-      await stopTrackedSidecar(sidecar);
-    }
-    releasePostReadyWork();
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(hoisted.createInternalHookEvent).not.toHaveBeenCalled();
-    expect(hoisted.triggerInternalHook).not.toHaveBeenCalled();
-    expect(trace.measures).not.toContain("sidecars.session-locks");
-    expect(trace.measures).not.toContain("sidecars.restart-sentinel");
-  });
+  it.each(["before immediate", "waiting for post-ready work"] as const)(
+    "cancels queued Gmail and startup hooks %s",
+    async (boundary) => {
+      vi.useFakeTimers();
+      hoisted.hasInternalHookListeners.mockReturnValue(true);
+      const trace = createStartupTraceRecorder();
+      const ready = createDeferred();
+      const result = await startGatewaySidecars({
+        cfg: { hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } } },
+        startupTrace: trace.startupTrace,
+        ...(boundary === "waiting for post-ready work"
+          ? { waitForPostReadyWork: () => ready.promise }
+          : {}),
+      });
+      expect(result).toBe(4);
+      expect(publishedPostReadySidecars.size).toBe(4);
+      if (boundary === "waiting for post-ready work") {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await stopTrackedSidecars(publishedPostReadySidecars);
+      ready.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+      expect(hoisted.createInternalHookEvent).not.toHaveBeenCalled();
+      expect(hoisted.triggerInternalHook).not.toHaveBeenCalled();
+      expect(trace.measures).not.toContain("sidecars.session-locks");
+      expect(trace.measures).not.toContain("sidecars.restart-sentinel");
+    },
+  );
 
   it.each([
     { direction: "forward", shiftedWallClockMs: 10_000, monotonicMs: 50, timedOut: false },
@@ -2382,19 +2342,13 @@ describe("startGatewayPostAttachRuntime", () => {
           return managerModule;
         });
         await startFreshGatewaySidecars(
-          createSidecarParams({
-            scheduler: params.scheduler,
-            cfg: { ...params.cfgAtStart, acp: { enabled: true, backend: "acpx" } },
-            pluginRegistry: params.pluginRegistry,
-            defaultWorkspaceDir: params.defaultWorkspaceDir,
-            deps: params.deps,
-            startChannels: params.startChannels,
-            shouldCreatePostReadySidecars: () => !closing,
-            onPostReadySidecars: composeTrackedPublisher(publishedPostReadySidecars, undefined),
-            log: params.log,
-            logHooks: params.logHooks,
-            logChannels: params.logChannels,
-          }),
+          createSidecarParams(
+            {
+              cfg: { ...params.cfgAtStart, acp: { enabled: true, backend: "acpx" } },
+              shouldCreatePostReadySidecars: () => !closing,
+            },
+            params,
+          ),
         );
         if (boundary === "backend readiness") {
           await waitForGatewayTestState(() =>

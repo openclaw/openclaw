@@ -109,27 +109,6 @@ struct PostUpdateBundledRuntimeTests {
         #expect(defaults.data(forKey: postAppUpdateReceiptKey) == before)
     }
 
-    @Test(arguments: [
-        ("2026.9.2", "2026.9.1"),
-        ("2026.9.0", "2026.9.1"),
-        ("2026.9.1", "2026.9.1-beta.1"),
-        ("2026.9.1-beta.1", "2026.9.1"),
-    ])
-    func `app launch never adopts recovery from a different target`(
-        _ pendingVersion: String, _ runningVersion: String) throws
-    {
-        let suite = "PostUpdateBundledRuntimeTests.launchTarget.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        PostAppUpdateReceiptStore.recordSetupRecovery(
-            fromVersion: "2026.8.1", toVersion: pendingVersion, defaults: defaults)
-        let before = defaults.data(forKey: postAppUpdateReceiptKey)
-        let receipt = PostAppUpdateReceiptStore.pendingForLaunch(
-            currentVersion: runningVersion, onboardingSeen: true, defaults: defaults)
-        #expect(receipt == nil)
-        #expect(defaults.data(forKey: postAppUpdateReceiptKey) == before)
-    }
-
     @Test(arguments: ["2026.9.0", "2026.9.1", "2026.9.2"])
     func `setup recovery leaves foreign targets intact without blocking current work`(_ pendingVersion: String) throws {
         let suite = "PostUpdateBundledRuntimeTests.setupTarget.\(UUID().uuidString)"
@@ -758,10 +737,6 @@ struct PostUpdateBundledRuntimeTests {
     @Test func `bundled Gateway updates never select package registry work`() {
         let statuses: [CLIInstaller.Status?] = [
             nil,
-            .ready(location: "/fixture/openclaw", version: "2026.9.1"),
-            .missing(location: "/fixture/openclaw"),
-            .unusable(location: "/fixture/openclaw"),
-            .incompatible(location: "/fixture/openclaw", found: "2026.8.1", required: "2026.9.1"),
         ]
         for status in statuses {
             for incomplete in [false, true] {

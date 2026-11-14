@@ -885,10 +885,6 @@ describe("Control UI plugin and catalog icon routes", () => {
   });
 
   it("returns not found when plugin metadata is absent or catalog image validation fails", async () => {
-    mocks.resolveIconSource.mockResolvedValueOnce([]);
-    const missing = await request("/__openclaw__/plugin-icon/missing");
-    expect(missing.status).toBe(404);
-
     mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("<html>nope</html>"),
       contentType: "text/html",

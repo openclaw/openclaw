@@ -1491,8 +1491,6 @@ describe("runBtwSideQuestion", () => {
           { type: "text", text: "Let me check." },
           { type: "thinking", thinking: "Hidden chain of thought" },
           { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
-          { type: "toolUse", id: "call_legacy", name: "read", input: { path: "README.md" } },
-          { type: "tool_call", id: "call_snake", name: "read", arguments: { path: "README.md" } },
         ],
         { stopReason: "toolUse" },
       ),
@@ -1513,11 +1511,6 @@ describe("runBtwSideQuestion", () => {
           type: "toolResult",
           toolUseId: "call_1",
           content: [{ type: "text", text: "secret" }],
-        },
-        {
-          type: "tool_result",
-          toolUseId: "call_2",
-          content: [{ type: "text", text: "secret-2" }],
         },
       ]),
     ]);

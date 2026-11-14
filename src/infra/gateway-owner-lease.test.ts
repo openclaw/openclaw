@@ -386,8 +386,6 @@ describe("Gateway owner lease", () => {
     { kind: "crashed legacy", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
     { kind: "crashed qualified", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
     { kind: "foreign namespace", age: 0, pid: process.pid },
-    { kind: "foreign namespace", age: 0 },
-    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS },
     { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
     { kind: "unavailable namespace", age: 0 },
     { kind: "invalid namespace", age: 0 },

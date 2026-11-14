@@ -784,127 +784,60 @@ describe("gateway config methods", () => {
 describe("gateway config methods", () => {
   installConfigWriteGatewayHooks();
 
-  it("accepts runtime-shaped config.set when bundled provider baseUrl was only defaulted", async () => {
-    const { createConfigIO } = await import("../config/config.js");
-    const configPath = createConfigIO().configPath;
-    try {
-      await writeJsonFile(configPath, {
-        models: {
-          providers: {
-            openai: {
-              agentRuntime: { id: "openclaw" },
+  it.each([
+    { method: "config.set", authoredModels: false, port: 19002 },
+    { method: "config.patch", authoredModels: false, port: 19003 },
+    { method: "config.patch", authoredModels: true, port: 19004 },
+  ] as const)(
+    "preserves provider source ownership through $method (authored models: $authoredModels)",
+    async ({ method, authoredModels, port }) => {
+      const { createConfigIO } = await import("../config/config.js");
+      const configPath = createConfigIO().configPath;
+      try {
+        await writeJsonFile(configPath, {
+          models: {
+            providers: {
+              openai: {
+                agentRuntime: { id: "openclaw" },
+                ...(authoredModels ? { models: [] } : {}),
+              },
             },
           },
-        },
-      });
-      invalidateConfigGetResponseCache();
-
-      const current = await getCurrentConfigObject();
-      const nextConfig = structuredClone(current.runtimeConfig);
-      const providers = ((nextConfig.models as Record<string, unknown>).providers ?? {}) as Record<
-        string,
-        Record<string, unknown>
-      >;
-      providers.openai ??= {};
-      providers.openai.baseUrl = "";
-      providers.openai.models = [];
-
-      const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
-      gateway.port = 19002;
-
-      const res = await rpcReq<{
-        ok?: boolean;
-        error?: { message?: string };
-      }>(requireClient(), "config.set", {
-        ...configRawPayload(nextConfig, current.hash),
-      });
-
-      expect(res.error).toBeUndefined();
-      expect(res.ok, res.error?.message).toBe(true);
-      const persisted = await fs.readFile(configPath, "utf-8");
-      expect(persisted).toContain('"port": 19002');
-      expect(persisted).not.toContain('"baseUrl"');
-    } finally {
-      await fs.rm(configPath, { force: true });
-      invalidateConfigGetResponseCache();
-    }
-  });
-
-  it("accepts config.patch when bundled provider baseUrl was only defaulted", async () => {
-    const { createConfigIO } = await import("../config/config.js");
-    const configPath = createConfigIO().configPath;
-    try {
-      await writeJsonFile(configPath, {
-        models: {
-          providers: {
-            openai: {
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      });
-      invalidateConfigGetResponseCache();
-
-      const current = await getCurrentConfigObject();
-
-      const res = await rpcReq<{
-        ok?: boolean;
-        error?: { message?: string };
-      }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({ gateway: { port: 19003 } }),
-        baseHash: current.hash,
-      });
-
-      expect(res.error).toBeUndefined();
-      expect(res.ok, res.error?.message).toBe(true);
-      const persisted = await fs.readFile(configPath, "utf-8");
-      expect(persisted).toContain('"port": 19003');
-      expect(persisted).not.toContain('"baseUrl"');
-      expect(persisted).not.toContain('"models": []');
-    } finally {
-      await fs.rm(configPath, { force: true });
-      invalidateConfigGetResponseCache();
-    }
-  });
-
-  it("preserves authored empty bundled provider models during config.patch", async () => {
-    const { createConfigIO } = await import("../config/config.js");
-    const configPath = createConfigIO().configPath;
-    try {
-      await writeJsonFile(configPath, {
-        models: {
-          providers: {
-            openai: {
-              agentRuntime: { id: "openclaw" },
-              models: [],
-            },
-          },
-        },
-      });
-      invalidateConfigGetResponseCache();
-
-      const current = await getCurrentConfigObject();
-
-      const res = await rpcReq<{
-        ok?: boolean;
-        error?: { message?: string };
-      }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({ gateway: { port: 19004 } }),
-        baseHash: current.hash,
-      });
-
-      expect(res.error).toBeUndefined();
-      expect(res.ok, res.error?.message).toBe(true);
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        models?: { providers?: { openai?: { baseUrl?: unknown; models?: unknown } } };
-      };
-      expect(persisted.models?.providers?.openai?.baseUrl).toBeUndefined();
-      expect(persisted.models?.providers?.openai?.models).toEqual([]);
-    } finally {
-      await fs.rm(configPath, { force: true });
-      invalidateConfigGetResponseCache();
-    }
-  });
+        });
+        invalidateConfigGetResponseCache();
+        const current = await getCurrentConfigObject();
+        let nextConfig: Record<string, unknown> = { gateway: { port } };
+        if (method === "config.set") {
+          nextConfig = structuredClone(current.runtimeConfig);
+          const providers = ((nextConfig.models as Record<string, unknown>).providers ??
+            {}) as Record<string, Record<string, unknown>>;
+          providers.openai ??= {};
+          providers.openai.baseUrl = "";
+          providers.openai.models = [];
+          const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+          gateway.port = port;
+        }
+        const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+          requireClient(),
+          method,
+          configRawPayload(nextConfig, current.hash),
+        );
+        expect(res.error).toBeUndefined();
+        expect(res.ok, res.error?.message).toBe(true);
+        const persisted = await fs.readFile(configPath, "utf-8");
+        expect(persisted).toContain(`"port": ${port}`);
+        expect(persisted).not.toContain('"baseUrl"');
+        if (authoredModels) {
+          expect(JSON.parse(persisted).models.providers.openai.models).toEqual([]);
+        } else if (method === "config.patch") {
+          expect(persisted).not.toContain('"models": []');
+        }
+      } finally {
+        await fs.rm(configPath, { force: true });
+        invalidateConfigGetResponseCache();
+      }
+    },
+  );
 
   it.each([false, true])(
     "keeps model ID patches source-owned (authored compat: %s)",
@@ -1128,48 +1061,36 @@ describe("gateway config methods", () => {
     }
   });
 
-  it("allows config.patch to append array entries without replacePaths", async () => {
+  it.each([
+    {
+      name: "append array entries without replacePaths",
+      before: [0, 1],
+      after: [0, 1, 2],
+      replace: false,
+    },
+    {
+      name: "shrink an existing array with replacePaths",
+      before: [0, 1, 2],
+      after: [0],
+      replace: true,
+    },
+  ])("allows config.patch to $name", async ({ before, after, replace }) => {
     const original = await getCurrentConfigObject();
-    const bindings = [0, 1].map(makeRouteBinding);
-    const seededConfig = { ...original.config, bindings };
-    const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
+    const bindings = before.map(makeRouteBinding);
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, bindings }, original.hash),
+    );
     expect(seed.ok, seed.error?.message).toBe(true);
-
     try {
-      const before = await getCurrentConfigObject();
-      const nextBindings = [...bindings, makeRouteBinding(2)];
+      const current = await getCurrentConfigObject();
+      const nextBindings = after.map(makeRouteBinding);
       const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
         raw: JSON.stringify({ bindings: nextBindings }),
-        baseHash: before.hash,
+        baseHash: current.hash,
+        ...(replace ? { replacePaths: ["bindings"] } : {}),
       });
-
       expect(res.ok, res.error?.message).toBe(true);
-      const after = await getCurrentConfigObject();
-      expect(after.config.bindings).toEqual(nextBindings);
-    } finally {
-      await restoreConfigFileForTest(original);
-    }
-  });
-
-  it("allows config.patch to shrink an existing array with replacePaths", async () => {
-    const original = await getCurrentConfigObject();
-    const bindings = [0, 1, 2].map(makeRouteBinding);
-    const seededConfig = { ...original.config, bindings };
-    const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
-    expect(seed.ok, seed.error?.message).toBe(true);
-
-    try {
-      const before = await getCurrentConfigObject();
-      const replacement = [bindings[0]];
-      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({ bindings: replacement }),
-        baseHash: before.hash,
-        replacePaths: ["bindings"],
-      });
-
-      expect(res.ok, res.error?.message).toBe(true);
-      const after = await getCurrentConfigObject();
-      expect(after.config.bindings).toEqual(replacement);
+      expect((await getCurrentConfigObject()).config.bindings).toEqual(nextBindings);
     } finally {
       await restoreConfigFileForTest(original);
     }
@@ -1291,51 +1212,38 @@ describe("gateway noncommitting config RPCs", () => {
       expect(response.error?.message).toContain("config changed since last load");
     });
 
-    it("rejects config.set when SecretRef resolution fails", async () => {
-      const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
-      deleteTestEnvValue(missingEnvVar);
-      const current = await getCurrentConfigObject();
-      const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
-
-      const res = await sendConfigSet(
-        configRawPayload(nextConfig, current.hash),
-        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
-      );
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
-      const afterHash = await getConfigHash();
-      expect(afterHash).toBe(current.hash);
-    });
-
-    it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
-      const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
-      deleteTestEnvValue(missingEnvVar);
-      const beforeHash = await getConfigHash();
-      const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
-        requireClient(),
-        "config.patch",
-        {
-          raw: JSON.stringify({
-            gateway: {
-              auth: {
-                mode: "token",
-                token: {
-                  source: "env",
-                  provider: "default",
-                  id: missingEnvVar,
-                },
-              },
-            },
-          }),
-          baseHash: beforeHash,
-        },
-        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
-      );
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
-      const afterHash = await getConfigHash();
-      expect(afterHash).toBe(beforeHash);
-    });
+    it.each([
+      { method: "config.set", prefix: "OPENCLAW_MISSING_SECRETREF_" },
+      { method: "config.patch", prefix: "OPENCLAW_MISSING_SECRETREF_PATCH_" },
+      { method: "config.apply", prefix: "OPENCLAW_MISSING_SECRETREF_APPLY_" },
+    ] as const)(
+      "rejects $method when active SecretRefs cannot resolve without changing the source",
+      async ({ method, prefix }) => {
+        const missingEnvVar = `${prefix}${Date.now()}`;
+        deleteTestEnvValue(missingEnvVar);
+        const current = await getCurrentConfigObject();
+        const nextConfig = configWithGatewayTokenSecretRef(
+          method === "config.patch" ? {} : current.config,
+          missingEnvVar,
+        );
+        const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+          requireClient(),
+          method,
+          configRawPayload(nextConfig, current.hash),
+          CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+        );
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+        const after = await rpcReq<{ hash?: string; raw?: string | null }>(
+          requireClient(),
+          "config.get",
+          {},
+        );
+        expect(after.ok).toBe(true);
+        expect(after.payload?.hash).toBe(current.hash);
+        expect(after.payload?.raw).toBe(current.raw);
+      },
+    );
 
     it("returns noop for config.patch when authored config is unchanged", async () => {
       const current = await getCurrentConfigObject();
@@ -1562,126 +1470,67 @@ describe("gateway noncommitting config RPCs", () => {
       });
     });
 
-    it("rejects config.patch that removes existing array entries without shrinking length", async () => {
+    it.each([
+      {
+        name: "removes existing array entries without shrinking length",
+        bindings: [0, 1].map(makeRouteBinding),
+        patch: { bindings: [makeRouteBinding(1), makeRouteBinding(2)] },
+        arrayPath: "bindings",
+      },
+      {
+        name: "shrinks a nested array with only its parent in replacePaths",
+        entries: { main: { skills: ["alpha", "beta"] }, worker: { skills: ["gamma"] } },
+        patch: { agents: { entries: { main: { skills: ["alpha"] } } } },
+        replacePaths: ["agents"],
+        arrayPath: "agents.entries.main.skills",
+      },
+      {
+        name: "deletes the parent of a nested array without replacePaths",
+        entries: { main: { subagents: { allowAgents: ["worker"] } }, worker: {} },
+        patch: { agents: { entries: { main: { subagents: null } } } },
+        arrayPath: "agents.entries.main.subagents.allowAgents",
+      },
+    ])("rejects config.patch that $name", async (row) => {
       const original = await getCurrentConfigObject();
-      const bindings = [0, 1].map(makeRouteBinding);
-      const seededConfig = { ...original.config, bindings };
-
+      const seededConfig = row.bindings
+        ? { ...original.config, bindings: row.bindings }
+        : {
+            ...original.config,
+            agents: {
+              ...(original.config.agents as Record<string, unknown> | undefined),
+              ownership: "explicit",
+              entries: row.entries,
+            },
+          };
       await withConfigFileFixture(original.path, async () => {
         await writeJsonFile(original.path, seededConfig);
         invalidateConfigGetResponseCache();
         const before = await getCurrentConfigObject();
         const beforeRaw = await fs.readFile(original.path, "utf-8");
         const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ bindings: [bindings[1], makeRouteBinding(2)] }),
+          raw: JSON.stringify(row.patch),
           baseHash: before.hash,
+          ...(row.replacePaths ? { replacePaths: row.replacePaths } : {}),
         });
-
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): bindings",
+          `config.patch would remove entries from array path(s): ${row.arrayPath}`,
         );
         const after = await getCurrentConfigObject();
         expect(after.hash).toBe(before.hash);
         await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
-        expect(after.config.bindings).toEqual(bindings);
-      });
-    });
-
-    it("rejects nested destructive array patches when replacePaths names only a parent object", async () => {
-      const original = await getCurrentConfigObject();
-      const agents = {
-        ...(original.config.agents as Record<string, unknown> | undefined),
-        ownership: "explicit",
-        entries: {
-          main: { skills: ["alpha", "beta"] },
-          worker: { skills: ["gamma"] },
-        },
-      };
-
-      await withConfigFileFixture(original.path, async () => {
-        await writeJsonFile(original.path, { ...original.config, agents });
-        invalidateConfigGetResponseCache();
-        const before = await getCurrentConfigObject();
-        const beforeRaw = await fs.readFile(original.path, "utf-8");
-        const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> })
-          .entries;
-        const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
-          baseHash: before.hash,
-          replacePaths: ["agents"],
-        });
-
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): agents.entries.main.skills",
-        );
-        const after = await getCurrentConfigObject();
-        expect(after.hash).toBe(before.hash);
-        await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
-        expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-          beforeEntries,
-        );
-      });
-    });
-
-    it("rejects deleting a nested parent object inside id-keyed arrays without replacePaths", async () => {
-      const original = await getCurrentConfigObject();
-      const agents = {
-        ...(original.config.agents as Record<string, unknown> | undefined),
-        ownership: "explicit",
-        entries: {
-          main: {
-            subagents: { allowAgents: ["worker"] },
-          },
-          worker: {},
-        },
-      };
-
-      await withConfigFileFixture(original.path, async () => {
-        await writeJsonFile(original.path, { ...original.config, agents });
-        invalidateConfigGetResponseCache();
-        const before = await getCurrentConfigObject();
-        const beforeRaw = await fs.readFile(original.path, "utf-8");
-        const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ agents: { entries: { main: { subagents: null } } } }),
-          baseHash: before.hash,
-        });
-
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): agents.entries.main.subagents.allowAgents",
-        );
-        const after = await getCurrentConfigObject();
-        expect(after.hash).toBe(before.hash);
-        await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(beforeRaw);
+        if (row.bindings) {
+          expect(after.config.bindings).toEqual(row.bindings);
+        } else {
+          expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
+            (before.config.agents as { entries?: Record<string, unknown> }).entries,
+          );
+        }
       });
     });
   });
 
   describe("gateway config.apply", () => {
-    it("rejects config.apply when SecretRef resolution fails", async () => {
-      const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
-      deleteTestEnvValue(missingEnvVar);
-      const current = await getCurrentConfigObject();
-      const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
-
-      const res = await sendConfigApply(
-        configRawPayload(nextConfig, current.hash),
-        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
-      );
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
-
-      const after = await rpcReq<{
-        hash?: string;
-        raw?: string | null;
-      }>(requireClient(), "config.get", {});
-      expect(after.ok).toBe(true);
-      expect(after.payload?.hash).toBe(current.hash);
-      expect(after.payload?.raw).toBe(current.raw);
-    });
-
     it("rejects invalid raw config", async () => {
       const currentHash = await getConfigHash();
       const res = await sendConfigApply({ raw: "{", baseHash: currentHash });

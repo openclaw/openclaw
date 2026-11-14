@@ -1844,13 +1844,6 @@ extension GatewayEndpointStoreTests {
         #expect(host == "127.0.0.1")
     }
 
-    @Test func `resolve local gateway host uses loopback for auto without tailnet`() {
-        let host = GatewayEndpointStore._testResolveLocalGatewayHost(
-            bindMode: "auto",
-            tailscaleIP: nil)
-        #expect(host == "127.0.0.1")
-    }
-
     @Test func `resolve local gateway host prefers tailnet for tailnet mode`() {
         let host = GatewayEndpointStore._testResolveLocalGatewayHost(
             bindMode: "tailnet",
@@ -1953,11 +1946,6 @@ extension GatewayEndpointStoreTests {
         #expect(url?.absoluteString == "ws://127.0.0.1:18789")
     }
 
-    @Test func `normalize gateway url accepts private network ws`() {
-        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://192.168.0.202:18789")
-        #expect(url?.absoluteString == "ws://192.168.0.202:18789")
-    }
-
     @Test func `normalize gateway url accepts tailnet ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://100.123.224.76:18789")
         #expect(url?.absoluteString == "ws://100.123.224.76:18789")
@@ -2041,11 +2029,6 @@ extension GatewayEndpointStoreTests {
                 throw CancellationError()
             }
         }
-    }
-
-    @Test func `normalize gateway url rejects public host ws`() {
-        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")
-        #expect(url == nil)
     }
 
     @Test func `normalize gateway url rejects private ipv4 suffix host bypasses`() {

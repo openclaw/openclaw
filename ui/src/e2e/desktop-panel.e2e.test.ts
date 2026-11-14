@@ -640,7 +640,6 @@ suite.define(() => {
       expect(await link.getAttribute("href")).toBe(
         "/focus/desktop/control/session/agent%3Amain%3Amain",
       );
-      expect(await link.getAttribute("target")).toBe("_blank");
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
     }));
 

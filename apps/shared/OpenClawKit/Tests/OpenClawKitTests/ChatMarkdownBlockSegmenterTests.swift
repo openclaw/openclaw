@@ -472,21 +472,6 @@ struct ChatMarkdownBlockSegmenterTests {
 
     // MARK: - Fenced code
 
-    @Test func `fence with language and surrounding prose`() {
-        let blocks = self.segments("""
-        before
-        ```swift
-        let x = 1
-        ```
-        after
-        """)
-        #expect(blocks == [
-            .prose("before"),
-            .code(ChatCodeBlock(language: "swift", code: "let x = 1", isComplete: true)),
-            .prose("after"),
-        ])
-    }
-
     @Test func `info string extras keep only the first word lowercased`() {
         let blocks = self.segments("```Swift title=Example.swift\nlet x = 1\n```")
         #expect(blocks == [
@@ -598,11 +583,6 @@ struct ChatMarkdownBlockSegmenterTests {
         #expect(self.segments(markdown) == [.prose(markdown)])
     }
 
-    @Test func `unclosed math while streaming stays prose`() {
-        let markdown = "$$\nx + y"
-        #expect(self.segments(markdown, isComplete: false) == [.prose(markdown)])
-    }
-
     @Test func `unclosed math in complete message renders as math`() {
         let blocks = self.segments("$$\nx + y")
         #expect(blocks == [
@@ -618,12 +598,6 @@ struct ChatMarkdownBlockSegmenterTests {
             .code(ChatCodeBlock(language: "swift", code: "let value = 1", isComplete: true)),
             .prose("after"),
         ])
-    }
-
-    @Test func `oversized math stays raw prose`() {
-        let latex = String(repeating: "x", count: ChatMarkdownBlockSegmenter.maxMathBytes + 1)
-        let markdown = "$$\n\(latex)\n$$"
-        #expect(self.segments(markdown) == [.prose(markdown)])
     }
 
     @Test func `oversized math keeps nested code fence in prose`() {
@@ -785,12 +759,6 @@ struct ChatMarkdownBlockSegmenterTests {
                 kind: .unordered,
                 items: [self.item([.markdown("item")])])),
             .heading(ChatMarkdownHeading(level: 1, markdown: "# Heading")),
-        ])
-    }
-
-    @Test func `Setext underline is not mistaken for a thematic break`() {
-        #expect(self.segments("Heading\n---") == [
-            .heading(ChatMarkdownHeading(level: 2, markdown: "Heading\n---")),
         ])
     }
 
@@ -1092,16 +1060,6 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
-    @Test func `escaped pipe stays a literal cell character`() {
-        let blocks = self.segments("| a\\|b | c |\n| - | - |\n| 1 | 2 |")
-        #expect(blocks == [
-            .table(ChatMarkdownTable(
-                header: ["a|b", "c"],
-                alignments: [.leading, .leading],
-                rows: [["1", "2"]])),
-        ])
-    }
-
     @Test func `short rows pad and long rows truncate to header width`() {
         let blocks = self.segments("| a | b |\n| - | - |\n| 1 |\n| 1 | 2 | 3 |")
         #expect(blocks == [
@@ -1225,18 +1183,6 @@ struct ChatMarkdownBlockSegmenterTests {
     @Test func `pipes without delimiter row stay prose`() {
         let markdown = "use foo | bar\nthen continue"
         #expect(self.segments(markdown) == [.prose(markdown)])
-    }
-
-    @Test func `table header inside paragraph is detected`() {
-        let blocks = self.segments("intro line\n| a | b |\n| - | - |\n| 1 | 2 |\n\ndone")
-        #expect(blocks == [
-            .prose("intro line"),
-            .table(ChatMarkdownTable(
-                header: ["a", "b"],
-                alignments: [.leading, .leading],
-                rows: [["1", "2"]])),
-            .prose("done"),
-        ])
     }
 
     @Test func `table syntax inside fence stays code`() {

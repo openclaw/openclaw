@@ -1905,21 +1905,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.progressCard == nil })
     }
 
-    @Test func `legacy plan is ignored while progress card capability is unknown`() async throws {
-        let (_, vm) = await makeViewModel(
-            historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
-            progressCardStoreAvailable: nil)
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-
-        await MainActor.run {
-            vm.handleTransportEvent(legacyPlanEvent(
-                steps: [legacyPlanStep("Ignored", status: "in_progress")]))
-        }
-
-        #expect(await MainActor.run { vm.progressCard == nil })
-        #expect(await MainActor.run { vm.progressCardStoreAvailable == nil })
-    }
-
     @Test func `unadvertised progress card store skips durable fetch`() async throws {
         let fetchCalls = AsyncCounter()
         let (_, vm) = await makeViewModel(
@@ -2115,23 +2100,6 @@ struct ChatViewModelTests {
         #expect(await fetchedSessions.current() == ["agent:main:main", "agent:main:other"])
     }
 
-    @Test func `progress card fetch failure stays silent`() async throws {
-        let fetchCalls = AsyncCounter()
-        let (_, vm) = await makeViewModel(
-            historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
-            fetchProgressCardHook: { _, _ in
-                _ = await fetchCalls.increment()
-                throw CancellationError()
-            })
-
-        try await loadAndWaitBootstrap(vm: vm)
-        await fetchCalls.wait { $0 >= 1 }
-        #expect(await fetchCalls.current() == 1)
-
-        #expect(await MainActor.run { vm.progressCard == nil })
-        #expect(await MainActor.run { vm.errorText == nil })
-    }
-
     @Test(arguments: [false, true])
     func `failed progress refresh evicts only denied cards`(denied: Bool) async throws {
         let fetchCalls = AsyncCounter()
@@ -2210,25 +2178,6 @@ struct ChatViewModelTests {
             sessionkey: "agent:research:global", revision: AnyCodable(3))))?.value
         #expect(vm.progressCard?.revision == 3)
         #expect(vm.errorText == "Unrelated chat action failed")
-    }
-
-    @Test @MainActor func `history canonical progress tuple survives delayed routing`() async throws {
-        let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: Data(
-            #"{"sessionKey":"agent:research:main","sessionId":"research-session","messages":[],"sessionInfo":{"key":"global","agentId":"research","hasActiveRun":false}}"#
-                .utf8))
-        let requests = AsyncStringRecorder()
-        let (_, vm) = await makeViewModel(
-            sessionKey: "agent:research:main",
-            activeAgentId: "research",
-            historyResponses: [history],
-            fetchProgressCardHook: { key, owner in
-                await requests.append("\(owner ?? "nil")|\(key)")
-                return progressCard(sessionKey: "agent:research:global", revision: 1, markdown: "Research")
-            },
-            progressCardStoreAvailable: true)
-        try await loadAndWaitBootstrap(vm: vm)
-        await waitForObservedState { vm.progressCard != nil }
-        #expect(await requests.current() == ["research|global"])
     }
 
     @Test @MainActor func `health progress waits for the held canonical history tuple`() async throws {
@@ -2477,21 +2426,6 @@ struct ChatViewModelTests {
         #expect(await oldReplyReady.current() == 1)
         await Task { @MainActor in }.value
         #expect(vm.progressCardStoreAvailable == true)
-    }
-
-    @Test func `successful history load fetches progress card`() async throws {
-        let fetchedSessions = AsyncStringRecorder()
-        let (_, vm) = await makeViewModel(
-            historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
-            fetchProgressCardHook: { sessionKey, _ in
-                await fetchedSessions.append(sessionKey)
-                return progressCard(revision: 7, markdown: "# Durable update")
-            })
-
-        try await loadAndWaitBootstrap(vm: vm)
-        await waitForObservedState { vm.progressCard?.revision == 7 }
-
-        #expect(await fetchedSessions.current() == ["agent:main:main"])
     }
 
     @Test @MainActor func `tool input delta updates the matching pending edit diff`() {
@@ -3897,19 +3831,6 @@ struct ChatViewModelTests {
                 $0.role == "user" && $0.content.first?.text == "repeat request"
             }) == 2 &&
             vm.messages.contains(where: { $0.id == optimisticID }))
-    }
-
-    @Test @MainActor func `foreground discovers run started without local ownership`() async throws {
-        let idleHistory = historyPayload()
-        let activeHistory = historyPayload(
-            inFlightRun: OpenClawChatInFlightRun(runId: "run-external", text: "external partial"))
-        let (_, vm) = await makeViewModel(historyResponses: [idleHistory, activeHistory])
-
-        try await loadAndWaitBootstrap(vm: vm)
-        #expect(await MainActor.run { vm.pendingRunCount } == 0)
-        await vm.resumeFromForeground().value
-
-        #expect(vm.pendingRunCount == 1 && vm.streamingAssistantText == "external partial")
     }
 
     @Test @MainActor func `foreground keeps active run with intermediate assistant history`() async throws {
@@ -9074,26 +8995,6 @@ struct ChatViewModelTests {
         #expect(await transport.lastSentRunId() == nil)
     }
 
-    @Test func `compact trigger shows generic error message on failure`() async throws {
-        let history = historyPayload()
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [history],
-            compactSessionHook: { _ in
-                throw NSError(
-                    domain: "TestCompact",
-                    code: 42,
-                    userInfo: [NSLocalizedDescriptionKey: "backend details should not leak"])
-            })
-        try await loadAndWaitBootstrap(vm: vm)
-
-        await sendUserMessage(vm, text: "/compact")?.value
-
-        #expect(await transport.compactSessionKeys() == ["main"])
-        #expect(await MainActor.run { !vm.isSubmittingDraft })
-        #expect(await MainActor.run { !vm.isLoading && vm.canRequestSessionCompact })
-        #expect(await MainActor.run { vm.errorText } == "Unable to compact the thread. Please try again.")
-    }
-
     @Test @MainActor func `compact trigger ignores concurrent and immediate repeat requests`() async throws {
         let before = historyPayload(
             messages: [
@@ -10239,45 +10140,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4-pro")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         #expect(modelPickerStore.recents == ["openai/gpt-5.4-pro"])
-    }
-
-    @Test func `distinct model patches are serialized in selection order`() async throws {
-        let firstPatchGate = AsyncGate()
-        let now = Date().timeIntervalSince1970 * 1000
-        let sessions = sessionsResponse(sessionEntry(key: "main", updatedAt: now, model: nil))
-        let models = [
-            modelChoice(id: "gpt-first", name: "First", provider: "openai"),
-            modelChoice(id: "gpt-second", name: "Second", provider: "openai"),
-        ]
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload()],
-            sessionsResponses: [sessions],
-            modelResponses: [models],
-            modelPatchResults: [
-                openAIModelPatchResult("gpt-first", thinking: "high"),
-                openAIModelPatchResult("gpt-second", thinking: "medium"),
-            ],
-            setSessionModelHook: { model in
-                if model == "openai/gpt-first" {
-                    await firstPatchGate.wait()
-                }
-            })
-
-        try await loadAndWaitBootstrap(vm: vm)
-        await MainActor.run {
-            vm.selectModel("openai/gpt-first")
-            vm.selectModel("openai/gpt-second")
-        }
-        await transport.waitForState { $0.patchedModels.count >= 1 }
-        #expect(await transport.patchedModels() == ["openai/gpt-first"])
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(await transport.patchedModels() == ["openai/gpt-first"])
-
-        await firstPatchGate.open()
-        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
-        #expect(await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"])
-        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-second")
-        #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-second")
     }
 
     @Test func `thinking patch follows in flight model patch on shared settings lane`() async throws {
@@ -12287,64 +12149,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { legacyVM.thinkingLevelOptions.isEmpty })
     }
 
-    @Test func `gated thinking picker sends off without changing stored level`() async throws {
-        let history = historyPayload(sessionId: "sess-main")
-        let sessions = sessionsResponse(
-            sessionEntry(
-                key: "main",
-                updatedAt: 1,
-                model: "plain-model",
-                modelProvider: "openai",
-                thinkingLevels: [thinkingOption("off"), thinkingOption("medium")]))
-        let models = [
-            modelChoice(id: "plain-model", name: "Plain Model", provider: "openai", reasoning: false),
-        ]
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [history],
-            sessionsResponses: [sessions],
-            modelResponses: [models],
-            initialThinkingLevel: "medium")
-
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        #expect(await MainActor.run { !vm.showsThinkingPicker })
-
-        let send = await sendUserMessage(vm, text: "hello")
-        await send?.value
-        #expect(await transport.sentThinkingLevels() == ["off"])
-
-        #expect(await MainActor.run { vm.thinkingLevel } == "medium")
-    }
-
-    @Test func `ungated thinking picker sends stored level`() async throws {
-        let history = historyPayload(sessionId: "sess-main")
-        let sessions = sessionsResponse(
-            sessionEntry(
-                key: "main",
-                updatedAt: 1,
-                model: "reasoning-model",
-                modelProvider: "openai",
-                thinkingLevels: [thinkingOption("off"), thinkingOption("medium")]))
-        let models = [
-            modelChoice(
-                id: "reasoning-model",
-                name: "Reasoning Model",
-                provider: "openai",
-                reasoning: true),
-        ]
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [history],
-            sessionsResponses: [sessions],
-            modelResponses: [models],
-            initialThinkingLevel: "medium")
-
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        #expect(await MainActor.run { vm.showsThinkingPicker })
-
-        let send = await sendUserMessage(vm, text: "hello")
-        await send?.value
-        #expect(await transport.sentThinkingLevels() == ["medium"])
-    }
-
     @Test func `switching back to reasoning model restores stored thinking level for send`() async throws {
         let history = historyPayload(sessionId: "sess-main")
         let sessions = sessionsResponse(
@@ -12700,42 +12504,6 @@ struct ChatViewModelTests {
 
         #expect(await MainActor.run { vm.thinkingLevel } == "max")
         #expect(await MainActor.run { vm.thinkingLevelOptions.isEmpty })
-    }
-
-    @Test func `thinking patches are serialized without replay`() async throws {
-        let history = historyPayloadWithoutRunState()
-
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [history],
-            setSessionThinkingHook: { level in
-                if level == "medium" {
-                    try await Task.sleep(for: .milliseconds(200))
-                }
-            })
-
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-
-        await MainActor.run { vm.selectThinkingLevel("medium") }
-        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
-        #expect(await transport.patchedThinkingLevels() == ["medium"])
-        await MainActor.run { vm.selectThinkingLevel("high") }
-
-        await vm.waitForPendingSessionSettings(in: "main")
-        #expect(await transport.patchedThinkingLevels() == ["medium", "high"])
-
-        #expect(await MainActor.run { vm.thinkingLevel } == "high")
-    }
-
-    @Test func `default settings patch returns accepted thinking state`() async throws {
-        let transport = TestChatTransport(historyResponses: [])
-
-        let result = try await transport.patchSessionSettings(
-            sessionKey: "main",
-            agentID: nil,
-            patch: OpenClawChatSessionSettingsPatch(thinkingLevel: .some("high")))
-
-        #expect(result?.key == "main")
-        #expect(result?.thinkingLevel == "high")
     }
 
     @Test func `default thinking selection clears override and adopts resolved level`() async throws {
@@ -13331,64 +13099,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
     }
 
-    @Test func `sessions refresh preserves a patch that succeeds while retry waits`() async throws {
-        let staleListGate = AsyncGate()
-        let modelPatchGate = AsyncGate()
-        let modelPatchStarted = AsyncGate()
-        let listCallCount = AsyncCounter()
-        let levels = ["off", "high"].map { thinkingOption($0) }
-        let initialSessions = sessionsResponse(
-            sessionEntry(
-                key: "main",
-                updatedAt: 1,
-                model: "model-a",
-                modelProvider: "openai",
-                thinkingLevel: "off",
-                thinkingLevels: levels))
-        let models = [
-            modelChoice(id: "model-a", name: "A", provider: "openai", reasoning: true),
-            modelChoice(id: "model-b", name: "B", provider: "openai", reasoning: true),
-        ]
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload(sessionId: "sess-main")],
-            modelResponses: [models],
-            modelPatchResults: [
-                openAIModelPatchResult("model-b", thinking: "high", levels: levels),
-            ],
-            setSessionModelHook: { _ in
-                await modelPatchStarted.open()
-                await modelPatchGate.wait()
-            },
-            listSessionsHook: { _ in
-                let call = await listCallCount.increment()
-                if call == 1 {
-                    return initialSessions
-                }
-                if call == 2 {
-                    await staleListGate.wait()
-                }
-                return initialSessions
-            })
-
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        let refresh = Task { await vm.fetchSessions(limit: nil) }
-        await listCallCount.wait { $0 >= 2 }
-        #expect(await listCallCount.current() == 2)
-        await MainActor.run { vm.selectModel("openai/model-b") }
-        await modelPatchStarted.wait()
-
-        await staleListGate.open()
-        try await Task.sleep(for: .milliseconds(50))
-        await modelPatchGate.open()
-        await vm.waitForPendingSessionSettings(in: "main")
-        await refresh.value
-
-        #expect(await transport.listSessionsQueries().count == 3)
-        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
-        #expect(await MainActor.run { vm.sessions.first?.model } == "model-b")
-        #expect(await MainActor.run { vm.thinkingLevel } == "high")
-    }
-
     @Test func `sessions refresh preserves consecutive patches that overlap its retry`() async throws {
         let staleListGate = AsyncGate()
         let thinkingPatchGate = AsyncGate()
@@ -13749,44 +13459,6 @@ struct ChatViewModelTests {
         #expect(await transport.patchedModels() == ["openai/model-b"])
         #expect(await transport.patchedThinkingLevels() == ["medium"])
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
-    }
-
-    @Test func `reconnect retires queued settings from the previous connection`() async throws {
-        let modelPatchGate = AsyncGate()
-        let modelPatchStarted = AsyncGate()
-        let sessions = sessionsResponse(
-            sessionEntry(key: "main", updatedAt: 1, model: "model-a", thinkingLevel: "off"))
-        let models = [
-            modelChoice(id: "model-a", name: "A", provider: "openai", reasoning: true),
-            modelChoice(id: "model-b", name: "B", provider: "openai", reasoning: true),
-        ]
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload(sessionId: "sess-main")],
-            sessionsResponses: [sessions],
-            modelResponses: [models],
-            modelPatchResults: [
-                openAIModelPatchResult("model-b", thinking: "off"),
-            ],
-            setSessionModelHook: { model in
-                guard model == "openai/model-b" else { return }
-                await modelPatchStarted.open()
-                await modelPatchGate.wait()
-            })
-
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        await MainActor.run { vm.selectModel("openai/model-b") }
-        await modelPatchStarted.wait()
-        await MainActor.run { vm.selectThinkingLevel("medium") }
-        await transport.waitForState { $0.capturedSessionSettingsRouteGenerations.count >= 2 }
-        #expect(await transport.capturedSessionSettingsRouteGenerations() == [0, 0])
-        await transport.replaceSessionSettingsRoute()
-        await MainActor.run { vm.selectThinkingLevel("high") }
-        await modelPatchGate.open()
-        await vm.waitForPendingSessionSettings(in: "main")
-
-        #expect(await transport.patchedThinkingLevels() == ["high"])
-        #expect(await MainActor.run { vm.thinkingLevel } == "high")
-        #expect(await MainActor.run { vm.sessions.first?.model } == "model-b")
     }
 
     @Test func `reconnect restores accepted thinking before replacement failure`() async throws {

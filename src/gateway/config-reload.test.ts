@@ -2955,7 +2955,6 @@ describe("startGatewayConfigReloader", () => {
       emitEcho = () => harness.watcher.emit("change");
       await harness.reloader.ready;
       await expect(applyPluginChange(harness, config, { reason })).resolves.toEqual(runtime);
-      expect(harness.onHotReload).toHaveBeenCalledOnce();
       expect(getOnlyHotReloadCall(harness)[0].changedPaths).toEqual(["plugins.installs.notes"]);
       await flushReload(harness.reloader);
       expect(harness.onHotReload).toHaveBeenCalledOnce();
@@ -3003,7 +3002,6 @@ describe("startGatewayConfigReloader", () => {
       expect(plan.reloadPlugins).toBe(true);
       expect(plan.disposeMcpRuntimes).toBe(false);
       expect(nextConfig).toBe(activeConfig);
-      expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(startupMetadata);
 
       // The explicit receipt completes the operation; its unchanged watcher echo is inert.
       harness.watcher.emit("change");

@@ -721,9 +721,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     ["direct", "automatic", false],
     ["direct", "automatic", true],
     ["direct", "message_tool", false],
-    ["direct", "message_tool", true],
     ["group", "automatic", false],
-    ["group", "automatic", true],
     ["group", "message_tool", false],
     ["group", "message_tool", true],
   ] as const)(

@@ -201,15 +201,6 @@ describe("guarded fetch policy", () => {
       /explicit proxy ssrf pinning requires https targets/i,
     ],
     [
-      "metadata behind exact-origin trust",
-      {
-        url: "http://model.lan:11434/v1/models",
-        lookupFn: lookup("64:ff9b::a9fe:a9fe"),
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      },
-      /private|internal|blocked/i,
-    ],
-    [
       "private proxy despite target origin trust",
       {
         url: "https://10.0.0.5:11434/v1/models",

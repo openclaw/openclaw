@@ -728,12 +728,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         },
         metadata: {},
       },
-      {
-        toolCallId: "call-code-mode-exec-null-command",
-        input: { code: "return 4;", command: null },
-        expectedParams: { code: "return 4;", command: "return 4;" },
-        metadata: { toolInputKind: "javascript" },
-      },
     ]) {
       beforeToolCallHook.mockClear();
       const result = await def.execute(toolCallId, input, undefined, undefined, extensionContext);

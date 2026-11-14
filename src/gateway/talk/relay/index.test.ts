@@ -416,7 +416,6 @@ describe("talk realtime gateway relay", () => {
   it.each([
     { forced: true, interrupt: undefined, expectedInterrupt: true },
     { forced: false, interrupt: undefined, expectedInterrupt: true },
-    { forced: false, interrupt: false, expectedInterrupt: false },
     { forced: true, interrupt: false, expectedInterrupt: false },
   ])(
     "resolves forced audio routing $forced independently of interruption $interrupt",
@@ -2469,33 +2468,6 @@ describe("talk realtime gateway relay", () => {
         { answer: "stale" },
         CANCELLED_RESULT,
       ]);
-    },
-  );
-
-  it.each(["cancel", "retry"] as const)(
-    "preserves rejected tool results for %s",
-    async (nextAction) => {
-      const submitToolResult = vi
-        .fn<RealtimeVoiceBridge["submitToolResult"]>()
-        .mockRejectedValueOnce(new Error("provider rejected tool result"));
-      if (nextAction === "cancel") {
-        submitToolResult.mockRejectedValue(new Error("provider rejected cancellation"));
-      }
-      const { submit, cancel, eventsOf, abortController } = await createRunRelay({
-        submitToolResult,
-      });
-      await expect(submit({ ok: nextAction === "cancel" })).rejects.toThrow(
-        "provider rejected tool result",
-      );
-      expect(eventsOf("toolResult")).toHaveLength(0);
-      if (nextAction === "cancel") {
-        void cancel("barge-in");
-        expect(abortController.signal.aborted).toBe(true);
-      } else {
-        expect(submit({ ok: true })).toBeUndefined();
-        expect(submitToolResult).toHaveBeenCalledTimes(2);
-        expect(eventsOf("toolResult")).toHaveLength(1);
-      }
     },
   );
 

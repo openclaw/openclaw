@@ -197,6 +197,7 @@ function makeReadPairClients(
 
 function makeScopedBroadcastClients() {
   const pairingSocket = makeRecordingSocket();
+  const questionSocket = makeRecordingSocket();
   const nodeSocket = makeRecordingSocket();
   const readSocket = makeRecordingSocket();
   const talkSocket = makeRecordingSocket();
@@ -204,6 +205,7 @@ function makeScopedBroadcastClients() {
   const adminSocket = makeRecordingSocket();
   const clients = new GatewayClientRegistry([
     makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
+    makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
     makeGatewayWsClient("c-node", nodeSocket, {
       role: "node",
       scopes: ["operator.read"],
@@ -214,7 +216,16 @@ function makeScopedBroadcastClients() {
     makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
   ]);
 
-  return { pairingSocket, nodeSocket, readSocket, talkSocket, writeSocket, adminSocket, clients };
+  return {
+    pairingSocket,
+    questionSocket,
+    nodeSocket,
+    readSocket,
+    talkSocket,
+    writeSocket,
+    adminSocket,
+    clients,
+  };
 }
 
 function makeScopedBroadcastContext() {
@@ -244,15 +255,6 @@ function chatPayload() {
 
 function chatSideResultPayload() {
   return { sessionKey: "agent:main:main", text: "tool output" };
-}
-
-function broadcastChatClassEvents(
-  broadcast: ReturnType<typeof createGatewayBroadcaster>["broadcast"],
-) {
-  broadcast("chat", chatPayload());
-  broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
-  broadcast("chat.send_timing", { phase: "dispatch-started", runId: "run-1" });
-  broadcast("chat.side_result", chatSideResultPayload());
 }
 
 describe("gateway broadcaster", () => {
@@ -461,73 +463,71 @@ describe("gateway broadcaster", () => {
     expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
-  it("requires operator.read for chat-class broadcast events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcastChatClassEvents(broadcast);
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).toHaveBeenCalledTimes(4);
-    expect(writeSocket.send).toHaveBeenCalledTimes(4);
-    expect(adminSocket.send).toHaveBeenCalledTimes(4);
-    const expectedEvents = ["chat", "agent", "chat.send_timing", "chat.side_result"];
-    expectSentEvents(readSocket, expectedEvents);
-    expectSentEvents(writeSocket, expectedEvents);
-    expectSentEvents(adminSocket, expectedEvents);
-  });
-
-  it("requires operator.questions for question broadcasts", () => {
-    const questionSocket = makeRecordingSocket();
-    const readSocket = makeRecordingSocket();
-    const clients = new GatewayClientRegistry([
-      makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
-      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
-    ]);
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    broadcast("question.requested", { id: "question-1" });
-    broadcast("question.resolved", { id: "question-1", status: "expired" });
-
-    expect(questionSocket.send).toHaveBeenCalledTimes(2);
-    expect(readSocket.send).not.toHaveBeenCalled();
-  });
-
-  it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("plugin.myplugin.custom", { data: "test" });
-    broadcast("plugin.otherplugin.state", { state: "updated" });
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expect(readSocket.send).not.toHaveBeenCalled();
-    expect(writeSocket.send).toHaveBeenCalledTimes(2);
-    expect(adminSocket.send).toHaveBeenCalledTimes(2);
-    const expectedEvents = ["plugin.myplugin.custom", "plugin.otherplugin.state"];
-    expectSentEvents(writeSocket, expectedEvents);
-    expectSentEvents(adminSocket, expectedEvents);
-  });
-
-  it("honors explicit read scope for plugin lifecycle events", () => {
-    const {
-      pairingSocket,
-      nodeSocket,
-      readSocket,
-      writeSocket,
-      adminSocket,
-      broadcastPluginEvent,
-    } = makeScopedBroadcastContext();
-
-    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
-
-    expect(pairingSocket.send).not.toHaveBeenCalled();
-    expect(nodeSocket.send).not.toHaveBeenCalled();
-    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
-    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
-    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
+  const readRecipients = ["readSocket", "writeSocket", "adminSocket"];
+  const writeRecipients = ["writeSocket", "adminSocket"];
+  const allRecipients = [
+    "pairingSocket",
+    "questionSocket",
+    "nodeSocket",
+    "readSocket",
+    "talkSocket",
+    "writeSocket",
+    "adminSocket",
+  ] as const;
+  const eventCases: Array<{
+    name: string;
+    events: Array<[string, unknown]>;
+    recipients: readonly string[];
+    pluginScope?: "operator.read";
+  }> = [
+    {
+      name: "requires operator.read for chat-class broadcast events",
+      events: [
+        ["chat", chatPayload()],
+        ["agent", { type: "status", sessionKey: "agent:main:main" }],
+        ["chat.send_timing", { phase: "dispatch-started", runId: "run-1" }],
+        ["chat.side_result", chatSideResultPayload()],
+      ],
+      recipients: readRecipients,
+    },
+    {
+      name: "requires operator.questions for question broadcasts",
+      events: [
+        ["question.requested", { id: "question-1" }],
+        ["question.resolved", { id: "question-1", status: "expired" }],
+      ],
+      recipients: ["questionSocket", "adminSocket"],
+    },
+    {
+      name: "allows plugin.* broadcast events for operator.write and operator.admin",
+      events: [
+        ["plugin.myplugin.custom", { data: "test" }],
+        ["plugin.otherplugin.state", { state: "updated" }],
+      ],
+      recipients: writeRecipients,
+    },
+    {
+      name: "honors explicit read scope for plugin lifecycle events",
+      events: [["plugin.workboard.changed", { revision: 1 }]],
+      recipients: readRecipients,
+      pluginScope: "operator.read" as const,
+    },
+  ];
+  it.each(eventCases)("$name", ({ events, recipients, ...options }) => {
+    const context = makeScopedBroadcastContext();
+    for (const [event, payload] of events) {
+      if (options.pluginScope) {
+        context.broadcastPluginEvent(event, payload, options.pluginScope);
+      } else {
+        context.broadcast(event, payload);
+      }
+    }
+    for (const key of allRecipients) {
+      expectSentEvents(
+        context[key],
+        recipients.includes(key) ? events.map(([event]) => event) : [],
+      );
+    }
   });
 
   it("rejects invalid or reserved plugin event broadcasts", () => {
@@ -550,75 +550,39 @@ describe("gateway broadcaster", () => {
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
-    const {
-      pairingSocket,
-      nodeSocket,
-      readSocket,
-      talkSocket,
-      writeSocket,
-      adminSocket,
-      broadcast,
-    } = makeScopedBroadcastContext();
-
-    broadcast("cron", { jobId: "job-1" });
-    broadcast("talk.mode", { enabled: true });
-    broadcast("voicewake.changed", { triggers: ["hello"] });
-    broadcast("voicewake.routing.changed", { config: { routes: [] } });
-    broadcast("heartbeat", { ts: 1 });
-    broadcast("presence", { presence: [] });
-    broadcast("health", { ok: true });
-    broadcast("tick", { ts: 2 });
-    broadcast("shutdown", { reason: "restart" });
-    broadcast("update.available", {
-      updateAvailable: {
-        currentVersion: "2026.4.19",
-        latestVersion: "2026.4.20",
-        channel: "stable",
-      },
-    });
-    broadcast("unknown.future.event", { hidden: true });
-
-    expectSentEvents(pairingSocket, [
-      "heartbeat",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
-    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
-    expectSentEvents(readSocket, [
-      "cron",
-      "voicewake.changed",
-      "voicewake.routing.changed",
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
-    expectSentEvents(talkSocket, [
-      "talk.mode",
-      "heartbeat",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
-    const writeVisibleEvents = [
-      "cron",
-      "talk.mode",
-      "voicewake.changed",
-      "voicewake.routing.changed",
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
+    const context = makeScopedBroadcastContext();
+    const events: Array<[string, unknown, readonly string[]]> = [
+      ["cron", { jobId: "job-1" }, readRecipients],
+      ["talk.mode", { enabled: true }, ["talkSocket", ...writeRecipients]],
+      ["voicewake.changed", { triggers: ["hello"] }, readRecipients],
+      ["voicewake.routing.changed", { config: { routes: [] } }, readRecipients],
+      ["heartbeat", { ts: 1 }, allRecipients],
+      ["presence", { presence: [] }, readRecipients],
+      ["health", { ok: true }, allRecipients],
+      ["tick", { ts: 2 }, allRecipients],
+      ["shutdown", { reason: "restart" }, allRecipients],
+      [
+        "update.available",
+        {
+          updateAvailable: {
+            currentVersion: "2026.4.19",
+            latestVersion: "2026.4.20",
+            channel: "stable",
+          },
+        },
+        allRecipients,
+      ],
+      ["unknown.future.event", { hidden: true }, []],
     ];
-    expectSentEvents(writeSocket, writeVisibleEvents);
-    expectSentEvents(adminSocket, writeVisibleEvents);
+    for (const [event, payload] of events) {
+      context.broadcast(event, payload);
+    }
+    for (const key of allRecipients) {
+      expectSentEvents(
+        context[key],
+        events.filter((entry) => entry[2].includes(key)).map(([event]) => event),
+      );
+    }
   });
 
   it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {

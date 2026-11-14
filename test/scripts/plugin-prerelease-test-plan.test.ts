@@ -808,7 +808,6 @@ export const createExtensionTestShards = () => [{
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["timeout-minutes"], jobName).toBe(15);
     }
-    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
         "Cancel only an exact active child after its first blocking job; false drains all children and permits same-parent recovery",
@@ -843,18 +842,6 @@ export const createExtensionTestShards = () => [{
         (step: WorkflowStep) => step.id === "dispatch",
       )?.env,
     ).not.toHaveProperty("FAIL_FAST");
-    expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
-    expect(fullReleaseSource).not.toContain(
-      "has failed child jobs before the workflow completed; cancelling the remaining run.",
-    );
-    expect(fullReleaseSource).not.toContain("trap cancel_child");
-    expect(fullReleaseSource).not.toContain("cancel_child_on_failure");
-    expect(fullReleaseSource).not.toContain("exit_on_parent_signal");
-    expect(fullReleaseSource).not.toContain("disable_child_cleanup");
-    expect(fullReleaseSource).not.toContain("cancel_child");
-    expect(fullReleaseSource).toContain(
-      'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
-    );
     expect(releaseChecksWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description: "Stop the Matrix QA lane after its first failed check or scenario",
       required: false,

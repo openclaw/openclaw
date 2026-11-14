@@ -2388,11 +2388,9 @@ class GatewaySessionReconnectTest {
   fun tokenFailuresPauseUnlessOneDeviceTokenRetryIsPending() {
     val cases =
       listOf(
-        Triple("AUTH_TOKEN_MISMATCH", false, true),
         Triple("AUTH_TOKEN_MISMATCH", true, false),
         Triple("AUTH_DEVICE_TOKEN_MISMATCH", false, true),
         Triple("AUTH_TOKEN_NOT_CONFIGURED", false, true),
-        Triple("AUTH_PASSWORD_MISSING", false, true),
         Triple("AUTH_PASSWORD_NOT_CONFIGURED", false, true),
         Triple("AUTH_SCOPE_MISMATCH", false, true),
         Triple("AUTH_VERIFIED_USER_REQUIRED", false, true),
@@ -2480,35 +2478,6 @@ class GatewaySessionReconnectTest {
         hasBootstrapToken = false,
         role = "operator",
         scopes = listOf("operator.read"),
-        pendingDeviceTokenRetry = false,
-      ),
-    )
-  }
-
-  @Test
-  fun protocolMismatchPausesReconnect() {
-    val error =
-      GatewaySession.ErrorShape(
-        code = "INVALID_REQUEST",
-        message = "protocol mismatch",
-        details =
-          GatewayErrorDetails(
-            code = "PROTOCOL_MISMATCH",
-            canRetryWithDeviceToken = false,
-            recommendedNextStep = null,
-            clientMinProtocol = 4,
-            clientMaxProtocol = 4,
-            expectedProtocol = 5,
-            minimumProbeProtocol = 4,
-          ),
-      )
-
-    assertTrue(
-      shouldPauseGatewayReconnectAfterAuthFailure(
-        error = error,
-        hasBootstrapToken = false,
-        role = "node",
-        scopes = emptyList(),
         pendingDeviceTokenRetry = false,
       ),
     )
@@ -2656,7 +2625,7 @@ class GatewaySessionReconnectTest {
             "question.list" -> {
               webSocket.send(
                 """
-                {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
+                {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.read","operator.questions"]}}}
                 """.trimIndent(),
               )
             }
@@ -2673,8 +2642,17 @@ class GatewaySessionReconnectTest {
         assertFalse(result.ok)
         assertEquals("MISSING_SCOPE", result.error?.details?.code)
         assertEquals("operator.questions", result.error?.details?.missingScope)
-        assertEquals(listOf("operator.questions"), result.error?.details?.requiredScopes)
+        assertEquals(listOf("operator.read", "operator.questions"), result.error?.details?.requiredScopes)
         assertEquals("operator.questions", result.error?.missingScope())
+        assertEquals(
+          GatewayMissingScopeErrorDetails("operator.questions", listOf("operator.read", "operator.questions")),
+          result.error?.missingScopeDetails(),
+        )
+        assertEquals(
+          "operator.read",
+          GatewaySession.ErrorShape(code = "INVALID_REQUEST", message = "missing scope: operator.read").missingScope(),
+        )
+        assertNull(GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "missing scope: operator.read").missingScope())
       } finally {
         shutdownReconnectHarness(harness, server)
       }

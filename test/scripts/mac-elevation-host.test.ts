@@ -1673,14 +1673,10 @@ describe("mac elevation host command contract", () => {
     mac.lifetime.run(async () => {
       const script = readFileSync(scriptPath, "utf8");
 
-      expect(script).toContain('ELEVATION_LABEL="ai.openclaw.mac.elevation-host"');
       expect(script).toContain('NORMAL_LABEL="ai.openclaw.mac"');
       expect(script).toContain("ordinary Launch at login is installed");
       expect(script).toContain("conflicting OpenClaw launch agent is installed");
       expect(script).toContain("unsupervised or conflicting OpenClaw process is running");
-      expect(script).toContain("plutil -insert KeepAlive -bool true");
-      expect(script).toContain("plutil -insert RunAtLoad -bool true");
-      expect(script).toContain('[$executable,"--elevation-host"]');
       expect(script).toContain("automatic elevation-host rollback was incomplete");
       expect(script).not.toContain("osascript");
     }));

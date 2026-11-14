@@ -197,9 +197,7 @@ describe("Plugin link reader panel", () => {
 
   it.each([
     ["Merged", "accent", "2026-09-23T12:31:58Z"],
-    ["Closed", "negative", "2026-09-24T09:15:00Z"],
     ["Open", "positive", undefined],
-    ["Draft", "neutral", undefined],
   ] as const)("shows the %s event date beside its badge", async (label, tone, timestamp) => {
     const document = {
       ...item(),

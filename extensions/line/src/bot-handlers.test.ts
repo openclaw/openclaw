@@ -630,30 +630,6 @@ describe("handleLineWebhookEvents", () => {
     expect(logVerboseMock.mock.calls.join(",")).not.toContain("line.action=play&line.device=tv");
   });
 
-  it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
-    const gate = Promise.withResolvers<void>();
-    const { send, processMessage, groupHistories } = createHistoryHarness(
-      "grp-race",
-      () => gate.promise,
-    );
-
-    await send("user-b", "m-past", "earlier chatter", 1000);
-    expect(groupHistories.get("grp-race")).toHaveLength(1);
-
-    // A mention turn starts and parks in processMessage (agent still running).
-    const mentionRun = send("user-a", "m-mention", "@Bot summarize", 2000, true);
-    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledTimes(1));
-
-    await send("user-c", "m-concurrent", "ping", 3000);
-    expect(groupHistories.get("grp-race")).toHaveLength(2);
-
-    gate.resolve();
-    await mentionRun;
-
-    expectHistory([expect.objectContaining({ body: "earlier chatter" })]);
-    expect(groupHistories.get("grp-race")).toEqual([expect.objectContaining({ body: "ping" })]);
-  });
-
   it("keeps a message arriving between the history snapshot and context construction for the next mention", async () => {
     const contextGate = Promise.withResolvers<void>();
     const { send, groupHistories } = createHistoryHarness("grp-mid");

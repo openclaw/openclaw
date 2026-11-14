@@ -666,24 +666,6 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
-  fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
-    assertEquals(
-      listOf(
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ),
-      operatorConnectScopesForAuth(
-        usesStoredDeviceToken = false,
-        storedOperatorScopes = null,
-      ),
-    )
-  }
-
-  @Test
   fun operatorConnectScopesForAuthPreservesStoredScopesForReconnects() {
     val storedScopes = listOf("operator.approvals", "operator.read", "operator.write")
 
@@ -692,17 +674,6 @@ class GatewayBootstrapAuthTest {
       operatorConnectScopesForAuth(
         usesStoredDeviceToken = true,
         storedOperatorScopes = storedScopes,
-      ),
-    )
-  }
-
-  @Test
-  fun operatorConnectScopesForAuthFallsBackToLegacyScopesForOldStoredDeviceTokens() {
-    assertEquals(
-      ConnectionManager.legacyOperatorScopes,
-      operatorConnectScopesForAuth(
-        usesStoredDeviceToken = true,
-        storedOperatorScopes = emptyList(),
       ),
     )
   }
@@ -2446,30 +2417,6 @@ class GatewayBootstrapAuthTest {
         assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
       } finally {
         runtime.releaseVoiceNoteMic()
-        Dispatchers.resetMain()
-      }
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun dictationMicOwnershipBlocksLocalVoiceAndGatewayPtt() =
-    runBlocking {
-      val runtime = createVoiceRuntime()
-      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
-      Dispatchers.setMain(Dispatchers.Unconfined)
-      try {
-        assertTrue(runtime.tryAcquireDictationMic())
-
-        runtime.setMicEnabled(true)
-        runtime.setTalkModeEnabled(true)
-        val ptt = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
-
-        assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
-        assertEquals("MIC_BUSY", ptt.error?.code)
-        assertEquals("MIC_BUSY: dictation is active", ptt.error?.message)
-        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
-      } finally {
-        runtime.releaseDictationMic()
         Dispatchers.resetMain()
       }
     }

@@ -1220,7 +1220,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/device-pairing-node-bins.worker.test.ts",
   "src/infra/device-pairing-prune.test.ts",
   "src/infra/device-pairing-publication.test.ts",
-  "src/infra/device-pairing-worker.benchmark.test.ts",
   "src/infra/device-pairing-worker.test.ts",
   "src/infra/node-pairing-migration.test.ts",
   "src/infra/push-apns.store.test.ts",

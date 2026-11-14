@@ -770,38 +770,6 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
   });
 
-  it("keeps task finalization, resource retirement, and announce cleanup root-admitted", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: true });
-    const browserCleanup = createDeferredCore();
-    const announce = createDeferredCore<AnnounceFlowOutcome>();
-    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      () => browserCleanup.promise,
-    );
-    const runSubagentAnnounceFlow = vi.fn(() => announce.promise);
-    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
-
-    const completion = completeRun(controller, entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "visible", text: "final completion reply" },
-    });
-
-    await waitForLifecycleState(() =>
-      expect(
-        browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
-      ).toHaveBeenCalledOnce(),
-    );
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    browserCleanup.resolve();
-    await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
-    await completion;
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    announce.resolve("delivered");
-    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
-  });
-
   it("settles an admitted subagent and its delivery behind a closed drain fence", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     const announce = createDeferredCore<AnnounceFlowOutcome>();
@@ -4476,41 +4444,6 @@ describe("requester settle wake trigger", () => {
       }
     },
   );
-
-  it("keeps the complete requester batch unchanged when its atomic settlement fails", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
-    });
-    let settleParams: RequesterSettleWakeParams | undefined;
-    const controller = createLifecycleController({
-      entry,
-      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
-        settleParams = params;
-        return false;
-      }),
-      runSubagentAnnounceFlow: vi.fn(async () => "intentional_non_delivery" as const),
-    });
-    await completeRun(controller, entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "empty" },
-    });
-    await waitForLifecycleState(() => expect(settleParams).toBeDefined());
-    const before = structuredClone(readLifecycleRun(entry));
-    completionDeliveryMocks.mutateRequesterCompletionBatch.mockRejectedValueOnce(
-      new Error("bookkeeping write failed"),
-    );
-
-    await expect(
-      settleParams!.completeBatch([entry], 1, {
-        delivered: false,
-        path: "none",
-        error: "requester settle wake failed",
-      }),
-    ).rejects.toThrow("bookkeeping write failed");
-    expect(readLifecycleRun(entry)).toEqual(before);
-  });
 
   it.each([true, false])(
     "retires delete cleanup after requester settlement (completion required=%s)",

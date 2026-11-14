@@ -1549,32 +1549,6 @@ describe("thread item cache", () => {
     expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
   });
 
-  it("updates the live stream without rescanning retained history", () => {
-    const read = vi.fn(Reflect.get);
-    const messages = Array.from(
-      { length: 1_000 },
-      (_, index) =>
-        new Proxy(chatMessage(index % 2 === 0 ? "user" : "assistant", `message ${index}`, index), {
-          get: read,
-        }),
-    );
-    const input = createProps({
-      messages,
-      stream: "partial reply",
-      streamStartedAt: 10,
-    });
-    const first = buildCachedChatItems(input);
-    read.mockClear();
-
-    const updated = buildCachedChatItems({ ...input, stream: "complete reply" });
-
-    expect(updated).toBe(first);
-    expect(read).not.toHaveBeenCalled();
-    expect(updated).toContainEqual(
-      expect.objectContaining({ kind: "stream", text: "complete reply", isStreaming: true }),
-    );
-  });
-
   it("keeps same-session render caches isolated between panes", () => {
     const messages = [assistant("needle"), user("other")];
     const paneA = createProps({

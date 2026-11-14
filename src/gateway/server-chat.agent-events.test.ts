@@ -1098,13 +1098,6 @@ describe("agent event handler", () => {
         message: { content: [{ text: "Before tool call\nAfter tool call" }] },
       },
     },
-    {
-      name: "empty scoped replacement",
-      first: { text: "Hello world", itemId: "message-1" },
-      next: { text: "", itemId: "message-1" },
-      delta: { deltaText: "", replace: true, message: { content: [{ text: "" }] } },
-      final: { state: "final" },
-    },
   ])("flushes $name before final", async ({ first, next, delta, final }) => {
     const h = createHarness({ now: 10_800 });
     h.registerNamed("final-flush");

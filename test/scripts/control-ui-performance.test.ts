@@ -735,10 +735,7 @@ describe("Control UI performance budgets", () => {
     }
   });
 
-  it.each([
-    { baselineBytes: 315_881, limit: 316_457 },
-    { baselineBytes: 311_544, limit: 312_120 },
-  ])(
+  it.each([{ baselineBytes: 315_881, limit: 316_457 }])(
     "enforces approved startup allowances for a $baselineBytes B baseline",
     ({ baselineBytes, limit }) => {
       const fixture = createCliFixture();

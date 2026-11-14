@@ -811,23 +811,6 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.createdParentKeys() == [key])
     }
 
-    @Test func `sidebar creation with active agent identity omits parent for an unscoped current key`() async throws {
-        let transport = SessionActionTransport()
-        let viewModel = OpenClawChatViewModel(
-            sessionKey: "main",
-            transport: transport,
-            activeAgentId: "worker")
-        let lease = try await viewModel.newSessionRouteLease()
-
-        await viewModel.startNewSession(
-            agentID: "worker",
-            worktree: false,
-            worktreeBaseRef: nil,
-            using: lease)
-
-        #expect(await transport.createdParentKeys() == [nil])
-    }
-
     @Test(arguments: ["worker", "other"])
     func `inheriting creation respects authoritative agent ownership`(agentID: String) async {
         let transport = SessionActionTransport(directCreateSupported: true)

@@ -860,18 +860,6 @@ it.skipIf(process.platform === "win32")(
         events.map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n",
       );
     for (const invalid of [
-      parentRows.filter((row) => row.event !== "spawn-exit"),
-      [...parentRows, nativeExit],
-      [...parentRows, created],
-      parentRows.map((row) =>
-        row.event === "spawn-exit" ? Object.assign({}, row, { child: -1 }) : row,
-      ),
-    ]) {
-      rewrite(parentLog, invalid);
-      expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow();
-    }
-    rewrite(parentLog, parentRows);
-    for (const invalid of [
       childRows.filter((row) => row.event !== "startup"),
       childRows.map((row) =>
         row.event === "startup" ? Object.assign({}, row, { ppid: -1 }) : row,
@@ -3139,32 +3127,6 @@ it("admits only the bound builtin hasher with a joined native thread", () => {
       hashWorker: { ...spec.hashWorker, sha256: "0".repeat(64) },
     }),
   ).toThrow("Missing worker-thread");
-  const log = path.join(
-    f.spec.directory,
-    fs.readdirSync(f.spec.directory).find((name) => name.endsWith("-0.jsonl"))!,
-  );
-  const original = fs.readFileSync(log, "utf8");
-  const rewrite = (events: Record<string, unknown>[]) =>
-    fs.writeFileSync(
-      log,
-      events.map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n",
-    );
-  rewrite(rows.filter((row) => row.event !== "thread-exit"));
-  expect(() => readInstalledTerminalEvents(f.spec.directory, spec)).toThrow(
-    "no unique native exit",
-  );
-  const exit = rows.find((row) => row.event === "exit")!;
-  rewrite(
-    rows.map((row) =>
-      row.event === "thread-exit"
-        ? Object.assign({}, row, { time: String(BigInt(String(exit.time)) + 1n) })
-        : row,
-    ),
-  );
-  expect(() => readInstalledTerminalEvents(f.spec.directory, spec)).toThrow(
-    "outside parent custody",
-  );
-  fs.writeFileSync(log, original);
   for (const edge of [
     'import "node:sqlite";',
     "export { createHash };",

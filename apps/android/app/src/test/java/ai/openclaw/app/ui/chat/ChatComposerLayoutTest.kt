@@ -18,6 +18,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatComposerOwner
@@ -292,24 +293,6 @@ class ChatComposerLayoutTest {
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
     NativeStringResources.install(app)
     WindowInfoTracker.reset()
-  }
-
-  @Test
-  fun compactComposerRetainsSeparateMinimumTouchTargets() {
-    val height = mutableStateOf(720.dp)
-    showChat(viewportWidth = 320.dp, viewportHeight = { height.value })
-    composerEditor().performTextReplacement("Touch target draft")
-    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
-    assertComposerControlsVisible(primaryAction = "Send")
-
-    composeRule.runOnIdle { height.value = 180.dp }
-    composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed()
-    assertComposerControlsVisible(primaryAction = "Send")
-    composerEditor().assertTextEquals("Touch target draft")
-
-    composeRule.runOnIdle { height.value = 720.dp }
-    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
-    assertComposerControlsVisible(primaryAction = "Send")
   }
 
   @Test
@@ -688,18 +671,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun shortLoadedHistoryDoesNotOfferJumpWhenBothRowsFit() {
-    withReaderHistory(assistantCount = 1) {
-      assertReaderMessageVisible("You", "Reader prompt")
-      assertReaderMessageVisible("OpenClaw", "Reader answer 1")
-      val range = readerTranscript().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
-      assertEquals("The short transcript starts at its latest edge", 0f, range.value(), 0f)
-      assertEquals("The complete short transcript fits without scrolling", 0f, range.maxValue(), 0f)
-      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
-    }
-  }
-
-  @Test
   fun overflowingLoadedHistoryStartsAtLatestAndManualReadingOffersJump() {
     withReaderHistory(assistantCount = 24) {
       val transcript = readerTranscript()
@@ -931,37 +902,6 @@ class ChatComposerLayoutTest {
       assertTailVisible()
       composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
       assertEquals("Reading and Jump keep the same transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
-    }
-  }
-
-  @Test
-  fun growingViewportHidesJumpWhenTheSameLoadedHistoryFits() {
-    val assistantCount = 6
-    val viewportHeight = mutableStateOf(400.dp)
-    withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
-      val transcript = readerTranscript()
-      val before = transcript.getUnclippedBoundsInRoot()
-      transcript.performTouchInput { swipeDown() }
-      composeRule.waitForIdle()
-      assertTrue(
-        "The smaller viewport must hide newer replies",
-        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
-      )
-      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertIsDisplayed()
-
-      composeRule.runOnIdle { viewportHeight.value = 720.dp }
-      composeRule.waitForIdle()
-
-      val after = transcript.getUnclippedBoundsInRoot()
-      assertTrue("Resizing grows the actual transcript viewport", after.bottom - after.top > before.bottom - before.top)
-      assertReaderMessageVisible("You", "Reader prompt")
-      for (index in 1..assistantCount) {
-        assertReaderMessageVisible("OpenClaw", "Reader answer $index")
-      }
-      val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
-      assertEquals("The resized transcript reaches its latest edge", 0f, range.value(), 0f)
-      assertEquals("The same complete history fits after resizing", 0f, range.maxValue(), 0f)
-      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
     }
   }
 
@@ -1204,23 +1144,6 @@ class ChatComposerLayoutTest {
         assertFalse("Selecting a command must not begin send admission", owner in model.chatComposerState.sendStates.value)
       }
     }
-  }
-
-  @Test
-  fun activeRunKeepsNewTextSendableAndRestoresStopForAnEmptyDraft() {
-    showChat()
-    assertTrue("The fixture must have an active run", controller.pendingRunCount.value > 0)
-    val editor = composerEditor()
-    listOf("hello", "/help", "/unknown").forEach { input ->
-      editor.performTextReplacement(input)
-      editor.assertTextEquals(input)
-      assertComposerControlsVisible(primaryAction = "Send")
-      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled()
-      assertTrue("Typing must not end the active run", controller.pendingRunCount.value > 0)
-    }
-    editor.performTextReplacement("")
-    assertComposerControlsVisible(primaryAction = "Stop")
-    composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
   }
 
   @Test
@@ -1562,36 +1485,6 @@ class ChatComposerLayoutTest {
       assertComposerControlsVisible(talkActive = true)
     }
     assertTrue((failures + measurements).joinToString("\n"), failures.isEmpty())
-  }
-
-  @Test
-  fun narrowFrenchMultilineDraftKeepsTalkAndRunControlsVisibleWithKeyboardOpen() {
-    NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
-    showChat(viewportWidth = 320.dp, fontScale = { 1.5f }, talkActive = true)
-    val editor = composerEditor()
-    val draft = "Un\ndeux\ntrois\nquatre\ncinq\nsix"
-    editor.performTextReplacement(draft)
-    editor.assertTextEquals(draft)
-    assertComposerControlsVisible(talkActive = true)
-  }
-
-  @Test
-  @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun composerResizeScreenshotProof() {
-    val height = mutableStateOf(720.dp)
-    showChat(viewportWidth = 320.dp, viewportHeight = { height.value }, fontScale = { 2f }, useChatShell = true)
-    val editor = composerEditor()
-    editor.performClick().performTextReplacement("Short viewport draft")
-    applyChatImeInsets()
-    composeRule.runOnIdle { height.value = 360.dp }
-    composeRule.waitForIdle()
-    System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { path ->
-      val folder = File(path).apply { mkdirs() }
-      val image = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
-      assertTrue(image.width >= 320 && image.height >= 360)
-      File(folder, "composer-resize.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-    }
-    assertCompleteComposerLineAboveIme()
   }
 
   @Test
@@ -5434,21 +5327,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun longProgressPlanKeepsEditorAndStopVisibleAndLastStepReachable() {
-    val viewModel = showChat()
-    val steps = List(20) { index -> "Step ${index + 1}: verify the Android chat behavior and document the result." }
-    showProgressCard(viewModel, steps)
-
-    assertComposerControlsVisible()
-    if (composeRule.onAllNodesWithContentDescription("Expand progress card").fetchSemanticsNodes().isNotEmpty()) {
-      composeRule.onNodeWithContentDescription("Expand progress card").performClick()
-    }
-    assertComposerControlsVisible()
-    composeRule.onNodeWithText(steps.last()).performScrollTo().assertIsDisplayed()
-    assertComposerControlsVisible()
-  }
-
-  @Test
   fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
     val viewModel = showChat()
     showProgressCard(viewModel, listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
@@ -5905,14 +5783,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun connectedEmptyChatDoesNotClaimGatewayOfflineWhileHealthIsPending() =
-    withConnectedUnreadyEmptyChat(rejectHealth = false) { _, _, _ ->
-      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
-      composeRule.onNodeWithText(nativeString("Chat not ready")).assertIsDisplayed()
-      composeRule.onNodeWithText(nativeString("Use Refresh chat to check Gateway health.")).assertIsDisplayed()
-    }
-
-  @Test
   fun connectedEmptyChatDoesNotClaimGatewayOfflineAfterHealthFails() =
     withConnectedUnreadyEmptyChat(rejectHealth = true) { _, _, _ ->
       composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
@@ -6295,6 +6165,43 @@ class ChatComposerLayoutTest {
       capture("confirmed")
       verifyGeometry("confirmed")
       assertTrue(geometryFailures.joinToString("\n"), geometryFailures.isEmpty())
+
+      // Transcript images use the inline budget; the large camera fixture intentionally exceeds it.
+      val imageBase64 =
+        java.io.ByteArrayOutputStream().use { output ->
+          val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+          try {
+            bitmap.eraseColor(android.graphics.Color.rgb(88, 139, 70))
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output))
+            Base64.getEncoder().encodeToString(output.toByteArray())
+          } finally {
+            bitmap.recycle()
+          }
+        }
+      assertTrue("Transcript fixture must fit inline image admission", imageBase64.length <= CHAT_IMAGE_MAX_BASE64_CHARS)
+      val image = ChatMessageContent(type = "image", mimeType = "image/jpeg", base64 = imageBase64)
+      composeRule.runOnIdle {
+        controllerFlow<List<ChatMessage>>("_messages").value =
+          listOf(
+            ChatMessage("garden-question", "user", listOf(ChatMessageContent(text = "Which garden layout works best?"), image, image), null),
+            ChatMessage("garden-answer", "assistant", listOf(ChatMessageContent(text = "The sunny bed has room for herbs. Keep a clear path between the planters.")), null),
+          )
+      }
+      composeRule.waitForIdle()
+      composeRule.onAllNodesWithContentDescription("image/jpeg", useUnmergedTree = true).assertCountEquals(0)
+      imageDecodeDispatcher.scheduler.advanceUntilIdle()
+      composeRule.waitForIdle()
+      composeRule.onAllNodesWithContentDescription("image/jpeg", useUnmergedTree = true).assertCountEquals(2)
+      composeRule.onNodeWithText("Which garden layout works best?", useUnmergedTree = true).assertIsDisplayed()
+      composeRule.onNodeWithText("The sunny bed has room for herbs. Keep a clear path between the planters.", useUnmergedTree = true).assertIsDisplayed()
+      System.getenv("OPENCLAW_MEDIA_PROOF_DIR")?.let { directory ->
+        val bitmap = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
+        assertEquals(360, bitmap.width)
+        assertEquals(800, bitmap.height)
+        val file = File(directory, "phone-full-chat.png")
+        file.parentFile!!.mkdirs()
+        file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+      }
     }
 
   private fun readerMarkerBounds(

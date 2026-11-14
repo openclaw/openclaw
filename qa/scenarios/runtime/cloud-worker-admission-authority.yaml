@@ -7,6 +7,8 @@ scenario:
   coverage:
     secondary:
       - gateway.remote-execution-safeguards
+      - gateway.chat-apis
+      - gateway.agent-and-automation-apis
   objective: Prove that a paired-node worker turn with a valid user admission reaches the worker and completes, and that revoking run or placement authority while the launch is in flight stops the turn before any worker turn I/O.
   successCriteria:
     - A managed-worktree qa-channel session dispatches to a real paired-node worker through an isolated Gateway.

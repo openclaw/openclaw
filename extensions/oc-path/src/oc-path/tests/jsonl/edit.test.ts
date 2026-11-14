@@ -102,13 +102,21 @@ describe("JSONL edits", () => {
     ["\n", "\n42\n"],
     ["\r\n", "\r\n42\r\n"],
     ['{ "id":9007199254740993 }', '{ "id":9007199254740993 }\n42'],
+    ['{"a":1}\n\n\n', '{"a":1}\n\n\n42\n'],
+    ['{"a":1}\nbroken\n{"b":2}\n', '{"a":1}\nbroken\n{"b":2}\n42\n'],
   ])("preserves prior bytes when appending after %j", (raw, expected) => {
-    const next = appendJsonlOcPath(parseJsonl(raw), { kind: "number", value: 42 });
+    const ast = parseJsonl(raw);
+    const before = structuredClone(ast);
+    const next = appendJsonlOcPath(ast, { kind: "number", value: 42 });
     expect(next.raw).toBe(expected);
+    expect(ast).toEqual(before);
+    expect(next.lines.map(({ line }) => line)).toEqual(next.lines.map((_, index) => index + 1));
     expect(resolveJsonlOcPath(next, parseOcPath("oc://x.jsonl/$last"))).toMatchObject({
       kind: "line",
       node: { value: { kind: "number", value: 42 } },
     });
+    const second = appendJsonlOcPath(next, { kind: "number", value: 43 });
+    expect(second.lines.slice(-2).map((line) => line.raw)).toEqual(["42", "43"]);
   });
 
   it("rejects new sentinel values without changing the source", () => {

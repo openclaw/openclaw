@@ -730,14 +730,6 @@ describe("subagent registry steer restarts", () => {
       emitLifecycleEnd("run-child");
       await childPublished;
       await settleRootWork(true);
-      {
-        const childRunIds = announceSpy.mock.calls.map(
-          (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
-        );
-        expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
-        expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
-      }
-
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );

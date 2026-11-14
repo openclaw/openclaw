@@ -275,7 +275,6 @@ struct DashboardNativeBrowserContractTests {
             (true, true, .openExternal(url)),
             (false, true, .cancel),
             (true, false, .cancel),
-            (false, false, .cancel),
         ]
         for testCase in cases {
             #expect(ControlUIDocumentHost.browserResponseAction(

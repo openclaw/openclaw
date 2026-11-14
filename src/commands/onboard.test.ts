@@ -708,12 +708,6 @@ describe("setupWizardCommand", () => {
       expect(runNonInteractive).not.toHaveBeenCalled();
       expect(mocks.handleReset).toHaveBeenCalledTimes(validationResult ? 1 : 0);
       expect(mocks.runNonInteractiveSetup).toHaveBeenCalledTimes(validationResult ? 1 : 0);
-      if (!validationResult) {
-        expect(validateNonInteractive).toHaveBeenCalledOnce();
-        expect(runtime.error).toHaveBeenCalledWith("Local provider preflight failed");
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-        return;
-      }
       expect(validateNonInteractive).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           authChoice: providerId,

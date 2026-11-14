@@ -313,6 +313,36 @@ test("removes only peer-granted node roles, preserving unrelated operator grants
 
 test("does not approve merged operator requests or stale principals", async () => {
   const peer = nodePeer();
+  const pendingBefore = (await listDevicePairing()).pending.length;
+  for (const role of ["operator", "node"] as const) {
+    const ws = await openWs(started.port, { [header]: peer });
+    try {
+      const res = await connectReq(ws, {
+        client: { ...NODE_CLIENT, mode: "cli" },
+        role,
+        scopes: ["operator.admin"],
+        skipDefaultAuth: true,
+        deviceIdentityPath: identityPath(`ocid-node-access-${role}`),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message).toContain('node keys require role "node" and client mode "node"');
+      expect((await listDevicePairing()).pending).toHaveLength(pendingBefore);
+    } finally {
+      ws.close();
+    }
+  }
+  const response = await fetch(`http://127.0.0.1:${started.port}/tools/invoke`, {
+    method: "POST",
+    headers: {
+      [header]: peer,
+      authorization: "Bearer test-node-secret",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ tool: "session_status", args: {} }),
+  });
+  expect(response.status).toBe(401);
+  expect(response.headers.get("set-cookie")).toBeNull();
+  await response.arrayBuffer();
   const path = identityPath("ocid-node-merged");
   const identity = loadOrCreateDeviceIdentity({ path });
   const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");

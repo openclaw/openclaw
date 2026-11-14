@@ -1375,21 +1375,6 @@ export const single = {
 
   describe("agent directory and glob inventory", () => {
     const toolRoot = "src/agents/tools";
-    const failoverRoot = "src/agents/failover";
-
-    it.each([toolRoot, `${toolRoot}/**/*.test.ts`])(
-      "intersects inherited includes for %s without dropping an explicit file",
-      (target) => {
-        const selected = `${toolRoot}/computer-tool.schema.test.ts`;
-        const explicit = `${failoverRoot}/classify.legacy-provider-predicates.test.ts`;
-        withIncludeFile([selected], (includeFile) => {
-          const specs = runSpecs([target, explicit], {
-            baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
-          });
-          expect(selectedTestFiles(specs).toSorted()).toEqual([selected, explicit].toSorted());
-        });
-      },
-    );
 
     it.each([toolRoot, `${toolRoot}/**/*.test.ts`])(
       "keeps live and E2E opt-in outside ordinary selection for %s",

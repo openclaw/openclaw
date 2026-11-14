@@ -629,7 +629,9 @@ struct OpenClawIDNodeEnrollmentTests {
             seq: Int64,
             claims: Int64,
             previous: OpenClawIDNodeTrustState?,
-            at now: Int64) throws -> OpenClawIDNodeTrustAssessment
+            at now: Int64,
+            snapshotIssuedAt: Int64? = nil,
+            invalidSignature: Bool = false) throws -> OpenClawIDNodeTrustAssessment
         {
             var response = base
             var descriptor = try #require(response["descriptor"]).fields([
@@ -649,9 +651,14 @@ struct OpenClawIDNodeEnrollmentTests {
                 [
                     "seq": .integer(seq),
                     "binding_seq": .integer(claims),
-                    "issued_at": .integer(now),
+                    "issued_at": .integer(snapshotIssuedAt ?? now),
                 ],
                 gateway)
+            if invalidSignature {
+                var snapshot = try #require(response["snapshot"]).fields(["v", "type", "body", "signer", "alg", "sig"])
+                snapshot["sig"] = .string(OpenClawIDNodeIdentity.base64URL(Data(repeating: 0, count: 64)))
+                response["snapshot"] = .object(snapshot)
+            }
             return try OpenClawIDNodeTrust.assess(
                 response: OpenClawIDCanonicalJSON.object(response).encoded,
                 link: link,
@@ -698,6 +705,30 @@ struct OpenClawIDNodeEnrollmentTests {
         await reopened.close()
         let admitted = try assess(binding: 1, gateway: oldGateway, seq: 7, claims: 1, previous: nil, at: fixture.now)
         let state = try admitted.verdict.get().state
+        for future in [false, true] {
+            let refused = try assess(
+                binding: 2, gateway: oldGateway, seq: 7, claims: 2, previous: state, at: fixture.now,
+                snapshotIssuedAt: future ? fixture.now + 301 : nil, invalidSignature: !future)
+            #expect(throws: (any Error).self) { try refused.verdict.get() }
+            let pin = try #require(refused.observation)
+            #expect(pin.bindingSequence == 2)
+            #expect(pin.snapshotSequence == state.snapshotSequence)
+            #expect(pin.snapshotIssuedAt == state.snapshotIssuedAt)
+            #expect(pin.snapshotBindingSequence == state.snapshotBindingSequence)
+            let pinURL = directory.appendingPathComponent("refused-\(future).sqlite")
+            let pinStore = OpenClawIDNodeNativeTrustStore(databaseURL: pinURL, enrollmentID: id, assertCurrent: {})
+            try await pinStore.observe(hostname: link.hostname, state: state)
+            try await pinStore.observe(hostname: link.hostname, state: pin)
+            await pinStore.close()
+            let retainedStore = OpenClawIDNodeNativeTrustStore(databaseURL: pinURL, enrollmentID: id, assertCurrent: {})
+            let retained = try #require(await retainedStore.load(hostname: link.hostname))
+            #expect(retained.bindingSequence == 2)
+            #expect(throws: OpenClawIDNodeEnrollmentError.rollback) {
+                try assess(binding: 1, gateway: oldGateway, seq: 7, claims: 1, previous: retained, at: fixture.now)
+                    .verdict.get()
+            }
+            await retainedStore.close()
+        }
         // The old K_gw alone signs binding_seq 9: refused, and nothing of it is kept.
         let inflated = try assess(
             binding: 1,

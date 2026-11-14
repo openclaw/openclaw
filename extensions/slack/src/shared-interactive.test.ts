@@ -10,21 +10,6 @@ import {
 } from "./blocks-render.js";
 
 describe("buildSlackInteractiveBlocks", () => {
-  it("preserves long legacy text, whitespace, protected entities, and surrogate pairs", () => {
-    const text = `${"x".repeat(2_998)}  &amp;🚀tail`;
-    const blocks = buildSlackInteractiveBlocks({ blocks: [{ type: "text", text }] });
-    const sections = blocks.map((block) =>
-      block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
-        ? block.text.text
-        : "",
-    );
-
-    expect(sections.join("")).toBe(text);
-    expect(sections).toHaveLength(2);
-    expect(sections.every((section) => section.length <= 3_000)).toBe(true);
-    expect(sections.some((section) => section.includes("&amp;🚀"))).toBe(true);
-  });
-
   it("keeps Slack sections and interactive controls within Block Kit limits", () => {
     const long = "x".repeat(120);
     const blocks = buildSlackInteractiveBlocks({

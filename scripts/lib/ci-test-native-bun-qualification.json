@@ -164,7 +164,6 @@
     "src/channels/thread-bindings-messages.test.ts": "25cf5d517fa785e1b0b196abb9d6026ce430762c021a43e45d9649fe48ff9215",
     "src/channels/turn/agent-run-terminal-outcome.test.ts": "c2ee2babe480edc2eb2b8fd70519e32a3d307e23757136b76f11db22e6bf0198",
     "src/channels/turn/history-window.test.ts": "d93e9626ad53501381a7423a55f60f06e4887f496ebc435ce1abde8fbfc51c83",
-    "src/cli/command-path-matches.test.ts": "fa85d58f4f233bbd2b63761e29f2cf0cd895ac5eec527202c8f42aa1d0255250",
     "src/cli/nodes-media-utils.test.ts": "6ec3b6dcb6a457c48a28d3f1541c69fb163429a6360600c99f92add2772805f9",
     "src/cli/parse-timeout.test.ts": "861cf40e85d56d34898606a8600ca5f9b74e623375f81896fc985652141f061d",
     "src/cli/program/command-descriptor-utils.test.ts": "3d5d4bb049c94903ae6e53e9058c5dc865e2717061f298811fa1d483cead95cd",

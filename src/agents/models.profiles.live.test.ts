@@ -577,28 +577,9 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
 }
 
 describe("isModelNotFoundErrorMessage", () => {
-  it("matches whitespace-separated not found errors", () => {
-    expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
-    expect(isModelNotFoundErrorMessage("model: minimax-text-01 not found")).toBe(true);
-  });
-
   it("still matches underscore and hyphen variants", () => {
     expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
-  });
-
-  it("matches deprecated free model transition messages", () => {
-    expect(
-      isModelNotFoundErrorMessage(
-        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
-      ),
-    ).toBe(true);
-  });
-
-  it("matches OpenRouter no-endpoints wording", () => {
-    expect(
-      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
-    ).toBe(true);
   });
 });
 

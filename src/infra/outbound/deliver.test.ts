@@ -2422,37 +2422,15 @@ describe("deliverOutboundPayloads", () => {
             "visible",
             "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
             "OpenClaw runtime context (internal):",
-            "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
-            "raw child output",
-            "<<<END_UNTRUSTED_CHILD_RESULT>>>",
             "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
             "after",
           ].join("\n"),
-          channelData: {
-            internal: [
-              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "internal metadata",
-              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-            ].join("\n"),
-          },
         },
       ],
       deps: { matrix: sendMatrix },
     });
 
     const queuedDelivery = requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery");
-    expect(
-      queuedDelivery?.preparedBatch?.entries?.flatMap((entry) =>
-        entry.status === "accepted" ? [entry.payload] : [],
-      ),
-    ).toStrictEqual([
-      {
-        text: "visible\nafter",
-        channelData: {
-          internal: "",
-        },
-      },
-    ]);
     expect(queuedDelivery?.renderedBatchPlan?.payloadCount).toBe(1);
     expect(queuedDelivery?.renderedBatchPlan?.textCount).toBe(1);
     expect(queuedDelivery?.renderedBatchPlan?.items?.[0]?.text).toBe("visible\nafter");

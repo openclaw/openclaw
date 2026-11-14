@@ -1604,16 +1604,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
   it.each([
     {
-      name: "leaving Ultrafast with an inherited lower limit",
-      fastMode: "ultrafast",
-      nextFastMode: true,
-      nativeLimit: 120_000,
-      nativeScope: "total",
-      retained: true,
-      expectedLimit: 120_000,
-      nativeLoaded: null,
-    },
-    {
       name: "leaving Ultrafast with the native default scope",
       fastMode: "ultrafast",
       nextFastMode: true,

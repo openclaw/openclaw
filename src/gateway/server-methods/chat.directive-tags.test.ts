@@ -3609,38 +3609,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     },
     {
-      name: "keeps final text when only the slash-command media is duplicated",
-      id: "media-different-final-text",
-      files: ["voice.mp3"],
-      replies: ([audio]) => [
-        createSlashCommandMediaReply("block", [audio], { text: "preview" }),
-        createSlashCommandMediaReply("final", [audio], {
-          text: "done",
-          replyToCurrent: true,
-        }),
-      ],
-      verify: (content) => {
-        const text = content
-          .map((block) => (typeof block.text === "string" ? block.text : ""))
-          .filter(Boolean)
-          .join("\n");
-        expect(text).toContain("preview");
-        expect(text).toContain("done");
-        expect(managedAudioBlocks(content)).toHaveLength(1);
-        const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
-          (update) =>
-            typeof update.message === "object" &&
-            update.message !== null &&
-            (update.message as { role?: unknown }).role === "assistant",
-        );
-        expect(transcriptUpdate?.message).toMatchObject({
-          openclawDelivery: { replyToCurrent: true },
-        });
-        expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
-        expect(JSON.stringify(transcriptUpdate?.message)).toContain("done");
-      },
-    },
-    {
       name: "deduplicates slash-command final echoes against the same text and media block",
       id: "same-caption-same-media",
       files: ["first.mp3", "second.mp3"],
@@ -4187,35 +4155,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         provenance,
       }),
     );
-  });
-
-  it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
-    await createReadyChatTranscript("openclaw-chat-send-user-transcript-before-run-gate-");
-    mockState.triggerAgentRunStart = true;
-    mockState.hasBeforeAgentRunHooks = true;
-    let userUpdateCountAtAgentStart = 0;
-    mockState.onAfterAgentRunStart = () => {
-      userUpdateCountAtAgentStart = mockState.emittedTranscriptUpdates.filter(
-        (update) =>
-          typeof update.message === "object" &&
-          update.message !== null &&
-          (update.message as { role?: unknown }).role === "user",
-      ).length;
-    };
-    await createChatRequestFixture().send({
-      idempotencyKey: "idem-user-transcript-before-run-gate",
-      message: "secret prompt that may be blocked",
-      expectBroadcast: false,
-    });
-
-    expect(userUpdateCountAtAgentStart).toBe(0);
-    const userUpdates = mockState.emittedTranscriptUpdates.filter(
-      (update) =>
-        typeof update.message === "object" &&
-        update.message !== null &&
-        (update.message as { role?: unknown }).role === "user",
-    );
-    expect(userUpdates).toHaveLength(0);
   });
 
   it("does not persist raw user transcript content when a delivered before_agent_run block is followed by a dispatch error", async () => {

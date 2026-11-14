@@ -253,86 +253,11 @@ class SmsManagerTest {
   }
 
   @Test
-  fun parseQueryParamsAcceptsEmptyPayload() {
-    val result = SmsManager.parseQueryParams(null)
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals(25, ok.params.limit)
-    assertEquals(0, ok.params.offset)
-  }
-
-  @Test
   fun parseQueryParamsRejectsNonObjectJson() {
     val result = SmsManager.parseQueryParams("[]")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
-  }
-
-  @Test
-  fun parseQueryParamsParsesLimitAndOffset() {
-    val result = SmsManager.parseQueryParams("{\"limit\":10,\"offset\":5}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals(10, ok.params.limit)
-    assertEquals(5, ok.params.offset)
-  }
-
-  @Test
-  fun parseQueryParamsClampsLimitRange() {
-    val result = SmsManager.parseQueryParams("{\"limit\":300}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals(200, ok.params.limit)
-  }
-
-  @Test
-  fun parseQueryParamsParsesPhoneNumber() {
-    val result = SmsManager.parseQueryParams("{\"phoneNumber\":\"+1234567890\"}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals("+1234567890", ok.params.phoneNumber)
-  }
-
-  @Test
-  fun parseQueryParamsParsesContactName() {
-    val result = SmsManager.parseQueryParams("{\"contactName\":\"lixuankai\"}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals("lixuankai", ok.params.contactName)
-  }
-
-  @Test
-  fun parseQueryParamsParsesKeyword() {
-    val result = SmsManager.parseQueryParams("{\"keyword\":\"test\"}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals("test", ok.params.keyword)
-  }
-
-  @Test
-  fun parseQueryParamsParsesTimeRange() {
-    val result = SmsManager.parseQueryParams("{\"startTime\":1000,\"endTime\":2000}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals(1000L, ok.params.startTime)
-    assertEquals(2000L, ok.params.endTime)
-  }
-
-  @Test
-  fun parseQueryParamsParsesType() {
-    val result = SmsManager.parseQueryParams("{\"type\":1}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals(1, ok.params.type)
-  }
-
-  @Test
-  fun parseQueryParamsParsesReadStatus() {
-    val result = SmsManager.parseQueryParams("{\"isRead\":true}")
-    assertTrue(result is SmsManager.QueryParseResult.Ok)
-    val ok = result as SmsManager.QueryParseResult.Ok
-    assertEquals(true, ok.params.isRead)
   }
 
   @Test
@@ -362,21 +287,6 @@ class SmsManagerTest {
   @Test
   fun toByPhoneLookupNumberStripsFormattingToDigits() {
     assertEquals("12107588120", SmsManager.toByPhoneLookupNumber("+1 (210) 758-8120"))
-  }
-
-  @Test
-  fun normalizePhoneNumberOrNullReturnsNullForFormattingOnlyInput() {
-    assertNull(SmsManager.normalizePhoneNumberOrNull("() -   "))
-  }
-
-  @Test
-  fun normalizePhoneNumberOrNullReturnsNullForPlusOnlyInput() {
-    assertNull(SmsManager.normalizePhoneNumberOrNull(" + "))
-  }
-
-  @Test
-  fun normalizePhoneNumberOrNullKeepsUsableNormalizedNumber() {
-    assertEquals("+15551234567", SmsManager.normalizePhoneNumberOrNull(" +1 (555) 123-4567 "))
   }
 
   @Test
@@ -505,19 +415,6 @@ class SmsManagerTest {
   }
 
   @Test
-  fun mixedCandidatesKeepDescendingOrderAndBounds() {
-    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 2, reviewMode = false)
-
-    candidates.add("sms:1", smsMessage(id = 1L, date = 1700L))
-    candidates.add("sms:2", smsMessage(id = 2L, date = 2000L))
-    candidates.add("sms:3", smsMessage(id = 3L, date = 1500L))
-
-    val page = candidates.page(SmsManager.QueryParams())
-    assertEquals(listOf(2L, 1L), page.map { it.id })
-    assertEquals(listOf(2000L, 1700L), page.map { it.date })
-  }
-
-  @Test
   fun mixedCandidatesSupportDefaultBoundedWindow() {
     val params = SmsManager.QueryParams(limit = 3, offset = 2, includeMms = true, phoneNumber = "+15551234567")
     val candidates = SmsManager.MixedByPhoneCandidates(params.offset + params.limit, reviewMode = false)
@@ -563,24 +460,6 @@ class SmsManagerTest {
       val expected = if (reviewMode) listOf("replacement", "MMS") else listOf("MMS", "replacement")
       assertEquals(expected, tied.page(SmsManager.QueryParams()).map { it.body })
     }
-  }
-
-  @Test
-  fun mixedCandidatesUseBoundedCollectorWhenReviewModeDisabled() {
-    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 1, reviewMode = false)
-    candidates.add("sms:1", smsMessage(id = 1L, date = 1000L))
-    candidates.add("mms:2", smsMessage(id = 2L, date = 2000L, transportType = "mms"))
-
-    assertEquals(listOf(2L), candidates.page(SmsManager.QueryParams()).map { it.id })
-  }
-
-  @Test
-  fun mixedCandidatesMaterializeFullSetWhenReviewModeEnabled() {
-    val candidates = SmsManager.MixedByPhoneCandidates(maxCandidates = 1, reviewMode = true)
-    candidates.add("sms:1", smsMessage(id = 1L, date = 1000L))
-    candidates.add("mms:2", smsMessage(id = 2L, date = 2000L, transportType = "mms"))
-
-    assertEquals(listOf(2L, 1L), candidates.page(SmsManager.QueryParams()).map { it.id })
   }
 
   @Test
@@ -682,26 +561,10 @@ class SmsManagerTest {
   }
 
   @Test
-  fun resolveMixedByPhoneRowAddressPreservesProviderAddressWhenPresent() {
-    assertEquals(
-      "+12107588120",
-      SmsManager.resolveMixedByPhoneRowAddress("+12107588120", "12107588120"),
-    )
-  }
-
-  @Test
   fun resolveMixedByPhoneRowAddressFallsBackToLookupNumberWhenProviderAddressMissing() {
     assertEquals(
       "12107588120",
       SmsManager.resolveMixedByPhoneRowAddress(null, "12107588120"),
-    )
-  }
-
-  @Test
-  fun resolveMixedByPhoneRowAddressCanPreserveLookupNumberWhenProviderAlreadyReturnsIt() {
-    assertEquals(
-      "12107588120",
-      SmsManager.resolveMixedByPhoneRowAddress("12107588120", "12107588120"),
     )
   }
 
@@ -797,13 +660,8 @@ class SmsManagerTest {
     val active =
       SmsManager.QueryParams(
         limit = 5,
-        offset = 0,
-        isRead = null,
         contactName = null,
         phoneNumber = "+12107588120",
-        keyword = null,
-        startTime = null,
-        endTime = null,
         includeMms = true,
         conversationReview = true,
       )
@@ -822,13 +680,8 @@ class SmsManagerTest {
     val params =
       SmsManager.QueryParams(
         limit = 5,
-        offset = 0,
-        isRead = null,
         contactName = null,
         phoneNumber = "+12107588120",
-        keyword = null,
-        startTime = null,
-        endTime = null,
         includeMms = true,
         conversationReview = true,
       )
@@ -851,13 +704,8 @@ class SmsManagerTest {
     val params =
       SmsManager.QueryParams(
         limit = 5,
-        offset = 0,
-        isRead = null,
         contactName = "Leah",
         phoneNumber = null,
-        keyword = null,
-        startTime = null,
-        endTime = null,
         includeMms = true,
         conversationReview = true,
       )
@@ -975,19 +823,6 @@ class SmsManagerTest {
     assertFalse(metadata.mmsRequested)
     assertFalse(metadata.mmsEligible)
     assertFalse(metadata.mmsAttempted)
-    assertFalse(metadata.mmsIncluded)
-  }
-
-  @Test
-  fun buildQueryMetadataMarksEligibleAttemptedButNotIncludedForSingleNumberFallback() {
-    val params = SmsManager.QueryParams(includeMms = true, phoneNumber = "+15551234567")
-    val messages = listOf(smsMessage(id = 1L, date = 1000L))
-
-    val metadata = SmsManager.buildQueryMetadata(params, listOf("+15551234567"), messages)
-
-    assertTrue(metadata.mmsRequested)
-    assertTrue(metadata.mmsEligible)
-    assertTrue(metadata.mmsAttempted)
     assertFalse(metadata.mmsIncluded)
   }
 

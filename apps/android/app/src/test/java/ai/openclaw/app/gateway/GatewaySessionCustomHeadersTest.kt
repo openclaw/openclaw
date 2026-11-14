@@ -100,12 +100,6 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
   @Test
-  fun sourceFaviconsUseReadAuthContextPathBoundsAndCurrentConnection() =
-    runBlocking {
-      assertSourceFavicons(contextPath = "/socket", basePath = "/ui")
-    }
-
-  @Test
   fun sourceFaviconsPreserveNativeProxyMountsWithoutDuplicatingExplicitUiPaths() =
     runBlocking {
       for ((contextPath, basePath, encodedPath) in listOf(

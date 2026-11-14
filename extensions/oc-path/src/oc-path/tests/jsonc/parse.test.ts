@@ -46,10 +46,14 @@ describe("parseJsonc — basic shapes", () => {
 });
 
 describe("parseJsonc — soft errors", () => {
-  it("returns null root on unrecoverable input", () => {
-    const ast = parseJsonc('{ "x" 1 }');
-    expect(ast.root).toBeNull();
-  });
+  it.each(['{ "x" 1 }', "// just a comment\n/* and a block */\n"])(
+    "returns null root on unrecoverable or content-free input: %s",
+    (raw) => {
+      const ast = parseJsonc(raw);
+      expect(ast.raw).toBe(raw);
+      expect(ast.root).toBeNull();
+    },
+  );
 
   it.each(["1 garbage", "1 2"])("retains a valid value before trailing input: %s", (raw) => {
     expect(parseJsonc(raw)).toEqual({
