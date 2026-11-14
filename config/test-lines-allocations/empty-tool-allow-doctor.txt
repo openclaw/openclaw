@@ -1,0 +1,2 @@
+131
+# Doctor empty-allow notes across tool, agent, channel, and sandbox inheritance.
