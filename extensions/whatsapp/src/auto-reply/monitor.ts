@@ -402,11 +402,18 @@ export async function monitorWebChannel(
         channel: "whatsapp",
         accountId: account.accountId,
       });
-      enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
-        sessionKey: connectRoute.sessionKey,
-      });
-
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
+      // Keep only the latest connection state so reconnects cannot fill the session queue.
+      const connectionNotice = {
+        sessionKey: connectRoute.sessionKey,
+        contextKey: `whatsapp:connection:${normalizedAccountId}`,
+        replace: true,
+      };
+      enqueueSystemEvent(
+        `WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`,
+        connectionNotice,
+      );
+
       const drainDeliveries = (mode: "reconnect" | "periodic") => {
         void drainPendingDeliveries({
           drainKey: `whatsapp:${normalizedAccountId}`,
@@ -499,9 +506,7 @@ export async function monitorWebChannel(
 
       enqueueSystemEvent(
         `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
-        {
-          sessionKey: connectRoute.sessionKey,
-        },
+        connectionNotice,
       );
 
       if (decision.action === "stop") {
