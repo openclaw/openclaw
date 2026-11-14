@@ -8,6 +8,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
   normalizeCacheKey,
+  postPinnedTrustedHostWebToolsJson,
   postTrustedWebToolsJson,
   readCache,
   readCachedSearchPayload,
@@ -124,6 +125,10 @@ function resolveEndpoint(baseUrl: string, pathname: string): string {
   return url.toString();
 }
 
+function usesDefaultTavilyHost(baseUrl: string): boolean {
+  return new URL(baseUrl).hostname === new URL(DEFAULT_TAVILY_BASE_URL).hostname;
+}
+
 async function postTavilyJson(params: {
   baseUrl: string;
   pathname: "/extract" | "/search";
@@ -134,7 +139,13 @@ async function postTavilyJson(params: {
   responseMaxBytes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
-  return postTrustedWebToolsJson(
+  // The hosted API keeps the trusted-endpoint guard. Any other base URL names an
+  // operator-run endpoint that may sit on a private host, so the guard trusts
+  // exactly that host while still checking the addresses it resolves to.
+  const postJson = usesDefaultTavilyHost(params.baseUrl)
+    ? postTrustedWebToolsJson
+    : postPinnedTrustedHostWebToolsJson;
+  return postJson(
     {
       url: resolveEndpoint(params.baseUrl, params.pathname),
       timeoutSeconds: params.timeoutSeconds,
