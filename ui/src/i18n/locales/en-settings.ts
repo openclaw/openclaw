@@ -1667,7 +1667,9 @@ const enSettings = {
       locationHint: "Allow agents to use device location when a tool asks for it.",
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
-      preciseLocationHint: "Always may require System Settings to approve background location.",
+      locationAlwaysHint: "Always may require System Settings to approve background location.",
+      preciseLocationHint:
+        "Allow the Gateway to request this Mac’s precise location when location access is enabled.",
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
