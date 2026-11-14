@@ -953,6 +953,12 @@ runs a dedicated Claude configuration directory. OpenClaw passes this variable
 through to the installed `claude` process. Use absolute paths and restart the
 Gateway after changing its environment.
 
+Native resume validation also follows the effective child environment when a selected
+skill supplies `CLAUDE_CONFIG_DIR` only for the run. Keep that skill selected on later
+turns, including after a Gateway restart. Missing transcripts and unanswered native
+tool calls still invalidate resume. This does not change the configuration root used
+by Control UI history reads or Doctor.
+
 For a separate login, run these commands as the Gateway's OS user, then set the
 same `CLAUDE_CONFIG_DIR` on the Gateway:
 

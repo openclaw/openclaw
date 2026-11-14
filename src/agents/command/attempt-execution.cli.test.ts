@@ -1301,31 +1301,41 @@ describe("CLI attempt execution", () => {
     expectBindingIds(sessionStore, sessionKey, concurrentCliSessionId);
   });
 
-  it("preserves a stopped Claude session whose transcript is in CLAUDE_CONFIG_DIR", async () => {
-    const sessionKey = "agent:main:direct:claude-config-root";
-    const cliSessionId = "configured-root-session";
-    const configDir = path.join(tmpDir, "claude-config");
-    setTestEnvValue("HOME", path.join(tmpDir, "home"));
-    setTestEnvValue("CLAUDE_CONFIG_DIR", configDir);
-    const workspaceKey = (await fs.realpath(tmpDir)).normalize("NFC").replace(/[^a-zA-Z0-9]/g, "-");
-    const projectDir = path.join(configDir, "projects", workspaceKey);
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(
-      path.join(projectDir, `${cliSessionId}.jsonl`),
-      `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "prior answer" } })}\n`,
-    );
-    const sessionEntry = makeClaudeCliSessionEntry("configured-root-chat", cliSessionId);
-    const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
-    runCliAgentMock.mockImplementationOnce(async () => {
-      expectBindingIds(sessionStore, sessionKey, cliSessionId);
-      return makeCliResult("continued answer", cliSessionId);
-    });
+  it.each(["gateway", "skill"] as const)(
+    "preserves a stopped Claude session in the %s config root",
+    async (source) => {
+      const sessionKey = "agent:main:direct:claude-config-root";
+      const cliSessionId = "configured-root-session";
+      const configDir = path.join(tmpDir, "claude-config");
+      setTestEnvValue("HOME", path.join(tmpDir, "home"));
+      if (source === "gateway") {
+        setTestEnvValue("CLAUDE_CONFIG_DIR", configDir);
+      }
+      const workspaceKey = (await fs.realpath(tmpDir))
+        .normalize("NFC")
+        .replace(/[^a-zA-Z0-9]/g, "-");
+      const projectDir = path.join(configDir, "projects", workspaceKey);
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(
+        path.join(projectDir, `${cliSessionId}.jsonl`),
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "prior answer" } })}\n`,
+      );
+      const sessionEntry = makeClaudeCliSessionEntry("configured-root-chat", cliSessionId);
+      const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
+      runCliAgentMock.mockImplementationOnce(async () => {
+        expectBindingIds(sessionStore, sessionKey, cliSessionId);
+        return makeCliResult("continued answer", cliSessionId);
+      });
 
-    await runCli();
+      await runCli({
+        cfg: { skills: { entries: { "claude-root": { env: { CLAUDE_CONFIG_DIR: configDir } } } } },
+        skillsSnapshot: { prompt: "", skills: [{ name: "claude-root" }] },
+      });
 
-    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
-    expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
-  });
+      expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+      expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
+    },
+  );
 
   it("clears the persisted Claude CLI binding but still forwards the candidate when the stored transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
@@ -1338,7 +1348,12 @@ describe("CLI attempt execution", () => {
         transcript: false,
       },
     );
-    runCliAgentMock.mockImplementationOnce(async () => {
+    runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      // The runner reports its child-environment validation before executing a fresh session.
+      await expectDefined(
+        run.onMissingCliSessionTranscript,
+        "missing transcript callback",
+      )("phantom-claude-session");
       expectBindings(sessionStore, sessionKey, undefined);
       return makeCliResult("fresh cli response");
     });
@@ -1383,12 +1398,6 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       cliSessionId,
       cliSessionBinding: { sessionId: cliSessionId, authProfileId: "anthropic:claude-cli" },
-    });
-    expect(hasClaudeSessionMock).toHaveBeenCalledWith({
-      backendId: "claude-cli",
-      agentId: "main",
-      sessionId: "openclaw-sid",
-      sessionKey,
     });
     expectBindingIds(sessionStore, sessionKey, cliSessionId);
   });
