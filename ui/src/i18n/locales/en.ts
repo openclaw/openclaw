@@ -1411,7 +1411,7 @@ const startupEnglish = {
     // Footer key hint: "Tab compose" switches to the other mode.
     modeSwitch: { search: "search", compose: "compose" },
     searchPlaceholder: "Search…",
-    composePlaceholder: "Write a message…",
+    composePlaceholder: "Ask me anything, or hand me something to do",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
