@@ -1,0 +1,117 @@
+name: BU CI footprint
+
+# One task-owned probe on opening this draft. No shared CI driver or runner routing changes.
+on:
+  pull_request:
+    types: [opened]
+    paths: [.github/workflows/bu-ci-footprint.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bu-ci-footprint-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  large41:
+    if: >-
+      github.repository == 'openclaw/openclaw' && github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'roboclaw/bu-ci-footprint'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout original failing source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bcae09093b5a06099cd3a3f0f3d5f4e4b499ad7f
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Apply exact reviewed diagnostic files
+        env:
+          DIAGNOSTIC_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIAGNOSTIC_HEAD" =~ ^[a-f0-9]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "$DIAGNOSTIC_HEAD"
+          for file in scripts/ci-run-node-test-shard.mts scripts/lib/ci-owned-footprint.mts src/gateway/server.worktree-preparation.test.ts test/scripts/ci-owned-footprint.test.ts test/scripts/ci-run-node-test-shard.test.ts; do
+            git show "${DIAGNOSTIC_HEAD}:$file" > "$file"
+          done
+          echo "original_source=$(git rev-parse HEAD) diagnostic_head=$DIAGNOSTIC_HEAD"
+          echo "original_run=41784433080 original_job=126423702015 requested_runner=ubuntu-24.04"
+      - name: Setup original Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          semantic-checks: "true"
+          cache-mode: restore
+          node-version: "24.22.1"
+          install-bun: "false"
+          dependency-cache: "false"
+          vitest-fs-cache: "true"
+          vitest-worker-cache: "true"
+          node-compile-cache: "true"
+      - name: Setup original pinned Bun
+        uses: ./.github/actions/setup-test-bun
+      - name: Run original large41 composition with bounded diagnostics
+        env:
+          CI_RESOURCE_DIAGNOSTICS: "1"
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CHECKOUT_BASE_SHA: 8b9e240149fb8c3c871f92a653a0423fcc8b320d
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all
+          FROZEN_TARGET: "false"
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "H4sIAAAAAAAAA61XTY/bOAz9Lz4PM8Ac51Ys5rDYjxZtsV2gKAa0RDtCZFFDUnGDov99oTiZmXa7I2d3Lw5ivEdSNPlIffzSOU5DGLW7/dgZqV3vw7OfDRZjEMrxsDw3C3xj2n266ijtu9sv3es3d7//9OurD/d//Pz+7t37+99e/Xn/4fXbX+7evutuu5vu61UXkovF0xs0I0lHbyru+sn89fL0QTOa28IgPMHZWY1k8ahbFH+fcKLutvs+OHhkOxbqrjoLU0jj/Y4OTTRkFIyRItR4W2kZ0WjGAyjJnuR/TsrJ+PXJOLoMSqqBE7jZP2bj6ofgnEH9DhxPmZU8CCkXcaRNnvAeIwwsM4oPaVxJEHoopAYxDGRhogZtj4YCIyUStHokumlQesIJeE7kYR9oboAZxZ/Nk4fgKVmww8ssh4aRR6jV1Ty522JKFBXUUAy4mOOpld8zqYGKgZJByZHRQ+YYXCvyY+WBkGPxsKNDy8OCV3JFgh0u8VH/BUe1KY0+2yrOLMEIhISwUbgnq5CFZpRpIzSxEWRhHl5meoo0Hj+2E0Jj2WRhX1wjQh9wTKwWnK7KAt0QzApblETayPKWUKwnNFCr2lJ7wx1cpHNoa84VkuMxBeOVrfWEN8GkTkK2Y2EkF2KDG3lUMAzxZdjkMlSF8UEd70kaKavwszzotpjnOTUYtVs5adWvKZhRo2oSWtgTbJl3FwoR56oQLMD98mYlL1Oq4ggh5WIwkQ8IrqixbyQjkygnjBCSmhR3POfmLOzqOLc0JLMYxkdOAyxhj0bHQRDJ2vjSx+BgZtmRQEijNKv8ASFiD5LdcaBiIwGXfZ+KDkIeckRHtS5W5eiRdjpIFh5q9S/H+3fcl0nZwRxkkUVBZ40Azx9ceIYelWJIpJuQjMZlIK6ne4qGCiVp6Wu79/Rf7FzAzTgn6IV3JA3kQ6z67zBjH2JzDB8HasngacASTUGoDsJ1pCF8tnLS2nZ5nVkz9cpuRwaCrs0xOm4irWOXHsdasZgSl+TOpFVz6ZH8UKjUoRYJU8kXkoW0RIM9SY8WpgvZapxh4Bh5vtjzkatkFo9deyH72eiqK0QMq5mHQNHDjOEkFOscG3NUoGEgVyfJZozcY4TF5Al7mYVzZ6FzTQUtimNVDrWTxyXyBodE65o0kFBqLvb7oKGPBEvTDhhjj253yR5SLdRBOVOsi+7L4LN0Pon2qdFWbY2VbUJ17aN6H/tGi/52+6sZC24RXo7VZyKQkmr3w7FZv78C1i18JA8rqE/3wdOOoSQB44q7YV1dMHmFGMatPbsbXv0I7ZEmTt/eIP/hmEezoCXXRaD7+ukvTScQNb0PAAA="
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+          OPENCLAW_VITEST_MAX_WORKERS: "3"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ubuntu-24.04 is the original supported hosted runner label. Report actual capacity.
+          node -e 'const os=require("node:os"); console.log(JSON.stringify({cpus:os.availableParallelism(),memoryBytes:os.totalmem(),node:process.version}))'
+          node --import tsx scripts/ci-run-node-test-shard.mts 2>&1 | tee "$RUNNER_TEMP/bu-ci-footprint.log"
+      - name: Preserve bounded metadata
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import os,pathlib,re
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])
+          log=root/'bu-ci-footprint.log'
+          lines=log.read_text(errors='replace').splitlines() if log.exists() else []
+          selected=[line for line in lines if re.match(r'^\[shard:(owned-disk|capacity-refusal|termination|parent-signal|resource-snapshot|completion)\] ',line)]
+          (root/'bu-ci-footprint-metadata.txt').write_text('\n'.join(selected)+'\n')
+          PYCODE
+      - name: Upload bounded metadata
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bu-ci-footprint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bu-ci-footprint-metadata.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Validate diagnostic contracts and original shard owner
+        if: ${{ !cancelled() }}
+        run: node scripts/run-vitest.mjs test/scripts/ci-owned-footprint.test.ts test/scripts/ci-run-node-test-shard.test.ts --maxWorkers=1
+      - name: Validate touched script syntax and format
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check scripts/lib/ci-owned-footprint.mts
+          node --check scripts/ci-run-node-test-shard.mts
+          node_modules/.bin/oxfmt --check scripts/ci-run-node-test-shard.mts scripts/lib/ci-owned-footprint.mts src/gateway/server.worktree-preparation.test.ts test/scripts/ci-owned-footprint.test.ts
+      - name: Lint touched files through repository owners
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/ci-run-node-test-shard.mts scripts/lib/ci-owned-footprint.mts
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/ci-owned-footprint.test.ts test/scripts/ci-run-node-test-shard.test.ts
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/gateway/server.worktree-preparation.test.ts
