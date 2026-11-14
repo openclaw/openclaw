@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { API, EmitOutputFile } from "typescript/async";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
 import {
@@ -386,12 +387,10 @@ async function compileDeclarationsWithCompilerCli({
     }
     const outputFiles = new Map<string, { text: string }>();
     // The compiler creates the output directory only when it emits a declaration.
-    const emitted = fs.existsSync(output)
-      ? fs.readdirSync(output, { recursive: true, withFileTypes: true })
-      : [];
-    for (const entry of emitted) {
-      if (entry.isFile() && /\.d\.[cm]?ts(?:\.map)?$/u.test(entry.name)) {
-        const file = path.join(entry.parentPath, entry.name);
+    const emitted = fs.existsSync(output) ? listDirectoryTreeStrictSync(output) : [];
+    for (const { relativePath, dirent } of emitted) {
+      if (dirent.isFile() && /\.d\.[cm]?ts(?:\.map)?$/u.test(dirent.name)) {
+        const file = path.join(output, relativePath);
         outputFiles.set(file, { text: fs.readFileSync(file, "utf8") });
       }
     }
