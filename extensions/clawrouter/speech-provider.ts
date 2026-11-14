@@ -18,6 +18,11 @@ import {
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 import { readElevenLabsSpeechConfig, synthesizeElevenLabsSpeech } from "./speech-elevenlabs.js";
 import {
+  GOOGLE_SPEECH_MODELS,
+  readGoogleSpeechConfig,
+  synthesizeGoogleSpeech,
+} from "./speech-google.js";
+import {
   OPENROUTER_SPEECH_MODELS,
   readOpenRouterSpeechConfig,
   synthesizeOpenRouterSpeech,
@@ -38,9 +43,23 @@ function readVoice(raw: Record<string, unknown>) {
 function readConfig(raw: Record<string, unknown>, path: string) {
   const upstreamProvider = normalizeOptionalString(raw.upstreamProvider) ?? "openai";
   if (
-    !["openai", "gradium", "azure-speech", "elevenlabs", "openrouter"].includes(upstreamProvider)
+    !["openai", "gradium", "azure-speech", "elevenlabs", "openrouter", "google"].includes(
+      upstreamProvider,
+    )
   ) {
     throw new Error("Unsupported ClawRouter speech upstreamProvider");
+  }
+  if (upstreamProvider === "google") {
+    return {
+      ...readGoogleSpeechConfig(raw),
+      upstreamProvider,
+      apiKey: normalizeResolvedSecretInputString({ value: raw.apiKey, path: path + ".apiKey" }),
+      baseUrl: normalizeOptionalString(raw.baseUrl),
+      profileId: normalizeOptionalString(raw.profileId),
+      speed: undefined,
+      instructions: undefined,
+      lang: undefined,
+    };
   }
   if (upstreamProvider === "openrouter") {
     return {
@@ -123,7 +142,12 @@ function ttsConfig(raw: Record<string, unknown>) {
 export function buildClawRouterSpeechProvider(
   context: Pick<PluginCapabilityCatalogContext, "resolveApiKeyForProvider" | "fetchWithSsrFGuard">,
 ): SpeechProviderPlugin {
-  async function resolveAuth(cfg: SpeechSynthesisRequest["cfg"], raw: Record<string, unknown>) {
+  async function resolveAuth(
+    cfg: SpeechSynthesisRequest["cfg"],
+    raw: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
     const config = readConfig(raw, "tts.providers.clawrouter");
     const baseUrl = normalizeClawRouterApiBaseUrl(
       config.baseUrl ?? cfg.models?.providers?.clawrouter?.baseUrl,
@@ -142,7 +166,9 @@ export function buildClawRouterSpeechProvider(
         throw new Error("Selected speech auth profile is unavailable for ClawRouter");
       }
     }
+    signal?.throwIfAborted();
     const auth = await context.resolveApiKeyForProvider({
+      ...(signal ? { signal } : {}),
       provider: "clawrouter",
       ...(store ? { store } : {}),
       cfg:
@@ -209,6 +235,15 @@ export function buildClawRouterSpeechProvider(
     });
     req.signal?.throwIfAborted();
     const base = readConfig(req.providerConfig, "tts.providers.clawrouter");
+    if (base.upstreamProvider === "google") {
+      return synthesizeGoogleSpeech({
+        request: req,
+        resolveContext: (signal, model) =>
+          resolveAuth(req.cfg, { ...req.providerConfig, model, modelId: undefined }, signal),
+        fetchWithSsrFGuard: context.fetchWithSsrFGuard,
+        remaining,
+      });
+    }
     if (base.upstreamProvider === "openrouter") {
       return synthesizeOpenRouterSpeech({
         request: req,
@@ -283,7 +318,10 @@ export function buildClawRouterSpeechProvider(
       ? buildSingleVoiceSsml({
           text: req.text,
           voice: config.voice,
-          lang: normalizeOptionalString(overrides.lang ?? overrides.languageCode) ?? config.lang,
+          lang:
+            normalizeOptionalString(overrides.lang ?? overrides.languageCode) ??
+            config.lang ??
+            "en-US",
         })
       : undefined;
     if (
@@ -451,7 +489,11 @@ export function buildClawRouterSpeechProvider(
     id: "clawrouter",
     label: "ClawRouter",
     defaultModel: MODEL,
-    models: [MODEL, ...OPENROUTER_SPEECH_MODELS.map((model) => "openrouter/" + model)],
+    models: [
+      MODEL,
+      ...OPENROUTER_SPEECH_MODELS.map((model) => "openrouter/" + model),
+      ...GOOGLE_SPEECH_MODELS.map((model) => "google/" + model),
+    ],
     voices: VOICES,
     resolveConfig: ({ rawConfig }) => ttsConfig(rawConfig),
     parseDirectiveToken: createSpeechDirectiveParser({
@@ -459,6 +501,27 @@ export function buildClawRouterSpeechProvider(
       model: ["allowModelId", ["model"]],
     }),
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
+      const raw = asOptionalRecord(asOptionalRecord(baseTtsConfig.providers)?.clawrouter) ?? {};
+      if (
+        talkProviderConfig.upstreamProvider === "google" ||
+        (talkProviderConfig.upstreamProvider === undefined && raw.upstreamProvider === "google")
+      ) {
+        const inherited: Record<string, unknown> =
+          raw.upstreamProvider === "google"
+            ? { ...raw }
+            : { apiKey: raw.apiKey, baseUrl: raw.baseUrl, profileId: raw.profileId };
+        for (const aliases of [
+          ["model", "modelId"],
+          ["speakerVoice", "speakerVoiceId", "voice", "voiceName", "voiceId"],
+        ]) {
+          if (aliases.some((key) => talkProviderConfig[key] !== undefined)) {
+            for (const key of aliases) {
+              delete inherited[key];
+            }
+          }
+        }
+        return readConfig({ ...inherited, ...talkProviderConfig }, "talk.providers.clawrouter");
+      }
       const base = ttsConfig(baseTtsConfig);
       const upstreamProvider = normalizeOptionalString(talkProviderConfig.upstreamProvider);
       const inherited =

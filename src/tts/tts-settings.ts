@@ -78,8 +78,29 @@ export function asProviderConfig(value: unknown): SpeechProviderConfig {
   return withSpeakerSelectionCompat(asNonArrayRecord(value));
 }
 
+function normalizePersonaProviderConfig(value: unknown): SpeechProviderConfig {
+  const raw = asNonArrayRecord(value);
+  const next = asProviderConfig(raw);
+  // Compatibility aliases must not erase authored conflicts or invalid values.
+  for (const key of [
+    "speakerVoice",
+    "speakerVoiceId",
+    "voice",
+    "voiceName",
+    "voiceId",
+    "model",
+    "modelId",
+  ]) {
+    if (Object.hasOwn(raw, key)) {
+      next[key] = normalizeOptionalString(raw[key]) ?? raw[key];
+    }
+  }
+  return next;
+}
+
 function normalizeProviderConfigMap(
   value: unknown,
+  persona = false,
 ): Record<string, SpeechProviderConfig> | undefined {
   const rawMap = asNonArrayRecord(value);
   if (Object.keys(rawMap).length === 0) {
@@ -88,7 +109,9 @@ function normalizeProviderConfigMap(
   const next: Record<string, SpeechProviderConfig> = {};
   for (const [providerId, providerConfig] of Object.entries(rawMap)) {
     const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-    next[normalized] = asProviderConfig(providerConfig);
+    next[normalized] = persona
+      ? normalizePersonaProviderConfig(providerConfig)
+      : asProviderConfig(providerConfig);
   }
   return next;
 }
@@ -104,7 +127,7 @@ function collectTtsPersonas(raw: TtsConfig): Record<string, ResolvedTtsPersona> 
       ...persona,
       id: normalizedId,
       provider: normalizeConfiguredSpeechProviderId(persona.provider) ?? persona.provider,
-      providers: normalizeProviderConfigMap(persona.providers),
+      providers: normalizeProviderConfigMap(persona.providers, true),
     };
   }
   return personas;

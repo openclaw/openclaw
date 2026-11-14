@@ -157,11 +157,24 @@ export function mergeProviderConfigWithPersona(params: {
   if (!personaProviderConfig) {
     return { providerConfig: params.providerConfig, personaBinding: "missing" };
   }
+  const inherited = { ...params.providerConfig };
+  for (const family of [
+    ["speakerVoice", "speakerVoiceId", "voice", "voiceName", "voiceId"],
+    ["model", "modelId"],
+  ]) {
+    if (
+      family.some(
+        (key) =>
+          Object.hasOwn(personaProviderConfig, key) && personaProviderConfig[key] !== undefined,
+      )
+    ) {
+      for (const key of family) {
+        delete inherited[key];
+      }
+    }
+  }
   return {
-    providerConfig: {
-      ...params.providerConfig,
-      ...personaProviderConfig,
-    },
+    providerConfig: { ...inherited, ...personaProviderConfig },
     personaProviderConfig,
     personaBinding: "applied",
   };
