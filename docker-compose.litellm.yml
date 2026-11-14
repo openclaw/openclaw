@@ -1,0 +1,45 @@
+# Standalone LiteLLM provider gateway for OpenClaw.
+# Separate from the repo's main docker-compose.yml — does NOT modify or depend
+# on it. Bring up:   docker compose -f docker-compose.litellm.yml up -d
+# Tear down:         docker compose -f docker-compose.litellm.yml down
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: openclaw-litellm
+    # Loopback for the local OpenClaw process, plus the Tailscale address so the
+    # Gru zPotok VPS (private tailnet) can reach the gateway — it holds the provider
+    # keys and serves the NVIDIA Nemotron aliases. Never 0.0.0.0: the host has a
+    # public address and this gateway is the only place the provider keys live.
+    ports:
+      - "127.0.0.1:4000:4000"
+      - "100.68.93.75:4000:4000"
+    env_file:
+      - .env
+    environment:
+      # Default Ollama target for Linux Docker; overridable in .env.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    volumes:
+      - ./litellm.config.yaml:/app/config.yaml:ro
+    # Reach the host's Ollama (127.0.0.1:11434) from inside the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    networks:
+      - default
+      # Доступ к локальному Langfuse (трекинг всех моделей шлюза).
+      - langfuse-internal
+    restart: unless-stopped
+    healthcheck:
+      # /health/liveliness needs no auth; proves the proxy process is up.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+networks:
+  default: {}
+  # Внешняя сеть стека Langfuse — по ней шлюз шлёт трейсы.
+  langfuse-internal:
+    external: true
+    name: langfuse-stack_langfuse-internal

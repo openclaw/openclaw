@@ -91,6 +91,13 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   const harnessBase = {
     ...diagnosticBase(params, harnessTrace),
     harnessId: "claude-cli",
+    runnerType: "cli",
+    ...(() => {
+      const provider = params.modelProvider ?? "anthropic";
+      return {
+        selectedRoute: params.model ? `${provider}/${params.model}` : provider,
+      };
+    })(),
   };
   const runBase = diagnosticBase(params, runTrace);
   const startedAt = Date.now();
@@ -201,6 +208,12 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
               ? "error"
               : runOutcome,
         ...(result.meta.yielded !== undefined ? { yieldDetected: result.meta.yielded } : {}),
+        ...(typeof result.meta.executionTrace?.fallbackUsed === "boolean"
+          ? { fallbackUsed: result.meta.executionTrace.fallbackUsed }
+          : {}),
+        ...(typeof result.meta.agentMeta?.costUsd === "number"
+          ? { costUsd: result.meta.agentMeta.costUsd }
+          : {}),
       },
       completionPrivateData(
         "harnessContent",

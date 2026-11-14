@@ -51,6 +51,15 @@ const OTLP_HTTP_PROTOBUF_PROTOCOL = "http/protobuf";
 const DEFAULT_SERVICE_NAME = "openclaw";
 const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
 const OTEL_EXPORTER_OTLP_PROTOCOL_ENV = "OTEL_EXPORTER_OTLP_PROTOCOL";
+const OPENCLAW_LANGFUSE_ENABLED_ENV = "OPENCLAW_LANGFUSE_ENABLED";
+const OPENCLAW_LANGFUSE_CAPTURE_PROMPTS_ENV = "OPENCLAW_LANGFUSE_CAPTURE_PROMPTS";
+const OPENCLAW_LANGFUSE_HOST_ENV = "OPENCLAW_LANGFUSE_HOST";
+const OPENCLAW_LANGFUSE_PUBLIC_KEY_ENV = "OPENCLAW_LANGFUSE_PUBLIC_KEY";
+const OPENCLAW_LANGFUSE_SECRET_KEY_ENV = "OPENCLAW_LANGFUSE_SECRET_KEY";
+const OPENCLAW_LANGFUSE_ENVIRONMENT_ENV = "OPENCLAW_LANGFUSE_ENVIRONMENT";
+const LANGFUSE_OTLP_PATH = "/api/public/otel";
+const LANGFUSE_OTLP_TRACES_PATH = "/api/public/otel/v1/traces";
+const LANGFUSE_INGESTION_VERSION_HEADER = "x-langfuse-ingestion-version";
 const RESOURCE_DETECTORS = [
   ["host", resources.hostDetector],
   ["os", resources.osDetector],
@@ -85,6 +94,66 @@ function readPositiveOtelNumber(name: string, fallback: number): number {
     return fallback;
   }
   return value ?? fallback;
+}
+
+type LangfuseConfigInput = {
+  enabled?: boolean;
+  host?: string;
+  publicKey?: string;
+  secretKey?: string;
+  environment?: string;
+  capturePrompts?: boolean;
+};
+
+type LangfuseRuntimeConfig = {
+  enabled: boolean;
+  host?: string;
+  publicKey?: string;
+  secretKey?: string;
+  environment?: string;
+  capturePrompts: boolean;
+};
+
+function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function buildLangfuseAuthHeader(publicKey: string, secretKey: string): string {
+  return `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString("base64")}`;
+}
+
+function resolveLangfuseRuntimeConfig(
+  diagnostics: { langfuse?: LangfuseConfigInput } | undefined,
+): LangfuseRuntimeConfig {
+  const langfuse = diagnostics?.langfuse;
+  return {
+    enabled:
+      langfuse?.enabled ??
+      parseOptionalBooleanEnv(process.env[OPENCLAW_LANGFUSE_ENABLED_ENV]) ??
+      false,
+    host: normalizeOptionalString(langfuse?.host ?? process.env[OPENCLAW_LANGFUSE_HOST_ENV]),
+    publicKey: langfuse?.publicKey?.trim() || process.env[OPENCLAW_LANGFUSE_PUBLIC_KEY_ENV],
+    secretKey: langfuse?.secretKey?.trim() || process.env[OPENCLAW_LANGFUSE_SECRET_KEY_ENV],
+    environment:
+      langfuse?.environment?.trim() || process.env[OPENCLAW_LANGFUSE_ENVIRONMENT_ENV] || undefined,
+    capturePrompts:
+      langfuse?.capturePrompts ??
+      parseOptionalBooleanEnv(process.env[OPENCLAW_LANGFUSE_CAPTURE_PROMPTS_ENV]) ??
+      false,
+  };
 }
 
 function resolveResourceDetectors(): resources.ResourceDetector[] {
@@ -198,14 +267,41 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
   return {
     id: "diagnostics-otel",
-    reload: { configPrefixes: ["diagnostics.otel", "diagnostics.enabled"] },
+    reload: { configPrefixes: ["diagnostics.otel", "diagnostics.langfuse", "diagnostics.enabled"] },
     async start(ctx) {
       preserveExporterRoutesOnNextStop = false;
       await stopStarted();
       const active = state;
 
       const cfg = ctx.config.diagnostics;
-      const otel = cfg?.otel;
+      const langfuse = resolveLangfuseRuntimeConfig(cfg);
+      const baseOtel = cfg?.otel;
+      // Langfuse rides the existing OTEL pipeline: enabling it turns the exporter on
+      // with traces-only defaults and points it at the Langfuse OTLP ingress.
+      const otel = langfuse.enabled
+        ? {
+            ...(baseOtel ?? {}),
+            enabled: true,
+            endpoint:
+              baseOtel?.endpoint ??
+              (langfuse.host ? `${langfuse.host}${LANGFUSE_OTLP_PATH}` : undefined),
+            tracesEndpoint:
+              baseOtel?.tracesEndpoint ??
+              (langfuse.host ? `${langfuse.host}${LANGFUSE_OTLP_TRACES_PATH}` : undefined),
+            headers:
+              langfuse.publicKey && langfuse.secretKey
+                ? {
+                    ...(baseOtel?.headers ?? {}),
+                    Authorization: buildLangfuseAuthHeader(langfuse.publicKey, langfuse.secretKey),
+                    [LANGFUSE_INGESTION_VERSION_HEADER]: "4",
+                  }
+                : baseOtel?.headers,
+            traces: baseOtel?.traces ?? true,
+            metrics: baseOtel?.metrics ?? false,
+            logs: baseOtel?.logs ?? false,
+            captureContent: langfuse.capturePrompts,
+          }
+        : baseOtel;
       if (!cfg || cfg.enabled === false || !otel?.enabled) {
         return;
       }
@@ -268,6 +364,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...(logsEnabled ? (["logs"] as const) : []),
       ];
       if (configuredSignals.length === 0) {
+        return;
+      }
+      if (langfuse.enabled && (!langfuse.host || !langfuse.publicKey || !langfuse.secretKey)) {
+        for (const signal of configuredSignals) {
+          emitExporterEvent({
+            signal,
+            exporter: "diagnostics-otel",
+            transport: "otlp-http-protobuf",
+            status: "failure",
+            reason: "langfuse_config_incomplete",
+          });
+        }
+        ctx.logger.warn(
+          "diagnostics-otel: Langfuse export enabled but host/publicKey/secretKey are incomplete",
+        );
         return;
       }
       // This capability is the admission gate; no exporter may outlive a denied start.
@@ -342,6 +453,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const resource = resources.resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
+        ...(langfuse.environment ? { "deployment.environment.name": langfuse.environment } : {}),
       });
 
       const resolveSignal = (
@@ -494,6 +606,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               `diagnostics-otel: SDK startup rollback cleanup failed: ${formatError(cleanupError)}`,
             );
             throw createStartupRollbackError(err, cleanupError);
+          }
+          // A Langfuse collector outage must not take the whole gateway down: the
+          // exporter stays down, the plugin service still starts.
+          if (langfuse.enabled) {
+            ctx.logger.warn(
+              `diagnostics-otel: Langfuse exporter unavailable, continuing without OTLP export: ${formatError(err)}`,
+            );
+            return;
           }
           throw err;
         }
