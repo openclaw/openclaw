@@ -46,7 +46,10 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
-import { inspectRestorableDatabaseFiles } from "./update-database-backup-files.js";
+import {
+  inspectRestorableDatabaseFiles,
+  prepareRestorableDatabaseFiles,
+} from "./update-database-backup-files.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
@@ -210,7 +213,7 @@ async function canonicalDatabaseInventory(
   };
 }
 
-/** Read-only capture; the caller separately decides whether automatic restoration is safe. */
+/** No logical writes; the caller separately decides whether automatic restoration is safe. */
 export async function createUpdateDatabaseBackupInProcess(
   input: BackupInput & {
     stagingRoot: string;
@@ -238,11 +241,15 @@ export async function createUpdateDatabaseBackupInProcess(
       input.excludedDatabasePaths,
     );
   const inventory = await inventoryFor(inspectionPlan);
-  const identities = await inspectRestorableDatabaseFiles(inventory.present);
+  // Preflight reserves no space; admit the complete family before checkpointing.
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
     input,
+  );
+  const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
+    inventory.present,
+    input.stopped,
   );
   const { buildBackupArchivePath } = await import("./backup-archive-path-policy.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
@@ -373,6 +380,9 @@ export async function createUpdateDatabaseBackupInProcess(
                 sourcePath,
                 targetPath: snapshotPath,
                 sourceIdentity: identities.get(sourcePath)!,
+                integrity: checkpointed.has(sourcePath)
+                  ? { check: input.integrityCheck ?? "full", ftsSchemas: AGENT_FTS_SCHEMAS }
+                  : undefined,
               })
             : await createVerifiedSqliteSnapshot({
                 sourcePath,
@@ -457,7 +467,16 @@ export async function createUpdateDatabaseBackupInProcess(
           });
         }
         const current = await inventoryFor(
-          await discoverUpdateStateSchemaInspectionInProcess({ ...input, preserveSourceArtifacts }),
+          await discoverUpdateStateSchemaInspectionInProcess({
+            ...input,
+            preserveSourceArtifacts,
+            sharedDatabaseImage: input.stopped
+              ? databases.find(
+                  (database) =>
+                    database.path === path.resolve(input.stateDir, "state", "openclaw.sqlite"),
+                )?.snapshotPath
+              : undefined,
+          }),
         );
         if (JSON.stringify(current) !== JSON.stringify(inventory)) {
           throw new Error(

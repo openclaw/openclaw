@@ -26,7 +26,7 @@ import {
   withoutMemberPeerKeys,
 } from "./allowlist.js";
 import { inviteLifetimeError, withoutSpentInvites } from "./invite-retention.js";
-import { addNode, nodeRemovalEvents, withoutNodes } from "./nodes.js";
+import { addNode, bindOwnerDeviceNode, nodeRemovalEvents, withoutNodes } from "./nodes.js";
 import { applyRevocation } from "./revocation.js";
 import {
   applied,
@@ -190,7 +190,7 @@ async function applyTarget(
     case "revoke_device":
       return applyRemovalOfPeer(state, target.peer_key);
     case "add_owner_device":
-      return addOwnerDevice(state, target.cert, authority, context);
+      return addOwnerDevice(state, target, authority, context);
     case "deny_invite": {
       const nodeInvite = state.node_invites[target.invite_id];
       if (nodeInvite?.status === "pending") {
@@ -359,13 +359,17 @@ async function mayReAdd(
 // The certificate must be signed by the change's signer: R or a current owner device with
 // approve_device. An owner device may grant only caps it holds (R may grant any), may re-add only
 // devices in its own approval subtree, and only R may raise a listed device's caps. The Gateway records the granted caps and the approver. At most
-// MAX_OWNER_DEVICES devices are listed.
+// MAX_OWNER_DEVICES devices are listed. A `node` in the same change is bound to the device.
 async function addOwnerDevice(
   state: AuthorityState,
-  cert: SignedStatement<"OwnerDeviceCert">,
+  target: Extract<
+    SignedStatement<"MembershipChange">["body"]["target"],
+    { op: "add_owner_device" }
+  >,
   authority: Authority,
   context: WriteContext,
 ): Promise<AuthorityResult> {
+  const cert = target.cert;
   const verified = await verifyOwnerStatement(
     cert,
     state.anchor,
@@ -453,7 +457,14 @@ async function addOwnerDevice(
   if (authority.kind === "root" && context.channel === "mailbox") {
     events.push({ type: "notify_owners", event: "kit_used", ref: fp });
   }
-  return applied({ ...state, owner_devices: { ...state.owner_devices, [fp]: record } }, events);
+  const listed = { ...state, owner_devices: { ...state.owner_devices, [fp]: record } };
+  if (!target.node) {
+    return applied(listed, events);
+  }
+  const approver: OwnerApprover =
+    authority.kind === "root" ? "root" : await fingerprint(cert.signer);
+  const bound = bindOwnerDeviceNode(listed, fp, target.node, approver, context.now);
+  return bound.ok ? applied(bound.state, [...bound.events, ...events]) : { ...bound, state };
 }
 
 /** Registers an InviteCap with its proof key. Owner devices do this directly at the Gateway. */

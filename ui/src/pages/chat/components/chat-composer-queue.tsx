@@ -626,23 +626,21 @@ function ChatQueueItem(rowProps: {
           </>
         ) : null}
         {busy() || editing() ? null : (
-          <openclaw-tooltip prop:content={t("chat.queue.removeQueuedMessage")}>
-            <button
-              class="chat-queue__remove"
-              type="button"
-              disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
-              aria-label={t("chat.queue.removeQueuedMessage")}
-              onClick={(event: MouseEvent) => {
-                // Chromium retargets click 2 after row removal; detail still owns the gesture.
-                if (event.detail <= 1) {
-                  rowProps.controls.onQueueRemove(item().id);
-                }
-              }}
-              onDblClick={(event: MouseEvent) => event.stopPropagation()}
-            >
-              <Icon name="trash" />
-            </button>
-          </openclaw-tooltip>
+          <button
+            class="chat-queue__remove"
+            type="button"
+            disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
+            aria-label={t("chat.queue.removeQueuedMessage")}
+            onClick={(event: MouseEvent) => {
+              // Chromium retargets click 2 after row removal; detail still owns the gesture.
+              if (event.detail <= 1) {
+                rowProps.controls.onQueueRemove(item().id);
+              }
+            }}
+            onDblClick={(event: MouseEvent) => event.stopPropagation()}
+          >
+            <Icon name="trash" />
+          </button>
         )}
         {editing() || !editable() ? null : (
           <Menu

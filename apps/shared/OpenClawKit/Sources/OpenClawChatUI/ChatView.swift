@@ -879,12 +879,10 @@ extension OpenClawChatView {
                         .help("Copy message")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                     self.replyMessageButton(for: actionMessage)
-                        .help("Reply")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                     self.listenMessageButton(for: actionMessage)
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                     self.messageActionsMenu(for: actionMessage)
-                        .help("Message actions")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                 }
                 .labelStyle(.iconOnly)
@@ -1570,14 +1568,12 @@ private struct ChatNoticeBanner: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Refresh")
 
             Button(action: self.dismiss) {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("Dismiss")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

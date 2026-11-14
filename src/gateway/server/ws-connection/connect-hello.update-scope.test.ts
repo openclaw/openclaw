@@ -12,6 +12,7 @@ import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
 import type { HealthSummary } from "../../health/types.js";
+import { setOpenClawIdClawOriginResolver } from "../../openclaw-id/claw-origin.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
 import { dispatchProfile } from "../client-fixtures.test-support.js";
@@ -133,6 +134,7 @@ function makeContext(
       isClosed: vi.fn(() => false),
       getClient: () => gatewayClient,
       connId: `conn-${role}`,
+      ingressAttribution: { kind: "direct-local" } as { kind: string },
       bootId: "gateway-boot-a",
       gatewayMethods: [],
       events: [],
@@ -837,6 +839,46 @@ describe("sendGatewayHello update detail scope", () => {
     if (controlUiUrl === undefined) {
       expect(helloPayload(context)).not.toHaveProperty("controlUiUrl");
     }
+  });
+
+  it.each([
+    ["openclaw-id-tunnel", {}, "https://studio-k7x2q.claws.example.test/remote"],
+    ["openclaw-id-tunnel", { enabled: false }, undefined],
+    ["tailscale-serve", {}, undefined],
+  ])(
+    "advertises the linked claw address to %s connections: %j",
+    async (kind, controlUi, controlUiClawUrl) => {
+      setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.claws.example.test");
+      try {
+        const context = makeContext("operator", ["operator.read"]);
+        context.handler.ingressAttribution = { kind };
+        const gateway = {
+          publicOrigin: "https://gateway.example.test",
+          controlUi: { basePath: "/remote", ...controlUi },
+        };
+        context.configSnapshot = { gateway };
+        await sendGatewayHello(
+          context as never,
+          makeState("operator", ["operator.read"]) as never,
+          {},
+        );
+        expect(helloPayload(context)?.controlUiClawUrl).toBe(controlUiClawUrl);
+        // Anonymous share links keep the public address: the tunnel admits members only.
+        expect(helloPayload(context)?.controlUiUrl).toBe(
+          gateway.controlUi.enabled === false ? undefined : "https://gateway.example.test/remote",
+        );
+      } finally {
+        setOpenClawIdClawOriginResolver(undefined);
+      }
+    },
+  );
+
+  it("omits the claw address on tunnel connections while no claw is linked", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    context.handler.ingressAttribution = { kind: "openclaw-id-tunnel" };
+    context.configSnapshot = { gateway: { publicOrigin: "https://gateway.example.test" } };
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+    expect(helloPayload(context)).not.toHaveProperty("controlUiClawUrl");
   });
 
   it.each([
