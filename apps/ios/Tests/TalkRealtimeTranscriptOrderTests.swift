@@ -109,6 +109,8 @@ final class TalkRealtimeTranscriptOrderTests: XCTestCase {
         while await requests.count < count, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
+        let deliveredBeforeFlush = await requests.count
+        XCTAssertEqual(deliveredBeforeFlush, count, "expected delivery without an explicit flush")
         await talk.flushTranscriptWrites()
         // Late duplicates or extra writes would also be ordering bugs.
         try await Task.sleep(nanoseconds: 100_000_000)

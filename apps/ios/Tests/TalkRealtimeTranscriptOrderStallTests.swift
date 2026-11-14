@@ -59,31 +59,73 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
         XCTAssertEqual(self.texts(order.settle(role: .user, text: "Question.", itemId: "u1")), ["Question.", "Reply."])
     }
 
+    func testLateFramelessFragmentKeepsItsOpenReservation() throws {
+        var order = TalkRealtimeTranscriptOrder()
+        _ = try order.observe(event(#"{"type":"input_transcript.added","item":{"text":"Question"}}"#))
+        _ = try order.observe(event(#"{"type":"output_transcript.added","item":{"text":"Reply"}}"#))
+        XCTAssertEqual(order.settle(role: .assistant, text: "Reply.", itemId: nil), [])
+        XCTAssertEqual(try order.observe(event(#"{"type":"input_transcript.added","item":{"text":"continued"}}"#)), [])
+        XCTAssertEqual(self.texts(order.settle(role: .user, text: "Question continued.", itemId: nil)),
+                       ["Question continued.", "Reply."])
+    }
+
     func testInterruptedFramelessReplyDoesNotLendItsPlaceToTheNextReply() throws {
         var order = TalkRealtimeTranscriptOrder()
-        // Reply 1 is cut off: it streams text but never sends turn.done.
         _ = try order.observe(event(#"{"type":"output_transcript.added","item":{"text":"Let me"}}"#))
         _ = try order.observe(event(#"{"type":"input_transcript.added","item":{"text":"Stop"}}"#))
         XCTAssertEqual(order.settle(role: .user, text: "Stop.", itemId: nil), [])
-        let released = try order.observe(event(#"{"type":"output_transcript.added","item":{"text":"Okay"}}"#))
+        let released = try order.observe(event(#"{"type":"output_audio_buffer.cleared"}"#))
         XCTAssertEqual(self.texts(released), ["Stop."])
+        _ = try order.observe(event(#"{"type":"output_transcript.added","item":{"text":"Okay"}}"#))
         XCTAssertEqual(self.texts(order.settle(role: .assistant, text: "Okay.", itemId: nil)), ["Okay."])
-        XCTAssertFalse(order.isHolding)
     }
 
-    func testEachStallReportsItsOwnBlockingTurn() throws {
-        var order = TalkRealtimeTranscriptOrder()
-        _ = try order.observe(event(#"{"type":"input_audio_buffer.committed","item_id":"u1"}"#))
-        _ = try order.observe(event(#"{"type":"conversation.item.added","item":{"id":"a1","type":"message","role":"assistant"}}"#))
-        _ = try order.observe(event(#"{"type":"input_audio_buffer.committed","item_id":"u2"}"#))
-        _ = order.settle(role: .assistant, text: "A.", itemId: "a1")
-        let first = try XCTUnwrap(order.holdingTurn)
-        XCTAssertEqual(self.texts(order.settle(role: .user, text: "U1.", itemId: "u1")), ["U1.", "A."])
-        XCTAssertNil(order.holdingTurn)
-        _ = try order.observe(event(#"{"type":"conversation.item.added","item":{"id":"a2","type":"message","role":"assistant"}}"#))
-        _ = order.settle(role: .assistant, text: "A2.", itemId: "a2")
-        let second = try XCTUnwrap(order.holdingTurn)
-        XCTAssertNotEqual(first, second)
+    func testEmptyFramelessCompletionReleasesTheNextTurn() async throws {
+        let saved = try await TalkRealtimeTranscriptOrderTests.persistedTranscripts(
+            after: [
+                #"{"type":"output_transcript.added","item":{"text":"Discarded"}}"#,
+                #"{"type":"input_transcript.added","item":{"text":"Next"}}"#,
+                #"{"type":"turn.done","turn":{"role":"user","transcript":"Next."}}"#,
+                #"{"type":"turn.done","turn":{"role":"assistant","transcript":""}}"#,
+            ],
+            expecting: 1,
+            makeSession: { gateway, delegate in
+                TalkRealtimeWebRTCSession(
+                    gateway: gateway, sessionKey: "main", voiceSessionId: "voice-1",
+                    transcriptStore: TalkRealtimeTranscriptStore(retryDelaysNanoseconds: []),
+                    transcriptHoldTimeoutSeconds: 60, delegate: delegate)
+            })
+        XCTAssertEqual(saved.map(\.text), ["Next."])
+    }
+
+    func testNewerBlockerSurvivesTheOlderTimeout() async throws {
+        let saved = try await TalkRealtimeTranscriptOrderTests.persistedTranscripts(
+            after: [
+                #"{"type":"input_audio_buffer.committed","item_id":"u1"}"#,
+                #"{"type":"conversation.item.added","item":{"id":"a1","type":"message","role":"assistant"}}"#,
+                #"{"type":"response.output_audio_transcript.done","item_id":"a1","transcript":"A1."}"#,
+            ],
+            expecting: 3,
+            makeSession: { gateway, delegate in
+                TalkRealtimeWebRTCSession(
+                    gateway: gateway, sessionKey: "main", voiceSessionId: "voice-1",
+                    transcriptStore: TalkRealtimeTranscriptStore(retryDelaysNanoseconds: []),
+                    transcriptHoldTimeoutSeconds: 1, delegate: delegate)
+            },
+            afterEvents: { talk, channel in
+                try await Task.sleep(nanoseconds: 600_000_000)
+                for json in [
+                    #"{"type":"input_audio_buffer.committed","item_id":"u2"}"#,
+                    #"{"type":"conversation.item.added","item":{"id":"a2","type":"message","role":"assistant"}}"#,
+                #"{"type":"response.output_audio_transcript.done","item_id":"a2","transcript":"A2."}"#,
+                ] {
+                    talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(json.utf8), isBinary: false))
+                }
+                try await Task.sleep(nanoseconds: 700_000_000)
+                let final = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"u2","transcript":"U2."}"#
+                talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(final.utf8), isBinary: false))
+            })
+        XCTAssertEqual(saved.map(\.text), ["A1.", "U2.", "A2."])
     }
 
     func testUnreservedItemFinalKeepsArrivalOrder() {

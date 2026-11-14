@@ -212,6 +212,14 @@ struct TalkRealtimeTranscriptOrder {
             } else if item.role == "user", item.content?.contains(where: { $0.type == "input_audio" }) == true {
                 self.reserve(itemId: item.id, role: .user)
             }
+        case "output_audio_buffer.cleared":
+            // Explicit interruption ends the frameless reply; interleaved text alone does not.
+            for index in self.slots.indices where self.slots[index].itemId == nil &&
+                self.slots[index].role == .assistant && !self.slots[index].settled
+            {
+                self.slots[index].settled = true
+            }
+            return self.releaseReady()
         case "input_transcript.added":
             return self.reserveFrameless(role: .user)
         case "output_transcript.added":
@@ -256,6 +264,15 @@ struct TalkRealtimeTranscriptOrder {
         return self.releaseReady()
     }
 
+    /// A timeout abandons only its blocker; newer unfinished turns retain their own grace period.
+    mutating func expireHoldingTurn() -> [Entry] {
+        guard let turn = self.holdingTurn,
+              let index = self.slots.firstIndex(where: { $0.seq == turn }) else { return [] }
+        self.remember(self.slots[index].itemId)
+        self.slots.remove(at: index)
+        return self.releaseReady()
+    }
+
     mutating func reset() {
         self.slots.removeAll()
         self.recentItemIds.removeAll()
@@ -269,12 +286,9 @@ struct TalkRealtimeTranscriptOrder {
     }
 
     private mutating func reserveFrameless(role: TalkRealtimeTranscriptRole) -> [Entry] {
-        // A role's streamed text belongs to its open turn until that turn's final arrives.
-        if let open = slots.firstIndex(where: { $0.itemId == nil && $0.role == role && !$0.settled }) {
-            // Once the other side has finished a later turn, this one was interrupted without
-            // turn.done: it gives up its place so the new turn cannot take it.
-            guard self.slots[(open + 1)...].contains(where: { $0.role != role && $0.settled }) else { return [] }
-            self.slots[open].settled = true
+        // Interleaved fragments still belong to the same unfinished turn.
+        guard !self.slots.contains(where: { $0.itemId == nil && $0.role == role && !$0.settled }) else {
+            return []
         }
         guard self.slots.count < Self.maxPendingSlots else { return self.releaseReady() }
         self.append(itemId: nil, role: role)
@@ -315,7 +329,7 @@ struct TalkRealtimeTranscriptOrder {
         while let head = slots.first, head.settled {
             self.slots.removeFirst()
             self.remember(head.itemId)
-            if let text = head.text {
+            if let text = head.text, !text.isEmpty {
                 ready.append(Entry(role: head.role, text: text))
             }
         }

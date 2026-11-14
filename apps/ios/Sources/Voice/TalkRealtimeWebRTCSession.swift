@@ -1203,10 +1203,12 @@ extension TalkRealtimeWebRTCSession {
 
     private func handleFramelessTurnDone(_ turn: TalkRealtimeServerTurn?) {
         guard let turn else { return }
-        if let text = turn.transcript, !text.isEmpty,
-           let role = turn.role.flatMap(TalkRealtimeTranscriptRole.init(rawValue:))
-        {
-            self.deliverTranscript(text, role: role, persist: true)
+        if let role = turn.role.flatMap(TalkRealtimeTranscriptRole.init(rawValue:)) {
+            if let text = turn.transcript, !text.isEmpty {
+                self.deliverTranscript(text, role: role, persist: true)
+            } else {
+                self.recordFinalTranscripts(self.transcriptOrder.settle(role: role, text: "", itemId: nil))
+            }
         }
         if turn.role == "assistant" {
             self.scheduleAssistantAudioFinished()
@@ -1247,7 +1249,7 @@ extension TalkRealtimeWebRTCSession {
             guard let self, !Task.isCancelled else { return }
             self.transcriptHoldTask = nil
             self.transcriptHoldTurn = nil
-            self.recordFinalTranscripts(self.transcriptOrder.releaseHeld())
+            self.recordFinalTranscripts(self.transcriptOrder.expireHoldingTurn())
         }
     }
 
