@@ -329,7 +329,12 @@ async function main() {
   const input =
     positionals[0] && positionals[0] !== "-" ? createReadStream(positionals[0]) : process.stdin;
   const lines = createInterface({ input, crlfDelay: Infinity });
-  const report = await attributeWriterOccupancy(lines, values);
+  const report = await attributeWriterOccupancy(lines, values).finally(() => {
+    lines.close();
+    if (input !== process.stdin) {
+      input.destroy();
+    }
+  });
   if (values.json) {
     console.log(JSON.stringify(report, null, 2));
     return;
