@@ -512,9 +512,9 @@ describe("completed reply frame ownership", () => {
   it.each([
     ["earlier reply in the same run", "run-1", false, "final_answer", true],
     ["earlier reply in another run", "run-other", false, "final_answer", true],
-    ["forwarded commentary", "run-1", true, undefined, true],
+    ["forwarded commentary", "run-1", true, "commentary", true],
     ["forwarded answer", "run-1", true, "final_answer", true],
-    ["promptless forwarded commentary", "run-1", true, undefined, false],
+    ["promptless forwarded commentary", "run-1", true, "commentary", false],
     ["promptless forwarded answer", "run-1", true, "final_answer", false],
   ] as const)("preserves reply boundaries: %s", (_name, runId, forwarded, phase, prompt) => {
     const messages = replyHistory(prompt ? ["run-u", "run-1"] : ["run-1", "run-1"], prompt);
@@ -535,7 +535,7 @@ describe("completed reply frame ownership", () => {
     expect(work).toBeDefined();
     if (forwarded) {
       expect(messagesIn(framesOf(chain))).not.toContain(inserted);
-      const standalone = phase ? kind(chain.transcriptItems, "group") : [work!];
+      const standalone = phase === "final_answer" ? kind(chain.transcriptItems, "group") : [work!];
       expect(messagesIn(standalone)).toContain(inserted);
     } else {
       expect(

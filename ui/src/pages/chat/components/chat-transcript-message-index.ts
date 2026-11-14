@@ -70,7 +70,7 @@ type TranscriptIndex = Readonly<{
 
 type TranscriptIndexSource = Pick<
   TranscriptChain,
-  "searchActive" | "transcriptItems" | "continuations" | "live"
+  "searchActive" | "transcriptItems" | "continuations" | "live" | "workGroups"
 >;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
@@ -395,10 +395,15 @@ export function projectTranscriptIndex(
       });
       return { kind: "item", key, item, revision };
     };
-    for (const item of chain.transcriptItems) {
+    const workRowKeys = new Map(
+      chain.workGroups.flatMap((work) =>
+        work.groups.map((group) => [group.key, `${work.key}:${group.key}`] as const),
+      ),
+    );
+    for (const item of chronologicalWorkItems(chain.transcriptItems, expandedToolCards)) {
       const rendered =
         windowCompletedFrames && item.kind === "agent-run-frame"
-          ? completedFrameRows(item, expandedToolCards, prepareIdleFrameFragments ? 1 : 2)
+          ? completedFrameRows(item, prepareIdleFrameFragments ? 1 : 2)
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
@@ -420,16 +425,11 @@ export function projectTranscriptIndex(
               ? estimateMessageGroupSize(rowItem)
               : undefined;
         rows.push({
-          ...row(rowItem),
+          ...row(rowItem, workRowKeys.get(rowItem.key) ?? rowItem.key),
           estimatedSize,
           retainDom,
           prewarm: rowItem.kind === "group" || (fragment && !prepareIdleFrameFragments),
         });
-      }
-      if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
-        for (const group of item.groups) {
-          rows.push(row(group, `${item.key}:${group.key}`));
-        }
       }
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];
       const groups = chatItemGroups(item);
@@ -465,7 +465,7 @@ export function projectTranscriptIndex(
           const rowKey =
             item.kind === "work-group" && expandedToolCards.get(item.key)
               ? item.key + ":" + group.key
-              : item.key;
+              : (workRowKeys.get(item.key) ?? item.key);
           for (const source of group.messages) {
             const sourceRowKey = fragmentKeys.get(source.key) ?? rowKey;
             transcriptMessageKeys.set(source.key, sourceRowKey);
@@ -483,10 +483,11 @@ export function projectTranscriptIndex(
       }
     }
     const positionIndex = projectChatPositions(
-      chain.transcriptItems,
+      chronologicalWorkItems(chain.transcriptItems, expandedToolCards),
       expandedToolCards,
       messageRowKeysById,
       chain.searchActive,
+      true,
     );
     return {
       messageRowKeysById,
@@ -499,9 +500,40 @@ export function projectTranscriptIndex(
   });
 }
 
+// The disclosure owns all work for its label and outcomes; mounted rows follow
+// the visible answer recorded by the folding pass, not the disclosure's position.
+function chronologicalWorkItems(
+  items: readonly ChatRenderItem[],
+  expanded: ReadonlyMap<string, boolean>,
+): ChatRenderItem[] {
+  const after = new Map<string, MessageGroup[]>();
+  const collect = (item: ChatRenderItem): void => {
+    if (item.kind === "agent-run-frame") {
+      item.parts.forEach(collect);
+    } else if (item.kind === "work-group" && expanded.get(item.key)) {
+      for (const group of item.groups) {
+        const anchor = item.workAfterGroup?.get(group.key) ?? item.key;
+        const pending = after.get(anchor) ?? [];
+        pending.push(group);
+        after.set(anchor, pending);
+      }
+    }
+  };
+  items.forEach(collect);
+  const project = (item: ChatRenderItem): ChatRenderItem[] => {
+    if (item.kind === "agent-run-frame") {
+      const parts = item.parts.flatMap((part) => [part, ...(after.get(part.key) ?? [])]);
+      if (parts.length !== item.parts.length) {
+        return [{ ...item, parts }, ...(after.get(item.key) ?? [])];
+      }
+    }
+    return [item, ...(after.get(item.key) ?? [])];
+  };
+  return items.flatMap(project);
+}
+
 function completedFrameRows(
   frame: AgentRunFrameRenderItem,
-  expanded: ReadonlyMap<string, boolean>,
   messageLimit: number,
 ): AgentRunFrameRenderItem[] {
   // Without an answer, the summary keeps the original row through disclosure changes.
@@ -573,12 +605,6 @@ function completedFrameRows(
     if (part.kind === "work-group") {
       finishChunk();
       chunks.push([part]);
-      if (expanded.get(part.key)) {
-        for (const group of part.groups) {
-          append(group);
-        }
-        finishChunk();
-      }
     } else {
       // A single activity disclosure remains atomic; never duplicate its summary/ARIA identity.
       append(part);
