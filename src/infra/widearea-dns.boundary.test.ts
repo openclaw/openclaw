@@ -40,6 +40,21 @@ describe("wide-area DNS zone writer — unmocked production boundary", () => {
   });
 
   it.each([
+    ["displayName", "a".repeat(243)],
+    ["displayName", "é".repeat(121) + "a"],
+    ["displayName", '"'.repeat(243)],
+    ["cliPath", "/" + "a".repeat(246)],
+  ])("preserves the served zone when %s exceeds one DNS-SD TXT string", async (field, value) => {
+    expect(Buffer.byteLength(`${field}=${value}`)).toBe(255);
+    const accepted = await writeWideAreaGatewayZone({ ...zoneOpts, [field]: value });
+    const previous = fs.readFileSync(accepted.zonePath);
+    await expect(writeWideAreaGatewayZone({ ...zoneOpts, [field]: `${value}a` })).rejects.toThrow(
+      `wide-area discovery TXT field ${field} exceeds 255 bytes`,
+    );
+    expect(fs.readFileSync(accepted.zonePath)).toEqual(previous);
+  });
+
+  it.each([
     { name: "advances future-dated serials", previous: 2027010101, expected: 2027010102 },
     { name: "advances counters past 99", previous: 2026031400, expected: 2026031401 },
     { name: "wraps maximum 32-bit serials", previous: 0xffffffff, expected: 2026031301 },

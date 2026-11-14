@@ -10,6 +10,7 @@ import { ignoreMissingPath } from "./errno.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
+const MAX_DNS_TXT_STRING_BYTES = 255;
 const INVALID_DOMAIN_ERROR = "wide-area discovery domain must be a valid DNS name";
 
 function normalizedDomainLabels(raw: string): string[] {
@@ -80,6 +81,13 @@ function dnsLabel(raw: string, fallback: string): string {
 }
 
 function txtQuote(value: string): string {
+  // DNS-SD assigns one key/value to each wire string; splitting changes its meaning.
+  if (Buffer.byteLength(value, "utf8") > MAX_DNS_TXT_STRING_BYTES) {
+    const key = value.split("=", 1)[0];
+    throw new Error(
+      `wide-area discovery TXT field ${key} exceeds ${MAX_DNS_TXT_STRING_BYTES} bytes; shorten the value before retrying`,
+    );
+  }
   const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n");
   return `"${escaped}"`;
 }
