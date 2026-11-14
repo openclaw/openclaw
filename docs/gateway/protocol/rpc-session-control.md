@@ -165,7 +165,7 @@ interrupt later tools. Confirm consumption through the normal input receipts.
 
 Pending `chat.history` items expose `steerNow: { status: "available" | "blocked",
 tools: string[] }` only while the captured runtime owns the steer. An empty
-blocked tool list indicates an unsupported runtime. Clients offer **Send now**
+blocked tool list indicates an unsupported runtime. Clients offer **Interrupt tools and send**
 only for `available`; blocked state should explain why the input must wait.
 `sessions.changed` with reason `agent.input.steering` refreshes this projection.
 

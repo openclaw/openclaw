@@ -123,7 +123,7 @@ describe("grouped chat rendering", () => {
       expectAbsent(".chat-group-footer__meta");
     },
   );
-  it("offers Send now only on the newest sendable steer", () => {
+  it("offers Interrupt tools and send only on the newest sendable steer", () => {
     renderSteer({ ...steerInput({ status: "available", tools: [] }), sendNow: true });
     expectPresent(".chat-group-footer .chat-steer-now button");
     expectAbsent(".chat-steer-now [role=status]");
@@ -131,7 +131,7 @@ describe("grouped chat rendering", () => {
   it.each([
     { name: "an earlier steer", steer: steerInput({ status: "blocked", tools: ["upload"] }) },
     {
-      name: "the newest when an earlier steer carries Send now",
+      name: "the newest when an earlier steer carries Interrupt tools and send",
       steer: {
         ...steerInput({ status: "blocked", tools: ["upload"] }),
         newest: true,

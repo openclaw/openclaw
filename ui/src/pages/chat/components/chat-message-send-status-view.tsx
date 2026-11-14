@@ -107,7 +107,7 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
 }
 
 export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: string) => void }) {
-  // One row speaks for every waiting steer: Send now when the viewer can use it,
+  // One row speaks for every waiting steer: interrupt tools when the viewer can,
   // otherwise Steering… on the newest.
   const sendNow = () => Boolean(props.onSend && props.input?.sendNow);
   const label = () => props.input?.newest && !(props.onSend && props.input.deferToSendNow);

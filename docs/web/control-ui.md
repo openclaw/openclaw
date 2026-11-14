@@ -454,7 +454,7 @@ Still-streaming assistant text stays at the bottom of its run, below saved outpu
 takes its transcript position once saved.
 
 While steering waits for a running tool, the message appears as an ordinary user
-bubble. Waiting steers are delivered together, so one small **Send now** link
+bubble. Waiting steers are delivered together, so one small **Interrupt tools and send** link
 appears under the newest steer that can interrupt. Session writers can click it
 to interrupt supported running tools and deliver the waiting steers sooner,
 keeping the same agent run alive. The model receives a tool result explaining
@@ -463,7 +463,7 @@ once it is delivered, so spacing stays the same. When nothing can interrupt, for
 viewers without steer access, tools that cannot be interrupted safely, and
 runtimes without tool interruption, the newest waiting message shows a muted
 **Steering…** label instead; hovering it explains what the steer is waiting for.
-A refused **Send now** returns the row to **Steering…** without a separate error.
+A refused **Interrupt tools and send** returns the row to **Steering…** without a separate error.
 Tools that cannot be interrupted safely include Code Mode aggregate tools and
 native or remote backends, which do not support tool-only interruption.
 

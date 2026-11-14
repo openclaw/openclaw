@@ -104,11 +104,11 @@ async function startProvider() {
   };
 }
 
-describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
+describe.skipIf(!variant)("Task proof: Interrupt tools and send through a real Gateway", () => {
   let instance: OpenClawTestInstance;
   let provider: Awaited<ReturnType<typeof startProvider>>;
   const suite = createControlUiE2eSuite({
-    name: "Send now real Gateway",
+    name: "Interrupt tools and send real Gateway",
     startServerBeforeBrowser: true,
     async startServer() {
       if (variant !== "baseline" && variant !== "fixed" && variant !== "fallback") {
@@ -202,7 +202,10 @@ describe.skipIf(!variant)("Task proof: Send now through a real Gateway", () => {
                 expect(provider.requests()).toBe(1);
                 const bubble = pane.locator(".chat-group.user", { hasText: correction });
                 await bubble.waitFor();
-                const link = bubble.getByRole("button", { name: "Send now", exact: true });
+                const link = bubble.getByRole("button", {
+                  name: "Interrupt tools and send",
+                  exact: true,
+                });
                 if (variant !== "baseline") {
                   await link.waitFor();
                 } else {

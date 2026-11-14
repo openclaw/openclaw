@@ -32,7 +32,7 @@ checked before model dispatch, including after a failed Code Mode cell. It does 
 extra model response. One-at-a-time steering still delivers one queued input per
 request.
 
-In the Control UI, a waiting steer has a small **Send now** link below its normal
+In the Control UI, a waiting steer has a small **Interrupt tools and send** link below its normal
 user bubble. A session writer can use it to interrupt supported running tools
 without aborting the run. Each interrupted tool records that the user interrupted
 it; the steer then reaches the next model decision after those results. Repeated
@@ -67,7 +67,7 @@ A non-interruptible tool still has a steering boundary after completion, so it
 does not trigger immediate followup fallback. Provider token-stream state alone
 does not determine whether the local steering queue can accept input.
 
-After that fallback, **Send now** stays below the waiting message while the
+After that fallback, **Interrupt tools and send** stays below the waiting message while the
 original run still has supported, interruptible tools running. Clicking it stops
 those tool calls through the same cleanup path. The queued message keeps its
 place and is delivered once when the run can accept it or the next turn starts.
@@ -75,7 +75,7 @@ The action never targets a later run. Unsupported tools keep the wait explanatio
 
 Queued follow-ups show **Queued behind the current turn** in the Control UI,
 including messages whose steering attempt fell back to the queue. Use **Stop**
-to stop the current turn, or the available **Steer** / **Send now** action to
+to stop the current turn, or the available **Steer** / **Interrupt tools and send** action to
 redirect it. Slow-send logs distinguish admission waits with
 `detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
 `followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
