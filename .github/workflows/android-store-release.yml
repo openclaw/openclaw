@@ -128,7 +128,7 @@ jobs:
         run: node scripts/install-mobile-release-dependencies.mjs
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"
