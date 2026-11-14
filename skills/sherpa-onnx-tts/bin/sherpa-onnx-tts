@@ -17,12 +17,12 @@ function usage(message) {
 
 function resolveRuntimeDir(explicit) {
   const value = explicit || process.env.SHERPA_ONNX_RUNTIME_DIR || "";
-  return value.trim();
+  return value;
 }
 
 function resolveModelDir(explicit) {
   const value = explicit || process.env.SHERPA_ONNX_MODEL_DIR || "";
-  return value.trim();
+  return value;
 }
 
 function resolveModelFile(modelDir, explicitFlag) {
