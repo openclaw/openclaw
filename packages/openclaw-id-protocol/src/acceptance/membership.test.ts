@@ -261,6 +261,10 @@ describe(acceptanceTitle(11), () => {
     const pending = await submitRedemption(state, redemption, identity, WORLD_NOW);
     expect(pending).toMatchObject({ ok: true, status: "pending" });
     expect(await admitted(pending.state, world.invitee.peer)).toBe(false);
+    expect(pending.state.invites[FIXTURE_INVITE_ID]?.pending).toMatchObject({
+      device_pub: world.invitee.pub,
+      label: "Bob browser",
+    });
     const approve = await signChange(pending.state, world.device1.signer, {
       op: "add",
       account_id: "acct_bob",
@@ -273,6 +277,11 @@ describe(acceptanceTitle(11), () => {
       code: "not_direct",
     });
     const direct = await submitStatement(pending.state, approve, tunnel);
+    expect(direct.state.members.acct_bob?.devices?.[world.invitee.peer]).toEqual({
+      device_pub: world.invitee.pub,
+      label: "Bob browser",
+      approved_by: { kind: "invite", invite_id: FIXTURE_INVITE_ID },
+    });
     expect(direct).toMatchObject({ ok: true });
     expect(await admitted(direct.state, world.invitee.peer)).toBe(true);
     expect(direct.state.invites[FIXTURE_INVITE_ID]?.status).toBe("consumed");

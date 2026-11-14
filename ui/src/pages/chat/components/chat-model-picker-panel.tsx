@@ -3,6 +3,7 @@ import { createMemo, createSignal, Errored, For, Show, useContext } from "solid-
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -115,7 +116,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         selectedModelValue: selectedModelValue(),
         selectedAgentRuntime: selectedAgentRuntime(),
       },
-      opening(),
+      { keys: favorites.keys(), opening: opening() },
     ),
   );
   const showBrowser = createMemo(
@@ -274,6 +275,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         .slice(0, 9)
         .map(({ row }) => row.key) ?? [],
   );
+  const scrollState = useScrollState(false, true, { revision: window.height });
   const renderRow = window.renderRow;
   const mounted = (entries: readonly ModelPickerOption[], provider: string) => {
     if (!entries.length) {
@@ -586,7 +588,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                   data-auth-blocked={activeAuth() ? "" : undefined}
                 >
                   <div
-                    ref={window.bind}
+                    ref={[window.bind, scrollState]}
                     class="chat-controls__model-options"
                     data-chat-model-window
                   >

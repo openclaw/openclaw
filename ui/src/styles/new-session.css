@@ -1558,8 +1558,15 @@ div.new-session-page__project-search {
 
   /* The picker holds the whole track, so nothing moves when the catalog
      arrives; the chip inside it hugs its label and chevron. */
-  .new-session-page .agent-chat__composer-controls .chat-controls__model-trigger {
+  .new-session-page .chat-controls__model-trigger {
     width: fit-content;
+  }
+
+  /* Empty catalogs have no effort chip to fill the track. Keep that status by
+     the actions; loading and model selections retain their stable alignment. */
+  .new-session-page [data-chat-model-empty="true"] {
+    display: flex;
+    margin-inline-start: auto;
   }
 
   .new-session-page .chat-controls__trigger-provider-icon {

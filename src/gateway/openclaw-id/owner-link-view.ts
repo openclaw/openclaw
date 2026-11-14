@@ -2,11 +2,12 @@
 import {
   isAdmitted,
   type IrohEndpointKey,
-  type MemberRole,
+  type MemberRecord,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import { listInviteViews } from "./invites-view.js";
+import { describeMemberDevices } from "./membership-views.js";
 import { listNodeInviteViews } from "./node-invites.js";
 import type { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
@@ -27,28 +28,38 @@ export async function readOwnerLinkStatus(params: {
   // reported when they joined by invite (display only), when the owner approved
   // them (seconds), and each device key's live activity read from this Gateway.
   const describeMembers = async (
-    members: Record<string, { role: MemberRole; peer_keys: IrohEndpointKey[] }>,
+    members: Record<string, MemberRecord>,
     approvedAt: StoredClaw["member_approved_at"],
   ) => {
     const effects = await getEffects();
     const profiles = await (await getAuthority()).memberProfiles(Object.keys(members));
     const keys = Object.values(members).flatMap((member) => member.peer_keys);
     const activity = effects?.describeActivity?.(keys) ?? {};
-    return Object.entries(members).map(([accountId, member]) => {
-      const profile = profiles[accountId];
-      return {
-        accountId,
-        role: member.role,
-        peerKeys: member.peer_keys,
-        email: profile?.email ?? null,
-        displayName: profile?.displayName ?? null,
-        approvedAt: approvedAt?.[accountId] ?? null,
-        devices: member.peer_keys.map((peerKey) => ({
-          peerKey,
-          ...(activity[peerKey] ?? { connections: 0, lastSeenAt: null, runs: [] }),
-        })),
-      };
-    });
+    return Promise.all(
+      Object.entries(members).map(async ([accountId, member]) => {
+        const profile = profiles[accountId];
+        return {
+          accountId,
+          role: member.role,
+          peerKeys: member.peer_keys,
+          email: profile?.email ?? null,
+          displayName: profile?.displayName ?? null,
+          approvedAt: approvedAt?.[accountId] ?? null,
+          devices: (await describeMemberDevices(member)).map((device) =>
+            Object.assign(
+              {
+                peerKey: device.peer_key,
+                deviceFp: device.device_fp,
+                label: device.label,
+                approvedBy: device.approved_by,
+                lastSeen: device.last_seen,
+              },
+              activity[device.peer_key] ?? { connections: 0, lastSeenAt: null, runs: [] },
+            ),
+          ),
+        };
+      }),
+    );
   };
 
   if (!enabled) {
