@@ -1201,6 +1201,8 @@ const enSettings = {
       checking: "Checking…",
       checkFailed:
         "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkBillingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then use Test access to try again.",
       checkInconclusive:
         "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
       checkUnavailable:
