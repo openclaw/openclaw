@@ -1096,7 +1096,7 @@
 /* Keep the painted primary surface independent of the target, including hover.
    The idle microphone joins the tier so its wash matches the disc beside it. */
 .agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach,
-.agent-chat__input .agent-chat__composer-actions > .chat-talk-control .chat-send-btn--voice,
+.agent-chat__input :where(.agent-chat__composer-actions > .chat-talk-control) .chat-send-btn--voice,
 .agent-chat__input.agent-chat__input--chat
   :is(.chat-mobile-primary-action, .chat-desktop-primary-action)
   .chat-send-btn,
@@ -1413,6 +1413,7 @@
   }
   .agent-chat__input--mobile-toolbar {
     --chat-composer-min-height: 92px;
+    --chat-composer-context-offset: 0px;
     --chat-composer-editor-inset-inline: 14px;
     --chat-composer-icon-size: 18px;
     --chat-composer-context-icon-size: 16px;
@@ -1517,7 +1518,9 @@
   }
 
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
-    padding: var(--chat-mobile-row-icon-padding);
+    padding: calc(
+      (var(--chat-composer-control-size) - var(--chat-composer-primary-surface-size)) / 2
+    );
   }
 
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice > svg {
