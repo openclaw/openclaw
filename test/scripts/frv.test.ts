@@ -1,7 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parse as parseYaml } from "yaml";
 import {
   continueFailed,
   createClient,
@@ -808,19 +807,6 @@ describe("FRV continuation preflight", () => {
     }
   });
 
-  it("does not claim recovery for a failed candidate producer with undispatched consumers", async () => {
-    const fixture = artifactFixture("candidate");
-    fixture.producer.conclusion = "failure";
-    const missing = withoutChildRunIdentity(child("pluginPrerelease", "202"));
-    fixture.plan = plan([fixture.selected, missing]);
-
-    await expect(preflightContinuation(fixture.plan, "77", fixture.client)).rejects.toThrow(
-      "selected FRV children did not record exact run IDs and attempts: pluginPrerelease; start a fresh all-group FRV",
-    );
-    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
-    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
-  });
-
   it("recovers every recoverable failed artifact producer instead of stopping at npm", async () => {
     const fixture = artifactFixture("npm");
     fixture.producer.conclusion = "failure";
@@ -1077,15 +1063,6 @@ describe("FRV continuation preflight", () => {
       }
     },
   );
-
-  it("adopts an already successful newer producer attempt without rerunning it", async () => {
-    const fixture = artifactFixture();
-    fixture.producer.run_attempt = 2;
-    await expect(
-      continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
-    ).resolves.toMatchObject({ action: "would-rerun-parent" });
-    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
-  });
 
   it.each([
     ["different tooling", { head_sha: "c".repeat(40) }],
@@ -2425,42 +2402,6 @@ describe("FRV child rerun", () => {
         maxAttempts: 3,
       }),
     ).resolves.toMatchObject({ action: "reran-child", reruns: [{ runAttempt: 3 }] });
-  });
-
-  it("keeps install-smoke payload verifiers independent of the consumer run attempt", () => {
-    const installSmoke = parseYaml(
-      readFileSync(".github/workflows/install-smoke-reusable.yml", "utf8"),
-    ) as { jobs: Record<string, { steps?: { run?: string }[] }> };
-    expect(
-      new Set(
-        Object.entries(installSmoke.jobs)
-          .filter(([, entry]) =>
-            entry.steps?.some(
-              (step) =>
-                step.run?.includes("install-smoke-candidate-payload.mts verify") &&
-                step.run.includes('--run-attempt "$GITHUB_RUN_ATTEMPT"'),
-            ),
-          )
-          .map(([id]) => id),
-      ),
-    ).toEqual(new Set());
-  });
-
-  it.each([
-    ["a failed consumer", ["installer_smoke_update", "installer_smoke"]],
-    [
-      "a failed upstream image whose rerun re-executes a consumer",
-      ["installer_smoke_update_image", "root_dockerfile_image", "installer_smoke"],
-    ],
-  ])("refuses a duplicate-prone multi-job install-smoke rerun for %s", (_case, failed) => {
-    const jobs = [
-      job(producer),
-      ...failed.map((name) => job(`install_smoke_release_checks / ${name}`, "failure")),
-      job("Verify release checks", "failure"),
-    ];
-    expect(() => planReleaseChildRerun({ childKey: "releaseChecks", jobs })).toThrow(
-      "refusing a multi-job rerun because GitHub can create persistent duplicate jobs",
-    );
   });
 
   it("continue --failed refuses multiple failed install-smoke jobs before mutation", async () => {

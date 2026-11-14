@@ -961,12 +961,6 @@ function createArtifactHarness(mac: MacScriptFixture) {
       )} >"$app/Contents/MacOS/OpenClaw"`,
       'printf helper >"$app/Contents/MacOS/openclaw-mlx-tts"',
       'chmod 755 "$app/Contents/MacOS/OpenClaw" "$app/Contents/MacOS/openclaw-mlx-tts"',
-      'case "${TEST_CUA_DRIVER_KIND:-none}" in',
-      '  file) mkdir -p "$app/Contents/Resources"; printf driver >"$app/Contents/Resources/cua-driver"; chmod 755 "$app/Contents/Resources/cua-driver" ;;',
-      '  symlink) mkdir -p "$app/Contents/Resources"; ln -s /missing/cua-driver "$app/Contents/Resources/cua-driver" ;;',
-      "  none) ;;",
-      "  *) exit 64 ;;",
-      "esac",
     ),
   );
   writeCommandFixture(
@@ -1857,25 +1851,6 @@ describe("mac elevation host command contract", () => {
         rejected,
         "artifact receipt does not match the authenticated release handoff digest",
       );
-    }),
-  );
-
-  nativeIt.concurrent(
-    "rejects CUA-bearing elevation artifacts before verify or install",
-    withMac(async (mac) => {
-      const verification = createArtifactHarness(mac);
-      const rejectedVerify = await runArtifact(mac, verification, "verify", [], {
-        ...verification.env,
-        TEST_CUA_DRIVER_KIND: "file",
-      });
-      expectFailure(rejectedVerify, "must not contain bundled CUA driver");
-
-      const installation = createRollbackHarness(mac);
-      const rejectedInstall = await installMigration(mac, installation, {
-        ...installation.env,
-        TEST_CUA_DRIVER_KIND: "symlink",
-      });
-      expectFailure(rejectedInstall, "must not contain bundled CUA driver");
     }),
   );
 

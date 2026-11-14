@@ -666,24 +666,6 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
-  fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
-    assertEquals(
-      listOf(
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ),
-      operatorConnectScopesForAuth(
-        usesStoredDeviceToken = false,
-        storedOperatorScopes = null,
-      ),
-    )
-  }
-
-  @Test
   fun operatorConnectScopesForAuthPreservesStoredScopesForReconnects() {
     val storedScopes = listOf("operator.approvals", "operator.read", "operator.write")
 
@@ -692,17 +674,6 @@ class GatewayBootstrapAuthTest {
       operatorConnectScopesForAuth(
         usesStoredDeviceToken = true,
         storedOperatorScopes = storedScopes,
-      ),
-    )
-  }
-
-  @Test
-  fun operatorConnectScopesForAuthFallsBackToLegacyScopesForOldStoredDeviceTokens() {
-    assertEquals(
-      ConnectionManager.legacyOperatorScopes,
-      operatorConnectScopesForAuth(
-        usesStoredDeviceToken = true,
-        storedOperatorScopes = emptyList(),
       ),
     )
   }

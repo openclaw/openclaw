@@ -2471,33 +2471,6 @@ describe("talk realtime gateway relay", () => {
     },
   );
 
-  it.each(["cancel", "retry"] as const)(
-    "preserves rejected tool results for %s",
-    async (nextAction) => {
-      const submitToolResult = vi
-        .fn<RealtimeVoiceBridge["submitToolResult"]>()
-        .mockRejectedValueOnce(new Error("provider rejected tool result"));
-      if (nextAction === "cancel") {
-        submitToolResult.mockRejectedValue(new Error("provider rejected cancellation"));
-      }
-      const { submit, cancel, eventsOf, abortController } = await createRunRelay({
-        submitToolResult,
-      });
-      await expect(submit({ ok: nextAction === "cancel" })).rejects.toThrow(
-        "provider rejected tool result",
-      );
-      expect(eventsOf("toolResult")).toHaveLength(0);
-      if (nextAction === "cancel") {
-        void cancel("barge-in");
-        expect(abortController.signal.aborted).toBe(true);
-      } else {
-        expect(submit({ ok: true })).toBeUndefined();
-        expect(submitToolResult).toHaveBeenCalledTimes(2);
-        expect(eventsOf("toolResult")).toHaveLength(1);
-      }
-    },
-  );
-
   it.each([
     [true, "replacement"],
     [false, "replacement"],

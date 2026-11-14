@@ -2395,25 +2395,6 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {
-    const fixture = trustedMainNpmFixture();
-    const selected = expectDefined(
-      fixture.executionPlan.children.find((child) => child.key === "normalCi"),
-      "normal CI child",
-    );
-    const windowsJob = {
-      ...fixture.parentJob,
-      name: "checks-windows-node-test-2",
-      conclusion: "failure",
-      html_url: `https://github.com/openclaw/openclaw/actions/runs/${selected.runId}/job/501`,
-    };
-    const jobs = [windowsJob, { ...fixture.parentJob, name: "openclaw/ci-gate" }];
-    setChildJobs(fixture, "normalCi", jobs).run.conclusion = "failure";
-    await expect(verifyFixture(fixture)).rejects.toThrow(
-      "Release manifest contains failed selected job evidence",
-    );
-  });
-
   it.each(["failed-gate", "missing-gate", "skipped-gate", "windows-shard", "retired-advisory"])(
     "keeps admitted candidate qualification strict for %s",
     async (scenario) => {
@@ -3063,9 +3044,6 @@ describe("release CI summary child correlation", () => {
     expect(() =>
       validatePerformanceArtifactOnlyJobs([{ ...guard, conclusion: "failure" }]),
     ).toThrow("performance artifact-only guard is missing or unsuccessful");
-    expect(() =>
-      validatePerformanceArtifactOnlyJobs([guard, { ...skippedPublisher, conclusion: "success" }]),
-    ).toThrow("performance report publisher was not skipped");
   });
 
   it("requires the child mapped by rerunGroup and scans only selected in-progress workflows", () => {

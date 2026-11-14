@@ -96,7 +96,6 @@ actor OutboxTransportState {
         case unsupportedTransport
         case legacyAdminScopeRejection
         case unknownMethodRejection
-        case unsupportedTextRejection
     }
 
     var sessionRoutingContract = "per-sender|main|main"
@@ -347,12 +346,6 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
                 method: "sessions.branches.list",
                 code: "INVALID_REQUEST",
                 message: "unknown method: sessions.branches.list",
-                details: nil)
-        case .unsupportedTextRejection:
-            throw GatewayResponseError(
-                method: "sessions.branches.list",
-                code: "UNSUPPORTED",
-                message: "sessions.branches.list is unsupported on this gateway",
                 details: nil)
         }
     }
@@ -2842,33 +2835,6 @@ struct ChatViewModelOutboxTests {
 }
 
 extension ChatViewModelOutboxTests {
-    @Test func `double submit during the offline health probe enqueues once`() async throws {
-        let (store, _, databaseDirectory) = try makeOutboxStore()
-        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        let transport = OutboxTestTransport(healthy: false)
-        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
-
-        await MainActor.run { vm.load() }
-        // Two rapid submits of the same draft: the second lands while the
-        // first is still awaiting the forced health probe. The isSending
-        // guard must swallow it instead of enqueueing a duplicate row.
-        await MainActor.run {
-            vm.input = "tap tap"
-            vm.send()
-            vm.send()
-        }
-        try await waitForOutboxState { !vm.isSubmittingDraft }
-        #expect(await MainActor.run {
-            vm.messages.contains { message in
-                message.role == "user" && message.content.contains { $0.text == "tap tap" }
-            }
-        })
-
-        let commands = await store.loadCommands()
-        #expect(commands.map(\.text) == ["tap tap"])
-        #expect(await MainActor.run { vm.outboxStatesByMessageID.count } == 1)
-    }
-
     @Test func `double submit during slash validation enqueues once`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }

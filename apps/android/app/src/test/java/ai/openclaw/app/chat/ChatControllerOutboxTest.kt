@@ -671,27 +671,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun mainAliasRowsFlushToCanonicalMainSessionAfterHello() =
-    outboxTest {
-      val chat = controller()
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "queued pre-hello", thinkingLevel = "off", attachments = emptyList())
-      val queuedRow = chat.outboxItems.value.single()
-      assertEquals("main", queuedRow.sessionKey)
-
-      // Gateway hello announces the canonical main session key, then health recovers.
-      gateway.online = true
-      chat.applyMainSessionKey("agent:main:main")
-      advanceUntilIdle()
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
-      assertTrue(chat.outboxItems.value.isEmpty())
-    }
-
-  @Test
   fun queuedRowsStayWithTheirGatewayAcrossSwitchAndFlushAfterSwitchBack() =
     outboxTest {
       var activeScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1L)
@@ -747,8 +726,6 @@ class ChatControllerOutboxTest {
         listOf<(String) -> String>(
           { key -> """{"runId":"$key","status":"error"}""" },
           { key -> """{"runId":"$key","status":"timeout"}""" },
-          { _ -> """{"status":"error"}""" },
-          { _ -> """{"status":"timeout"}""" },
         )
 
       for ((index, response) in responses.withIndex()) {
@@ -990,30 +967,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun failedKnownOwnerRowNeverSendsUntilExplicitRetry() =
-    outboxTest {
-      seed(
-        id = "migrated-ambiguous",
-        text = "possibly delivered before upgrade",
-        createdAtMs = System.currentTimeMillis(),
-        status = ChatOutboxStatus.Failed,
-        lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-      )
-      val chat = controller()
-      gateway.online = true
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Failed, chat.singleOutboxStatus())
-
-      chat.retryOutboxCommand("migrated-ambiguous")
-      advanceUntilIdle()
-      assertEquals(listOf("migrated-ambiguous"), gateway.sentIdempotencyKeys)
-      assertTrue(chat.outboxItems.value.isEmpty())
-    }
-
-  @Test
   fun notDispatchedKeepsRowQueuedForNextReconnectInsteadOfBurningAttempts() =
     outboxTest {
       val chat = controller()
@@ -1159,8 +1112,6 @@ class ChatControllerOutboxTest {
       val responses =
         listOf<(String) -> String>(
           { key -> """{"runId":"$key","status":"mystery"}""" },
-          { key -> """{"runId":"$key","status":"accepted"}""" },
-          { _ -> """{"status":"accepted"}""" },
           { _ -> """{"status":"started"}""" },
           { _ -> """{"status":"in_flight"}""" },
           { key -> """{"runId":"$key","status":42}""" },

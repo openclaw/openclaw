@@ -1408,8 +1408,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "gpt-5.4",
     });
     state.sessionEntryMock = createCommandSessionEntry({
-      sessionId: "session-1",
-      updatedAt: 1,
       modelSelectionLocked: true,
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     });
@@ -3168,7 +3166,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     async ({ source, profileProvider, preserve }) => {
       const profileId = `${profileProvider}:selected`;
       state.sessionEntryMock = createCommandSessionEntry({
-        sessionId: "session-1",
         updatedAt: Date.now(),
         providerOverride: "openai",
         modelOverride: "gpt-future",

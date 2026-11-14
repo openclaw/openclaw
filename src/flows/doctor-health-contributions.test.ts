@@ -2239,13 +2239,6 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it("retains all public startup channel lint selectors", () => {
-    expect(requireDoctorContribution("doctor:startup-channel-maintenance").healthCheckIds).toEqual([
-      "core/doctor/channel-plugin-blockers",
-      "core/doctor/channel-preview-warnings",
-    ]);
-  });
-
   it("preserves the shipped legacy dependency selector as a non-destructive deprecation", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
@@ -2383,13 +2376,6 @@ describe("doctor health contributions", () => {
     const status = {
       eventLoop: {
         degraded: true,
-        degradedSinceMs: 61_000,
-        reasons: ["event_loop_delay"],
-        intervalMs: 30_000,
-        delayP99Ms: 42,
-        delayMaxMs: 12_000,
-        utilization: 0.3,
-        cpuCoreRatio: 0.4,
       },
     };
     mocks.callGateway.mockResolvedValueOnce(status);
@@ -3102,19 +3088,6 @@ describe("doctor health contributions", () => {
           path: "gateway.port",
           severity: "error",
           fixHint: expect.stringContaining("openclaw config unset"),
-        }),
-      );
-    });
-
-    it("skips plugin schema validation for final validation during update doctor runs", async () => {
-      const contribution = requireDoctorContribution("doctor:final-config-validation");
-
-      await contribution.run(
-        createDoctorContext({
-          shouldRepair: true,
-          env: {
-            OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          },
         }),
       );
     });

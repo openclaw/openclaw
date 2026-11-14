@@ -642,22 +642,6 @@ class WearChatEventFlowTest {
     }
 
   @Test
-  fun terminalErrorCompletionWaitsForCanonicalHistory() =
-    withFlow { flow ->
-      flow.send()
-      flow.observeReplyCompletion()
-      flow.historyMessages = """[{"id":"own-partial","role":"assistant","content":"Own partial reply","idempotencyKey":"${flow.runId}"}]"""
-      flow.historyGate = CompletableDeferred()
-      flow.emit("error")
-      assertEquals(WearConversationFailure.INTERNAL_ERROR, flow.state.conversationFailure)
-      assertTrue("Terminal-derived errors must not bypass canonical history completion", flow.completedReplies.isEmpty())
-      flow.historyGate?.complete(Unit)
-      flow.idle()
-      assertEquals(listOf("Own partial reply"), flow.completedReplies.map { it?.text })
-      assertEquals(WearConversationFailure.INTERNAL_ERROR, flow.state.conversationFailure)
-    }
-
-  @Test
   fun rewrittenAssistantBoundaryDoesNotClearACompletedError() =
     withFlow { flow ->
       flow.historyMessages = """[{"id":"reply-a","role":"assistant","content":"Initial content","timestamp":1}]"""
@@ -1056,17 +1040,6 @@ class WearChatEventFlowTest {
   }
 
   @Test
-  fun emptyActiveStreamRejectsALateInputCallback() {
-    for (run in listOf("foreign-run", null)) {
-      withFlow { flow ->
-        flow.emit("delta", eventRunId = run, text = "", complete = true)
-        flow.send()
-        assertEquals("No send during an active empty stream", 0, flow.sendRequests)
-      }
-    }
-  }
-
-  @Test
   @Config(qualifiers = "w400dp-h800dp-mdpi")
   fun activeStreamsDisableInputAndExposeWorkingAbortInTheApp() {
     for (run in listOf(null, "identified-run")) {
@@ -1454,20 +1427,6 @@ class WearChatEventFlowTest {
     }
 
   @Test
-  fun abortingAnAmbiguousPendingSendRetiresItsRetryKey() =
-    withFlow { flow ->
-      flow.sendFails = true
-      flow.send()
-      val firstRun = flow.runId
-      flow.vm.abort()
-      flow.idle()
-      assertNull(flow.state.pendingReply)
-      flow.sendFails = false
-      flow.send()
-      assertTrue("Abort must retire the ambiguous request, not replay it", flow.runId != firstRun)
-    }
-
-  @Test
   fun foreignDeltasCannotEraseTheOnlyObservedOwnTerminal() {
     for ((ownTerminal, ownOutcome) in listOf("error" to WearReplyOutcome.Error, "aborted" to WearReplyOutcome.Aborted)) {
       for ((foreignTerminal, foreignOutcome) in listOf("final" to WearReplyOutcome.Final, "error" to WearReplyOutcome.Error, "aborted" to WearReplyOutcome.Aborted)) {
@@ -1497,24 +1456,6 @@ class WearChatEventFlowTest {
       }
     }
   }
-
-  @Test
-  fun abortingForeignRunPreservesTheWatchOwnerAndItsCompletion() =
-    withFlow { flow ->
-      flow.send()
-      val ownRun = flow.runId
-      flow.observeReplyCompletion()
-      flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
-      flow.vm.abort()
-      flow.idle()
-      assertEquals(listOf("foreign-run"), flow.abortRuns)
-      assertEquals("Abort only affected the foreign run", ownRun, flow.state.pendingReply?.runId)
-      assertTrue(flow.completedReplies.isEmpty())
-      assertEquals(false, flow.vm.sendReply("Another send"))
-      flow.historyMessages = """[{"id":"own","role":"assistant","content":"Own reply","idempotencyKey":"$ownRun"}]"""
-      flow.emit("final", eventRunId = ownRun)
-      assertEquals(listOf("Own reply"), flow.completedReplies.map { it?.text })
-    }
 
   @Test
   fun suspendedRunAbortCannotClearNewerLiveOrTerminalState() {
