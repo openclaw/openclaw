@@ -1,6 +1,6 @@
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
@@ -28,16 +28,11 @@ import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-test("guest revocation and discard do not flush queued audio or gracefully finalize the vendor stream", async ({
-  onTestFailed,
-}) => {
-  const started = performance.now();
-  const phases: string[] = [];
-  const mark = (phase: string) =>
-    phases.push(`${Math.round(performance.now() - started)}ms ${phase}`);
-  onTestFailed(() => console.error("[guest-dictation-transport-phase]", phases.join(" -> ")));
-  mark("setup");
-  const origin = "https://control.example.com";
+const origin = "https://control.example.com";
+let guestProfileId: string;
+
+// Keep profile preparation outside the transport assertion deadline.
+beforeEach(async () => {
   const auth: GatewayAuthConfig = {
     mode: "trusted-proxy",
     identityScopes: { "dictation@example.com": ["operator.sessions.write"] },
@@ -62,9 +57,19 @@ test("guest revocation and discard do not flush queued audio or gracefully final
       },
     },
   });
-  const guest = ensureProfileForEmail("dictation@example.com");
-  setUserProfileRole(guest.id, "guest");
-  const guestProfileId = guest.id;
+  guestProfileId = ensureProfileForEmail("dictation@example.com").id;
+  setUserProfileRole(guestProfileId, "guest");
+});
+
+test("guest revocation and discard do not flush queued audio or gracefully finalize the vendor stream", async ({
+  onTestFailed,
+}) => {
+  const started = performance.now();
+  const phases: string[] = [];
+  const mark = (phase: string) =>
+    phases.push(`${Math.round(performance.now() - started)}ms ${phase}`);
+  onTestFailed(() => console.error("[guest-dictation-transport-phase]", phases.join(" -> ")));
+  mark("vendor-setup");
   const vendor = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await new Promise<void>((resolve) => {
     vendor.once("listening", resolve);
