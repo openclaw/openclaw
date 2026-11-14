@@ -10,7 +10,6 @@ import {
   createSystemAgentSession,
   runSystemAgentTurn,
   type SystemAgentSession,
-  type SystemAgentTurnDirective,
   type SystemAgentTurnRunner,
 } from "./agent-turn.js";
 import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
@@ -20,7 +19,13 @@ import {
   type ChatWizardResult,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
-import { applyTurnDirective, approvalQuestion, formatSystemAgentTurnInput } from "./dialogue.js";
+import {
+  applyTurnDirective,
+  approvalQuestion,
+  createCaptureRuntime,
+  formatSystemAgentTurnInput,
+  type CaptureRuntime,
+} from "./dialogue.js";
 import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
@@ -77,7 +82,6 @@ export type SystemAgentChatEngineOptions = {
   requesterAgentId?: string;
 };
 
-type CaptureRuntime = RuntimeEnv & { read: () => string };
 type PersistentApplyGuard = () => void;
 
 function unavailable(reason: string): string {
@@ -85,18 +89,6 @@ function unavailable(reason: string): string {
     `⚠ The write was applied, but post-write verification is unavailable: ${reason}.`,
     "Run `openclaw doctor --fix` on the machine running OpenClaw, then verify the configuration before continuing.",
   ].join("\n");
-}
-
-function createCaptureRuntime(): CaptureRuntime {
-  const lines: string[] = [];
-  return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`OpenClaw operation exited with code ${String(code)}`);
-    },
-    read: () => lines.join("\n").trim(),
-  };
 }
 
 export class SystemAgentChatEngine {
@@ -497,6 +489,9 @@ export class SystemAgentChatEngine {
     const baseText = [capture.read() || "Applied. Audit entry written.", verify]
       .filter(Boolean)
       .join("\n\n");
+    if (operation.kind === "template-install") {
+      this.agentSession.templateResult = baseText;
+    }
     if (
       (operation.kind === "setup" || operation.kind === "create-agent") &&
       result?.applied &&
@@ -538,6 +533,7 @@ export class SystemAgentChatEngine {
       this.pending,
       this.proposalResolution,
       uiContext,
+      this.agentSession.templateResult,
     );
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
     const runTurn = () =>
@@ -563,19 +559,16 @@ export class SystemAgentChatEngine {
       this.pending = null;
       this.pendingDescription = undefined;
     }
-    return await this.applyAgentTurnReply(loopReply);
-  }
-
-  private async applyAgentTurnReply(loopReply: {
-    text: string;
-    directive?: SystemAgentTurnDirective;
-  }): Promise<SystemAgentChatReply> {
     await this.requireVerifiedInference();
-    return await applyTurnDirective({
+    const reply = await applyTurnDirective({
       loopReply,
       runOperation: (operation) => this.runOperation(operation),
       applyApproved: (operation) => this.applyApprovedPersistentOperation(operation),
     });
+    if (loopReply.directive?.kind === "template-operation") {
+      this.agentSession.templateResult = reply.text;
+    }
+    return reply;
   }
 
   private async runOperation(operation: SystemAgentOperation): Promise<SystemAgentChatReply> {

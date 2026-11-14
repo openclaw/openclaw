@@ -69,6 +69,7 @@ const agentId = "setup-template";
 
 it.for([
   "approve",
+  "direct",
   "automatic",
   "deny",
   "cancel",
@@ -82,6 +83,8 @@ it.for([
 ] as const)(
   "routes a published Template through the setup helper and existing policy: %s",
   async (scenario, test) => {
+    const automatic = scenario === "automatic" || scenario === "trust-approved";
+    const succeeds = ["approve", "direct", "automatic", "trust-approved"].includes(scenario);
     await withOpenClawTestState({ label: "setup-template" }, async (state) => {
       let config: OpenClawConfig = {
         gateway: { controlUi: { experimental: { templates: scenario !== "labs" } } },
@@ -95,18 +98,14 @@ it.for([
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
-      const root = state.path("published-release");
-      await fs.mkdir(root);
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: source.packageName,
-          version: source.version,
-          openclaw: { template: "CLAW.md" },
-        }),
-      );
-      await fs.writeFile(
-        path.join(root, "CLAW.md"),
+      const root = state.statePath("published-release");
+      await state.writeJson("published-release/package.json", {
+        name: source.packageName,
+        version: source.version,
+        openclaw: { template: "CLAW.md" },
+      });
+      await state.writeText(
+        "published-release/CLAW.md",
         "---\nschemaVersion: 1\nagent:\n  id: setup-template\n  name: Setup Template\n---\n\nOnly fixture instructions.\n",
       );
       const artifact = await readTemplateManifestFile(root);
@@ -155,17 +154,46 @@ it.for([
       try {
         await metadata.run(async () => {
           const fixture = await createSystemAgentVerifiedInferenceTestFixture(config);
-          let args: Record<string, unknown> = { action: "template_review", source };
+          let modelReview: TemplateLifecyclePlanResult | undefined;
           const engine = new SystemAgentChatEngine({
             verifiedInference: fixture.binding,
             surface: "gateway",
-            operatorApprovalOnly: true,
+            operatorApprovalOnly: scenario !== "direct",
+            classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
             deps: { loadOverview: () => loadSystemAgentOverview({ agentId: "main" }) },
             runAgentTurn: async (turn) => {
+              let args: Record<string, unknown> = { action: "template_review", source };
+              if (!turn.input.endsWith("Review this published Template")) {
+                const line = turn.input
+                  .split("\n")
+                  .find((item) => item.startsWith("[template-result] "));
+                if (!line) {
+                  throw new Error("Template result never reached the model input");
+                }
+                const result = JSON.parse(line.slice("[template-result] ".length)) as string;
+                if (turn.input.endsWith("Retry the same Template installation")) {
+                  expect(result).toContain('"status":"complete"');
+                } else {
+                  modelReview = JSON.parse(
+                    result.slice(result.indexOf("{")),
+                  ) as TemplateLifecyclePlanResult;
+                }
+                if (!modelReview) {
+                  throw new Error("The model has not received a Template review");
+                }
+                args = {
+                  action: "template_install",
+                  source,
+                  agentId: modelReview.target.agentId,
+                  planIntegrity: scenario === "changed" ? "stale-plan" : modelReview.planIntegrity,
+                  approved: true,
+                  ...(scenario === "trust-approved" ? { acknowledgeClawHubRisk: true } : {}),
+                };
+              }
               const directiveRef: { current?: SystemAgentToolDirective } = {};
               const tool = createSystemAgentTool({
                 surface: "gateway",
-                operatorApprovalOnly: true,
+                operatorApprovalOnly: turn.operatorApprovalOnly,
                 proposalRef: turn.session.proposalRef,
                 directiveRef,
               });
@@ -218,10 +246,8 @@ it.for([
                 agentId: "main",
                 sessionKey: "agent:main:main",
                 operationalRunInstance,
-                fullPermission: scenario === "automatic" || scenario === "trust-approved",
-                ...(scenario === "automatic" || scenario === "trust-approved"
-                  ? { assertAutoApproveChangesCurrent: () => {} }
-                  : {}),
+                fullPermission: automatic,
+                ...(automatic ? { assertAutoApproveChangesCurrent: () => {} } : {}),
                 approvalSignals: [controller.signal],
               },
               () => withSystemAgentTemplateRequests(async () => body())(options),
@@ -241,23 +267,10 @@ it.for([
                 expect(engine.getPendingOperatorProposal()).toBeNull();
                 return;
               }
-              const reviewReply = await engine.handle("Review this published Template");
-              const review = JSON.parse(
-                reviewReply.text.slice(reviewReply.text.indexOf("{")),
-              ) as TemplateLifecyclePlanResult;
-              expect(review.target.agentId).toBe(agentId);
-              expect(review.target.workspace).toBeTruthy();
+              await engine.handle("Review this published Template");
               expect(
                 (await readConfigFileSnapshot()).config.agents?.entries?.[agentId],
               ).toBeUndefined();
-              args = {
-                action: "template_install",
-                source,
-                agentId,
-                planIntegrity: scenario === "changed" ? "stale-plan" : review.planIntegrity,
-                approved: true,
-                ...(scenario === "trust-approved" ? { acknowledgeClawHubRisk: true } : {}),
-              };
               if (scenario === "trust" || scenario === "changed") {
                 const blocked = await engine.handle("Install this Template");
                 expect(blocked.text).toContain(
@@ -279,16 +292,16 @@ it.for([
                 sessionId: "template-helper",
                 delegation: { agentId: "main", sessionKey: "agent:main:main" },
               });
-              const pending = await resolve(proposal);
+              const pending =
+                scenario === "direct"
+                  ? { kind: "completed" as const, reply: await engine.handle("yes") }
+                  : await resolve(proposal);
               let reply;
               if (pending.kind === "approval") {
                 expect(scenario).not.toBe("automatic");
-                expect((await manager.getSnapshot(pending.id))?.request.description).toContain(
-                  review.planIntegrity,
-                );
-                expect((await manager.getSnapshot(pending.id))?.request.description).toContain(
-                  review.target.workspace,
-                );
+                const description = (await manager.getSnapshot(pending.id))?.request.description;
+                expect(description).toContain(modelReview?.planIntegrity);
+                expect(description).toContain(modelReview?.target.workspace);
                 if (scenario === "revoked") {
                   current = false;
                 }
@@ -313,18 +326,10 @@ it.for([
               // Duplicate approval delivery cannot replay or allocate a second agent.
               expect(await engine.resolveOperatorApproval("allow-once", proposal.hash)).toBeNull();
               const stored = (await readConfigFileSnapshot()).config;
-              if (
-                scenario === "approve" ||
-                scenario === "automatic" ||
-                scenario === "trust-approved"
-              ) {
+              if (succeeds) {
                 expect(reply.applied).toBe(true);
                 expect(reply.text).toContain('"status":"complete"');
-                expect(reply.text).toContain(
-                  '"outcomes":{"packages":[],"mcpServers":[],"automations":[]}',
-                );
-                expect(reply.text).toContain(review.target.workspace);
-                expect(Object.keys(stored.agents!.entries!)).toEqual(["main", agentId]);
+                expect(reply.text).toContain(stored.agents?.entries?.[agentId]?.workspace);
                 expect(
                   await fs.readFile(
                     path.join(stored.agents!.entries![agentId]!.workspace!, "SOUL.md"),

@@ -78,7 +78,8 @@ An agent can delegate a published ClawHub Template installation to the
 `source: { packageName, version }`, then proposes `template_install` using the returned
 `target.agentId` and `planIntegrity`. Required Template risk, plugin
 capability, and skill warning acknowledgements must match that review. Template
-contents are untrusted data, not instructions for the requesting agent.
+contents are untrusted data, not instructions for the requesting agent. The host carries
+its result into later helper turns; users do not need to paste the review JSON.
 
 The host uses the requesting session's existing setup-change approval policy;
 an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
