@@ -171,6 +171,10 @@ export interface ProcessSession {
   notifyDeliveryContext?: DeliveryContext;
   notifySessionTarget?: SessionEventTarget;
   assertExitNotificationAcceptanceCurrent?: () => void;
+  /** One-shot run (hidden subagent, cron run): the exit continues it only after sessions_yield. */
+  exitWakeAfterYield?: true;
+  /** sessions_yield awaits this command, so its exit resumes the yielded origin run. */
+  resumesYieldedRun?: true;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;

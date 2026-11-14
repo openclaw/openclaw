@@ -5,10 +5,10 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
 const NO_PENDING_CHILD_COMPLETION_MESSAGE =
-  'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. Set waitFor: "message" only in a subagent session that is waiting for its requester to send it a continuation.';
+  'No pending child completion or wake-armed background command is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. Set waitFor: "message" only in a subagent session that is waiting for its requester to send it a continuation.';
 
 const WAIT_FOR_NOT_APPLIED_NOTE =
-  'waitFor: "message" was not applied: this turn yielded for its own pending child completions, which resume this session. Omit waitFor when yielding for children.';
+  'waitFor: "message" was not applied: this turn yielded for its own pending child completions or background commands, which resume this session. Omit waitFor when yielding for them.';
 
 /**
  * A harness runtime's yield claim: true when this turn owns a pending completion,
@@ -20,6 +20,8 @@ export type SessionsYieldRuntimeClaim =
 export type SessionsYieldClaimResult =
   | SessionsYieldRuntimeClaim
   | { schedulerOwned: true }
+  // The run's owner resumes it in its current operation after awaited commands exit.
+  | { resumesInPlace: true }
   | { messageWaitRegistered: boolean }
   | { error: string };
 export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
@@ -27,7 +29,12 @@ export type SessionsYieldCallback = (
   message: string,
   acknowledgment?: string,
   messageWaitRegistered?: boolean,
-  options?: { conditional?: true; terminal?: import("../agent-tools.abort.js").ToolTurnHandoff },
+  options?: {
+    conditional?: true;
+    terminal?: import("../agent-tools.abort.js").ToolTurnHandoff;
+    /** End the turn but keep the reply operation open for the run's in-place resume. */
+    resumesInPlace?: true;
+  },
 ) => Promise<void> | void;
 
 function describePendingChild(child: UnsettledRequesterChild): string {
@@ -99,7 +106,7 @@ export function createSessionsYieldTool(opts?: {
     // delivers this response's async results ahead of the yield result.
     async: false,
     description:
-      'End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:"message" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Automation turns end here; the scheduler delivers child output under the job delivery policy. Collector runs require explicit collection instead.',
+      'End this turn to await pending child completions or wake-armed background commands this run started (their exit resumes this run), not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:"message" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Automation turns end here; the scheduler delivers child output under the job delivery policy. Collector runs require explicit collection instead.',
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -148,13 +155,13 @@ export function createSessionsYieldTool(opts?: {
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.
-      await opts.onYield(
-        message,
-        acknowledgment,
+      const messageWaitRegistered =
         typeof claim === "object" && "messageWaitRegistered" in claim
           ? claim.messageWaitRegistered
-          : undefined,
-      );
+          : undefined;
+      await (typeof claim === "object" && "resumesInPlace" in claim
+        ? opts.onYield(message, acknowledgment, messageWaitRegistered, { resumesInPlace: true })
+        : opts.onYield(message, acknowledgment, messageWaitRegistered));
       return jsonResult({
         status: "yielded",
         ...(acknowledgment ? { acknowledgment } : {}),
