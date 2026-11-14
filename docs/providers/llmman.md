@@ -157,13 +157,13 @@ Qwen3.8 on a local llmman server:
 
 ## Model discovery
 
-llmman is not a bundled OpenClaw plugin, so there is no implicit discovery. List every model you want under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix).
+llmman is not a bundled OpenClaw plugin, so the `llmman` provider has no implicit discovery. List every model you want under `models.providers.llmman.models` with a provider-local `id` (no `llmman/` prefix). To skip the list, use the bundled Ollama provider on llmman's native API, described under [Advanced configuration](#advanced-configuration).
 
 | Behavior     | Detail                                                                                                                                                                   |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Model ids    | Short (`qwen3.8`, `qwen3.5:9b`), Hugging Face (`unsloth/Qwen3.5-0.8B-GGUF`), or fully qualified (`docker.io/ai/qwen3.8:latest`) all work                                 |
 | Default tag  | `:latest` when omitted                                                                                                                                                   |
-| Capabilities | `llmman show <model>` and `POST /api/show` report `completion` plus `vision` when a companion `mmproj` projector is present; mark such models `input: ["text", "image"]` |
+| Capabilities | `POST /api/show` reports `completion`, `tools`, `thinking`, and `vision` when a companion `mmproj` projector is attached; mark vision models `input: ["text", "image"]`. |
 | Reasoning    | Set `reasoning: true` for thinking models such as Qwen3.8; llmman returns thinking as `reasoning_content`                                                                |
 | Context      | `llmman show <model>` prints the trained context length; `llmman ps` prints the context the running server was started with                                              |
 | Costs        | All `0`; the hosted half of a hybrid ref is billed by that provider, not tracked by OpenClaw                                                                             |
@@ -935,7 +935,25 @@ container, or service account.
   </Accordion>
 
   <Accordion title="Ollama-compatible API">
-    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. The native route also works from OpenClaw. Use a custom provider id such as `llmman`, not `ollama`: discovery on that id reads llmman's `/api/show`, which reports only `completion` and `vision`, and marks every model `compat.supportsTools: false`. Set `api: "ollama"`, omit `/v1`, and list models explicitly:
+    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. OpenClaw's bundled [Ollama provider](/providers/ollama/configuration) can use that route directly, so pulled models are discovered with their vision, tools, and thinking support and need no hand-written list. This needs llmman 0.1.550 or later, which reports `tools` and `thinking` from `/api/show`. Omit `/v1`, and set `LLMMAN_API_KEY` to the daemon's key (any non-empty value on loopback with no keys):
+
+    ```json5
+    {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:17434",
+            apiKey: "${LLMMAN_API_KEY}",
+            api: "ollama",
+          },
+        },
+      },
+    }
+    ```
+
+    `openclaw models list --provider ollama --refresh` then lists each pulled model by its llmman name, for example `ollama/hf.co/unsloth/Qwen3.5-0.8B-GGUF:latest`. Discovered models get OpenClaw's 32,768-token local context, which llmman loads as the model's window (`options.num_ctx`) instead of `LLMMAN_CONTEXT_LENGTH`. To change it, list the model with `contextTokens`; the other models are still discovered.
+
+    Discovery covers the `ollama` provider id. If that id is already a real Ollama host, use a custom id such as `llmman` and list models explicitly:
 
     ```json5
     {
