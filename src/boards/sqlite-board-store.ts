@@ -10,7 +10,7 @@ import type {
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
@@ -147,7 +147,7 @@ export class SqliteBoardStore implements BoardStore {
               snapshotFields: [],
               expectedIdentity: identity,
             }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
         assertDatabaseCurrent();
         assertCurrent();
@@ -314,7 +314,7 @@ export class SqliteBoardStore implements BoardStore {
           },
           snapshotOnly,
         ),
-      targetDiscoveryLane,
+      sessionStoreLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
     });

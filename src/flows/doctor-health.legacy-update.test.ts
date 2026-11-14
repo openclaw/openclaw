@@ -26,7 +26,7 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../cron/store/run-history.kernel.js";
-import { replaceCronRuntimeAuthorityRows } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";

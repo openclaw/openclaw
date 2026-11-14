@@ -14,7 +14,7 @@ import {
   generateStoredDeviceIdentity,
   storedDeviceIdentityToRow,
 } from "./device-identity-material.js";
-import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
+import type { DeviceIdentityStoreOptions } from "./device-identity-store-options.js";
 import { ed25519PrivateKeyPemFromRaw } from "./ed25519-signature.js";
 
 const boundary = vi.hoisted(() => ({

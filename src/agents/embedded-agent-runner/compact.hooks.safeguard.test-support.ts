@@ -87,14 +87,14 @@ export function registerCompactionSafeguardTests({
 
     let safeguard: typeof import("../agent-hooks/compaction-safeguard.js").default;
     let setSafeguardRuntime: typeof import("../agent-hooks/compaction-safeguard-runtime.js").setCompactionSafeguardRuntime;
-    let summaryBridge: typeof import("../sessions/index.js").generateSummary;
+    let summaryBridge: typeof import("../sessions/compaction/compaction.js").generateSummary;
 
     beforeAll(async () => {
       // Share the reset harness registry while retaining the real session fixture.
       safeguard = (await import("../agent-hooks/compaction-safeguard.js")).default;
       setSafeguardRuntime = (await import("../agent-hooks/compaction-safeguard-runtime.js"))
         .setCompactionSafeguardRuntime;
-      summaryBridge = (await import("../sessions/index.js")).generateSummary;
+      summaryBridge = (await import("../sessions/compaction/compaction.js")).generateSummary;
     });
 
     afterEach(() => {

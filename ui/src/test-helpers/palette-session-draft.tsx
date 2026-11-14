@@ -80,7 +80,11 @@ export class PaletteDraftHost {
             <textarea aria-label="Palette prompt" value={message()} />
             <PaletteSessionControls draft={this.draft} revision={revision()} />
             <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
-            <PaletteSessionAttachments draft={this.draft} revision={revision()} />
+            <PaletteSessionAttachments
+              draft={this.draft}
+              revision={revision()}
+              onOpenImage={() => {}}
+            />
           </>
         );
       },

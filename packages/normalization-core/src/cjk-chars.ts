@@ -11,7 +11,8 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 export type StringCharBudgetOptions = { minimumRawWeight?: number };
 const DEFAULT_BUDGET_OPTIONS: StringCharBudgetOptions = {};
-const NUMERIC_RUN_PATTERN = /^[0-9]+$/;
+const TOKEN_PRESSURE_RUN_RE = /[A-Za-z0-9+/_=-]{16,}|\b[0-9]+\b|[{}[\]:,]/g;
+const TOKEN_PRESSURE_PART_RE = /[A-Za-z]+|[0-9]{1,3}|[^A-Za-z0-9]/y;
 const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\p{ASCII}]+|[^\p{ASCII}]/gu;
 
 const WEIGHTED_CJK_RANGES = [
@@ -165,21 +166,62 @@ export function estimateStringTokenPressure(
   let tokens = estimateStringChars(text) / charsPerToken;
   // Encoded runs, numeric groups and JSON delimiters have lexical boundaries
   // that prose character averages miss, regardless of the message's tool role.
-  for (const run of text.match(/[A-Za-z0-9+/_=-]{16,}|\b[0-9]+\b|[{}[\]:,]/g) ?? []) {
-    let denseTokens = 0;
-    if (NUMERIC_RUN_PATTERN.test(run)) {
-      denseTokens = Math.ceil(run.length / 3);
-    } else if (run.length === 1) {
-      denseTokens = 1;
-    } else {
-      if (run.length < 64 && !(/[A-Za-z]/.test(run) && /[0-9]/.test(run))) {
-        continue;
+  TOKEN_PRESSURE_RUN_RE.lastIndex = 0;
+  let previousEnd = 0;
+  while (TOKEN_PRESSURE_RUN_RE.test(text)) {
+    const end = TOKEN_PRESSURE_RUN_RE.lastIndex;
+    let start = end;
+    let numericStart = end;
+    let hasLetter = false;
+    let hasDigit = false;
+    // Recover the match bounds without allocating a match array or substring.
+    while (start > previousEnd) {
+      const code = text.charCodeAt(start - 1);
+      const digit = code >= 48 && code <= 57;
+      const letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+      if (
+        !digit &&
+        !letter &&
+        code !== 43 &&
+        code !== 47 &&
+        code !== 95 &&
+        code !== 61 &&
+        code !== 45
+      ) {
+        break;
       }
-      for (const part of run.match(/[A-Za-z]+|[0-9]{1,3}|[^A-Za-z0-9]/g) ?? []) {
-        denseTokens += Math.ceil(part.length / charsPerToken);
+      start--;
+      hasLetter ||= letter;
+      hasDigit ||= digit;
+      if (digit && numericStart === start + 1) {
+        numericStart = start;
       }
     }
-    tokens += Math.max(0, denseTokens - run.length / charsPerToken);
+    previousEnd = end;
+    // A short match is either a delimiter or a word-bounded numeric suffix.
+    if (start === end) {
+      start--;
+    } else if (end - start < 16) {
+      start = numericStart;
+    }
+    const length = end - start;
+    let denseTokens = 0;
+    if (numericStart === start) {
+      denseTokens = Math.ceil(length / 3);
+    } else if (length === 1) {
+      denseTokens = 1;
+    } else {
+      if (length < 64 && !(hasLetter && hasDigit)) {
+        continue;
+      }
+      TOKEN_PRESSURE_PART_RE.lastIndex = start;
+      while (start < end && TOKEN_PRESSURE_PART_RE.test(text)) {
+        const partEnd = TOKEN_PRESSURE_PART_RE.lastIndex;
+        denseTokens += Math.ceil((partEnd - start) / charsPerToken);
+        start = partEnd;
+      }
+    }
+    tokens += Math.max(0, denseTokens - length / charsPerToken);
   }
   return Math.ceil(tokens);
 }

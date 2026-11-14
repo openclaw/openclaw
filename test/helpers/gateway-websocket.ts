@@ -1,5 +1,6 @@
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 /** Termination owns errors until the actual close event, including during HTTP upgrade. */
@@ -88,4 +89,52 @@ export async function acquireGatewayTestWebSocket(
   } finally {
     cleanup();
   }
+}
+
+export type GatewayTestMessage = {
+  type?: string;
+  id?: string;
+  ok?: boolean;
+  event?: string;
+  payload?: Record<string, unknown> | null;
+  seq?: number;
+  stateVersion?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
+  ws: WebSocket,
+  filter: (obj: T) => boolean,
+  // Full-suite runs can saturate the event loop (581+ files). Keep this high
+  // enough to avoid flaky RPC timeouts, but still fail fast when a response
+  // never arrives.
+  timeoutMs = 10_000,
+): Promise<T> {
+  // Keep the wait's caller in the stack when a timer eventually rejects it.
+  const timeoutError = new Error("timeout");
+  return new Promise<T>((resolve, reject) => {
+    function cleanup() {
+      clearTimeout(timer);
+      ws.off("message", handler);
+      ws.off("close", closeHandler);
+    }
+    function closeHandler(code: number, reason: Buffer) {
+      cleanup();
+      reject(new Error(`closed ${code}: ${reason.toString()}`));
+    }
+    function handler(data: RawData) {
+      const obj = JSON.parse(rawDataToString(data)) as T;
+      if (filter(obj)) {
+        cleanup();
+        resolve(obj);
+      }
+    }
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+      cleanup();
+      reject(timeoutError);
+    }, timeoutMs);
+    timer.unref?.();
+    ws.on("message", handler);
+    ws.once("close", closeHandler);
+  });
 }

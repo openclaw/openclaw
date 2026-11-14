@@ -7,7 +7,6 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
-import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
@@ -325,13 +324,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             inert={!showAnalytics()}
             style={{ display: showAnalytics() ? "contents" : "none" }}
           >
-            <UsageMosaic
-              overview={analyticsData().overview}
-              timeZone={props.filters.timeZone}
-              selectedHours={props.filters.selectedHours}
-              onSelectHour={props.callbacks.filters.onSelectHour}
-            />
-
             <UsageSessionsGrid
               usage={props}
               reveal={reveal}

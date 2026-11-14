@@ -1,5 +1,5 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { SqliteWalHealth, SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
   DatabasePathIdentity,
@@ -39,6 +39,14 @@ export type OpenClawAgentDatabase = {
     walStopMs?: number;
     checkpointMs?: number;
     nativeCloseMs?: number;
+    checkpoint?: {
+      alreadyClosed: boolean;
+      pathCurrent: boolean;
+      state?: SqliteWalHealth["state"];
+      logFrames?: number | null;
+      checkpointedFrames?: number | null;
+      walBytes?: number;
+    };
   };
 };
 

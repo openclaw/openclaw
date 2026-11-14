@@ -1,6 +1,5 @@
 import { readConfigFileSnapshot } from "../config/config.js";
 import { redactConfigSnapshot } from "../config/redact-snapshot.js";
-import { loadGatewayConfigRedactionHints } from "../config/runtime-schema.js";
 import { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
@@ -43,12 +42,14 @@ export async function readConfigGetResponse(params: {
   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
-  const readResponse = async () =>
-    createConfigGetResponse(
+  const readResponse = async () => {
+    const { loadGatewayConfigRedactionHints } = await import("../config/runtime-schema.js");
+    return createConfigGetResponse(
       await readConfigFileSnapshot(),
       loadGatewayConfigRedactionHints(),
       params.revisionProjector,
     );
+  };
   const getHotReloadStatus = params.getHotReloadStatus;
   if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
     return readResponse();

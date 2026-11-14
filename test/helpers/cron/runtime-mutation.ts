@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import * as cronStore from "../../../src/cron/store.js";
 import { cronStoreKey } from "../../../src/cron/store/key.js";
 import type { CronStateWorkerOperations } from "../../../src/cron/store/worker-contract.js";
+import type { CronJobState } from "../../../src/cron/types.js";
 import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contract.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 
@@ -100,7 +101,7 @@ export function loseFirstCronMutationReply(
 /** Observe persisted state after a real cron write has committed. */
 export function observeCronJobCommits(
   jobId: string,
-  observer: (state: { queuedAtMs?: number; runningAtMs?: number }) => void,
+  observer: (state: CronJobState) => void,
 ): () => void {
   const database = openOpenClawStateDatabase().db;
   const read = (storeKey: string) =>
@@ -129,7 +130,7 @@ export function observeCronJobCommits(
         return;
       }
       previous.set(storeKey, current);
-      const state = JSON.parse(row.state_json) as { queuedAtMs?: number; runningAtMs?: number };
+      const state = JSON.parse(row.state_json) as CronJobState;
       observer(state);
     });
   return () => publication.mockRestore();

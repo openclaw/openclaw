@@ -17,7 +17,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -569,12 +569,12 @@ it.each([
       assertCurrent();
       authorization.assertCurrent();
     });
-    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const read = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
     let revoked = false;
     let inventories = 0;
     let closing: Promise<void> | undefined;
     const runExternalClose = AsyncLocalStorage.snapshot();
-    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       const kind =
         reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value

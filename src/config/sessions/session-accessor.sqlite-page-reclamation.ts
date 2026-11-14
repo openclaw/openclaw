@@ -28,7 +28,7 @@ import {
   type SessionArchivePruningSnapshot,
   type SessionArchivePruningOperations,
 } from "./session-history-archive-pruning.types.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
@@ -359,7 +359,7 @@ export async function withSqliteSessionPageReclamation<T>(
             },
           );
         },
-        maintenanceLane,
+        sessionStoreLane,
       );
     } finally {
       await execution.release();

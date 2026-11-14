@@ -89,6 +89,21 @@ function runConfigScript(source: string) {
 }
 
 describe("projects vitest config", () => {
+  it("keeps both Gateway phases within the selected worker budget", () => {
+    runConfigScript(`
+      import assert from "node:assert/strict";
+      import { resolveConfig } from "vitest/node";
+      process.env.OPENCLAW_VITEST_MAX_WORKERS = "2";
+      const { createGatewayServerVitestConfig } = await import("./test/vitest/vitest.gateway-server.config.ts");
+      const resolved = await resolveConfig({ config: false }, createGatewayServerVitestConfig(undefined, true));
+      assert.equal(resolved.test.maxWorkers, 2);
+      assert.deepEqual(
+        resolved.test.resolvedProjects.map(({ projectConfig }) => [projectConfig.name, projectConfig.maxWorkers]),
+        [["gateway-server-native", 1], ["gateway-server-parallel", 2]],
+      );
+    `);
+  });
+
   it("pins an explicit full-suite project worker limit", () => {
     withEnv({ OPENCLAW_VITEST_MAX_WORKERS: "8" }, () => {
       const config = requireTestConfig(
@@ -534,7 +549,6 @@ describe("projects vitest config", () => {
   });
 
   it.each([
-    "test/plugins/deep-research-recovery.gateway.test.ts",
     "test/plugins/deep-research-routing.gateway.test.ts",
     "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
   ])("routes %s through the Gateway database owner exactly once", (file) => {

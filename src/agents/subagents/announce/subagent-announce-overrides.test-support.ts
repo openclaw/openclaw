@@ -3,6 +3,7 @@ import * as configRuntime from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import * as sessionHistory from "../../../config/sessions/session-history.js";
+import * as outboundMessage from "../../../infra/outbound/message.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { adoptSessionControllerSource } from "../../../sessions/session-controller.mailbox.js";
 import * as sessionQueries from "../../../sessions/session-controller.queries.js";
@@ -43,7 +44,7 @@ export type SubagentAnnounceDeliveryTestDeps = AnnounceTestDeps & {
   loadRequesterSessionEntry: (
     ...args: Parameters<typeof deliveryRuntime.loadRequesterSessionEntry>
   ) => Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>>;
-  sendMessage: typeof deliveryRuntime.sendSubagentAnnounceMessage;
+  sendMessage: typeof outboundMessage.sendMessage;
 };
 
 type DeliveryTestOverrides = Partial<SubagentAnnounceDeliveryTestDeps>;
@@ -208,7 +209,7 @@ function replaceOverrides(scope: Scope, overrides?: Overrides) {
     embeddedRuns,
     "resolveEmbeddedRunAbandonment",
   )(current.resolveRequesterSessionAbandonment);
-  install(deliveryRuntime, "sendSubagentAnnounceMessage")(current.sendMessage);
+  install(outboundMessage, "sendMessage")(current.sendMessage);
 }
 
 export const announceTesting = {
