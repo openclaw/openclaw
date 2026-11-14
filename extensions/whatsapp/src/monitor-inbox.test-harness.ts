@@ -7,6 +7,7 @@ import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-i
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   loadConfigMock,
@@ -67,7 +68,6 @@ const channelActivityMocks = vi.hoisted(() => ({
 const pluginRuntimeMocks = vi.hoisted(() => {
   type StoreEntry = { key: string; value: unknown; createdAt: number };
   const stores = new Map<string, Map<string, StoreEntry>>();
-  let stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
 
   const openKeyedStore = vi.fn((options: { namespace: string }) => {
     let store = stores.get(options.namespace);
@@ -102,11 +102,9 @@ const pluginRuntimeMocks = vi.hoisted(() => {
 
   return {
     openKeyedStore,
-    stateDir: () => stateDir,
     reset: () => {
       stores.clear();
       openKeyedStore.mockClear();
-      stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
     },
   };
 });
@@ -408,6 +406,8 @@ export function getAuthDir(): string {
 }
 
 export function installWebMonitorInboxUnitTestHooks() {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
@@ -415,10 +415,11 @@ export function installWebMonitorInboxUnitTestHooks() {
     inboundIdle = undefined;
     channelActivityMocks.recordChannelActivity.mockClear();
     pluginRuntimeMocks.reset();
+    const stateDir = tempDirs.make("openclaw-whatsapp-ingress-");
     setWhatsAppRuntime({
       channel: createPluginRuntimeMock().channel,
       state: {
-        resolveStateDir: pluginRuntimeMocks.stateDir,
+        resolveStateDir: () => stateDir,
         openKeyedStore: pluginRuntimeMocks.openKeyedStore,
         openKeyedStoreV2: pluginRuntimeMocks.openKeyedStore,
         openChannelIngressQueue: (
