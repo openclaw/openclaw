@@ -337,6 +337,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-outputs";
     case "ui/src/pages/chat/components/chat-details-people-list.tsx":
       return "chat-details-people-list";
+    // Defer noble initialization inside this chunk without another cold-boot request.
+    case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/pages/chat/chat-live-events.runtime.ts":

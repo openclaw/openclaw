@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSessionStoreCandidatesInWorker,
-  targetDiscoveryLane,
+  sessionStoreLane,
   withSessionHistoryWorkerReadCandidates,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import type {
@@ -99,8 +99,8 @@ export function registerGatewayStartupAdmissionTests(params: {
       workerUrl: new URL("file:///synthetic-private-root/private-worker.js"),
       maxPendingBytes: 8,
     });
-    const originalPool = targetDiscoveryLane.pool;
-    targetDiscoveryLane.pool = { ...pool, canCloseNativeResources: () => false };
+    const originalPool = sessionStoreLane.pool;
+    sessionStoreLane.pool = { ...pool, canCloseNativeResources: () => false };
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
     const owner = await import("./session-restart-resume.js");
@@ -120,7 +120,7 @@ export function registerGatewayStartupAdmissionTests(params: {
               paths: new Map(),
               registeredDatabases: { status: "deferred" },
             }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
         return;
       }
@@ -170,7 +170,7 @@ export function registerGatewayStartupAdmissionTests(params: {
       lifetime.abort();
       await Promise.allSettled(tracked);
       resumeSpy.mockRestore();
-      targetDiscoveryLane.pool = originalPool;
+      sessionStoreLane.pool = originalPool;
       await pool.close();
     }
   });

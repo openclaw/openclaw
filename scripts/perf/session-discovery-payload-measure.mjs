@@ -18,7 +18,7 @@ assert(globalThis.gc, "--expose-gc required");
 mkdirSync(".local", { recursive: true });
 const root = mkdtempSync(path.resolve(".local/session-discovery-payload-"));
 process.env.OPENCLAW_STATE_DIR = root;
-const { withSessionHistoryWorkerReadCandidates, targetDiscoveryLane, rotateDatabaseWorkers } =
+const { withSessionHistoryWorkerReadCandidates, sessionStoreLane, rotateDatabaseWorkers } =
   await import("../../src/config/sessions/session-transcript-worker-resources.ts");
 const config = {
   agents: {
@@ -73,8 +73,8 @@ const replies = {
 const channel = new MessageChannel();
 let postCpuMicros = 0;
 let wireBytes;
-const original = targetDiscoveryLane.pool.run;
-targetDiscoveryLane.pool.run = async (prepare) => {
+const original = sessionStoreLane.pool.run;
+sessionStoreLane.pool.run = async (prepare) => {
   const input = typeof prepare === "function" ? prepare() : prepare;
   if (wireBytes === undefined) {
     wireBytes = serialize(input).byteLength;
@@ -149,14 +149,14 @@ try {
         }
       }
     },
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 } finally {
   inspector.disconnect();
-  targetDiscoveryLane.pool.run = original;
+  sessionStoreLane.pool.run = original;
   channel.port1.close();
   channel.port2.close();
-  await rotateDatabaseWorkers(targetDiscoveryLane);
+  await rotateDatabaseWorkers(sessionStoreLane);
   rmSync(root, { recursive: true, force: true });
 }
 console.log(JSON.stringify({ node: process.version, rows }));

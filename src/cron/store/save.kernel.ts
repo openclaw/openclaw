@@ -1,8 +1,14 @@
 import { isDeepStrictEqual, toUSVString } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import {
@@ -22,7 +28,12 @@ import {
 import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
-  replaceCronRuntimeAuthorityRows,
+  applyCronRuntimeAuthorityRow,
+  CRON_RUNTIME_AUTHORITY_TABLE,
+  cronRuntimeAuthorityInputFingerprint,
+  getCronAuthorityKysely,
+  loadCronRuntimeAuthorityRows,
+  writeRecoveryRow,
 } from "./runtime-authority-store.js";
 import { CronJobsStoreChangedError } from "./save-error.js";
 import type {
@@ -31,6 +42,11 @@ import type {
   PreparedCronStoreChanges,
 } from "./save.types.js";
 import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.types.js";
+
+const ensureCronRuntimeAuthorityTable = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql(CRON_RUNTIME_AUTHORITY_TABLE),
+  { tables: [CRON_RUNTIME_AUTHORITY_TABLE] },
+);
 
 function mergeCronRuntimeChanges(
   previous: CronJobState,
@@ -257,4 +273,87 @@ export function saveCronStoreInDatabase(
   }
   replaceCronStoreRowsInDatabase(database.db, storeKey, store, opts?.preserveRuntimeState === true);
   hooks?.hooks.afterWrite?.(database.db, hooks.receiptSchema);
+}
+
+/** Reconciles child rows inside the same transaction as their owning cron rows. */
+export function replaceCronRuntimeAuthorityRows(params: {
+  db: EngineConnection;
+  storeKey: string;
+  jobs: readonly CronStoredJob[];
+  preserveExistingForJobIds?: ReadonlySet<string>;
+  writeMissingForJobIds?: ReadonlySet<string>;
+}): void {
+  const hasPersistedAuthority = params.jobs.some(
+    (job) => job.runtimeAuthority || job.runtimeAuthorityRecoveryRequired === true,
+  );
+  if (!hasPersistedAuthority && !tableExists(params.db, CRON_RUNTIME_AUTHORITY_TABLE)) {
+    return;
+  }
+  if (isPostgresSqlConnection(params.db)) {
+    ensureStatePostgresFragment(params.db, CRON_RUNTIME_AUTHORITY_TABLE);
+  } else {
+    ensureCronRuntimeAuthorityTable(params.db);
+  }
+  const database = getCronAuthorityKysely(params.db);
+  const existingRowsByJobId = params.preserveExistingForJobIds
+    ? new Map(
+        loadCronRuntimeAuthorityRows(
+          params.db,
+          params.storeKey,
+          params.jobs.map((job) => job.id),
+        ).map((row) => [row.job_id, row]),
+      )
+    : undefined;
+  for (const job of params.jobs) {
+    // Doctor must not replay a pre-prompt authority snapshot. Keep the current
+    // child only while its inputs match; missing stays missing unless legacy job_json owns it.
+    if (params.preserveExistingForJobIds?.has(job.id)) {
+      const existingRow = existingRowsByJobId?.get(job.id);
+      if (existingRow) {
+        if (applyCronRuntimeAuthorityRow(job, existingRow) === "repair") {
+          writeRecoveryRow(params.db, params.storeKey, job.id);
+        }
+        continue;
+      }
+      if (!params.writeMissingForJobIds?.has(job.id)) {
+        continue;
+      }
+    }
+    if (job.runtimeAuthorityRecoveryRequired === true) {
+      writeRecoveryRow(params.db, params.storeKey, job.id);
+      continue;
+    }
+    const authority = normalizeCronRuntimeAuthority(job.runtimeAuthority);
+    if (authority) {
+      const authorityJson = JSON.stringify(authority);
+      const authorityInputFingerprint = cronRuntimeAuthorityInputFingerprint(job);
+      executeSqliteQuerySync(
+        params.db,
+        database
+          .insertInto("cron_job_runtime_authorities")
+          .values({
+            store_key: params.storeKey,
+            job_id: job.id,
+            authority_json: authorityJson,
+            authority_input_fingerprint: authorityInputFingerprint,
+            recovery_required: 0,
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["store_key", "job_id"]).doUpdateSet({
+              authority_json: authorityJson,
+              authority_input_fingerprint: authorityInputFingerprint,
+              recovery_required: 0,
+            }),
+          ),
+      );
+      continue;
+    }
+    executeSqliteQuerySync(
+      params.db,
+      database
+        .deleteFrom("cron_job_runtime_authorities")
+        .where("store_key", "=", params.storeKey)
+        .where("job_id", "=", job.id),
+    );
+  }
 }

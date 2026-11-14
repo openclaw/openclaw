@@ -59,7 +59,7 @@ import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
 import { publishUnchangedSessionTranscriptReceipts } from "./session-transcript-authority.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import {
   parseTranscriptAppendRefusal,
@@ -484,7 +484,7 @@ export async function restoreSessionColdTranscript(
           signal,
         );
       },
-      projectionLane,
+      sessionStoreLane,
     );
   }
   const resolved = preparation.target;

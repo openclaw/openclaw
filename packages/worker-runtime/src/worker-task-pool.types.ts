@@ -159,6 +159,7 @@ export type Slot<Input, Output> = {
   releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;
   idleTimer?: NodeJS.Timeout;
+  idleSince?: number;
   retiring?: RetainedOperation<void>;
   /** The retirement owner has joined this exact slot's native termination barrier. */
   retired?: true;

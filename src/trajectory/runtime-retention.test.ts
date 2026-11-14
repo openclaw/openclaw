@@ -65,7 +65,7 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
 }));
 // mock-isolation: Cleanup is tested without initializing the shared maintenance worker lane.
 vi.mock("../config/sessions/session-transcript-worker-resources.js", () => ({
-  maintenanceLane: {},
+  sessionStoreLane: {},
 }));
 // mock-isolation: Control read results and cleanup without starting maintenance workers.
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
