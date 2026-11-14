@@ -74,26 +74,9 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return false;
     }
     const { updateCommand } = await import("../cli/update-cli/update-command.js");
-    let handled = false;
-    let readinessUnverified = false;
-    await updateCommand({
-      sourceUpdate: { root: params.root },
-      timeout: String(UPDATE_RUNNER_TIMEOUT_MS / 1000),
-      onResult: (result) => {
-        readinessUnverified =
-          result.status === "skipped" &&
-          (result.reason === "gateway-readiness-unverified" || result.reason === "still-starting");
-        handled = result.status === "ok" || readinessUnverified;
-      },
-    });
-    if (handled) {
-      params.outro(
-        readinessUnverified
-          ? "OpenClaw installed; Gateway readiness remains unverified. Keep recovery backups and check `openclaw gateway status --deep`."
-          : "Update completed (doctor already ran as part of the update).",
-      );
-    }
-    return handled;
+    await updateCommand({ timeout: String(UPDATE_RUNNER_TIMEOUT_MS / 1000) });
+    params.outro("Update finished. Run `openclaw doctor` again to check the new release.");
+    return true;
   }
 
   if (git === "not-git") {

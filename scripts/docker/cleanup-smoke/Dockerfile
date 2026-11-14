@@ -14,7 +14,7 @@ RUN --mount=type=cache,id=openclaw-cleanup-smoke-apt-cache,target=/var/cache/apt
 
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY openclaw.mjs ./
+COPY openclaw.mjs runtime-slot-redirect.mjs ./
 COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-sqlite-capabilities.mjs runtime-process-bootstrap.generated.mjs runtime-process-scripts.generated.mjs ./

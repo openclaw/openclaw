@@ -243,7 +243,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/doctor-output.process.test.ts", 90],
   ["src/cli/mcp-cli.probe-exit.process.test.ts", 7],
   ["src/cli/one-shot-exit.test.ts", 25],
-  ["src/cli/update-cli/update-command-lease.test.ts", 86],
   ["src/cli/update-finalization-output.process.test.ts", 25],
   // The few CI-derived slow-file hints needed for the three new stripes are
   // rounded checkmark durations from canonical-main run 31691151297.
@@ -312,9 +311,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Serial case-cost sums from PR run 37678385185, rounded up. These process
   // suites were packed together at the default weight; imports/setup remain separate.
   ["src/cli/local-state-owner.process.test.ts", 296],
-  ["src/cli/update-cli.candidate-activation.test.ts", 149],
-  ["src/cli/update-cli.git-service.test.ts", 116],
-  ["src/cli/update-cli.target-schema.test.ts", 186],
   ["test/scripts/pr-worktree-provision.test.ts", 206],
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],

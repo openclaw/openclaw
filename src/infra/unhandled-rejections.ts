@@ -17,6 +17,7 @@ import {
 } from "./errors.js";
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 import { isTransientNetworkError } from "./retryable-network-errors.js";
+import { configErrorExitCode } from "./runtime-slots.js";
 
 export { isTransientNetworkError } from "./retryable-network-errors.js";
 
@@ -74,7 +75,6 @@ const CONFIG_ERROR_CODES = new Set([
   "MISSING_API_KEY",
   "MISSING_CREDENTIALS",
 ]);
-const EXIT_CONFIG_ERROR = 78;
 
 const TRANSIENT_SQLITE_CODES = new Set([
   "SQLITE_BUSY",
@@ -305,7 +305,7 @@ export function installUnhandledRejectionHandler(): void {
 
     if (code !== undefined && CONFIG_ERROR_CODES.has(code)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      const exitCode = code === INVALID_CONFIG_ERROR_CODE ? EXIT_CONFIG_ERROR : 1;
+      const exitCode = code === INVALID_CONFIG_ERROR_CODE ? configErrorExitCode() : 1;
       exitWithTerminalRestore("configuration error", reason, "configuration_error", exitCode);
       return;
     }

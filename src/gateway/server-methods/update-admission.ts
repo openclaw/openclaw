@@ -6,7 +6,10 @@ import {
 import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { readGatewayOwnerLeaseAsync } from "../../infra/gateway-owner-lease.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -22,6 +25,7 @@ import {
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
+import type { ForegroundUpdateOrigin } from "../../infra/update-restart-sentinel-payload.js";
 import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import {
@@ -36,6 +40,7 @@ import {
   createSystemPackageOwnershipInspection,
   SystemPackageOwnershipError,
 } from "../../infra/update-system-package-ownership.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -366,4 +371,23 @@ export async function createUnexpectedUpdateFailureResult(
     warn,
   );
   return result;
+}
+
+/** This process's live foreground Gateway ownership, which an update must respawn itself. */
+export async function readForegroundUpdateOrigin(): Promise<ForegroundUpdateOrigin | undefined> {
+  const gatewayOwner = await readGatewayOwnerLeaseAsync();
+  return gatewayOwner?.mode === "foreground" &&
+    gatewayOwner.state === "live" &&
+    gatewayOwner.pid === process.pid &&
+    gatewayOwner.startedAt !== null
+    ? {
+        owner: gatewayOwner.owner,
+        pid: gatewayOwner.pid,
+        host: gatewayOwner.host,
+        startedAt: gatewayOwner.startedAt,
+        port: gatewayOwner.port,
+        stateDatabasePath: resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath()),
+        configPath: resolvePathViaExistingAncestorSync(resolveConfigPath()),
+      }
+    : undefined;
 }

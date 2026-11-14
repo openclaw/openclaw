@@ -37,6 +37,7 @@ const targets = [
   "node-runtime-recovery.mjs",
   "node-runtime-env.mjs",
   "node-sqlite.mjs",
+  "runtime-slot-redirect.mjs",
   "node-sqlite-capabilities.mjs",
   "runtime-process-bootstrap.generated.mjs",
   "runtime-process-scripts.generated.mjs",

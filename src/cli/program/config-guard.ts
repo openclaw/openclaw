@@ -307,7 +307,8 @@ export async function ensureConfigReady(params: {
     writeInvalidConfigCliJson(params.runtime, snapshot);
   }
   if (isPluginPackagingFailure && isGatewayStartup) {
-    params.runtime.exit(78);
+    const { configErrorExitCode } = await import("../../infra/runtime-slots.js");
+    params.runtime.exit(configErrorExitCode());
     return;
   }
   if (shouldOfferRecovery && !isPluginPackagingFailure) {

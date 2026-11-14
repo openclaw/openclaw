@@ -54,11 +54,9 @@ export async function prepareInterruptedManagedServiceFixture(params: {
     const fs = (await import("node:fs")).default;
     const { createRequire } = await import("node:module");
     const require = createRequire(import.meta.url);
-    const { inspectUpdateRepairDriverAdmission, settleManagedHandoffPluginCohort,
+    const { inspectUpdateRepairDriverAdmission,
       assertUpdateRecoveryAdmission } = await import(${runtimeUrl});
     const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
-    // Production finalize opens with this helper-owned settlement and admission.
-    await settleManagedHandoffPluginCohort();
     await assertUpdateRecoveryAdmission({ env: process.env });
     ${
       params.pluginCohort === "risk"

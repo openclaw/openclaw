@@ -29,6 +29,7 @@ import {
   formatUnsupportedNodeDiagnosticWarning,
   SUPPORTED_NODE_VERSION_RANGE,
 } from "./node-version.mjs";
+import { redirectToCurrentRuntimeSlot } from "./runtime-slot-redirect.mjs";
 
 watchCliRespawnParent();
 
@@ -643,6 +644,9 @@ if (isBrowserNativeHostInvocation) {
 }
 
 async function runLauncher() {
+  await redirectToCurrentRuntimeSlot(fileURLToPath(new URL(".", import.meta.url)), {
+    gatewayRun: isForegroundGatewayRunArgv(process.argv),
+  });
   // Resolve Node before loading pending package lifecycle code or any built runtime modules.
   const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
   if (waitingForNodeUpdateRespawn) {

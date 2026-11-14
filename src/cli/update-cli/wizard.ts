@@ -1,4 +1,4 @@
-import { confirm, isCancel } from "@clack/prompts";
+import { confirm } from "@clack/prompts";
 import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -8,17 +8,9 @@ import {
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { pathExists } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { reportHostOwnedUpdate } from "./host-owned.js";
-import {
-  isEmptyDir,
-  isGitCheckout,
-  parseUpdateTimeoutMs,
-  resolveGitInstallDir,
-  resolveUpdateRoot,
-  type UpdateWizardOptions,
-} from "./shared.js";
+import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateWizardOptions } from "./shared.js";
 import { readUpdateConfigFileSnapshot } from "./update-command-config.js";
 
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
@@ -92,30 +84,6 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
   const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
 
-  if (requestedChannel === "dev" && updateStatus.installKind !== "git") {
-    const gitDir = resolveGitInstallDir();
-    const hasGit = await isGitCheckout(gitDir);
-    if (!hasGit) {
-      if ((await pathExists(gitDir)) && !(await isEmptyDir(gitDir))) {
-        defaultRuntime.error(
-          `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      const ok = await confirm({
-        message: stylePromptMessage(
-          `Create a git checkout at ${gitDir}? (override via OPENCLAW_GIT_DIR)`,
-        ),
-        initialValue: true,
-      });
-      if (isCancel(ok) || !ok) {
-        return cancel();
-      }
-    }
-  }
-
   const restart = await confirm({
     message: stylePromptMessage("Restart the gateway service after update?"),
     initialValue: true,
@@ -126,11 +94,8 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
 
   const { updateCommand } = await import("./update-command.js");
   await updateCommand({
-    runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
     channel: requestedChannel ?? undefined,
     restart,
     timeout: opts.timeout,
-    acceptCapabilities: opts.acceptCapabilities,
-    fullIntegrityCheck: opts.fullIntegrityCheck,
   });
 }

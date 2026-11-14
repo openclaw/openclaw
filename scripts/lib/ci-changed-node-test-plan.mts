@@ -123,7 +123,6 @@ const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/infra/update-managed-service-handoff-lifecycle.test.ts", 92],
   ["src/cli/update-cli/update-command-migrated.test.ts", 67],
   ["src/flows/doctor-health.managed-settlement.test.ts", 296],
-  ["src/cli/update-cli.already-current.test.ts", 130],
   ["src/flows/doctor-health.update-schema.test.ts", 62],
   ["src/cli/admin-state-owner.process.test.ts", 45],
 ]);
