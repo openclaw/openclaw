@@ -370,7 +370,9 @@ export function validateFullReleaseValidationEvidence({
   if (manifest.publicationAdmissionContract !== registryContract) {
     throw new Error("Publication evidence differs from its immutable registry-admission contract.");
   }
+  // Recovery authenticates the original admission separately in strict evidence below.
   if (
+    !receiptRecovery &&
     qualificationAdmissionContract(workflowSource) === "1" &&
     sourceAdmission?.validationPurpose === "publish" &&
     !sourceAdmission.qualificationAdmission
