@@ -178,7 +178,7 @@ export default {
     automationEvent: "Event: {source}",
     automationWaitingForEvent: "Waiting for event",
     viewPresetCountOne: "1 card",
-    editCardHelp: "Update queue metadata and session handoff.",
+    editCardHelp: "Edit this card’s details and linked session.",
     newCard: "New card",
     newCardShort: "New",
     newCardInColumn: "New card in {column}",

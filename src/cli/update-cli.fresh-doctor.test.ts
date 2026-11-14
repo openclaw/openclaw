@@ -27,9 +27,9 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
+    const root = f.createCaseDir("openclaw-git-downgrade");
+    await fs.mkdir(root, { recursive: true });
+    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(root);
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });

@@ -92,7 +92,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       searchInput.focus({ preventScroll: true });
     }
   };
-  // Retain the panel after first use so search and provider expansion survive dismissal.
+  // Retain the panel after first use so expanded model lists survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
     search.setOpen(target.open);

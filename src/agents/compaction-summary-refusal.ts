@@ -1,9 +1,6 @@
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  compactWithoutSummary,
-  type CompactionPreparation,
-} from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { CompactionPreparation } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { isSummaryProviderError } from "../../packages/agent-core/src/harness/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -13,6 +10,10 @@ import {
 } from "./agent-hooks/compaction-safeguard-runtime.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
+import {
+  getPreparedCompaction,
+  resolveCompactionFallback,
+} from "./sessions/prepared-compaction.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
@@ -64,7 +65,7 @@ function compactAfterSummaryRefusal(
   if (mode === "defer" || mode === "fallback") {
     throw refusal;
   }
-  const result = compactWithoutSummary(preparation);
+  const result = resolveCompactionFallback(preparation, getPreparedCompaction(sessionManager));
   if (!result.ok) {
     throw new Error(
       "The summarizer refused, and recent context could not fit without a summary. " +
@@ -90,7 +91,7 @@ export function compactWithoutNewSummary(
   if (refusalModes.get(sessionManager) === "floor") {
     return compactAfterSummaryRefusal(preparation, sessionManager, undefined);
   }
-  const result = compactWithoutSummary(preparation);
+  const result = resolveCompactionFallback(preparation, getPreparedCompaction(sessionManager));
   if (!result.ok) {
     throw result.error;
   }
@@ -147,7 +148,8 @@ export async function settleCompactionSafeguardCancellation(
   // The owner's fact, not an estimate: a required preflight cannot run its pending request.
   const required = request.requestRequiresCompaction === true;
   const refused = isCompactionSummaryRefusal(cancellation.error);
-  const floor = !refused && required ? compactWithoutSummary(preparation) : undefined;
+  const prepared = getPreparedCompaction(sessionManager);
+  const floor = !refused && required ? resolveCompactionFallback(preparation, prepared) : undefined;
   // Best effort: a lost row hides one failure from the attempt rate.
   await sessionManager
     .appendCustomEntryAsync(COMPACTION_ATTEMPT_CUSTOM_TYPE, {

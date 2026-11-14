@@ -358,7 +358,40 @@ function prepareSqliteTrajectoryRuntimeWindow(
     windowFacts?: TrajectoryRuntimeWindowFacts;
   },
 ) {
-  const known = input.windowFacts;
+  const db = getTrajectoryKysely(database.db);
+  const events = db.selectFrom("trajectory_runtime_events").where("session_id", "=", sessionId);
+  const utf8 = readTrajectoryStorageEncoding(database.db) === "UTF-8";
+  let known = input.windowFacts;
+  if (!known && utf8 && !input.discardPrevious && input.expiredThroughIndex < 0) {
+    // Separate aggregates use the sequence PK and the covering run-byte index.
+    // Combining MAX(seq) with SUM would force a payload-table lookup per event.
+    const window = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectNoFrom([
+        events.select((row) => row.fn.max<number>("seq").as("seq")).as("lastSeq"),
+        events
+          .select((row) =>
+            row.fn
+              .sum<number>(
+                row(
+                  row.fn.coalesce(
+                    "event_utf8_bytes",
+                    row.fn<number>("octet_length", ["event_json"]),
+                  ),
+                  "+",
+                  1,
+                ),
+              )
+              .as("bytes"),
+          )
+          .as("bytes"),
+      ]),
+    )!;
+    known = {
+      nextSeq: sqliteNumber(window.lastSeq ?? -1) + 1,
+      retainedBytes: sqliteNumber(window.bytes ?? 0),
+    };
+  }
   if (
     known &&
     (input.discardPrevious ||
@@ -380,12 +413,9 @@ function prepareSqliteTrajectoryRuntimeWindow(
           : input.retainedBytes,
     };
   }
-  const db = getTrajectoryKysely(database.db);
-  const utf8 = readTrajectoryStorageEncoding(database.db) === "UTF-8";
   const rows = iterateSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("trajectory_runtime_events")
+    events
       .select("seq")
       .select((eb) => {
         // octet_length reads stored byte sizes without loading overflow pages. Only
@@ -398,14 +428,13 @@ function prepareSqliteTrajectoryRuntimeWindow(
           utf8 ? eb.val(null).as("event_json") : eb.ref("event_json").as("event_json"),
         ];
       })
-      .where("session_id", "=", sessionId)
       .orderBy("seq", known ? "asc" : "desc"),
   );
   let nextSeq = known?.nextSeq;
   let retainedBytes = input.retainedBytes + (known?.retainedBytes ?? 0);
   let removeThroughSeq: number | undefined;
   // Committed window facts let overflow read only the prefix it expires. A cold
-  // window still reads backward to recover its sequence and retained suffix.
+  // UTF-16 window still decodes backward to recover its UTF-8 retained suffix.
   for (const row of rows) {
     nextSeq ??= sqliteNumber(row.seq) + 1;
     if (input.discardPrevious || input.expiredThroughIndex >= 0) {
