@@ -325,6 +325,12 @@ is separate from the descriptor that owns temporary wrapper cleanup. Reentry
 must verify the complete source inventory and manifest against the selected
 commit before using it. Keep the retained installation available until the PR
 operation completes; a workflow binding does not freeze installed package bytes.
+Only initial `prepare-baseline-refresh --for-proof` selection may retain the
+reviewed workflow after main advances: fresh official main must descend from it
+and match its complete workflow, governing policy and dependency/runtime inputs.
+The descriptor carries bounded exact review bytes; the signed baseline retains
+comparison provenance without granting future admission. See [proof baseline
+preparation](/reference/scripts/pr-preparation).
 
 When `refs/remotes/origin/main` is absent, only the clean, HEAD-verified canonical
 wrapper can bootstrap. After acquiring the PR operation lock and checking

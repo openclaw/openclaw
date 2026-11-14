@@ -59,15 +59,20 @@ if (workflowContext) {
       (held.mode & 0o777) !== 0o400 ||
       held.nlink !== 0 ||
       held.size < 1 ||
-      held.size > 4096 ||
+      held.size > 16 * 1024 * 1024 ||
       `${held.dev}:${held.ino}` !== workflowContext
     ) {
       throw new Error("Invalid workflow selection descriptor");
     }
     const bytes = Buffer.alloc(held.size);
+    if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) {
+      throw new Error("Incomplete workflow selection descriptor");
+    }
+    const selection = JSON.parse(bytes);
     if (
-      readSync(8, bytes, 0, bytes.length, 0) !== bytes.length ||
-      JSON.parse(bytes.toString("utf8")).creator !== String(process.pid)
+      selection.creator !== String(process.pid) ||
+      (held.size > 4096 &&
+        !(selection.admission === "proof-baseline" && typeof selection.proof?.review === "string"))
     ) {
       throw new Error("Workflow selection does not belong to this supervisor");
     }

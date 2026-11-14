@@ -32,40 +32,44 @@ resolve_pr_author_access_at_prepare() {
 
 retire_prep_evidence() {
   local archive="" artifact
+  local retained=()
   PREP_RETIRED_EVIDENCE=""
-  for artifact in \
-    .local/prep-context.env \
-    .local/prep.env \
-    .local/gates.env \
-    .local/prepare-push-result.env \
-    .local/prepare-sync-result.env \
-    .local/prep.md \
-    .local/correction-review.json \
-    .local/correction-review.md \
-    .local/correction-incoming-review.json \
-    .local/correction-incoming-review.md \
-    .local/prepare-baseline.json \
-    .local/gates-*.log; do
-    if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
-      continue
-    fi
-    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
-      echo "Cannot retain preparation evidence at $artifact: expected a regular file." >&2
-      return 1
-    fi
-    if [ -z "$archive" ]; then
-      archive=$(mktemp -d .local/prep-evidence.XXXXXX) || return 1
-    fi
-    cp -p "$artifact" "$archive/" || return 1
-    cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
-  done
-  [ -n "$archive" ] || return 0
+  local artifacts=(
+    .local/prep-context.env
+    .local/prep.env
+    .local/gates.env
+    .local/prepare-push-result.env
+    .local/prepare-sync-result.env
+    .local/prep.md
+    .local/correction-review.json
+    .local/correction-review.md
+    .local/correction-incoming-review.json
+    .local/correction-incoming-review.md
+    .local/prepare-baseline.json
+    .local/gates-*.log
+  )
   if [ "${2:-}" = proof ]; then
     for artifact in .local/pr-meta.json .local/pr-meta.env .local/review.json; do
       [ -f "$artifact" ] && [ ! -L "$artifact" ] || return 1
-      cp -p "$artifact" "$archive/" && cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+      artifacts+=("$artifact")
     done
   fi
+  for artifact in "${artifacts[@]}"; do
+    if [ -e "$artifact" ] || [ -L "$artifact" ]; then
+      [ -f "$artifact" ] && [ ! -L "$artifact" ] || { echo "Expected regular preparation evidence: $artifact" >&2; return 1; }
+      retained+=("$artifact")
+    fi
+  done
+  if [ "${1:-}" = inspect ]; then
+    node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' "${retained[@]}"
+    return
+  fi
+  for artifact in "${artifacts[@]}"; do
+    [ -e "$artifact" ] || continue
+    if [ -z "$archive" ]; then archive=$(mktemp -d .local/prep-evidence.XXXXXX) || return 1; fi
+    cp -p "$artifact" "$archive/" && cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+  done
+  [ -n "$archive" ] || return 0
   PREP_RETIRED_EVIDENCE="$archive"
   [ "${1:-}" != retain ] || return 0
 
@@ -362,14 +366,13 @@ prepare_baseline_materialize() (
     echo "The exact proof baseline is installed; complete its fresh independent candidate review."
     return 0
   fi
-  local proof_source="" proof_prepared=""
+  local proof_source="" proof_prepared="" proof_inventory=""
   if [ "$proof" = true ]; then
     [ "$(pr_git rev-parse HEAD)" = "$expected" ] && [ "$(pr_git rev-parse 'HEAD^{tree}')" = "$expected_tree" ] || return 1
-    # Retain old context/receipts and fresh incoming metadata separately. The
-    # continuation owner derives the new context but installs nothing yet.
-    mark_pr_operation_side_effects_started
-    retire_prep_evidence retain proof || return 1
-    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$source_review" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation" "$predecessor") || return 1
+    # Validate live inputs before creating any retained evidence. The continuation
+    # owner derives the context without installing it or admitting an archive.
+    proof_inventory=$(retire_prep_evidence inspect proof) || return 1
+    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" .local "$proof_inventory" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation" "$predecessor" "$$" "$resolutions" "$coauthors") || return 1
     snapshot=$(printf '%s' "$proof_prepared" | jq -er .snapshot) || return 1
     proof_source=$(printf '%s' "$proof_prepared" | jq -ce .proofSource) || return 1
   elif [ "$successor" = false ] && [ "$expected" = "$PR_HEAD_SHA_BEFORE" ]; then
@@ -384,6 +387,12 @@ prepare_baseline_materialize() (
     if [ "$proof" = true ]; then
       require_proof_publication_hosted_state "$pr" "$(printf '%s' "$proof_source" | jq -er .expectedHostedHead)" "$expected" || return 1
       require_proof_publication_custody "$pr" proof || return 1
+    fi
+    # Child-owned receipt/context reads are included in the prepared input set.
+    # Recheck it after live observations and custody, before archive creation.
+    if [ "$proof" = true ]; then
+      proof_inventory=$(retire_prep_evidence inspect proof) || return 1
+      printf '%s' "$proof_prepared" | node "$helper" check-proof-source "$pr" "$expected" "$PR_MAIN_SHA" .local "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$proof_inventory" || return 1
     fi
     # The initial snapshot and create owner already validate the signed review.
     # After the live observation compare exact bytes, never replay that history.
@@ -401,8 +410,19 @@ prepare_baseline_materialize() (
   fi
   require_baseline_source || return 1
   pr_git merge-base --is-ancestor "$baseline" "$PR_MAIN_SHA" || return 1
+  if [ "$proof" = true ]; then
+    # The prepared replay already owns the exact target tree. Refuse ignored
+    # collisions before retaining evidence; the final transition checks again.
+    target=$(printf '%s' "$proof_prepared" | jq -er .replay.tree) || return 1
+    require_no_ignored_transition_paths "$pr" "$expected" "$target" || return 1
+  fi
   mark_pr_operation_side_effects_started
-  if [ "$proof" = false ]; then retire_prep_evidence retain || return 1; fi
+  if [ "$proof" = true ]; then
+    retire_prep_evidence retain proof || return 1
+    proof_source=$(printf '%s' "$proof_prepared" | node "$helper" retain-proof-source "$pr" "$expected" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$proof_inventory") || return 1
+  else
+    retire_prep_evidence retain || return 1
+  fi
   local create_command=create
   set -- "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$snapshot" "$resolutions"
   if [ "$proof" = true ]; then
@@ -416,7 +436,7 @@ prepare_baseline_materialize() (
     create_command=create-signing-request
     set -- "$@" "$signer"
   fi
-  prepared=$(node "$helper" "$create_command" "$@") || return 1
+  prepared=$(printf '%s' "$proof_prepared" | node "$helper" "$create_command" "$@") || return 1
   if [ "$admission" = request ]; then
     require_baseline_source || return 1
     local request_oid
@@ -434,7 +454,7 @@ prepare_baseline_materialize() (
   recover_review_transition "$pr" || return 1
   if [ "$proof" = true ]; then
     # Seed, never approve, the new candidate through the existing review owner
-    # while this current-main invocation still owns the operation and checkout.
+    # while this qualified invocation still owns the operation and checkout.
     run_prepared_correction_review "$pr" init || return 1
   fi
   echo "Refreshed candidate $target; prior proof retained at $PREP_RETIRED_EVIDENCE."
