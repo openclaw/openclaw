@@ -190,6 +190,14 @@ export function registerCronAddCommand(cron: Command) {
                   "Choose exactly one payload: --system-event, --message, --command, or --script",
                 );
               }
+              if (!scriptPath) {
+                if (opts.scriptTimeoutSeconds !== undefined) {
+                  throw new CronCliError("--script-timeout-seconds requires --script");
+                }
+                if (opts.scriptToolBudget !== undefined) {
+                  throw new CronCliError("--script-tool-budget requires --script");
+                }
+              }
               if (typeof opts.skipIfScratchEmpty === "boolean" && !message) {
                 throw new CronCliError(
                   "--skip-if-scratch-empty/--no-skip-if-scratch-empty require --message",
