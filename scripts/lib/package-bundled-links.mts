@@ -12,6 +12,8 @@ import {
 } from "./package-installed-dependencies.mts";
 import { isRecord } from "./record-shared.mjs";
 
+const PNPM_STORE = "node_modules/.pnpm";
+
 export async function hasMissingBundledDependencies(tarballPath: string): Promise<boolean> {
   const entries = new Set<string>();
   const manifest: Buffer[] = [];
@@ -27,9 +29,31 @@ export async function hasMissingBundledDependencies(tarballPath: string): Promis
       entry.resume();
     },
   });
-  return listBundleDependencies(JSON.parse(Buffer.concat(manifest).toString("utf8"))).some(
-    (name) => !entries.has(`package/node_modules/${name}/package.json`),
+  // A linked bundle's dependencies packed at their pnpm store path cannot resolve after install.
+  return (
+    [...entries].some((entry) => entry.startsWith(`package/${PNPM_STORE}/`)) ||
+    listBundleDependencies(JSON.parse(Buffer.concat(manifest).toString("utf8"))).some(
+      (name) => !entries.has(`package/node_modules/${name}/package.json`),
+    )
   );
+}
+
+// npm packs a linked bundle's installed dependencies under the pnpm store path; restage those.
+async function hasLinkedDependencies(packagePath: string): Promise<boolean> {
+  const link = await fs.lstat(packagePath).catch((error: unknown) => {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+    return undefined;
+  });
+  if (!link?.isSymbolicLink()) {
+    return false;
+  }
+  const source = await fs.realpath(packagePath);
+  const manifest: unknown = JSON.parse(
+    await fs.readFile(path.join(source, "package.json"), "utf8"),
+  );
+  return isRecord(manifest) && (await installedPackageDependencies(source, manifest)).length > 0;
 }
 
 async function directory(target: string) {
@@ -166,7 +190,7 @@ export async function materializeMissingBundledDependencies(
       if (!existing.isDirectory()) {
         throw new Error(`Bundled package destination is occupied: ${destination}`);
       }
-      if (!owner) {
+      if (!owner && !(await hasLinkedDependencies(path.join(sourceDir, "node_modules", name)))) {
         continue;
       }
       // npm may have packed a same-version root copy instead of the plugin's patched bytes.
@@ -182,6 +206,17 @@ export async function materializeMissingBundledDependencies(
       throw new Error(`Packed bundle is missing from a materialized source: ${packagePath}`);
     }
     await stagePackage(packagePath, destination, timeoutMs, new Map());
+    changed = true;
+  }
+  const store = path.join(packedRoot, PNPM_STORE);
+  const leftover = await fs.lstat(store).catch((error: unknown) => {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+    return undefined;
+  });
+  if (leftover) {
+    await fs.rm(store, { recursive: true });
     changed = true;
   }
   return changed;

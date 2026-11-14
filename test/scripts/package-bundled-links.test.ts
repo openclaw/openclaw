@@ -3,8 +3,12 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { create as createTar } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
-import { materializeMissingBundledDependencies } from "../../scripts/lib/package-bundled-links.mts";
+import {
+  hasMissingBundledDependencies,
+  materializeMissingBundledDependencies,
+} from "../../scripts/lib/package-bundled-links.mts";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -262,6 +266,61 @@ process.send('staged');`,
     expect((await fs.lstat(f.destination)).ino).toBe(original.ino);
     expect(await fs.readFile(path.join(f.destination, "owned"), "utf8")).toBe("packed payload");
     await f.assertSourceUnchanged();
+  });
+
+  it("restages a packed linked bundle whose dependencies npm left at the pnpm store path", async () => {
+    const f = await fixture();
+    const store = path.join(f.modules, ".pnpm");
+    const helper = path.join(store, "fixture-helper@1.0.0/node_modules/fixture-helper");
+    await fs.mkdir(helper, { recursive: true });
+    await f.writeManifest(helper, { name: "fixture-helper", version: "1.0.0", main: "index.js" });
+    await fs.writeFile(path.join(helper, "index.js"), 'module.exports = "helper";');
+    await fs.mkdir(path.join(f.store, "node_modules"));
+    await fs.symlink(helper, path.join(f.store, "node_modules/fixture-helper"), "junction");
+    await f.writeManifest(f.store, {
+      name: "fixture-bundle",
+      version: "1.0.0",
+      main: "index.js",
+      dependencies: { "fixture-helper": "1.0.0" },
+    });
+    await fs.writeFile(
+      path.join(f.store, "index.js"),
+      'module.exports = require("fixture-helper");',
+    );
+    // npm pack output for the link: the bundle itself plus its dependency at the store path.
+    const misplaced = path.join(f.packed, "node_modules/.pnpm/x/node_modules/fixture-helper");
+    await fs.mkdir(misplaced, { recursive: true });
+    await fs.cp(helper, misplaced, { recursive: true });
+    await fs.cp(f.store, f.destination, {
+      recursive: true,
+      filter: (copied) => !copied.includes(`${path.sep}node_modules`),
+    });
+    await expect(f.stage()).resolves.toBe(true);
+    expect(createRequire(path.join(f.destination, "package.json"))("./")).toBe("helper");
+    await expect(fs.lstat(path.join(f.packed, "node_modules/.pnpm"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.readFile(path.join(helper, "index.js"), "utf8")).resolves.toContain("helper");
+  });
+
+  it.each([
+    ["complete", ["node_modules/fixture-bundle/package.json"], false],
+    ["missing", [], true],
+    ["store-placed", ["node_modules/fixture-bundle/package.json", "node_modules/.pnpm/x/y"], true],
+  ] as const)("flags a %s bundle layout for repair", async (_label, files, expected) => {
+    const root = tempDirs.make("openclaw-bundle-tarball-");
+    const tree = path.join(root, "package");
+    for (const file of ["package.json", ...files]) {
+      await fs.mkdir(path.dirname(path.join(tree, file)), { recursive: true });
+      await fs.writeFile(path.join(tree, file), "{}");
+    }
+    await fs.writeFile(
+      path.join(tree, "package.json"),
+      JSON.stringify({ bundleDependencies: ["fixture-bundle"] }),
+    );
+    const tarball = path.join(root, "package.tgz");
+    await createTar({ gzip: true, file: tarball, cwd: root }, ["package"]);
+    await expect(hasMissingBundledDependencies(tarball)).resolves.toBe(expected);
   });
 
   it("rejects a missing archive bundle from a materialized source", async () => {
