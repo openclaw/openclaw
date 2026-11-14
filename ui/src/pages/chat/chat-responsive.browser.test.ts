@@ -227,17 +227,7 @@ function composerControlsHtml() {
           <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model: GPT-5.6 Luna">
             <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
-            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
-            <div class="chat-controls__model-options">
-              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
-              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
-            </div>
-          </div>
+          <div class="oc-overlay chat-picker-overlay" popover="manual"></div>
           </details>
           <details class="chat-controls__inline-select chat-controls__permission-picker">
           <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
@@ -251,9 +241,7 @@ function composerControlsHtml() {
           <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
             <span class="chat-controls__inline-select-label">Medium</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
-            <div class="chat-controls__reasoning-panel">Effort</div>
-          </div>
+          <div class="oc-overlay chat-picker-overlay" popover="manual"></div>
           </details>
         </div>
       </div>
@@ -429,7 +417,7 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
+      `<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/components/solid/overlay.css")}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
     await syncFixtureComposerPopoverAnchor(page);
     return page;

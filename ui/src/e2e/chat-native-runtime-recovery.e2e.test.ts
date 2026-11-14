@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { showText } from "./activity-assertions.test-support.ts";
 import {
   exactButton,
@@ -196,7 +195,9 @@ suite.define(() => {
           await gateway.waitForRequest("chat.send");
         } else {
           await trigger.click();
-          await selectChatModelOption(picker, "fixture/synthetic-model", { runtime: "opencode" });
+          await picker
+            .locator('.chat-controls__runtime-option[data-chat-model-runtime="opencode"]')
+            .click();
           await expectRequest(gateway, "sessions.patch", {
             key,
             model: "fixture/synthetic-model",

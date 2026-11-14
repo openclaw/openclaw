@@ -57,7 +57,9 @@ In Memory's **Settings** tab, unfinished number text such as `1e` restores the l
 
 In **Models**, **Add account** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Add account → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved accounts.
 
-Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
+Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs; **Utility Model** lists the agents with their own utility settings and links to each one.
+
+To set one agent's utility model, open **Settings → Agents → Overview → Utility model**. **Inherit default** removes the agent's own primary, **Disabled for this agent** saves an empty primary, and a model choice saves that model. The agent's own utility fallbacks are kept, in order, for every choice. A configured model that is currently unavailable stays shown and selected.
 
 Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
 
@@ -114,6 +116,10 @@ openclaw config set gateway.controlUi.communityInvite false
 After the Gateway applies the change, reload the browser page or reconnect to pick it up. The setting belongs to the Gateway serving the UI, including when that UI connects to a different remote Gateway. Re-enabling it with `true` shows the card only in browsers that have not dismissed it.
 
 ## Personal identity
+
+For Discord linking, Profile initially selects an already-linked Gateway account, even if it is unavailable for new links. Otherwise, it selects an available account when one exists. Refreshing account status preserves your selection while that account is still listed, even if it becomes unavailable.
+
+A session writer can set or reset **Symbol & Color** for a session they own from the sidebar, Chat header, or Sessions page without Gateway-wide write access. Read-only access or access to someone else’s session does not grant this permission.
 
 **Settings → Profile → Your access** shows your current permissions. To request broader access, use **Admin access**; an admin must approve this device separately.
 
@@ -226,7 +232,7 @@ Personal theme definitions are saved to your authenticated Gateway profile. Exis
 
 The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon, Phosphor, CRT, Manuscript, Rosé, and Miami themes (Claw is default), plus themes contributed by enabled plugins, personal themes saved through the agent, and one browser-local tweakcn import slot. Each theme ships its own self-hosted typeface, loaded only when selected or previewed: Claw uses Instrument Sans, Knot uses Geist, Dash pairs DM Sans with Fraunces for chat prose, Absolutely pairs Space Grotesk with Lora for chat prose, Tide uses IBM Plex Sans, Rosé uses DM Sans, and Miami uses Space Grotesk. Beacon targets WCAG AAA (7:1) contrast with the Atkinson Hyperlegible Next typeface for low vision, bright sunlight, projectors, and low-quality panels. Phosphor and CRT set the entire surface, chat prose included, in JetBrains Mono — Phosphor as green-on-glass, CRT as a white-on-black console with squared corners. Manuscript is the one light-first theme: parchment and iron-gall ink with a lapis accent, set entirely in the Lora serif, with a candlelit dark mode. To import a theme, open the [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
 
-Theme stylesheets can set `--chat-composer-corner-shape` (default `round`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
+Theme stylesheets can set `--chat-composer-corner-shape` (default `superellipse(1.5)`; `round` in Safari and other WebKit browsers) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
 
 Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. A theme can also hide **Lobsterdex**, including its visit and sound controls and collected-lobster tab icons. This preserves your collection, saved tab icon, and visit preferences; switching back to a theme that shows Lobsterdex restores them. Hiding Lobsterdex alone does not change mascot or critter behavior. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
 
@@ -273,10 +279,7 @@ to open web links outside OpenClaw instead of in built-in readers or browser pan
 In a web browser, links use ordinary browser navigation; in a native app, they open
 in the system's default browser. The switch is off by default, preserving current
 behavior. Turning it off restores built-in readers and any existing **Open links
-in Control UI browser** preference. Browser preview cards also follow this setting
-when you click their image or **Open** button. Their three-dot menu offers
-**Open in OpenClaw** when external opening is enabled, or **Open in new tab**
-when it is disabled. Explicit context-menu choices still work.
+in Control UI browser** preference. Explicit context-menu choices still work.
 
 This preference is stored only in the current browser or app webview, separately
 for each Gateway. It does not change shared Gateway configuration or sync across

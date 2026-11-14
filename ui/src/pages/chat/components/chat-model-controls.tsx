@@ -160,7 +160,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const headingKey = (id: string) => {
       const provider = normalizeChatModelProviderId(id);
       // Usage aliases are not billing identities: Claude CLI's native account
-      // and the direct Anthropic API connection own separate picker headings.
+      // and the direct Anthropic API connection own separate authentication identities.
       return provider === "claude-cli"
         ? provider
         : normalizeChatModelProviderGroupId(canonicalModelAuthProviderId(provider));
@@ -265,6 +265,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         recommended: catalogEntry?.recommended,
         disabled: option.disabled,
         unavailableReason: option.disabled ? option.unavailableReason : undefined,
+        unavailableUntil: catalogEntry?.unavailableUntil,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -281,8 +282,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         pickerOption.agentRuntimeId = agentRuntimeId;
       }
       if (isDefault && sessionRuntimePinned && resolveModelRuntimeRoute(pickerOption.provider)) {
-        // Default clears the runtime pin; session-scoped metadata describes the route being left.
-        pickerOption.agentRuntimeId = undefined;
+        // Default clears the runtime pin; label the configured default route, not the one being left.
+        pickerOption.agentRuntimeId = defaultsRuntimeId?.trim() || undefined;
       }
       const options = [pickerOption];
       for (const choice of runtimeSelectionLocked ? [] : (catalogEntry?.runtimeChoices ?? [])) {
@@ -303,6 +304,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
+          unavailableUntil: choice.unavailableUntil,
           recommended: pickerOption.recommended,
         });
       }
@@ -689,12 +691,12 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps) {
+export function ChatModelControls(props: ChatModelControlsProps & { showEffort?: boolean }) {
   const controls = createChatModelControls(props);
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      <ChatEffortPicker {...controls().effort} />
+      {props.showEffort !== false ? <ChatEffortPicker {...controls().effort} /> : undefined}
     </div>
   );
 }

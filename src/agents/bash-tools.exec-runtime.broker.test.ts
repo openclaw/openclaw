@@ -1,11 +1,10 @@
+import { ok } from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
-import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
-import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { runWithSpawnBroker, startGatewaySpawnBroker } from "../process/spawn-broker/context.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -41,9 +40,9 @@ function exec(command: string, options: Partial<Parameters<typeof runExecProcess
   });
 }
 async function startBroker(resources: AsyncDisposableStack) {
-  const broker = createSpawnBrokerHost();
+  const broker = await startGatewaySpawnBroker({ onReady() {}, onStartupFailure: vi.fn() });
+  ok(broker);
   resources.defer(() => broker.close());
-  await broker.ready();
   vi.mocked(spawn).mockClear();
   return broker;
 }
@@ -55,7 +54,7 @@ afterEach(() => {
 });
 
 describe.skipIf(!supportsSpawnBrokerCommandTransport())("exec tool broker transport", () => {
-  it("keeps detached scheduled exec on its Gateway broker", async () => {
+  it("keeps detached exec callbacks on the running Gateway broker", async () => {
     await using resources = new AsyncDisposableStack();
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
     const broker = await startBroker(resources);
@@ -65,14 +64,11 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("exec tool broker transp
       run?.kill();
       await run?.promise;
     });
-    const runScheduled = runWithSpawnBroker(broker, () => createScheduledGatewayRunner());
-    const outcome = await runInDetachedAsyncContext(() =>
-      runScheduled(async () => {
-        const command = "printf scheduled-exec-ok";
-        run = await exec(command, { execCommand: command });
-        return await run.promise;
-      }),
-    );
+    const outcome = await runInDetachedAsyncContext(async () => {
+      const command = "printf scheduled-exec-ok";
+      run = await exec(command, { execCommand: command });
+      return await run.promise;
+    });
     expect(outcome).toMatchObject({
       status: "completed",
       exitCode: 0,

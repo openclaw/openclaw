@@ -3,7 +3,14 @@ import {
   CODE_MODE_STORE_CUSTOM_TYPE,
   collectCodeModeStoreWrites,
 } from "../../agents/code-mode-session-store-replay.js";
+import {
+  jsonExtractText,
+  jsonLastStringValue,
+  jsonPathValue,
+  jsonType,
+} from "../../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
@@ -152,6 +159,45 @@ export function readSessionTranscriptMaintenance(
             .where("session_id", "=", target.sessionId)
             .where("seq", ">=", first.seq)
             .where("seq", "<=", last.seq)
+            .$if(!isPostgresSqlConnection(database.db), (query) =>
+              query.where((eb) => {
+                const metadata = eb.ref("navigation_json");
+                const navigation = jsonExtractText(database.db, metadata, "navigation");
+                const model = jsonExtractText(database.db, metadata, "model");
+                const members = getSessionKysely(database.db)
+                  .fn<{ key: string }>("json_each", [navigation])
+                  .as("member");
+                const envelopeMembers = getSessionKysely(database.db)
+                  .selectFrom(members)
+                  .select((member) => member.fn.countAll<number>().as("count"))
+                  .where("member.key", "in", ["type", "message"]);
+                // Stored model facts are safe only for an unambiguous message envelope.
+                // Retain legacy/exceptional bodies and malformed activity for caller validation.
+                return eb
+                  .case()
+                  .when(
+                    eb.and([
+                      eb("event_json", "is", null),
+                      eb("navigation_json", "is not", null),
+                      eb(envelopeMembers, "=", 2),
+                      eb(jsonPathValue(database.db, navigation, eb.val("$.type")), "=", "message"),
+                      eb(jsonType(database.db, navigation, eb.val("$.message")), "=", "object"),
+                    ]),
+                  )
+                  .then(
+                    eb(
+                      jsonLastStringValue(database.db, eb.fn.coalesce(model, eb.val("{}")), [
+                        "message",
+                        "customType",
+                      ]),
+                      "=",
+                      NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,
+                    ),
+                  )
+                  .else(true)
+                  .end();
+              }),
+            )
             .orderBy("seq", "asc"),
         );
         const events: TranscriptEvent[] = [];

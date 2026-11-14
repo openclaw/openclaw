@@ -298,7 +298,12 @@ export async function backupRemoteVerifyCommand(
 
 export async function backupRemoteRestoreCommand(
   runtime: RuntimeEnv,
-  opts: RemoteBackupOptions & { archive: string; target?: string; localCompanion?: boolean },
+  opts: RemoteBackupOptions & {
+    archive: string;
+    target?: string;
+    localCompanion?: boolean;
+    postgresConnectionEnv?: string;
+  },
 ) {
   return await withDownloadedBackup(runtime, opts, async (archive) => {
     const { backupRestoreCommand } = await import("./backup-restore.js");
@@ -307,6 +312,7 @@ export async function backupRemoteRestoreCommand(
       target: opts.target,
       json: opts.json,
       localCompanion: opts.localCompanion,
+      postgresConnectionEnv: opts.postgresConnectionEnv,
     });
   });
 }

@@ -17,6 +17,7 @@ const reviewJob = {
   state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
 };
 
+let gateways = 0;
 // A fake page host: Gateway reads answer from `world`; writes are recorded.
 function fixture(world: {
   sessions?: Record<
@@ -108,7 +109,9 @@ function fixture(world: {
     events.set(name, listener);
     return () => events.delete(name);
   });
-  const host = { request, connection, sessions: { create, open }, basePath: "", onEvent };
+  // Update state is kept per Gateway, by base path: each fixture is its own Gateway.
+  const basePath = `/gateway-${++gateways}`;
+  const host = { request, connection, sessions: { create, open }, basePath, onEvent };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const ui = {
@@ -585,6 +588,24 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   expect(String(calls.at(-1)![1]!.message).endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(
     true,
   );
+  // A late replacement is a new attempt, but losing its response keeps that attempt's key.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+  try {
+    lost = false;
+    buttonNamed(await render(), "Try again").click();
+    await vi.waitFor(() =>
+      expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("connection lost")),
+    );
+    buttonNamed(await render(), "Try again").click();
+    await vi.waitFor(() =>
+      expect(calls.filter(([method]) => method === "chat.send")).toHaveLength(4),
+    );
+    const sends = calls.filter(([method]) => method === "chat.send");
+    expect(sends[2]![1]!.idempotencyKey).not.toBe(first![1]!.idempotencyKey);
+    expect(sends[3]![1]!.idempotencyKey).toBe(sends[2]![1]!.idempotencyKey);
+  } finally {
+    vi.restoreAllMocks();
+  }
   // Updating until the automation's revision changes, which a cron change reloads to show.
   view = await render();
   expect(view.querySelector(".scribe-update")?.textContent).toMatch(/^Updating Knowledge/);
@@ -648,10 +669,11 @@ it("offers Try again, as a new request, when an update left the automation uncha
     // A Try again whose send fails stays late, with the error, and can be tried again.
     const answer = request.getMockImplementation()!;
     request.mockImplementationOnce(async (method, params) => {
+      const result = await answer(method, params);
       if (method === "chat.send") {
         throw new Error("offline");
       }
-      return answer(method, params);
+      return result;
     });
     const failing = view.querySelector(".scribe-update")!;
     buttonNamed(view, "Try again").click();
@@ -659,13 +681,17 @@ it("offers Try again, as a new request, when an update left the automation uncha
       expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("Error: offline")),
     );
     expect(failing.textContent).toContain("hasn't changed");
+    // The lost send dropped the connection: the page reloads with a new host for that Gateway.
+    Object.assign(ui.s.context, { host: { ...ui.s.context.host } });
     expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
       "hasn't changed",
     );
+    expect(sends()).toHaveLength(2);
     buttonNamed(await render(), "Try again").click();
-    await vi.waitFor(() => expect(sends()).toHaveLength(2));
-    // A new attempt: the Gateway must not answer it from the first request's record.
+    await vi.waitFor(() => expect(sends()).toHaveLength(3));
+    // A new attempt for the completed turn, retained when that attempt loses its response.
     expect(sends()[1]!.idempotencyKey).not.toBe(sends()[0]!.idempotencyKey);
+    expect(sends()[2]!.idempotencyKey).toBe(sends()[1]!.idempotencyKey);
     expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
   } finally {
     vi.restoreAllMocks();
@@ -693,6 +719,68 @@ it("reports a skipped run that could not complete as failed", async () => {
   );
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
+
+it.each([
+  ["Repair", true],
+  ["Try again", true],
+  ["Repair", false],
+  ["Try again", false],
+] as const)(
+  "reuses a lost %s request after reconnecting (existing conversation: %s)",
+  async (action, existing) => {
+    const failing = { ...reviewJob, state: { ...reviewJob.state, consecutiveErrors: 1 } };
+    const { render, ui, calls, request, create, events } = fixture({
+      sessions: existing ? reviewSession : {},
+      jobs: [failing],
+    });
+    create.mockImplementation(async () => `agent:main:repair:${create.mock.calls.length}`);
+    ui.s.scribe = "claim-consolidation";
+    const answer = request.getMockImplementation()!;
+    const sends = () => calls.filter(([method]) => method === "chat.send").map(([, p]) => p!);
+    let loseResponse = false;
+    request.mockImplementation(async (method, params) => {
+      const result = await answer(method, params);
+      if (method === "chat.send" && loseResponse) {
+        loseResponse = false;
+        throw new Error("response lost after acceptance");
+      }
+      return result;
+    });
+    let view = await render();
+    try {
+      if (action === "Try again") {
+        buttonNamed(view, "Repair").click();
+        await vi.waitFor(() => expect(sends()).toHaveLength(1));
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+        view = await render();
+      }
+      loseResponse = true;
+      const retry = buttonNamed(view, action);
+      retry.click();
+      await vi.waitFor(() => {
+        expect(loseResponse).toBe(false);
+        expect(retry.disabled).toBe(false);
+      });
+      // A dropped response replaces the host and page before the operator retries.
+      Object.assign(ui.s.context, { host: { ...ui.s.context.host } });
+      buttonNamed(await render(), action).click();
+      await vi.waitFor(() => expect(sends()).toHaveLength(action === "Repair" ? 2 : 3));
+      const sent = sends();
+      expect(sent.at(-1)!.idempotencyKey).toBe(sent.at(-2)!.idempotencyKey);
+      expect(sent.map((send) => send.sessionKey)).toEqual(
+        Array(sent.length).fill(existing ? "s-review" : "agent:main:repair:1"),
+      );
+      expect(create).toHaveBeenCalledTimes(existing ? 0 : 1);
+      if (action === "Try again") {
+        expect(sent[1]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      ui.s.disposed = true;
+      events.get("cron.inventory.changed")?.();
+    }
+  },
+);
 
 it("repairs an archived scribe by restoring its conversation and turning it on, without a turn", async () => {
   const { render, ui, calls } = fixture({
