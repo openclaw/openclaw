@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 export type DirectRoomTrackerOptions = NonNullable<
@@ -29,11 +29,32 @@ const hoisted = await vi.hoisted(async () => {
     start: vi.fn(),
     stop: vi.fn(async () => {}),
   };
+  const ingressLifecycles: Array<{
+    abortSignal: AbortSignal;
+    onAdopted: Mock;
+    onDeferred: Mock;
+    onAdoptionFinalizing: Mock;
+    onFailed: Mock;
+    onCancelled: Mock;
+    onAbandoned: Mock;
+  }> = [];
   const createMatrixIngressMonitor = vi.fn(
     (params: {
-      dispatch: (roomId: string, event: unknown, lifecycle: unknown) => Promise<void>;
+      dispatch: (roomId: string, event: unknown, lifecycle: unknown) => Promise<unknown>;
     }) => {
-      hoisted.registeredOnRoomMessage = (roomId, event) => params.dispatch(roomId, event, {});
+      hoisted.registeredOnRoomMessage = (roomId, event) => {
+        const lifecycle = {
+          abortSignal: new AbortController().signal,
+          onAdopted: vi.fn(async () => {}),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onFailed: vi.fn(async () => {}),
+          onCancelled: vi.fn(async () => {}),
+          onAbandoned: vi.fn(async () => {}),
+        };
+        ingressLifecycles.push(lifecycle);
+        return params.dispatch(roomId, event, lifecycle);
+      };
       return ingress;
     },
   );
@@ -151,6 +172,7 @@ const hoisted = await vi.hoisted(async () => {
     createDirectRoomTracker,
     createMatrixIngressMonitor,
     ingress,
+    ingressLifecycles,
     createMatrixRoomMessageHandler,
     createThreadBindingManager,
     disposeAutoJoin,
@@ -159,8 +181,9 @@ const hoisted = await vi.hoisted(async () => {
     getMemberDisplayName,
     getRoomInfo,
     logger,
+    messagesConfig: undefined as undefined | Record<string, unknown>,
     registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
-    registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
+    registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<unknown>),
     registerChannelRuntimeContext,
     registerMatrixAutoJoin,
     registerMatrixMonitorEvents,
@@ -200,6 +223,7 @@ vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
 }));
 
+// mock-isolation: The monitor must read config, logging, and channel helpers from this fake runtime, not the process-wide singleton.
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
@@ -207,6 +231,7 @@ vi.mock("../../runtime.js", () => ({
         channels: {
           matrix: hoisted.accountConfig,
         },
+        ...(hoisted.messagesConfig ? { messages: hoisted.messagesConfig } : {}),
       }),
       replaceConfigFile: vi.fn(),
       mutateConfigFile: vi.fn(),

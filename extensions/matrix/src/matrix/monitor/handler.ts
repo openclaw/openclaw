@@ -3,7 +3,6 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -37,6 +36,7 @@ import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
+import type { MatrixInboundLifecycle } from "./inbound-debounce.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { createRoomHistoryTracker } from "./room-history.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -98,11 +98,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
-  return async (
-    roomId: string,
-    event: MatrixRawEvent,
-    lifecycle: ChannelIngressMonitorLifecycle,
-  ) => {
+  return async (roomId: string, event: MatrixRawEvent, lifecycle: MatrixInboundLifecycle) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
