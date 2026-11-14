@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { MAX_DATE_TIMESTAMP_MS } from "../../packages/gateway-protocol/src/schema/cron-shared.js";
 import { PROFILE_OPTIONS } from "../agents/core-tool-facts.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
@@ -231,7 +230,11 @@ const agentSettingsSchema = z
         every: nonEmptyString
           .refine((value) => {
             try {
-              return parseDurationMs(value, { defaultUnit: "m" }) <= MAX_DATE_TIMESTAMP_MS;
+              const everyMs = parseDurationMs(value, { defaultUnit: "m" });
+              return (
+                everyMs === 0 ||
+                computeNextRunAtMs({ kind: "every", everyMs }, Date.now()) !== undefined
+              );
             } catch {
               return false;
             }

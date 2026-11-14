@@ -259,7 +259,7 @@ describe("parseTemplateManifest", () => {
     expect(duplicateCron.ok).toBe(false);
   });
 
-  it.each(["eventually", "104000000d"])("rejects invalid heartbeat duration %s", (every) => {
+  it.each(["eventually", "104000000d", "100000000d"])("rejects invalid heartbeat %s", (every) => {
     const result = parseTemplateManifest({
       ...minimalManifest,
       agent: { id: "worker", heartbeat: { every } },
