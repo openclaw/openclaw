@@ -19,7 +19,7 @@ import {
 } from "../../cron/run-authority.js";
 import { createCronStoreHarness } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
-import type { CronJob, CronJobCreate, CronStoredJob } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -212,123 +212,132 @@ describe("cron ownership access matrix", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  it.each([false, true])(
-    "keeps ownerless operator admission during admin edits (local capture: %s)",
-    async (localCapture) => {
-      const { storePath } = await makeStorePath();
-      await withCronManagementCaller("owner-chat-edit", async (identity) => {
-        const sessionKey = identity.sessionKey;
-        const seeded: CronStoredJob = {
-          ...createCronJob({
-            agentId: identity.agentId,
-            sessionKey,
-            sessionTarget: `session:${sessionKey}`,
-            ownerProfileId: "gateway-owner",
-            scheduledToolPolicy: { version: 1, mode: "trusted" },
-          }),
-          createdActor: { type: "human", source: "profile", id: "gateway-owner" },
-          ...(localCapture
-            ? {
-                toolsAllowProvenance: {
-                  version: 1 as const,
-                  source: "final-executable-surface" as const,
-                  callerOrigin: { kind: "local" as const },
-                },
-              }
+  it.each([
+    "model",
+    "model-local",
+    "prompt-cap",
+    "metadata-local",
+    "legacy-cap",
+    "requester-unknown-cap",
+    "requester-external-cap",
+  ] as const)("preserves the saved execution class during admin edits: %s", async (scenario) => {
+    const { storePath } = await makeStorePath();
+    await withCronManagementCaller("owner-chat-edit", async (identity) => {
+      const sessionKey = identity.sessionKey;
+      const localCapture = scenario === "model-local" || scenario === "metadata-local";
+      const requester = scenario.startsWith("requester-");
+      const seeded: CronStoredJob = {
+        ...createCronJob({
+          agentId: identity.agentId,
+          sessionKey,
+          sessionTarget: "session:" + sessionKey,
+          ownerProfileId: "gateway-owner",
+          ...(scenario !== "legacy-cap"
+            ? { scheduledToolPolicy: { version: 1, mode: "trusted" } }
             : {}),
-        };
-        await saveCronStore(storePath, { version: 1, jobs: [seeded] });
-        const cron = createReadService({
-          storePath,
-          cronEnabled: false,
-          defaultAgentId: identity.agentId,
-          enqueueSystemEvent: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        });
-        onTestFinished(() => cron.stop());
-        const context = createCronTestContext(undefined, getRuntimeConfig);
-        context.validateAgentRuntimeApprovalAuthority = () => true;
-        context.cron.readJob.mockImplementation((id) => cron.readJob(id));
-        context.cron.getJob.mockImplementation((id) => cron.getJob(id));
-        context.cron.updateWithPrecondition.mockImplementation((...args) =>
-          cron.updateWithPrecondition(...args),
-        );
-        // Replace only the transport: the tool mints its real management grant and the
-        // Gateway handler commits through the real SQLite service, as a nested tool does.
-        using _ = vi
-          .spyOn(gatewayModule, "callGatewayTool")
-          .mockImplementation(async (method, _opts, params) => {
-            const caller = getGatewayToolCallerIdentity()!;
-            const client: GatewayClient = {
-              connect: {} as GatewayClient["connect"],
-              internal: {
-                agentRuntimeIdentity: {
-                  ...identity,
-                  cronToolsAllowCapture: caller.cronToolsAllowCapture,
-                  cronManagementGrant: caller.cronManagementGrant,
-                },
+        }),
+        createdActor: { type: "human", source: "profile", id: "gateway-owner" },
+        ...(localCapture || requester
+          ? {
+              toolsAllowProvenance: {
+                version: 1 as const,
+                source: "final-executable-surface" as const,
+                callerOrigin: localCapture
+                  ? { kind: "local" as const }
+                  : scenario === "requester-external-cap"
+                    ? { kind: "external" as const, channel: "discord" }
+                    : { kind: "unknown" as const },
               },
-            };
-            const { respond } = await invokeCron(method, requireRecord(params, "tool params"), {
-              context,
-              client,
-            });
-            const [ok, result, error] = respond.mock.calls[0]!;
-            if (!ok) {
-              throw new Error(error.message);
             }
-            return result;
-          });
-        const tool = createCronTool({
-          runId: identity.operationalRunInstance.runId,
-          agentSessionKey: sessionKey,
-          creatorToolAllowlistCaptureRef: {
-            value: { version: 1, source: "final-executable-surface" },
-          },
-        });
-        await tool.execute("get", { action: "get", jobId: seeded.id });
-        for (const patch of [
-          { displayName: "Operator job" },
-          { payload: { model: "provider/model-b", fallbacks: ["provider/model-c"] } },
-          { payload: { ...seeded.payload, message: "edited prompt" } },
-        ]) {
-          await tool.execute("update", {
-            action: "update",
-            jobId: seeded.id,
-            job: patch,
-          });
-          const stored = (await loadCronStore(storePath)).jobs[0]!;
-          const admissionSource = resolveCronRunAdmissionSource(stored);
-          expect.soft(admissionSource).toBe("operator-schedule");
-          expect
-            .soft(
-              resolveCronSessionWorkspaceOwnershipError({
-                cfg: {},
-                agentId: identity.agentId,
-                sessionKey,
-                ownerSessionKey: stored.owner?.sessionKey,
-                hasWorkspaceBinding: true,
-                admissionSource,
-              }),
-            )
-            .toBeUndefined();
-        }
-        const stored = (await loadCronStore(storePath)).jobs[0]!;
-        expect(stored.toolsAllowProvenance).toBeUndefined();
-        expect(stored.payload).toEqual({
-          ...seeded.payload,
-          model: "provider/model-b",
-          fallbacks: ["provider/model-c"],
-          message: "edited prompt",
-        });
-        expect(stored.owner).toBeUndefined();
-        expect(stored.ownerProfileId).toBe(seeded.ownerProfileId);
-        expect(stored.createdActor).toEqual(seeded.createdActor);
-        expect(stored.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
-        expect(stored.sessionTarget).toBe(seeded.sessionTarget);
+          : {}),
+      };
+      await saveCronStore(storePath, { version: 1, jobs: [seeded] });
+      const cron = createReadService({
+        storePath,
+        cronEnabled: false,
+        defaultAgentId: identity.agentId,
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-    },
-  );
+      onTestFinished(() => cron.stop());
+      const context = createCronTestContext(undefined, getRuntimeConfig);
+      context.validateAgentRuntimeApprovalAuthority = () => true;
+      context.cron.readJob.mockImplementation((id) => cron.readJob(id));
+      context.cron.getJob.mockImplementation((id) => cron.getJob(id));
+      context.cron.updateWithPrecondition.mockImplementation((...args) =>
+        cron.updateWithPrecondition(...args),
+      );
+      // Replace only transport; the tool issues its real management grant and
+      // the Gateway commits through the real SQLite service.
+      using _ = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async (method, _opts, params) => {
+          const caller = getGatewayToolCallerIdentity()!;
+          const client: GatewayClient = {
+            connect: {} as GatewayClient["connect"],
+            internal: {
+              agentRuntimeIdentity: {
+                ...identity,
+                cronToolsAllowCapture: caller.cronToolsAllowCapture,
+                cronManagementGrant: caller.cronManagementGrant,
+              },
+            },
+          };
+          const { respond } = await invokeCron(method, requireRecord(params, "tool params"), {
+            context,
+            client,
+          });
+          const [ok, result, error] = respond.mock.calls[0]!;
+          if (!ok) {
+            throw new Error(error.message);
+          }
+          return result;
+        });
+      const tool = createCronTool({
+        runId: identity.operationalRunInstance.runId,
+        agentSessionKey: sessionKey,
+        creatorToolAllowlistCaptureRef: {
+          value: { version: 1, source: "final-executable-surface" },
+        },
+      });
+      const patch: CronJobPatch =
+        scenario === "metadata-local"
+          ? { displayName: "Operator job" }
+          : scenario.startsWith("model")
+            ? { payload: { model: "provider/model-b", fallbacks: ["provider/model-c"] } }
+            : {
+                payload: {
+                  kind: "agentTurn",
+                  message: "edited prompt",
+                  toolsAllow: scenario === "prompt-cap" ? ["*"] : ["read"],
+                },
+              };
+      await tool.execute("get", { action: "get", jobId: seeded.id });
+      await tool.execute("update", { action: "update", jobId: seeded.id, job: patch });
+      const stored = (await loadCronStore(storePath)).jobs[0]!;
+      const admissionSource = resolveCronRunAdmissionSource(stored);
+      expect(admissionSource).toBe(requester ? "requester-schedule" : "operator-schedule");
+      const workspaceError = resolveCronSessionWorkspaceOwnershipError({
+        cfg: {},
+        agentId: identity.agentId,
+        sessionKey,
+        ownerSessionKey: stored.owner?.sessionKey,
+        hasWorkspaceBinding: true,
+        admissionSource,
+      });
+      if (requester) {
+        expect(workspaceError).toContain("owning conversation");
+      } else {
+        expect(workspaceError).toBeUndefined();
+      }
+      expect(stored.payload).toEqual({ ...seeded.payload, ...patch.payload });
+      expect(stored.owner).toBeUndefined();
+      expect(stored.ownerProfileId).toBe(seeded.ownerProfileId);
+      expect(stored.createdActor).toEqual(seeded.createdActor);
+      expect(stored.sessionTarget).toBe(seeded.sessionTarget);
+      expect(stored.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
+    });
+  });
 
   it("filters operator commands, foreign streams and foreign trusted jobs from caller-scoped cron.list", async () => {
     getRuntimeConfig.mockReturnValue({});
