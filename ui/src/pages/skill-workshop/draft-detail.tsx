@@ -126,7 +126,6 @@ function DraftContent(props: { reads: WorkshopReads }) {
                   after={viewer().result.content}
                   beforeLabel={t("skillWorkshop.drafts.diffLive")}
                   afterLabel={t("skillWorkshop.drafts.diffDraft")}
-                  sameText={t("skillWorkshop.drafts.same")}
                   tooLargeText={t("skillWorkshop.drafts.tooLarge")}
                   fallbackSide="after"
                 />

@@ -63,7 +63,6 @@ const enSkillWorkshop = {
       discardTitle: "Delete this draft without changing the skill.",
       diffLive: "Live skill",
       diffDraft: "Draft",
-      same: "This draft already matches the live skill. Discard it.",
       tooLarge: "This draft differs too much from the live skill to compare line by line.",
       filesLabel: "Files",
       chatHint:
