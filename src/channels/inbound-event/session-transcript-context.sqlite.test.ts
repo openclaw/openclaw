@@ -174,7 +174,7 @@ it.each([false, true])(
     ];
     const recentPrompt = await render();
     const retained = ["send-1", "no-output", "unseen", ...incomplete.map(([id]) => id)];
-    expect(ctx.InboundHistory.map((entry) => entry.messageId)).toEqual(retained);
+    expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual(retained);
     expect(recentPrompt).toContain(`"history_count":${retained.length}`);
     for (const { body } of ctx.InboundHistory) {
       expect(recentPrompt).toContain(body);
@@ -278,4 +278,124 @@ it("suppresses already-replayed DM turns while preserving delivery-only context 
   expect(prompt).toContain("Time for your weigh-in.");
   expect(prompt).not.toContain("ordinary user turn");
   expect(prompt).not.toContain("ordinary assistant reply");
+});
+
+it("keeps an answered recent candidate when internal rows spend the read budget", async () => {
+  const scope = {
+    agentId: "main",
+    sessionId: "conversation",
+    sessionKey: "agent:main:main",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  const sessionEntry = { sessionId: scope.sessionId, chatType: "channel" as const, updatedAt: 1 };
+  await replaceSessionEntry(scope, sessionEntry);
+  const append = (...messages: unknown[]) =>
+    persistTurn(scope, { updateMode: "none", messages: messages.map((message) => ({ message })) });
+  const ask = (text: string, messageId: string) =>
+    persistUserTurnTranscript({
+      ...scope,
+      sessionEntry,
+      input: { text, timestamp: Date.now(), transport: { channel: "discord", messageId } },
+    });
+  const questions = [
+    "does the deploy checklist still apply",
+    "what did the reviewer say",
+    "who owns the release notes",
+    "when is the freeze window",
+    "which branch should ship",
+    "is the migration reversible",
+  ];
+  // Six answered candidates for a 12-row candidate budget, plus an internal runtime
+  // input and its NO_REPLY pair that cannot answer any candidate but spend those rows.
+  await ask(questions[0]!, "m-0");
+  await append({ role: "assistant", content: "reply-0", stopReason: "stop" });
+  await append({ role: "user", content: "internal runtime input" });
+  await append({ role: "assistant", content: "NO_REPLY", stopReason: "stop" });
+  for (const [index, question] of questions.slice(1).entries()) {
+    await ask(question, `m-${index + 1}`);
+    await append({ role: "assistant", content: `reply-${index + 1}`, stopReason: "stop" });
+  }
+  const stored = await loadTranscriptEvents(scope);
+  const ctx: FinalizedMsgContext = {
+    Body: "what next?",
+    SessionKey: scope.sessionKey,
+    AgentId: scope.agentId,
+    Provider: "discord",
+    CommandAuthorized: false,
+    SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+    InboundHistory: questions.map((question, index) => ({
+      messageId: `m-${index}`,
+      sender: "Alice",
+      body: question,
+    })),
+    Timestamp: Date.now() + 1_000,
+  };
+  let prompt = "";
+  await runPreparedChannelTurn({
+    channel: ctx.Provider!,
+    routeSessionKey: scope.sessionKey,
+    storePath: scope.storePath,
+    ctxPayload: ctx,
+    recordInboundSession: async () => undefined,
+    runDispatch: async () => {
+      prompt = buildInboundUserContextPrefix(ctx);
+      return { queuedFinal: false };
+    },
+  });
+
+  // Every candidate is answered in this session, including the oldest pair that a
+  // six-candidate budget of 12 rows would miss once the internal pair spends two.
+  expect(ctx.InboundHistory ?? []).toEqual([]);
+  for (const question of questions) {
+    expect(prompt.split(question)).toHaveLength(1);
+  }
+  expect(await loadTranscriptEvents(scope)).toEqual(stored);
+});
+
+it("keeps an unanswered request when a textless user turn separates it from a reply", async () => {
+  const scope = {
+    agentId: "main",
+    sessionId: "conversation",
+    sessionKey: "agent:main:main",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  const sessionEntry = { sessionId: scope.sessionId, chatType: "channel" as const, updatedAt: 1 };
+  await replaceSessionEntry(scope, sessionEntry);
+  const append = (...messages: unknown[]) =>
+    persistTurn(scope, { updateMode: "none", messages: messages.map((message) => ({ message })) });
+  const ask = (text: string, messageId: string) =>
+    persistUserTurnTranscript({
+      ...scope,
+      sessionEntry,
+      input: { text, timestamp: Date.now(), transport: { channel: "discord", messageId } },
+    });
+  // An unanswered request followed by an image-only turn: that turn carries no text, so
+  // its answer must not reach back past it and cover the request before it.
+  await ask("does the deploy checklist still apply", "send-old");
+  await append({
+    role: "user",
+    content: [{ type: "image", source: { type: "base64", mediaType: "image/png", data: "AAAA" } }],
+  });
+  await append({ role: "assistant", content: "here is the chart", stopReason: "stop" });
+  await append({ role: "user", content: "internal runtime input" });
+  await append({ role: "assistant", content: "NO_REPLY", stopReason: "stop" });
+  await ask("which branch should ship", "send-new");
+  await append({ role: "assistant", content: "ship the release branch", stopReason: "stop" });
+  const ctx: FinalizedMsgContext = {
+    Body: "what next?",
+    SessionKey: scope.sessionKey,
+    AgentId: scope.agentId,
+    Provider: "discord",
+    CommandAuthorized: false,
+    SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+    InboundHistory: [
+      { messageId: "send-old", sender: "Alice", body: "does the deploy checklist still apply" },
+      { messageId: "send-new", sender: "Alice", body: "which branch should ship" },
+    ],
+    Timestamp: Date.now() + 1_000,
+  };
+
+  await mergeSessionTranscriptContext({ ...scope, ctx });
+
+  expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual(["send-old"]);
 });
