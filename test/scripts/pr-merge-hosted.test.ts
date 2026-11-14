@@ -220,26 +220,17 @@ describePosix("native pending GitHub merge handoff", () => {
     expect(events.some((event) => event.kind === "gh" && event.args?.[1] === "merge")).toBe(false);
   });
 
-  it("submits one exact-head auto request and returns pending without polling or cleanup", () => {
-    const { stdout, events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]));
-    expect(stdout).toContain("AUTO/QUEUE PENDING for PR #42; not merged");
-    const mergeCalls = events.filter(isMerge);
-    expect(mergeCalls).toHaveLength(1);
-    const args = mergeCalls[0]?.args ?? [];
-    expect(args).toContain("--auto");
-    expect(args[args.indexOf("--match-head-commit") + 1]).toBe(f.head);
+  it("refuses a compiler-input auto request before intent or dispatch", () => {
+    const { stdout, events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]), 1);
+    expect(stdout).toContain("PENDING: compiler-input PR requires immediate admission");
+    expect(events.filter(isMerge)).toHaveLength(0);
+    expect(events.filter(isGraphqlMerge)).toHaveLength(0);
     expect(events.filter((event) => event.kind === "required-checks")).toHaveLength(1);
     expect(
       events.some((event) => ["ci-watched", "hosted-gate", "leased-cleanup"].includes(event.kind)),
     ).toBe(false);
     expect(events.some((event) => event.kind === "gh" && event.args?.includes("POST"))).toBe(false);
-    expect(outcomeRecord(f)).toMatchObject({
-      head: f.head,
-      route: "auto",
-      phase: "intent",
-      accepted: true,
-      landed: null,
-    });
+    expectNoIntent(f);
     expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
     expect(f.git(f.origin, "rev-parse", "topic")).toBe(f.head);
     expect(existsSync(f.worktree)).toBe(true);
