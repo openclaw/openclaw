@@ -1,5 +1,5 @@
-# Issue #197730: native Gateway admission/link/persistence/history and unlink/reassignment,
-# actual Control UI portrait/source presentation, and independent attribution/import-safe
-# projection contracts. Exact net test growth; the repeated-projection review regression
-# brings the complete behavior proof three lines above the default 400-line budget.
-403
+# Issue #197730: 625 net test lines, 225 above the default allowance.
+# Native admission/persistence and pending-message parity; real Gateway + built UI
+# link/unlink/reassignment (including warm history cursors); independent renderer
+# own-side/source and raw-identity/reprojection contracts. Existing harnesses reused.
+225

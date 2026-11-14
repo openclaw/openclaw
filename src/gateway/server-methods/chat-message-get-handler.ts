@@ -108,12 +108,16 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
             [pending.message],
             context.cronStorePath,
           );
+          const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay([
+            pending.message,
+          ]);
           await withCurrentSession(() => {
             const message = projectPendingInputMessage(
               pending,
               effectiveMaxChars,
               undefined,
               resolveCronJobName,
+              resolveLinkedChannelSenderDisplay,
             );
             respondMessage(message);
           });

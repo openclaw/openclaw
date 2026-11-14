@@ -6,9 +6,10 @@ import {
   type LinkedChannelSenderDisplay,
   type LinkedChannelSenderDisplayResolver,
 } from "./chat-display-projection.linked-senders.js";
-import type {
-  CurrentUserProfileDisplay,
-  CurrentUserProfileDisplayResolver,
+import {
+  resolveCurrentUserProfileDisplay,
+  type CurrentUserProfileDisplay,
+  type CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
 
 export type { LinkedChannelSenderDisplayResolver } from "./chat-display-projection.linked-senders.js";
@@ -27,11 +28,9 @@ export async function prepareLinkedChannelSenderDisplay(
   if (!messages.some(requiresLinkedChannelSenderDisplayRead)) {
     return () => undefined;
   }
-  // Only the admitted host preparation path loads state owners; history kernels
-  // receive this operation from their caller and never discover profiles themselves.
-  const resolveDisplay =
-    options.resolveDisplay ??
-    (await import("./current-user-profile-display.js")).resolveCurrentUserProfileDisplay;
+  // History kernels receive this operation from their admitted caller; channel
+  // link storage is loaded only when that caller has not supplied its own reader.
+  const resolveDisplay = options.resolveDisplay ?? resolveCurrentUserProfileDisplay;
   const readLink =
     options.readLink ??
     (await import("../state/user-channel-identity-operations.js"))
