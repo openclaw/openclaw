@@ -165,9 +165,21 @@ function projectGitDiagnosticFailure(
     stderr: result.stderr,
     stdout: result.stdout,
   });
+  if (operation === "clone" || operation === "fetch") {
+    return new ProjectCloneError(
+      "clone_failed",
+      `Git ${operation === "fetch" ? "refresh" : operation} failed. Ask the Gateway operator to check projects/clone logs. Diagnostic ID: ${diagnosticId}.`,
+    );
+  }
+  const phrase = {
+    "prepare refresh": "prepare the repository refresh",
+    "read refs": "read the managed repository's branches",
+    "seed refs": "prepare the managed repository's branches for refresh",
+    "update refs": "update the managed repository's branches",
+  }[operation];
   return new ProjectCloneError(
     "clone_failed",
-    `Git ${operation === "fetch" ? "refresh" : operation} failed. Ask the Gateway operator to check projects/clone logs. Diagnostic ID: ${diagnosticId}.`,
+    `Git could not ${phrase}. Send again to retry; if it fails, give the operator Diagnostic ID: ${diagnosticId}.`,
   );
 }
 
