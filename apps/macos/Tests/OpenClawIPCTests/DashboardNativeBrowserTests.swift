@@ -560,6 +560,103 @@ struct DashboardNativeBrowserHostTests {
     }
 }
 
+@MainActor
+private final class DashboardInterruptionNavigationObserver: NSObject, WKNavigationDelegate {
+    private let controller: DashboardWindowController
+    private var interruptedNavigation: WKNavigation?
+    let failureCompleted = AsyncTestGate()
+    private(set) var failure: NSError?
+
+    init(controller: DashboardWindowController) {
+        self.controller = controller
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        self.controller.webView(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
+    {
+        self.controller.webView(webView, decidePolicyFor: navigationResponse, decisionHandler: decisionHandler)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (
+            URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.controller.webView(webView, didReceive: challenge, completionHandler: completionHandler)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        self.controller.webView(webView, didStartProvisionalNavigation: navigation)
+        // Installed after the article loads: the first navigation is the interrupted
+        // request, not the replacement that may start before its failure arrives.
+        if self.interruptedNavigation == nil {
+            self.interruptedNavigation = navigation
+        }
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        self.controller.webView(webView, didCommit: navigation)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        self.controller.webView(webView, didFinish: navigation)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error)
+    {
+        self.controller.webView(webView, didFailProvisionalNavigation: navigation, withError: error)
+        self.recordFailure(navigation, error: error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        self.controller.webView(webView, didFail: navigation, withError: error)
+        self.recordFailure(navigation, error: error)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        self.controller.webViewWebContentProcessDidTerminate(webView)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationAction: WKNavigationAction,
+        didBecome download: WKDownload)
+    {
+        self.controller.webView(webView, navigationAction: navigationAction, didBecome: download)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationResponse: WKNavigationResponse,
+        didBecome download: WKDownload)
+    {
+        self.controller.webView(webView, navigationResponse: navigationResponse, didBecome: download)
+    }
+
+    private func recordFailure(_ navigation: WKNavigation?, error: Error) {
+        guard let navigation, let interruptedNavigation,
+              navigation === interruptedNavigation, self.failure == nil else { return }
+        // This records the real controller's completed call, not KVO settlement.
+        // Record unexpected errors too, so classification fails instead of hanging.
+        self.failure = error as NSError
+        self.failureCompleted.open()
+    }
+}
+
 @Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardNativeBrowserFailureTests {
@@ -644,6 +741,14 @@ struct DashboardNativeBrowserFailureTests {
         let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
         try await TestWait.state("loaded article") { !webView.isLoading && webView.title == "Article" }
 
+        let observer = DashboardInterruptionNavigationObserver(controller: controller)
+        webView.navigationDelegate = observer
+        defer {
+            withExtendedLifetime(observer) {
+                webView.navigationDelegate = controller
+            }
+        }
+
         let expectedPath: String
         switch trigger {
         case "download":
@@ -663,6 +768,13 @@ struct DashboardNativeBrowserFailureTests {
             expectedPath = "/plain"
         }
         do {
+            try await observer.failureCompleted.wait("\(trigger) cancellation callback completes")
+            let error = try #require(observer.failure)
+            #expect(
+                (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled) ||
+                    (error.domain == "WebKitErrorDomain" && error.code == 102),
+                "\(trigger)")
+            // The cancelled predecessor can finish while its replacement still loads.
             try await TestWait.state("\(trigger) settles") { !webView.isLoading && webView.url?.path == expectedPath }
         } catch {
             // Separate the conjunction on failure without changing the Stop contract.
