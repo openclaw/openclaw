@@ -780,7 +780,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       | ReturnType<typeof getTerminalSessionWorkAdmissionRelease>
       | undefined;
     const broadcast = vi.fn((..._args: unknown[]) => {
-      broadcastAdmissionRelease = getTerminalSessionWorkAdmissionRelease(target);
+      broadcastAdmissionRelease ??= getTerminalSessionWorkAdmissionRelease(target);
     });
     const dedupe = new Map();
     rpcSourceTesting.set(
