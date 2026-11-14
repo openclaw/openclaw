@@ -342,16 +342,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/codex/src/session-catalog-native-performance.test.ts",
     watchGlobs: ["pnpm-lock.yaml"],
   },
-  ...[
-    "extensions/copilot/src/attempt-transcript-journal.test.ts",
-    "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-    ],
-  })),
+  ...["extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/config/sessions/session-transcript-reconcile.worker.ts",
+        "src/config/sessions/session-transcript.worker.ts",
+      ],
+    }),
+  ),
   ...[
     "extensions/diffs/src/store.test.ts",
     "extensions/diffs/src/tool.test.ts",
@@ -1078,7 +1077,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/gateway/talk/handlers/client-native-control.test.ts",
-    "src/gateway/talk/handlers/native-consult-target.test.ts",
     "src/gateway/talk/handlers/target.test.ts",
     "src/gateway/talk/handlers/voice.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -1691,7 +1689,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/config/sessions/session-accessor.sqlite-archive-session.test.ts",
     "src/config/sessions/session-history-budget-owner.test.ts",
     "src/config/sessions/session-history-eviction.test.ts",
   ].map((testFile): PolicyTestWatch => ({
