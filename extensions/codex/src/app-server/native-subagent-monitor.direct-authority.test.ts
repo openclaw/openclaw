@@ -103,7 +103,7 @@ describe("CodexNativeSubagentMonitor", () => {
         }),
       );
       await second.unregister();
-      await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+      await expect(releaseForResume()).rejects.toThrow("background work or live resources");
       if (status === "interrupted") {
         resumed.cancel();
         expect(() => resumed.assertCurrent()).toThrow("execution was cancelled");

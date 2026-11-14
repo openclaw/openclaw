@@ -250,9 +250,50 @@ export function createCodexEphemeralThreadPolicy(
   };
 }
 
+export type CodexThreadProtectionOwner =
+  | "unspecified"
+  | "native-command"
+  | "native-continuation"
+  | "mcp-discovery"
+  | "compaction"
+  | "mcp-app-view";
+
+export function acquireThreadProtection(
+  runtime: ThreadOwnershipState,
+  threadId: string,
+  clientId: string,
+  owner: CodexThreadProtectionOwner,
+): () => boolean | undefined {
+  const count = (runtime.protectedThreads.get(threadId) ?? 0) + 1;
+  runtime.protectedThreads.set(threadId, count);
+  embeddedAgentLog.debug("codex thread protection acquired", { clientId, threadId, owner, count });
+  let held = true;
+  return () => {
+    if (!held) {
+      return undefined;
+    }
+    held = false;
+    if (runtime.closed) {
+      return undefined;
+    }
+    return releaseThreadProtection(runtime, threadId, clientId, owner);
+  };
+}
+
 /** Final process settlement releases only the exact deferred physical claim. */
-export function releaseThreadProtection(runtime: ThreadOwnershipState, threadId: string): boolean {
+function releaseThreadProtection(
+  runtime: ThreadOwnershipState,
+  threadId: string,
+  clientId: string,
+  owner: CodexThreadProtectionOwner,
+): boolean {
   const count = runtime.protectedThreads.get(threadId) ?? 0;
+  embeddedAgentLog.debug("codex thread protection released", {
+    clientId,
+    threadId,
+    owner,
+    count: Math.max(0, count - 1),
+  });
   if (count > 1) {
     runtime.protectedThreads.set(threadId, count - 1);
     return false;
@@ -281,7 +322,13 @@ export async function waitForThreadBackgroundCleanup(
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
-  if (!runtime || runtime.closed || !isThreadBackgroundOnly(runtime, threadId)) {
+  if (!runtime || runtime.closed) {
+    return;
+  }
+  // Final unprotection starts an asynchronous unsubscribe before dropping its claim.
+  const cleanupPending = () =>
+    isThreadBackgroundOnly(runtime, threadId) || runtime.releasingThreads.has(threadId);
+  if (!cleanupPending()) {
     return;
   }
   await new Promise<void>((resolve, reject) => {
@@ -292,7 +339,7 @@ export async function waitForThreadBackgroundCleanup(
     };
     const check = () => {
       // A new foreground claim must return to the caller's admission guard too.
-      if (runtime.closed || !isThreadBackgroundOnly(runtime, threadId)) {
+      if (runtime.closed || !cleanupPending()) {
         cleanup();
         resolve();
       }

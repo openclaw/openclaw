@@ -107,7 +107,7 @@ it("retains a protected parent through private completion and owner reentry", as
     await expect(runCodexAppServerAttempt(changed)).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
       message:
-        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+        "Codex thread thread-1 still has background work or live resources after waiting for cleanup; wait for them to settle or release the owning resources and retry.",
     });
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
     const methods = harness.requests.map(({ method }) => method);
