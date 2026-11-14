@@ -64,7 +64,11 @@ export class SessionOwnerFilter {
 
   hasMultipleOwners(agentId: string): boolean {
     this.read();
-    return this.ownerFacet?.agentId === agentId && this.ownerFacet.multiple;
+    // An all-agent facet belongs to the personal list, not the open conversation.
+    return (
+      (this.ownerFacet?.agentId === "*" || this.ownerFacet?.agentId === agentId) &&
+      this.ownerFacet.multiple
+    );
   }
 
   observeOwnerFacet(agentId: string, owners: SessionsListResult["owners"]): void {

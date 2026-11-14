@@ -96,12 +96,16 @@ export function subscribeSidebarAgentSessionCaches(
 
 type SidebarSessionQueryOwner = {
   sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+  sidebarSessionsAcrossAgents?(): boolean;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
 };
 
 export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
-  return owner.sidebarSessionStatusFilter() !== "active" || Boolean(ownerId || involvingMe);
+  return (
+    owner.sidebarSessionStatusFilter() !== "active" ||
+    Boolean(ownerId || involvingMe || owner.sidebarSessionsAcrossAgents?.())
+  );
 }
 
 export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
@@ -111,7 +115,8 @@ export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId
     excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
-    agentId: ownerId ? undefined : agentId,
+    // A solo-install owner fallback may include unowned rows without changing browsing scope.
+    agentId: ownerId || owner.sidebarSessionsAcrossAgents?.() ? undefined : agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     rowMode: "sidebar",

@@ -63,6 +63,7 @@ export interface SessionDataInputs {
   selectedAgentIdForSessions(): string;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
   sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+  sidebarSessionsAcrossAgents?(): boolean;
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
 }
 
