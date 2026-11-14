@@ -252,11 +252,15 @@ the adopted session to the node and its catalog-reported working directory, and
 runs each one-shot `claude -p` turn there. The first turn still uses
 `--fork-session`, preserving the source transcript.
 
-Node-placed turns use the node's Claude defaults. In v1 they do not receive the
-Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
-Gateway transcript, and reject attachments and images. Claude Desktop rows and
-nodes that do not advertise the run command remain view-only. The macOS app
-node does not advertise this command yet, so its rows remain view-only.
+Node-placed turns use the node's Claude defaults, except for the system prompt:
+like Gateway-local agent turns, they send OpenClaw's system prompt as Claude
+Code's replacement prompt (`--system-prompt-file`). Claude Code keeps the prompt
+a session was created with, so a resumed or adopted session keeps its own. In v1
+node-placed turns do not receive the Gateway loopback MCP config or Gateway
+skills plugin, cannot reseed from a Gateway transcript, and reject attachments
+and images. Claude Desktop rows and nodes that do not advertise the run command
+remain view-only. The macOS app node does not advertise this command yet, so its
+rows remain view-only.
 
 ## OpenCode and Pi sessions
 
