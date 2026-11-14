@@ -166,9 +166,9 @@ function TranscriptRows(props: {
                         active() || preparing()
                           ? `${props.snapshot.layout.rowMinimum(index())}px`
                           : "0",
-                      // Retain parked DOM without making WebKit restyle its hidden
-                      // layout tree. Forecast rows regain their boxes before arrival.
-                      display: active() || preparing() ? undefined : "none",
+                      // Chromium keeps a parked box for timely forecast paint; WebKit
+                      // releases it in CSS to avoid restyling hidden subtrees.
+                      height: active() || preparing() ? undefined : "0",
                       position: active() ? undefined : "absolute",
                       top: active()
                         ? undefined
