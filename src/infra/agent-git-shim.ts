@@ -225,7 +225,8 @@ EOF
 $missing
 EOF
       ;;
-    history_blobs)
+    history_blobs|history_paths)
+      [ "$query" != history_paths ] || set -- "$@" -c core.quotePath=false
       # Raw changes include both sides of range/limit boundaries without opening blobs.
       [ "$blob_literal" != 1 ] || set -- "$@" --no-literal-pathspecs
       case $blob_verb in
@@ -238,13 +239,14 @@ EOF
 $blob_args
 EOF
       if [ "$blob_verb" != grep ]; then
-        set -- "$@" --format= --no-patch --raw --no-abbrev --no-renames --no-ext-diff --no-textconv --color=never
+        set -- "$@" --format= --no-patch --raw --no-abbrev --no-renames --no-relative --no-ext-diff --no-textconv --color=never
       fi
+      [ "$query" != history_paths ] || set -- "$@" --full-diff --diff-filter=D
       set -- "$@" --
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_paths
 EOF
-      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk '
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v query="$query" '
         function add(oid, mode) {
           if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
           if (++count > 2048 || (bytes += length(oid) + 1) > 131072) exit
@@ -252,7 +254,12 @@ EOF
         { if ((scanned += length($0) + 1) > 8388608) exit }
         /^\\?/ { add(substr($1, 2), "100644") }
         /^:[0-7]+ [0-7]+ [0-9a-f]+ [0-9a-f]+ / {
-          add($3, substr($1, 2)); add($4, $2)
+          if (query == "history_paths") {
+            path = substr($0, index($0, "\\t") + 1)
+            # Git-quoted names cannot enter the line-delimited pathspec batch.
+            if (path ~ /^"/) exit
+            add(":(top,literal)" path, substr($1, 2))
+          } else { add($3, substr($1, 2)); add($4, $2) }
         }
         /^complete$/ { complete=1 }
         END { if (!complete) print "skip"; else for (oid in seen) print oid }
@@ -350,7 +357,12 @@ $1
   # Pickaxe counts matching commits, so limits cannot bound the content scan.
   [ "$blob_pickaxe" = 1 ] || blob_args="$blob_args$blob_limits"
   [ "$blob_patch$blob_pickaxe" != "" ] || return 1
-  [ "$blob_verb" != blame ] || [ -n "$blob_paths" ] || return 1
+  if [ "$blob_verb" = blame ]; then
+    [ -n "$blob_paths" ] || return 1
+    blob_paths=":(literal)\${blob_paths%'
+'}"
+    blob_literal=1
+  fi
   [ "$blob_verb" != grep ] || [ -n "$blob_args" ] || return 1
   return 0
 }
@@ -374,6 +386,24 @@ EOF
   # after this bounded prefetch, even when discovery or the fetch cannot finish.
   [ "$blob_verb" = show ] || prepared_blobs=1
   (
+    if [ "$blob_verb" = blame ]; then
+      # Rename detection needs content. Follow deleted-path candidates in the
+      # same commits offline first, including earlier names across rename chains.
+      while :; do
+        paths=$(query_repository history_paths "$@")
+        case $paths in skip) return 0 ;; '') break ;; esac
+        paths=$(printf '%s\\n%s\\n' "$blob_paths" "$paths" | LC_ALL=C awk '
+          NF && !seen[$0]++ {
+            if (++count > 2048 || (bytes += length($0) + 1) > 131072) { bounded=1; exit }
+            rows[count]=$0
+          }
+          END { if (bounded) print "skip"; else for (i=1; i<=count; i++) print rows[i] }
+        ')
+        [ "$paths" != skip ] || return 0
+        [ "$paths" != "$blob_paths" ] || break
+        blob_paths=$paths
+      done
+    fi
     candidates=$(query_repository history_blobs "$@")
     case $candidates in ''|skip) return 0 ;; esac
     missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'

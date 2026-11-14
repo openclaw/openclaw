@@ -12,7 +12,7 @@ async function withHistoryFixture(
   await withTempDir("agent-git-blobs-", async (root) => run(await historyFixture(root)));
 }
 
-async function historyFixture(root: string, versions = 12, append = true) {
+async function historyFixture(root: string, versions = 12, append = true, rename = false) {
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
     GIT_CONFIG_NOSYSTEM: "1",
@@ -32,7 +32,7 @@ async function historyFixture(root: string, versions = 12, append = true) {
   };
   const origin = path.join(root, "origin");
   const seed = path.join(root, "seed");
-  const file = "folder/history file.txt";
+  let file = "folder/history file.txt";
   const shim = path.join(root, "git");
   await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
   git(root, ["init", "--initial-branch=main", origin]);
@@ -47,6 +47,23 @@ async function historyFixture(root: string, versions = 12, append = true) {
   git(origin, ["fast-import", "--quiet"], input);
   git(origin, ["reset", "--hard", "HEAD"]);
   git(origin, ["repack", "-adq"]);
+  if (rename) {
+    for (const next of ["first renamed.txt", "folder/second renamed.txt"]) {
+      await fs.mkdir(path.dirname(path.join(origin, next)), { recursive: true });
+      git(origin, ["mv", file, next]);
+      await fs.appendFile(path.join(origin, next), `line added in ${next}\n`);
+      git(origin, [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-am",
+        "rename and edit",
+      ]);
+      file = next;
+    }
+  }
   git(root, ["clone", "--filter=blob:none", "--no-checkout", pathToFileURL(origin).href, seed]);
   const seedHead = git(origin, ["rev-parse", "HEAD"]).trim();
   await fs.writeFile(path.join(origin, file), "new tip\n");
@@ -285,5 +302,33 @@ it.skipIf(process.platform === "win32")(
       const hydratedArgs = ["log", "--oneline", "-S", "history", "--", file];
       expect((await hydrated.invoke(hydratedArgs)).stdout).toBe(git(origin, hydratedArgs));
       expect(await hydrated.newPacks()).toEqual(before);
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "batches blame history across edited renames without unrelated blobs",
+  () =>
+    withTempDir("agent-git-renames-", async (root) => {
+      const { origin, file, git, reader } = await historyFixture(root, 12, true, true);
+      for (const mode of ["default", "flag", "environment", "relative"]) {
+        const { linked, invoke, newPacks, requests } = await reader();
+        const relative = mode === "relative";
+        const prefix = mode === "flag" ? ["--literal-pathspecs"] : [];
+        if (relative) {
+          prefix.push("-c", "diff.relative=true");
+        }
+        const args = [...prefix, "blame", "HEAD", "--", relative ? path.basename(file) : file];
+        const result = await invoke(
+          args,
+          relative ? path.join(linked, "folder") : linked,
+          mode === "environment" ? { GIT_LITERAL_PATHSPECS: "1" } : {},
+        );
+        expect.soft(result.code, `${mode}: ${result.stderr}`).toBe(0);
+        expect
+          .soft(result.stdout, mode)
+          .toBe(git(relative ? path.join(origin, "folder") : origin, args));
+        expect.soft(await newPacks(), mode).toHaveLength(1);
+        expect.soft(await requests(), mode).toHaveLength(13);
+      }
     }),
 );
