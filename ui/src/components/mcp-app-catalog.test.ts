@@ -110,7 +110,9 @@ describe("app launch catalog", () => {
     "only creates a startup-waiting catalog session while its target remains open (%s)",
     async (lifetime) => {
       vi.useFakeTimers();
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       let ready = false;
       const writes: RequestFrame[] = [];
       const issued = createDeferred();

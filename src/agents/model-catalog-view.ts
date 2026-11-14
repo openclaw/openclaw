@@ -9,8 +9,8 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
-import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";

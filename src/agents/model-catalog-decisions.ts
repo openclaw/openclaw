@@ -3,8 +3,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
-import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {

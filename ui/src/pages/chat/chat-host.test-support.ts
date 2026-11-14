@@ -69,14 +69,6 @@ export function expectRpc(
   );
 }
 
-export function expectNoRpc(
-  request: unknown,
-  method: string,
-  payload: unknown = expect.anything(),
-): void {
-  expect(request).not.toHaveBeenCalledWith(method, payload, expect.anything());
-}
-
 export const requireRecord = createRequireRecord("object", "expected-label");
 
 export function findRequestPayload(source: MockCallSource, method: string, label: string) {

@@ -14,8 +14,8 @@ import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
 } from "../plugin-sdk/provider-model-types.js";
-import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import {

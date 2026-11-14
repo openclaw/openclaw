@@ -23,7 +23,17 @@ import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test
 describe("models.list configured runtime choices", () => {
   it("bounds configured-row indexing through hydrated implicit OpenAI picker reads", async () => {
     await withOpenClawTestState(
-      { layout: "state-only", prefix: "model-picker-index-", agentEnv: "main" },
+      {
+        layout: "state-only",
+        prefix: "model-picker-index-",
+        agentEnv: "main",
+        env: {
+          ...WITHOUT_OPENAI_ENV_AUTH,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+          OPENCLAW_BUILD_PRIVATE_QA: undefined,
+          OPENCLAW_QA_FORCE_RUNTIME: undefined,
+        },
+      },
       async (state) => {
         const { validateConfigObjectRaw } = await import("../../config/validation-core.js");
         const ids = ["model-0", "model-4", "model-8", "model-12", "model-16"];
@@ -145,14 +155,6 @@ describe("models.list configured runtime choices", () => {
           afterFirstRead - afterConstruction,
           JSON.stringify({ afterConstruction, afterPreparation, afterFirstRead }),
         ).toBeLessThanOrEqual(runtimeRows.length);
-      },
-      {
-        env: {
-          ...WITHOUT_OPENAI_ENV_AUTH,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-          OPENCLAW_BUILD_PRIVATE_QA: undefined,
-          OPENCLAW_QA_FORCE_RUNTIME: undefined,
-        },
       },
     );
   });
