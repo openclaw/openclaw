@@ -3168,7 +3168,6 @@ publish_release() (
 cleanup_releases() {
 	local current_sha previous_sha protected_sha field directory sha identity device inode quarantine quarantine_name extra
 	local verified_shas verified_count=0 release_device
-	local selected_sha="${1:-}"
 	local -a directories protected
 	current_sha="$(read_pointer "$current_link")" || return 1
 	current_sha="$(basename "$current_sha")"
@@ -3177,7 +3176,7 @@ cleanup_releases() {
 		previous_sha="$(read_pointer "$previous_link")" || return 1
 		previous_sha="$(basename "$previous_sha")"
 	fi
-	protected=("$current_sha" "$previous_sha" "$selected_sha")
+	protected=("$current_sha" "$previous_sha")
 	verified_shas="$(verified_markers list)" || return 1
 	while IFS= read -r protected_sha; do
 		[[ -n "$protected_sha" ]] || continue
@@ -4582,8 +4581,5 @@ if [[ "$target_sha" == "$previous_sha" ]]; then
 	fail 'current release is unhealthy; refusing an unattended restart'
 fi
 candidate_release="$releases_root/$target_sha"
-# Reclaim headroom even when publication or activation will fail or defer.
-# Even an old published candidate stays protected until its exact attempt settles.
-cleanup_releases "$target_sha"
 candidate_info="$(publish_release "$target_sha" "$previous_release")"
 activate_prepared_release
