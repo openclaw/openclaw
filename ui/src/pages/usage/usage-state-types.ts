@@ -50,7 +50,6 @@ export type UsageFilterState = {
   scope: "instance" | "family";
   selectedSessions: string[];
   selectedDays: string[];
-  selectedHours: number[];
   creatorKey: string | null;
   query: string;
   queryDraft: string;
