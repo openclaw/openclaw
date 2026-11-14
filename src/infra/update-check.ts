@@ -274,7 +274,8 @@ async function resolveUpdateInstallOwnership(
     // An expired probe does not establish that this root is a package installation.
     throw createGitCommandError("git rev-parse --show-toplevel", result);
   }
-  const gitRoot = result?.code === 0 ? result.stdout.trim() : "";
+  // Git appends one LF; preceding whitespace belongs to the checkout path.
+  const gitRoot = result?.code === 0 ? result.stdout.replace(/\n$/u, "") : "";
   if (gitRoot && updateInstallRootsMatch(gitRoot, root)) {
     return { installKind: "git" };
   }

@@ -82,21 +82,28 @@ it.each([
   },
 );
 
-it("classifies checkout roots, aliases and nested packages", async () => {
-  const base = makeRoot();
-  const root = path.join(base, "repo");
-  const alias = path.join(base, "alias");
-  const nested = path.join(root, "node_modules", "openclaw");
-  await git("init", "--separate-git-dir", path.join(base, "git-dir"), root);
-  await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
-  await fs.mkdir(nested, { recursive: true });
-  await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
-  await expect(resolveKind(root)).resolves.toBe("git");
-  await expect(resolveKind(alias)).resolves.toBe("git");
-  const command = vi.spyOn(processExec, "runCommandWithTimeout");
-  await expect(resolveKind(nested)).resolves.toBe("package");
-  expect(command).not.toHaveBeenCalled();
-});
+it.each(process.platform === "win32" ? ["repo"] : ["repo", "repo ", "repo\t", "repo\n", "repo\r"])(
+  "classifies checkout root %j, aliases and nested packages",
+  async (rootName) => {
+    const base = makeRoot();
+    const root = path.join(base, rootName);
+    const alias = path.join(base, "alias");
+    const nested = path.join(root, "node_modules", "openclaw");
+    await git("init", "--separate-git-dir", path.join(base, "git-dir"), root);
+    await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
+    await expect(resolveKind(root)).resolves.toBe("git");
+    await expect(resolveIdentity({ root })).resolves.toMatchObject({ installKind: "git" });
+    await expect(checkStatus({ root, includeRegistry: false })).resolves.toMatchObject({
+      installKind: "git",
+    });
+    await expect(resolveKind(alias)).resolves.toBe("git");
+    const command = vi.spyOn(processExec, "runCommandWithTimeout");
+    await expect(resolveKind(nested)).resolves.toBe("package");
+    expect(command).not.toHaveBeenCalled();
+  },
+);
 
 it("does not treat an invalid Git marker as a checkout", async () => {
   const root = makeRoot();

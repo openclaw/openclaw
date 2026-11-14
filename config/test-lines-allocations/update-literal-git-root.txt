@@ -1,0 +1,2 @@
+# Extend existing real Git root table and consumers without duplicating fixtures.
+7
