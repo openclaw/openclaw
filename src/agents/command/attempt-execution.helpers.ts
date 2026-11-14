@@ -496,6 +496,7 @@ export function adaptCompletionRelayTurnForToolSurface(params: {
   internalEvents?: AgentInternalEvent[];
   isSubagentAnnounceHandoff: boolean;
   completionRetainsRequesterTools: boolean;
+  completionNeedsMessageDelivery?: boolean;
 }): {
   prompt: string;
   internalEvents?: AgentInternalEvent[];
@@ -503,7 +504,11 @@ export function adaptCompletionRelayTurnForToolSurface(params: {
   if (!params.isSubagentAnnounceHandoff || params.completionRetainsRequesterTools) {
     return { prompt: params.prompt, internalEvents: params.internalEvents };
   }
-  const prompt = rewriteSubagentCompletionReplyInstructionForRelayOnly(params.prompt);
+  const allowMessageDelivery = params.completionNeedsMessageDelivery === true;
+  const prompt = rewriteSubagentCompletionReplyInstructionForRelayOnly(
+    params.prompt,
+    allowMessageDelivery,
+  );
   const internalEvents = params.internalEvents
     ? params.internalEvents.map((event) => {
         if (event.type !== "task_completion") {
@@ -511,6 +516,7 @@ export function adaptCompletionRelayTurnForToolSurface(params: {
         }
         const nextInstruction = rewriteSubagentCompletionReplyInstructionForRelayOnly(
           event.replyInstruction,
+          allowMessageDelivery,
         );
         return nextInstruction === event.replyInstruction
           ? event

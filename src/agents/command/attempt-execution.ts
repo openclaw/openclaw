@@ -237,6 +237,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     internalEvents: params.opts.internalEvents,
     isSubagentAnnounceHandoff,
     completionRetainsRequesterTools,
+    completionNeedsMessageDelivery,
   });
   // Collector output is mandatory result transport, even on a narrowed tool
   // surface. The CLI grant is minted from this list and enforced exactly on the
@@ -395,6 +396,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
               prompt: annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance),
               isSubagentAnnounceHandoff,
               completionRetainsRequesterTools,
+              completionNeedsMessageDelivery,
             }).prompt
           : adaptedCompletionTurn.prompt;
         const cliTranscriptPrompt =

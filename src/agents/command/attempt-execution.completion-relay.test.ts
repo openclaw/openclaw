@@ -1,23 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { AgentInternalEvent } from "../internal-events.js";
 import {
+  SUBAGENT_COMPLETION_MESSAGE_ONLY_OUTCOME_INSTRUCTION,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
   SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION,
-  rewriteSubagentCompletionReplyInstructionForRelayOnly,
 } from "../subagents/completion/subagent-completion-instructions.js";
 import { adaptCompletionRelayTurnForToolSurface } from "./attempt-execution.helpers.js";
 
 describe("adaptCompletionRelayTurnForToolSurface", () => {
-  it("replaces continuation outcome instructions with relay-only guidance", () => {
-    const original = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Otherwise send a truthful user-facing update.`;
-    const rewritten = rewriteSubagentCompletionReplyInstructionForRelayOnly(original);
-
-    expect(rewritten).toContain(SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION);
-    expect(rewritten).not.toContain(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION);
-    expect(rewritten).toContain("Otherwise send a truthful user-facing update.");
-  });
-
-  it("rewrites prompt and task_completion events when a completion relay loses requester tools", () => {
+  it("rewrites prompt and task_completion events for tool-free completion relays", () => {
     const events: AgentInternalEvent[] = [
       {
         type: "task_completion",
@@ -38,6 +29,7 @@ describe("adaptCompletionRelayTurnForToolSurface", () => {
       internalEvents: events,
       isSubagentAnnounceHandoff: true,
       completionRetainsRequesterTools: false,
+      completionNeedsMessageDelivery: false,
     });
 
     expect(adapted.prompt).toContain(SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION);
@@ -47,6 +39,37 @@ describe("adaptCompletionRelayTurnForToolSurface", () => {
       SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION,
     );
     expect(events[0]?.replyInstruction).toContain(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION);
+  });
+
+  it("preserves permitted message delivery guidance on message-only completion turns", () => {
+    const events: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        announceType: "subagent task",
+        childSessionKey: "agent:main:subagent:child-msg",
+        taskLabel: "deliver update",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Done.",
+        replyInstruction: `Process this result privately. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`,
+      },
+    ];
+    const prompt = `Action:\nProcess this result privately. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`;
+
+    const adapted = adaptCompletionRelayTurnForToolSurface({
+      prompt,
+      internalEvents: events,
+      isSubagentAnnounceHandoff: true,
+      completionRetainsRequesterTools: false,
+      completionNeedsMessageDelivery: true,
+    });
+
+    expect(adapted.prompt).toContain(SUBAGENT_COMPLETION_MESSAGE_ONLY_OUTCOME_INSTRUCTION);
+    expect(adapted.prompt).not.toContain("Do not attempt tool calls");
+    expect(adapted.internalEvents?.[0]?.replyInstruction).toContain(
+      SUBAGENT_COMPLETION_MESSAGE_ONLY_OUTCOME_INSTRUCTION,
+    );
   });
 
   it("preserves continuation instructions when requester tools are retained or not a completion handoff", () => {

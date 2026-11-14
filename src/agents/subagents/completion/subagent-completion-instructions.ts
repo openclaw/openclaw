@@ -8,12 +8,18 @@ export const SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION =
 export const SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION =
   "This completion ends one child run, and this turn only relays the captured child result without execution or delegation tools. Do not attempt tool calls or follow-up runs here. Report the result truthfully; if follow-up work is needed, state what follow-up is needed so the requester can start a normal turn.";
 
-export function rewriteSubagentCompletionReplyInstructionForRelayOnly(text: string): string {
+export const SUBAGENT_COMPLETION_MESSAGE_ONLY_OUTCOME_INSTRUCTION =
+  "This completion ends one child run, and this turn only relays the captured child result without execution or delegation tools (only permitted message delivery is available). Do not attempt execution or delegation calls or follow-up runs here; use only permitted message delivery when needed. Report the result truthfully; if follow-up work is needed, state what follow-up is needed so the requester can start a normal turn.";
+
+export function rewriteSubagentCompletionReplyInstructionForRelayOnly(
+  text: string,
+  allowMessageDelivery = false,
+): string {
+  const replacement = allowMessageDelivery
+    ? SUBAGENT_COMPLETION_MESSAGE_ONLY_OUTCOME_INSTRUCTION
+    : SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION;
   return text.includes(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION)
-    ? text.replaceAll(
-        SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
-        SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION,
-      )
+    ? text.replaceAll(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION, replacement)
     : text;
 }
 
