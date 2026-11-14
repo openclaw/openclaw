@@ -1,9 +1,18 @@
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import {
+  capturePersonalReminderDelegation,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,11 +24,20 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  clearAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
-import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
+import {
+  abortSessionControllerInput,
+  releaseSessionControllerClaim,
+} from "../../sessions/session-controller.mailbox.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -184,6 +202,91 @@ describe("runReplyAgent runtime config", () => {
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
   });
+
+  it.each(["complete", "cancel"] as const)(
+    "uses the real direct Telegram input cancellation fence after child admission (%s)",
+    async (outcome) => {
+      const { replyParams, followupRun } = createDirectRuntimeReplyParams();
+      const runId = "direct-personal-reminder";
+      const sessionKey = directSessionKey;
+      const instance = createOperationalRunInstanceRef(runId);
+      registerAgentRunContext(runId, { agentId: "main", sessionKey });
+      const authority = claimAgentRunDelegatedAuthority(instance);
+      const operator = createAdmittedRunOperatorAuthority({
+        profileId: "human-profile",
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+        retain: () => () => {},
+      });
+      const scope = createCronCreatorAuthorityCapability(
+        runId,
+        { kind: "external", channel: "telegram" },
+        undefined,
+        () => true,
+        undefined,
+        undefined,
+        true,
+        {
+          profileId: "human-profile",
+          agentId: "main",
+          sessionKey,
+          sessionId: "session-1",
+          accountId: "default",
+          to: "12345",
+        },
+      );
+      expect(scope).toBeDefined();
+      replyParams.opts = { runId };
+      runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
+      const captured: {
+        child?: NonNullable<
+          ReturnType<NonNullable<ReturnType<typeof capturePersonalReminderDelegation>>["claim"]>
+        >;
+      } = {};
+      executeAgentTurnMock.mockImplementationOnce(async () => {
+        const delegation = capturePersonalReminderDelegation(operator);
+        expect(delegation).toBeDefined();
+        captured.child = delegation?.claim();
+        expect(captured.child?.isCurrent()).toBe(true);
+        if (outcome === "cancel") {
+          expect(followupRun.controllerInput).toBeDefined();
+          expect(abortSessionControllerInput(followupRun.controllerInput!, "user cancelled")).toBe(
+            true,
+          );
+          expect(captured.child?.isCurrent()).toBe(false);
+        }
+        return settledTurn(runId);
+      });
+      const finalize = vi
+        .spyOn(agentRunnerResult, "finalizeReplyAgentRun")
+        .mockResolvedValue({ text: "done" });
+      try {
+        const run = runWithCronCreatorAuthorityCapability(scope!, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey,
+              operationalRunInstance: instance,
+              approvalAuthority: authority,
+            },
+            () => runReplyAgent(replyParams),
+          ),
+        );
+        if (outcome === "cancel") {
+          await run.catch(() => undefined);
+        } else {
+          await run;
+          expect(captured.child?.isCurrent()).toBe(true);
+        }
+        expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+        captured.child?.release();
+      } finally {
+        finalize.mockRestore();
+        releaseAgentRunDelegatedAuthority(authority);
+        clearAgentRunContext(runId);
+      }
+    },
+  );
 
   it.each(["completed", "failed"] as const)(
     "reports one %s terminal outcome after finalization settles",

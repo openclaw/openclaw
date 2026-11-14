@@ -66,6 +66,45 @@ export function assertCronModelJobAllowed(
   }
 }
 
+/** Scheduling rights do not permit retargeting or host-command jobs. */
+export function assertCallerAutomationJobAllowed(
+  job: CronJobCreate,
+  scope: CronCallerScope | undefined,
+): void {
+  if (!scope?.personalReminder) {
+    return;
+  }
+  const origin = scope.personalReminderOrigin;
+  const delivery = job.delivery;
+  if (
+    !scope.creatorProfileId ||
+    !origin?.to ||
+    job.agentId !== origin.agentId ||
+    job.sessionKey !== scope.sessionKey ||
+    !["current", "isolated"].includes(job.sessionTarget) ||
+    !["at", "every", "cron"].includes(job.schedule.kind) ||
+    job.payload.kind !== "agentTurn" ||
+    job.payload.toolsAllowIsDefault === true ||
+    !Array.isArray(job.payload.toolsAllow) ||
+    job.payload.toolsAllow.includes("*") ||
+    job.trigger !== undefined ||
+    (job.failureAlert !== undefined && job.failureAlert !== false) ||
+    (delivery?.mode !== "announce" && delivery?.mode !== "none") ||
+    delivery.channel !== "telegram" ||
+    delivery.to !== origin.to ||
+    normalizeAccountId(delivery.accountId) !== scope.accountId ||
+    String(delivery.threadId ?? "") !== String(origin.threadId ?? "") ||
+    delivery.target ||
+    delivery.completionDestination ||
+    delivery.failureDestination ||
+    job.declarationKey
+  ) {
+    throw new TypeError(
+      "Caller automations require a captured tool cap and the original Telegram conversation.",
+    );
+  }
+}
+
 export function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
 ):
@@ -215,6 +254,9 @@ export type CronCallerScope = {
   kind: "agentTool";
   /** Attribution from the existing live creator grant, not management entitlement. */
   creatorProfileId?: string;
+  /** Admission restricted this call to the current human reminders. */
+  personalReminder?: true;
+  personalReminderOrigin?: import("../cron-creator-authority-grant.js").PersonalReminderOrigin;
   agentId: string;
   sessionKey?: string;
   accountId: string;
@@ -293,11 +335,20 @@ export function readCronCallerScope(
     ...(grantProvenance?.creatorProfileId
       ? { creatorProfileId: grantProvenance.creatorProfileId }
       : {}),
-    agentId: normalizeAgentId(identity.agentId),
-    sessionKey: identity.sessionKey?.trim() || undefined,
-    accountId: normalizeAccountId(identity.turnSourceAccountId),
+    ...(grantProvenance?.personalReminder
+      ? {
+          personalReminder: true as const,
+          personalReminderOrigin: grantProvenance.personalReminder,
+        }
+      : {}),
+    agentId: normalizeAgentId(grantProvenance?.personalReminder?.agentId ?? identity.agentId),
+    sessionKey:
+      grantProvenance?.personalReminder?.sessionKey ?? (identity.sessionKey?.trim() || undefined),
+    accountId: normalizeAccountId(
+      grantProvenance?.personalReminder?.accountId ?? identity.turnSourceAccountId,
+    ),
     currentJobId,
-    manageAll,
+    manageAll: grantProvenance?.personalReminder ? undefined : manageAll,
     ...(toolsAllowProvenance ? { toolsAllowProvenance } : {}),
     ...(surfaceProvenance && identity.cronExecToolTarget?.host === "gateway"
       ? {
@@ -418,7 +469,7 @@ export function cronCallerRunsJob(
 }
 
 export function cronJobMatchesCallerScope(params: {
-  job: CronJob;
+  job: CronJob & Partial<Pick<CronStoredJob, "createdActor">>;
   callerScope: CronCallerScope | undefined;
   defaultAgentId?: string;
   allowCurrentJob?: boolean;
@@ -426,9 +477,34 @@ export function cronJobMatchesCallerScope(params: {
   if (!params.callerScope) {
     return true;
   }
-  if (params.callerScope.manageAll) {
+  if (params.callerScope.manageAll && !params.callerScope.personalReminder) {
     params.callerScope.manageAll();
     return true;
+  }
+  // Shared topics have one session but many humans. Require the durable human owner
+  // and the exact originating session/account before any legacy visibility fallback.
+  if (params.callerScope.personalReminder) {
+    const profileId = params.callerScope.creatorProfileId;
+    if (
+      !profileId ||
+      params.job.ownerProfileId !== profileId ||
+      params.job.createdActor?.type !== "human" ||
+      params.job.createdActor.source !== "profile" ||
+      params.job.createdActor.id !== profileId ||
+      !params.callerScope.sessionKey ||
+      params.job.owner?.sessionKey !== params.callerScope.sessionKey ||
+      !params.job.owner?.accountId ||
+      normalizeAccountId(params.job.owner?.accountId) !== params.callerScope.accountId ||
+      (params.job.delivery?.mode !== "announce" && params.job.delivery?.mode !== "none") ||
+      params.job.delivery.channel !== "telegram" ||
+      params.job.delivery.to !== params.callerScope.personalReminderOrigin?.to ||
+      String(params.job.delivery.threadId ?? "") !==
+        String(params.callerScope.personalReminderOrigin?.threadId ?? "") ||
+      normalizeAccountId(params.job.delivery.accountId) !== params.callerScope.accountId ||
+      params.job.scheduledToolPolicy?.mode !== "account"
+    ) {
+      return false;
+    }
   }
   // Command cron is an operator-admin automation surface, not a model-visible
   // agent tool capability. Hide it before owner/routing fallback can expose

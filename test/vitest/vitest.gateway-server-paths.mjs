@@ -12,6 +12,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/deep-research-startup.gateway.test.ts",
   "test/plugins/reef-shutdown.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
+  "test/plugins/telegram-personal-reminder-authority.gateway.test.ts",
 ];
 
 // Native database consumers retain lifecycle cleanup within each forked process.

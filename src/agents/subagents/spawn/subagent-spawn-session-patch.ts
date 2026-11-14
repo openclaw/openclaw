@@ -96,6 +96,8 @@ export async function createInitialSubagentSession(input: {
     ReturnType<typeof resolveSpawnAdmission>,
     { ok: true }
   >["childSessionPatch"];
+  /** Captured at spawn; this surface fact is not an execution grant. */
+  personalReminderSurface?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   inheritedToolPolicySource?: "sender";
@@ -126,6 +128,7 @@ export async function createInitialSubagentSession(input: {
     // Explicit undefined keeps a reused child key from inheriting an earlier blind spawn.
     blindPrompt: params.blind ? true : undefined,
     inheritedToolPolicyVersion: 1,
+    ...(params.personalReminderSurface ? { personalReminderSurface: true } : {}),
     ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),
     ...(params.inheritedToolPolicySource
       ? { inheritedToolPolicySource: params.inheritedToolPolicySource }

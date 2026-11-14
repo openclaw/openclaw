@@ -267,10 +267,9 @@ export function createCronCallerClient(
   sessionKey?: string,
   currentJobId?: string,
   currentJobExpiresAtMs = Date.now() + 60_000,
+  operationalRunId = `run-cron-validation-${randomUUID()}`,
 ): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef(
-    `run-cron-validation-${randomUUID()}`,
-  );
+  const operationalRunInstance = createOperationalRunInstanceRef(operationalRunId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   onTestFinished(() => {
     releaseAgentRunDelegatedAuthority(authority);
@@ -366,8 +365,16 @@ export function expectResponseError(
 
 export function callerClientWithCronCreatorAuthority(
   grant: CronCreatorAuthorityGrant,
+  operationalRunId = grant.runId,
 ): GatewayClient {
-  const client = createCronCallerClient("ops");
+  const client = createCronCallerClient(
+    "ops",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    operationalRunId,
+  );
   client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
   client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
   return client;

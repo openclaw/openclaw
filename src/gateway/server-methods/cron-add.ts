@@ -23,6 +23,7 @@ import {
   cronCreateMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   readCronCallerScope,
+  assertCallerAutomationJobAllowed,
   resolveCronCreatorAuthorityCapture,
   resolveCronStreamExecPolicy,
   resolveCronMutationCommitGuard,
@@ -72,6 +73,16 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   // SAFETY: cron.add validates this shape; createJob normalizes its nullable selectors.
   const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
   const cfg = context.getRuntimeConfig();
+  try {
+    assertCallerAutomationJobAllowed(jobCreate, callerScope);
+  } catch (error) {
+    respondInvalidCronParams(respond, "cron.add", formatErrorMessage(error));
+    return;
+  }
+  if (callerScope?.personalReminder) {
+    // Never inherit a Gateway-wide failure destination for a caller-owned job.
+    jobCreate.failureAlert = false;
+  }
   const creator = await prepareCronCreatorSession({
     context,
     client,

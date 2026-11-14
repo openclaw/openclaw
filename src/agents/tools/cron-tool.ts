@@ -14,6 +14,7 @@ import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
+  CALLER_AUTOMATION_METHODS,
   CRON_MANAGEMENT_METHODS,
   isCronModelManagementAllowed,
 } from "../../gateway/cron-creator-authority-grant.js";
@@ -37,6 +38,11 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
+import {
+  assertCronSelfRemoveScope,
+  readCronSelfRemoveOnlyJobId,
+  requireCronJobIdParam,
+} from "./cron-tool-action-scope.js";
 import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
@@ -59,6 +65,7 @@ import {
 import { buildCronToolDescription } from "./cron-tool-description.js";
 import { createCronToolGatewayCaller } from "./cron-tool-gateway.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
+import { applyPersonalReminderDefaults } from "./cron-tool-personal-reminder.js";
 import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
 import {
   assertCronPacingInput,
@@ -91,43 +98,8 @@ export {
   replaceWithEffectiveCronCreatorToolAllowlist,
 } from "./cron-tool-creator-cap.js";
 
-function requireCronJobIdParam(params: Record<string, unknown>): string {
-  const id = readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
-  if (!id) {
-    throw new Error("jobId required (id accepted for backward compatibility)");
-  }
-  return id;
-}
-
 const CRON_RUN_MAX_WAIT_MS = 10 * 60_000;
 const CRON_RUN_ENQUEUE_TIMEOUT_MS = 60_000;
-
-const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
-
-function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
-  return opts?.selfRemoveOnlyJobId?.trim() || undefined;
-}
-
-function assertCronSelfRemoveScope(
-  opts: CronToolOptions | undefined,
-  action: string,
-  params: Record<string, unknown>,
-) {
-  const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-  if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
-    return;
-  }
-  const invocationAction = ["next_check", "scratch_get", "scratch_set", "record_result"].includes(
-    action,
-  );
-  if (invocationAction || ["get", "remove", "runs"].includes(action)) {
-    const id = readToolStringParam(params, "jobId") ?? readToolStringParam(params, "id");
-    if (id === selfRemoveOnlyJobId || (invocationAction && !id)) {
-      return;
-    }
-  }
-  throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-}
 
 function isOlderGatewayRejectingParam(error: unknown, method: string, param: string): boolean {
   return (
@@ -196,6 +168,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         );
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
+      if (
+        (opts?.personalReminder || requesterAuthority?.personalReminder) &&
+        !CALLER_AUTOMATION_METHODS.some((method) => method === "cron." + action)
+      ) {
+        throw new Error(
+          "Caller automations allow only list, get, add, update, remove, run, and runs.",
+        );
+      }
       if (
         managementAuthority?.managementOnly &&
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
@@ -289,6 +269,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         const callGateway = createCronToolGatewayCaller({
           managementAuthority,
           requesterAuthority,
+          personalReminder: Boolean(opts?.personalReminder || requesterAuthority?.personalReminder),
           operationSignal,
           readStreamExecPolicy: () => streamExecPolicy,
           assertCurrent: assertCurrentRun,
@@ -450,7 +431,16 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ) {
                 delete job.enabled;
               }
-              applyCronToolDefaults(job, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
+              const personalReminder =
+                opts?.personalReminder ?? requesterAuthority?.personalReminder;
+              if (personalReminder) {
+                applyPersonalReminderDefaults(job, canonicalJob, personalReminder);
+              }
+              applyCronToolDefaults(
+                job,
+                runtimeConfig.cron?.defaultTools,
+                personalReminder ? "exact" : params.toolsAllowMode,
+              );
               const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
                 job,
                 opts?.creatorToolAllowlist,

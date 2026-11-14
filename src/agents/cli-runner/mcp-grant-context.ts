@@ -47,6 +47,9 @@ export function finalizeCliMcpGrant(
   return {
     context: {
       ...context,
+      ...(cronRequesterGrantIssuer?.personalReminder
+        ? { personalReminder: cronRequesterGrantIssuer.personalReminder }
+        : {}),
       ...(toolsAllow !== undefined ? { toolsAllow: [...toolsAllow] } : {}),
       // Only parent-observed native startup can fill this pending authority.
       ...(nativeAuthorityPending ? { nativeCronCreatorToolAllowlist: null } : {}),

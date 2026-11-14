@@ -82,7 +82,6 @@ export async function spawnSubagentDirect(
   });
   const promptedAt = Date.now();
   const label = params.label?.trim() || "";
-  const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
     captureSubagentSpawnGatewayContext();
@@ -245,6 +244,7 @@ export async function spawnSubagentDirect(
         sessionPermissionPolicy: ctx.sessionPermissionPolicy,
         worktree: params.worktree ? params : undefined,
         admissionPatch: admission.childSessionPatch,
+        personalReminderSurface: requester?.personalReminder !== undefined,
         inheritedToolAllowlist: ctx.inheritedToolAllowlist,
         inheritedToolDenylist: ctx.inheritedToolDenylist,
         inheritedToolPolicySource: ctx.inheritedToolPolicySource,
@@ -280,7 +280,7 @@ export async function spawnSubagentDirect(
       // of the key could capture a reset/rebound successor that this spawn does not own.
       provisionalSessionIdentity = captureSubagentSessionCleanupIdentity(childEntry);
     }
-    if (requestThreadBinding) {
+    if (params.thread === true) {
       const bindResult = await runWithAgentToolSourceExecutionScope(assertActive, () =>
         bindThreadForSubagentSpawn({
           assertActive,
@@ -310,7 +310,7 @@ export async function spawnSubagentDirect(
     // instructions, and requester receipt cannot disagree about completion.
     const completionMode = params.collect
       ? "collector"
-      : requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin
+      : params.thread === true && spawnMode === "session" && hasBoundThreadDeliveryOrigin
         ? "thread-direct"
         : expectsCompletionMessage
           ? "announce"
@@ -441,7 +441,7 @@ export async function spawnSubagentDirect(
       targetAgentId,
       label: label || undefined,
       requesterOrigin,
-      requestThreadBinding,
+      requestThreadBinding: params.thread === true,
       spawnMode,
       resolvedModelMetadata,
     });

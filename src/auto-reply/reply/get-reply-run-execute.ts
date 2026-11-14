@@ -7,7 +7,6 @@ import {
   hasSessionAutoModelFallbackProvenance,
 } from "../../agents/agent-scope.js";
 import {
-  createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
   isFreshChannelCronAuthorityTurn,
 } from "../../agents/cron-creator-authority-context.js";
@@ -28,7 +27,6 @@ import { conversationIdentityFromMsgContext } from "../../config/sessions/conver
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
-import { normalizeAccountId } from "../../routing/account-id.js";
 import {
   isSessionPersonalBootstrapTurn,
   readSessionInputProfileId,
@@ -58,6 +56,10 @@ import {
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import {
+  createChannelReminderAuthorityFactory,
+  resolvePersonalReminderOrigin,
+} from "./personal-reminder-origin.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -400,18 +402,21 @@ export async function executePreparedReplyRun(
     InputProvenance: inputProvenance,
   });
   const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  const personalOperator = opts?.operatorAuthority;
+  const personalReminder = resolvePersonalReminderOrigin({
+    eligible: freshChannelCronAuthorityTurn && !command.senderIsOwner,
+    messageProvider,
+    operator: personalOperator,
+    requesterProfileId: getRequesterProfile(ctx)?.id,
+    sessionKey,
+    sessionId: preparedSessionState.sessionId,
+    lifecycleRevision: preparedSessionState.sessionEntry?.lifecycleRevision,
+    replyRoute,
+    originatingThreadId,
+  });
   const authorityRunId =
-    freshChannelCronAuthorityTurn && command.senderIsOwner
+    freshChannelCronAuthorityTurn && (command.senderIsOwner || personalReminder)
       ? (opts?.runId ?? crypto.randomUUID())
-      : undefined;
-  const channelRequester =
-    freshChannelCronAuthorityTurn && messageProvider === "discord" && sessionCtx.SenderId
-      ? {
-          version: 1 as const,
-          channel: messageProvider,
-          accountId: normalizeAccountId(replyRoute.accountId),
-          senderId: sessionCtx.SenderId,
-        }
       : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
   const cronOwner = {
@@ -421,20 +426,17 @@ export async function executePreparedReplyRun(
   };
   const isCurrentChannelOwner = () =>
     channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
-  // Capture the authenticated source, never the later drain runner's identity.
-  // Queued input resolves ownership at its new admission, including owner promotion.
-  const createChannelCronAuthority =
-    !inheritedCronCreatorAuthorityCapability && freshChannelCronAuthorityTurn && messageProvider
-      ? (runId: string, isCurrentOwner = isCurrentChannelOwner) =>
-          createCronCreatorAuthorityCapability(
-            runId,
-            { kind: "external", channel: messageProvider },
-            { source: "channel-owner", isCurrent: isCurrentOwner },
-            undefined,
-            channelRequester,
-            { isCurrent: isCurrentOwner, ...cronOwner },
-          )
-      : undefined;
+  const createChannelCronAuthority = createChannelReminderAuthorityFactory({
+    inherited: Boolean(inheritedCronCreatorAuthorityCapability),
+    fresh: freshChannelCronAuthorityTurn,
+    messageProvider,
+    senderId: sessionCtx.SenderId,
+    accountId: replyRoute.accountId,
+    cronOwner,
+    isCurrentChannelOwner,
+    personalReminder,
+    operator: personalOperator,
+  });
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,

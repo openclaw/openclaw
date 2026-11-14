@@ -19,6 +19,10 @@ import {
   createCodeModeTools,
 } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "./cron-creator-authority-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -46,6 +50,61 @@ const session: ToolOptions = {
   senderIsOwner: false,
   sourceReplyDeliveryMode: "automatic",
 };
+
+it("keeps a personal child tool surface stable when its human authority is revoked", async () => {
+  let current = true;
+  const childSession = "agent:main:subagent:personal-prefix";
+  const scope = createCronCreatorAuthorityCapability(
+    "personal-prefix-run",
+    { kind: "external", channel: "telegram" },
+    undefined,
+    () => current,
+    undefined,
+    undefined,
+    true,
+    {
+      profileId: "human",
+      agentId: "main",
+      sessionKey: session.sessionKey!,
+      sessionId: "parent",
+      accountId: "default",
+      to: "room",
+    },
+  )!;
+  const options = {
+    ...session,
+    sessionKey: childSession,
+    runId: scope.runId,
+    preparedSessionCapabilityStore: {
+      [childSession]: {
+        sessionId: "child",
+        spawnedBy: session.sessionKey,
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        inheritedToolPolicyVersion: 1,
+        personalReminderSurface: true,
+      },
+    },
+  };
+
+  let before: string[] = [];
+  let revoked: ReturnType<typeof createOpenClawCodingTools> = [];
+  await runWithCronCreatorAuthorityCapability(scope, async () => {
+    before = surface(createOpenClawCodingTools(options));
+    current = false;
+    revoked = createOpenClawCodingTools(options);
+  });
+  const absent = createOpenClawCodingTools(options);
+  expect(before.some((entry) => JSON.parse(entry).name === "automations")).toBe(true);
+  expect(surface(revoked)).toEqual(before);
+  expect(surface(absent)).toEqual(before);
+  for (const tools of [revoked, absent]) {
+    const automation = tools.find((tool) => tool.name === "automations");
+    expect(automation).toBeDefined();
+    const result = await automation!.execute("denied-personal-reminder", { action: "add" });
+    expect(result.details).toMatchObject({ gated: true });
+  }
+});
 
 function completionTurn(sourceTool: string): ToolOptions {
   return {

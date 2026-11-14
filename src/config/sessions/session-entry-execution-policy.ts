@@ -19,6 +19,7 @@ export function captureSessionExecutionPolicy(entry: SessionSharingEntry | undef
     modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
     modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
     modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    personalReminderSurface: entry.personalReminderSurface,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,

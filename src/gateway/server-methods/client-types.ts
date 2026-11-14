@@ -18,6 +18,8 @@ export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
   sessionKey: string;
   requesterOrigin?: RequesterOrigin;
+  /** In-process, live parent delegation; model input cannot create it. */
+  personalReminder?: import("../../agents/cron-creator-authority-context.js").PersonalReminderDelegation;
   /** Parent audit binding captured with this caller; never grants execution authority. */
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Exact admitted requester lifetime; identity alone does not establish live authority. */

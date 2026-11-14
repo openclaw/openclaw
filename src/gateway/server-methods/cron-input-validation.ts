@@ -352,13 +352,20 @@ export async function captureCronCreatorSession(
     : resolveOperatorSessionCreation(caller.client).actor;
   const actorId = normalizeOptionalString(actor?.id);
   const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
-  const createdActor = callerScope
-    ? attributeDelegatedSessionCreator(
-        legacyActor,
-        callerScope.creatorProfileId,
-        callerScope.agentId,
-      )
-    : legacyActor;
+  const createdActor = callerScope?.personalReminder
+    ? callerScope.creatorProfileId
+      ? { type: "human" as const, source: "profile" as const, id: callerScope.creatorProfileId }
+      : undefined
+    : callerScope
+      ? attributeDelegatedSessionCreator(
+          legacyActor,
+          callerScope.creatorProfileId,
+          callerScope.agentId,
+        )
+      : legacyActor;
+  if (callerScope?.personalReminder && !createdActor) {
+    throw new TypeError("A verified requester profile is required for personal reminders.");
+  }
   const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
   const executionSession =
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey

@@ -1,5 +1,7 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { resolveTurnToolSurface } from "../../agents/agent-tools.turn-authority.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -13,7 +15,9 @@ import {
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
+import { fakeTool } from "../../agents/test-helpers/fake-tool.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { prepareSessionPortalToolAccess } from "../../agents/tools/session-portal-target.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -48,6 +52,94 @@ export function registerPendingRequesterAuthorityCases({
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
   turn: typeof createPreparedReplyTurn;
 }): void {
+  it("admits a linked nonowner Telegram reminder through the real owner gate", async () => {
+    const sessionKey = "agent:default:telegram:group:chat-1:topic:7";
+    const runId = "personal-reminder-entrypoint";
+    const params = turn(
+      "remind me",
+      {
+        ...createProviderSurface("telegram"),
+        OriginatingChannel: "telegram",
+        OriginatingTo: "chat-1",
+        ChatType: "group",
+        SenderId: "human-a",
+        AccountId: "default",
+        MessageThreadId: 7,
+        SessionKey: sessionKey,
+      },
+      {},
+      { InboundAccessAuthorized: true },
+    );
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "human-a-profile",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    bindRequesterProfile(params.ctx, {
+      id: "human-a-profile",
+      displayName: "A",
+      isCurrent: () => true,
+    });
+    const instance = createTestAdmittedRunContext(runId).operationalRunInstance;
+    registerAgentRunContext(runId, { sessionKey, agentId: "default" });
+    const authority = claimAgentRunDelegatedAuthority(instance);
+    const gate = {
+      result: undefined as Awaited<ReturnType<ReturnType<typeof fakeTool>["execute"]>> | undefined,
+    };
+    vi.mocked(runReplyAgent).mockImplementationOnce(async ({ followupRun }) => {
+      gate.result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "default",
+          sessionKey,
+          operationalRunInstance: instance,
+          approvalAuthority: authority,
+          requesterOrigin: followupRun.run.requesterOrigin,
+        },
+        async () => {
+          const portal = prepareSessionPortalToolAccess({
+            sessionKey,
+            agentId: "default",
+            senderIsOwner: false,
+            sandboxed: false,
+            runId,
+          });
+          const automation = {
+            ...fakeTool("automations", "automations"),
+            execute: async () => ({ content: [], details: { reachedScheduler: true } }),
+          };
+          const { tools } = resolveTurnToolSurface({
+            turnTools: [automation],
+            ownerOnlyDenied: new Set(portal.ownerOnlyCoreToolDenylist),
+          });
+          return await tools[0]!.execute("reminder", { action: "add" });
+        },
+      );
+      return undefined;
+    });
+    try {
+      await runPrepared({ ...params, sessionKey, opts: { operatorAuthority, runId } });
+      // Surface the real gate response in the baseline failure, rather than
+      // allowing a test label to stand in for the production error text.
+      if ((gate.result?.details as { gated?: boolean } | undefined)?.gated) {
+        throw new Error(JSON.stringify(gate.result?.content));
+      }
+      expect(gate.result).toMatchObject({
+        details: { reachedScheduler: true },
+      });
+      expect(
+        requireRunReplyAgentCall().opts?.cronCreatorAuthorityCapability?.personalReminder,
+      ).toMatchObject({
+        profileId: "human-a-profile",
+        sessionKey,
+        to: "chat-1",
+        threadId: 7,
+      });
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+      clearAgentRunContext(runId);
+    }
+  });
+
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
       ...createProviderSurface("x"),

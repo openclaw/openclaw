@@ -185,6 +185,7 @@ export type OpenClawToolsOptions = {
   /** Prepared profile authority for the gateway tool's configuration-read actions. */
   gatewayConfigReadAllowed?: boolean;
   /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
+  personalReminder?: import("../gateway/cron-creator-authority-grant.js").PersonalReminderOrigin;
   cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
   cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
   resolveCronCreatorToolAuthority?: CronToolOptions["resolveCreatorToolAuthority"];

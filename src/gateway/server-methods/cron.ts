@@ -25,7 +25,9 @@ import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import {
+  assertCallerAutomationMethodAllowed,
   getCronManagementAuthority,
+  resolveCronCreatorAuthorityGrantProvenance,
   withCronManagementGrant,
 } from "../cron-creator-authority-grant.js";
 import { retainCronControlSource } from "../cron-operator-source.js";
@@ -34,6 +36,7 @@ import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js"
 import { cronAddHandler } from "./cron-add.js";
 import { cronBindHandler } from "./cron-bind.js";
 import {
+  assertCallerAutomationJobAllowed,
   assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
   cronJobMatchesCallerScope,
@@ -235,6 +238,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         currentJob: jobToUpdate,
         patch,
       });
+      assertCallerAutomationJobAllowed(nextJob, callerScope);
       targetAccess?.release();
       targetAccess = undefined;
       targetAccess = await prepareHumanCronTargetAccess(
@@ -615,6 +619,19 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
     let succeeded = false;
     const run = async () => {
       assertActiveAgentRuntimeAuthority(args.client, args.context);
+      const requesterGrant = identity.cronCreatorAuthorityGrant;
+      const provenance =
+        requesterGrant &&
+        resolveCronCreatorAuthorityGrantProvenance(
+          requesterGrant,
+          identity.operationalRunInstance.runId,
+        );
+      if (requesterGrant && !provenance) {
+        throw new TypeError("Automation requester authority is no longer active.");
+      }
+      if (provenance?.personalReminder) {
+        assertCallerAutomationMethodAllowed(method);
+      }
       await handler({
         ...args,
         respond: (...response) => {
@@ -627,6 +644,15 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
             method === "cron.history"
           ) {
             assertActiveAgentRuntimeAuthority(args.client, args.context);
+            if (
+              requesterGrant &&
+              !resolveCronCreatorAuthorityGrantProvenance(
+                requesterGrant,
+                identity.operationalRunInstance.runId,
+              )
+            ) {
+              throw new TypeError("Automation requester authority is no longer active.");
+            }
             getCronManagementAuthority(identity)?.();
           }
           succeeded = response[0];

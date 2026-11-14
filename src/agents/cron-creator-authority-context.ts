@@ -19,6 +19,8 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { AsyncContext } from "../shared/async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { requesterCreatorProfileId } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
@@ -47,6 +49,7 @@ export function createCronCreatorAuthorityCapability(
   channelRequester?: CronAuthenticatedChannelRequester,
   requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"],
   callerScopedCreation?: true,
+  personalReminder?: CronCreatorAuthorityCapability["personalReminder"],
 ): CronCreatorAuthorityCapability | undefined {
   const normalizedRunId = runId.trim();
   return normalizedRunId
@@ -58,6 +61,7 @@ export function createCronCreatorAuthorityCapability(
         channelRequester,
         requesterOwner,
         callerScopedCreation,
+        personalReminder,
       )
     : undefined;
 }
@@ -68,6 +72,103 @@ const activeCronCreatorAuthority = new AsyncContext<CronCreatorAuthorityRunScope
 const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthorityResolverScope>(
   Symbol("cronCreatorAuthorityResolver"),
 );
+
+export type PersonalReminderDelegation = Readonly<{
+  origin: NonNullable<CronCreatorAuthorityCapability["personalReminder"]>;
+  isCurrent: () => boolean;
+  /** Transfer retained human source to the accepting child, exactly once. */
+  claim: () => { isCurrent: () => boolean; release: () => void } | undefined;
+}>;
+const personalReminderDelegations = resolveGlobalSingleton(
+  Symbol.for("openclaw.personalReminderDelegations"),
+  () => new WeakSet<object>(),
+);
+const personalReminderCancellationSignals = new WeakMap<
+  CronCreatorAuthorityCapability,
+  AbortSignal
+>();
+
+/** Bind the admitted reply input cancellation fence even without channel lifecycle options. */
+export function bindPersonalReminderCancellationSignal(runId: string, signal: AbortSignal): void {
+  const scope = activeCronCreatorAuthority.getStore();
+  if (!scope?.personalReminder || !scope.active || scope.runId !== runId) {
+    return;
+  }
+  personalReminderCancellationSignals.set(scope, signal);
+}
+
+/** Capture only an active host-owned parent run, never child-supplied routing or identity. */
+export function capturePersonalReminderDelegation(
+  operator?: AdmittedRunOperatorAuthority,
+): PersonalReminderDelegation | undefined {
+  const scope = activeCronCreatorAuthority.getStore();
+  const caller = getGatewayToolCallerIdentity();
+  const authority = caller?.approvalAuthority;
+  if (
+    !scope?.personalReminder ||
+    !scope.active ||
+    scope.signal.aborted ||
+    scope.isCurrent?.() === false ||
+    !authority ||
+    authority.operationalRunInstance.runId !== scope.runId ||
+    !validateAgentRunDelegatedAuthority(authority) ||
+    !operator?.retain ||
+    operator.profileId !== scope.personalReminder.profileId
+  ) {
+    return undefined;
+  }
+  const cancellation = personalReminderCancellationSignals.get(scope);
+  // Without an independently observable cancellation fence, do not hand a
+  // child authority that could survive an explicit cancellation of its parent.
+  if (!cancellation) {
+    return undefined;
+  }
+  const isParentCurrent = () =>
+    scope.active &&
+    !scope.signal.aborted &&
+    !cancellation?.aborted &&
+    scope.isCurrent?.() !== false &&
+    validateAgentRunDelegatedAuthority(authority);
+  let claimed = false;
+  const captured = Object.freeze({
+    origin: scope.personalReminder,
+    isCurrent: isParentCurrent,
+    claim: () => {
+      if (claimed || !isParentCurrent()) {
+        return undefined;
+      }
+      operator.assertCurrent();
+      const releaseSource = operator.retain!();
+      claimed = true;
+      let released = false;
+      return {
+        isCurrent: () => {
+          if (released || cancellation?.aborted) {
+            return false;
+          }
+          try {
+            operator.assertCurrent();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        release: () => {
+          if (!released) {
+            released = true;
+            releaseSource();
+          }
+        },
+      };
+    },
+  });
+  personalReminderDelegations.add(captured);
+  return captured;
+}
+
+export function isPersonalReminderDelegation(value: unknown): value is PersonalReminderDelegation {
+  return typeof value === "object" && value !== null && personalReminderDelegations.has(value);
+}
 
 /** Retain the Cron-only fence when tools materialize outside their creator scope. */
 export function bindActiveCronAuthorityCurrentness(
@@ -297,10 +398,10 @@ export function bindCronManagementGrant(runId: string | undefined, config?: Open
 
 /** Retains authenticated provenance before late CLI admission without execution authority. */
 export function captureCronRequesterGrantIssuer(runId: string | undefined) {
-  const creatorProfileId = requesterCreatorProfileId(
-    getGatewayToolCallerIdentity()?.requesterOrigin,
-  );
   const scope = activeCronCreatorAuthority.getStore();
+  const creatorProfileId =
+    scope?.personalReminder?.profileId ??
+    requesterCreatorProfileId(getGatewayToolCallerIdentity()?.requesterOrigin);
   if (
     !scope ||
     (scope.callerOrigin.kind !== "local" &&
@@ -310,25 +411,28 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
   ) {
     return undefined;
   }
-  return (
-    authority: AgentRunDelegatedAuthority,
-    signal?: AbortSignal,
-    sourceIsCurrent?: () => boolean,
-  ) => {
-    const isCurrent = () =>
-      authority.operationalRunInstance.runId === scope.runId &&
-      validateAgentRunDelegatedAuthority(authority) &&
-      sourceIsCurrent?.() !== false;
-    return mintCronCreatorAuthorityGrant(
-      scope,
-      signal,
-      undefined,
-      undefined,
-      "requester",
-      isCurrent,
-      creatorProfileId,
-    );
-  };
+  return Object.assign(
+    (
+      authority: AgentRunDelegatedAuthority,
+      signal?: AbortSignal,
+      sourceIsCurrent?: () => boolean,
+    ) => {
+      const isCurrent = () =>
+        authority.operationalRunInstance.runId === scope.runId &&
+        validateAgentRunDelegatedAuthority(authority) &&
+        sourceIsCurrent?.() !== false;
+      return mintCronCreatorAuthorityGrant(
+        scope,
+        signal,
+        undefined,
+        undefined,
+        "requester",
+        isCurrent,
+        creatorProfileId,
+      );
+    },
+    { personalReminder: scope.personalReminder },
+  );
 }
 
 /** Captures authenticated requester facts independently of full tool-surface materialization. */
@@ -339,7 +443,9 @@ export function bindCronRequesterGrant(runId: string | undefined) {
     authority &&
     authority.operationalRunInstance.runId === runId &&
     validateAgentRunDelegatedAuthority(authority)
-    ? (signal?: AbortSignal) => issue(authority, signal)
+    ? Object.assign((signal?: AbortSignal) => issue(authority, signal), {
+        personalReminder: activeCronCreatorAuthority.getStore()?.personalReminder,
+      })
     : undefined;
 }
 
@@ -369,6 +475,9 @@ export function runWithCronCreatorAuthorityCapability<T>(
   signal?: AbortSignal,
 ): T {
   const revoke = () => revokeCronCreatorAuthorityRunScope(scope);
+  if (signal) {
+    personalReminderCancellationSignals.set(scope, signal);
+  }
   signal?.addEventListener("abort", revoke, { once: true });
   if (signal?.aborted) {
     revoke();

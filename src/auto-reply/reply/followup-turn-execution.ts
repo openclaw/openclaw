@@ -7,6 +7,7 @@ import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { revokeCronCreatorAuthorityRunScope } from "../../gateway/cron-creator-authority-grant.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -427,21 +428,31 @@ export async function executeFollowupTurn(params: {
       // Only the original fresh ingress can recreate authority for this new run.
       // Maintenance copies and synthetic turns must not reuse the source factory.
       const run = turn.queued.run;
+      const candidate = isFreshChannelCronAuthorityTurn({
+        messageProvider: run.messageProvider,
+        senderId: run.senderId,
+        isRoomEvent: roomEvent,
+        inputProvenance: run.inputProvenance,
+        spawnedBy: run.spawnedBy,
+        suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+      })
+        ? turn.queued.createChannelCronAuthority?.(
+            turn.runId,
+            getCommandOwnerAuthority(run)?.isCurrent,
+          )
+        : undefined;
+      // Factory presence alone does not authorize a non-owner: the host-created
+      // scope must carry the same live, narrowly scoped human reminder source.
       const capability =
-        run.senderIsOwner &&
-        isFreshChannelCronAuthorityTurn({
-          messageProvider: run.messageProvider,
-          senderId: run.senderId,
-          isRoomEvent: roomEvent,
-          inputProvenance: run.inputProvenance,
-          spawnedBy: run.spawnedBy,
-          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
-        })
-          ? turn.queued.createChannelCronAuthority?.(
-              turn.runId,
-              getCommandOwnerAuthority(run)?.isCurrent,
-            )
+        run.senderIsOwner ||
+        (candidate?.personalReminder &&
+          candidate.personalReminder.profileId === turn.queued.operatorAuthority?.profileId &&
+          candidate.isCurrent?.() === true)
+          ? candidate
           : undefined;
+      if (candidate && !capability) {
+        revokeCronCreatorAuthorityRunScope(candidate);
+      }
       progressOpts.cronCreatorAuthorityCapability = capability;
       const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
       execution = capability

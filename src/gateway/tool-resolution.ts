@@ -9,7 +9,6 @@ import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.as
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { projectAgentToolsExecPolicy } from "../agents/agent-tools.execution-policy.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
-import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
@@ -38,10 +37,8 @@ import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
   hasRestrictiveAllowPolicy,
-  mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
-  resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
@@ -73,6 +70,11 @@ import {
   resolveGatewayRequesterToolPolicies,
   resolveGatewaySenderAuthority,
 } from "./tool-resolution-authority.js";
+import { resolveGatewayConfiguredToolPolicies } from "./tool-resolution.configured-policies.js";
+import {
+  filterPersonalReminderOwnerDeny,
+  resolvePersonalReminderSubagentPolicy,
+} from "./tool-resolution.personal-reminder.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -174,32 +176,16 @@ export async function resolveGatewayScopedTools(
       ? "message_tool_only"
       : undefined);
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
-  function resolveConfiguredToolPolicies(config: OpenClawConfig) {
-    const effective = resolveEffectiveToolPolicy({
+  const resolveConfiguredToolPolicies = (config: OpenClawConfig) =>
+    resolveGatewayConfiguredToolPolicies({
       config,
-      sessionKey: runtimePolicySessionKey,
-      agentId: runtimePolicyAgentId,
+      runtimePolicySessionKey,
+      runtimePolicyAgentId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
+      gatewayRequestedTools,
+      runtimeAlsoAllow,
     });
-    const profilePolicy = resolveToolProfilePolicy(effective.profile);
-    const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
-    return {
-      ...effective,
-      profilePolicy,
-      providerProfilePolicy,
-      profilePolicyWithAlsoAllow: mergeAlsoAllowPolicy(profilePolicy, [
-        ...(effective.profileAlsoAllow ?? []),
-        ...gatewayRequestedTools,
-        ...runtimeAlsoAllow,
-      ]),
-      providerProfilePolicyWithAlsoAllow: mergeAlsoAllowPolicy(providerProfilePolicy, [
-        ...(effective.providerProfileAlsoAllow ?? []),
-        ...gatewayRequestedTools,
-        ...runtimeAlsoAllow,
-      ]),
-    };
-  }
   const configuredToolPolicies = resolveConfiguredToolPolicies(params.cfg);
   const {
     agentId: resolvedPolicyAgentId,
@@ -219,7 +205,17 @@ export async function resolveGatewayScopedTools(
     nodeExecSurface,
     accountId: gatewayCaller.accountId,
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const { groupPolicy, senderPolicy, inheritedToolPolicy } = requesterPolicies;
+  const personalChild =
+    surface === "loopback" &&
+    params.personalReminder &&
+    params.admittedRunContext &&
+    params.isGrantCurrent;
+  const subagentPolicy = resolvePersonalReminderSubagentPolicy(
+    requesterPolicies.subagentPolicy,
+    params.cfg.tools?.subagents?.tools?.deny ?? [],
+    Boolean(personalChild),
+  );
   const completionHandoff =
     stableSessionSurface && requesterPolicies.requesterPolicySource === "completion-handoff";
   const sessionPermissionPolicy =
@@ -264,7 +260,10 @@ export async function resolveGatewayScopedTools(
     params.admittedRunContext &&
     getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   const ownerOnlyGatewayDeny = [
-    ...scheduledTools.ownerOnlyDeny(senderIsOwner, sessionPortalTarget !== undefined),
+    ...filterPersonalReminderOwnerDeny(
+      scheduledTools.ownerOnlyDeny(senderIsOwner, sessionPortalTarget !== undefined),
+      Boolean(personalChild),
+    ),
     // Attach grants also use loopback; session binding is not run authority.
     ...(senderIsOwner !== true &&
     !assignmentAdmitted &&
@@ -454,6 +453,10 @@ export async function resolveGatewayScopedTools(
     pluginToolDenylist: catalogDenylist,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
+    personalReminder:
+      surface === "loopback" && params.admittedRunContext && params.isGrantCurrent
+        ? params.personalReminder
+        : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,

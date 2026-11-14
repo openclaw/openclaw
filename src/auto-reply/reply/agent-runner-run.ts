@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { bindPersonalReminderCancellationSignal } from "../../agents/cron-creator-authority-context.js";
 import {
   isRequiredReplyExpectation,
   resolveReplyCompletion,
@@ -117,6 +118,10 @@ export async function runReplyAgent(
   ].filter((signal): signal is AbortSignal => signal !== undefined);
   followupRun.abortSignal =
     upstreamSignals.length > 1 ? AbortSignal.any(upstreamSignals) : upstreamSignals[0];
+  bindPersonalReminderCancellationSignal(
+    runId,
+    followupRun.abortSignal ?? controllerInput.abortSignal,
+  );
   const preparationResources: { stopBlockReply?: () => void } = {};
   const inputGeneration = getAgentEventLifecycleGeneration();
   try {

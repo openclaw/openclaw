@@ -107,6 +107,39 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(createExec).not.toHaveBeenCalled();
   }
 
+  it.each([
+    [["read"], true],
+    [["automations"], false],
+    [["cron"], false],
+    [["auto*"], false],
+    [["*"], false],
+  ] as const)("preserves explicit child deny policy %j (available=%s)", async (deny, available) => {
+    mockTools("automations");
+    const sessionKey = "agent:main:subagent:child";
+    const admission = prepareSystemAgentRunAdmission({}, "personal-deny-test", "main", "test");
+    try {
+      const result = await resolveTools({
+        cfg: { tools: { allow: ["automations"], subagents: { tools: { deny: [...deny] } } } },
+        sessionKey,
+        senderIsOwner: false,
+        admittedRunContext: await admission.admit("embedded"),
+        isGrantCurrent: () => true,
+        personalReminder: {
+          profileId: "human",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "parent",
+          accountId: "default",
+          to: "group",
+          threadId: "topic",
+        },
+      });
+      expect(toolNames(result).includes("automations")).toBe(available);
+    } finally {
+      admission.close();
+    }
+  });
+
   it("passes immutable source-reply authority into message-tool construction", async () => {
     await resolveTools({
       sessionKey: "agent:main:telegram:group:chat123",

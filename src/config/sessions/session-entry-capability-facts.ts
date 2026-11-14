@@ -26,6 +26,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     completionOwnerSessionKey: entry.completionOwnerSessionKey,
     subagentRole: entry.subagentRole,
     subagentControlScope: entry.subagentControlScope,
+    personalReminderSurface: entry.personalReminderSurface,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
     delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy),
