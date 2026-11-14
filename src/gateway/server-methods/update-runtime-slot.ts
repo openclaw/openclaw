@@ -28,13 +28,18 @@ type GatewaySlotUpdateParams = {
   log?: { info: (message: string) => void; warn: (message: string) => void };
 };
 
-/** Null when the install keeps the in-place updater (Windows, Homebrew, system packages). */
+/** A package manager, app or image owns other installs: the result names its command. */
 export async function prepareGatewaySlotUpdate(params: GatewaySlotUpdateParams) {
-  const { resolveRuntimeSlotInstall } = await import("../../cli/update-cli/update-slots.js");
-  const install = await resolveRuntimeSlotInstall(resolveUpdateInstallRoot(params.installRoot));
-  if (!install) {
-    return null;
+  const { resolveUpdateOwner, resolveUpdateTag } =
+    await import("../../cli/update-cli/update-slots.js");
+  const owner = await resolveUpdateOwner(
+    resolveUpdateInstallRoot(params.installRoot),
+    await resolveUpdateTag(params.request),
+  );
+  if (owner.kind === "external") {
+    return { external: owner } as const;
   }
+  const install = owner;
   const before = await readPackageVersion(params.installRoot);
   const result: UpdateRunResult = {
     status: "skipped",
@@ -46,6 +51,7 @@ export async function prepareGatewaySlotUpdate(params: GatewaySlotUpdateParams) 
     durationMs: 0,
   };
   return {
+    external: undefined,
     result,
     handoff: { status: "started" as const, command: "openclaw update (runtime slot)" },
     /** Starts once the restart sentinel is persisted, so the next Gateway can report. */

@@ -15,7 +15,9 @@ import { resolveSystemdUnitPath } from "../../daemon/systemd-service-files.js";
 import { parseSystemdExecStart } from "../../daemon/systemd-unit.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -38,6 +40,10 @@ import {
   type RuntimeSlotSource,
 } from "../../infra/runtime-slots.js";
 import { channelToNpmTag, DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "../../infra/update-system-package-ownership.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
@@ -66,24 +72,66 @@ export type RuntimeSlotUpdateResult = {
   message: string;
 };
 
+export type UpdateOwner =
+  | { kind: "slots"; root: string; git: boolean }
+  | { kind: "external"; reason: string; message: string };
+
 /**
- * Linux and macOS user npm installs (not Homebrew), git checkouts, and installs
- * already on the slot layout. Everything else keeps its own updater.
+ * Who updates this install. npm installs, git checkouts and installs already on
+ * the slot layout update through runtime slots. Package managers, app bundles
+ * and container images own their files: `openclaw update` names their command.
  */
-export async function resolveRuntimeSlotInstall(
-  root: string,
-): Promise<{ root: string; git: boolean } | null> {
-  if ((process.platform !== "linux" && process.platform !== "darwin") || process.versions.bun) {
-    return null;
+export async function resolveUpdateOwner(root: string, tag: string): Promise<UpdateOwner> {
+  const external = (reason: string, message: string): UpdateOwner => ({
+    kind: "external",
+    reason,
+    message,
+  });
+  const appOwner = await readInstallOwner(root);
+  if (appOwner) {
+    return external("app-owned-install", formatInstallOwnerMessage(appOwner));
+  }
+  if (isContainerEnvironment()) {
+    return external(
+      "container-image-install",
+      `This OpenClaw runs from a container image. Pull the new image and recreate the container: docker pull ghcr.io/openclaw/openclaw:${tag}`,
+    );
+  }
+  if (process.versions.bun) {
+    return external(
+      "bun-install",
+      `This OpenClaw runs under Bun. Update it with: bun add -g --trust openclaw@${tag}`,
+    );
+  }
+  if (await resolveBrewOpenClawPath(root)) {
+    return external(
+      "homebrew-install",
+      "Homebrew owns this OpenClaw. Update it with: brew upgrade openclaw-cli",
+    );
+  }
+  const owned = await createSystemPackageOwnershipInspection()
+    .assertUnowned(root)
+    .then(
+      () => null,
+      (error: unknown) => (error instanceof SystemPackageOwnershipError ? error : null),
+    );
+  if (owned) {
+    return external(owned.reason, owned.message);
   }
   const git = await isGitCheckout(root);
   const dir = resolveRuntimeSlotsDir();
-  if (git || isPathInside(dir, root) || readRuntimePointer(dir) !== null) {
-    return { root, git };
+  if (
+    git ||
+    isPathInside(dir, root) ||
+    readRuntimePointer(dir) !== null ||
+    root.split(path.sep).includes("node_modules")
+  ) {
+    return { kind: "slots", root, git };
   }
-  const npm =
-    root.split(path.sep).includes("node_modules") && !(await resolveBrewOpenClawPath(root));
-  return npm ? { root, git } : null;
+  return external(
+    "unmanaged-package-install",
+    `OpenClaw cannot tell how ${root} was installed. Reinstall it with: npm install -g openclaw@${tag}`,
+  );
 }
 
 /** The installed service's argv, read from its definition file without D-Bus or launchctl. */
@@ -376,15 +424,31 @@ export async function runRuntimeSlotUpdate(
   }
 }
 
+/** The npm dist-tag or version a package-manager command should install. */
+export async function resolveUpdateTag(opts: Pick<UpdateCommandOptions, "channel" | "tag">) {
+  const channel =
+    parseUpdateChannel(opts.channel) ??
+    parseUpdateChannel((await readConfigFileSnapshot()).config.update?.channel ?? undefined) ??
+    "stable";
+  return normalizeTag(opts.tag) ?? channelToNpmTag(channel);
+}
+
 /** `openclaw update`: runs before the in-place updater admits state or inspects services. */
 export async function tryRunRuntimeSlotUpdate(opts: UpdateCommandOptions): Promise<boolean> {
   if (opts.run || opts.recovery || opts.sourceUpdate) {
     return false;
   }
-  const install = await resolveRuntimeSlotInstall(await resolveUpdateRoot());
-  if (!install) {
-    return false;
+  const owner = await resolveUpdateOwner(await resolveUpdateRoot(), await resolveUpdateTag(opts));
+  if (owner.kind === "external") {
+    // Not an error: the owning package manager is the update path.
+    if (opts.json) {
+      defaultRuntime.writeJson({ status: "skipped", reason: owner.reason, message: owner.message });
+    } else {
+      defaultRuntime.log(owner.message);
+    }
+    return true;
   }
+  const install = owner;
   let result: RuntimeSlotUpdateResult;
   try {
     result = await runRuntimeSlotUpdate(
