@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { openAIRealtimeHost } from "./realtime-host.js";
+import { OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS } from "./realtime-quicksilver-instructions.js";
 import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
+  resolveOpenAIQuicksilverStartupContext,
 } from "./realtime-quicksilver-wire.js";
 
 function createCall(
@@ -31,6 +33,33 @@ function createCall(
 function respond(body: string, init: ResponseInit) {
   return vi.fn<typeof fetch>(async () => new Response(body, init));
 }
+
+it("repeats only ChatGPT call instructions, without shared history", () => {
+  const params = {
+    model: "gpt-live-1-codex",
+    instructions: "Your name is Lachlan.",
+    hostControlsInput: true,
+  };
+  const session = buildOpenAIQuicksilverSession({
+    ...params,
+    initialItems: [{ role: "user", text: "Earlier call request" }],
+  });
+  const startupContext = resolveOpenAIQuicksilverStartupContext({
+    ...params,
+    auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
+  });
+
+  expect(session.instructions).toContain("Earlier call request");
+  expect(startupContext).toBe(
+    `Your name is Lachlan.\n\n${OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS}`,
+  );
+  expect(
+    resolveOpenAIQuicksilverStartupContext({
+      ...params,
+      auth: { type: "api-key", token: "platform-key" },
+    }),
+  ).toBeUndefined();
+});
 
 it("bounds shared background UTF-8 without splitting emoji", () => {
   const text = "🦞".repeat(1_000);
