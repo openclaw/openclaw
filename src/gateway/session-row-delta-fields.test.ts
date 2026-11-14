@@ -18,34 +18,7 @@ const compare = (previous: Record<string, unknown>, current: Record<string, unkn
     current,
   );
 
-it("preserves JSON values and removes fields that disappear from the wire", () => {
-  const previous = Object.fromEntries(
-    ["removed", "nowUndefined", "nil", "enabled", "runtimeMs", "runs"].map((key) => [key, "old"]),
-  );
-  const current = {
-    nowUndefined: undefined,
-    nil: null,
-    enabled: false,
-    runtimeMs: 0,
-    runs: [],
-    added: "new",
-  };
-  expect(compare(previous, current)).toEqual({
-    set: { nil: null, enabled: false, runtimeMs: 0, runs: [], added: "new" },
-    remove: ["removed", "nowUndefined"],
-  });
-});
-
 it.each([
-  [-0, 0, false],
-  [Number.NaN, null, false],
-  [Infinity, null, false],
-  [-Infinity, null, false],
-  [null, Number.NaN, false],
-  [1, "1", true],
-  [true, "true", true],
-  ["", "", false],
-  ["allow", "allow", false],
   ["allow", "allows", true],
   ["aaaaa", "aaaaaa", true],
   ["aaaaaa", "aaaaaaa", true],
@@ -88,21 +61,6 @@ it.each(["", "allow", "allows", "viewer", "running", "\u007f", "\u0080", "\0", "
   },
 );
 
-it("compares nested JSON semantically and replaces a changed nested field whole", () => {
-  const previous = {
-    activity: { b: [null, { done: false }], a: 1 },
-    usage: { input: 4, output: 3 },
-  };
-  const current = {
-    activity: { a: 1, b: [undefined, { done: false, ignored: undefined }] },
-    usage: { input: 4, output: 5 },
-  };
-  expect(compare(previous, current)).toEqual({
-    set: { usage: { input: 4, output: 5 } },
-    remove: [],
-  });
-});
-
 it("recomputes mutable children shared by distinct shallow-frozen row snapshots", () => {
   const usage = { input: 4, output: 3 };
   const previous = prepareSessionRowDeltaFields(Object.freeze({ usage }));
@@ -118,6 +76,14 @@ it("matches JSON patches through consecutive revisions and audience changes", ()
     undefined,
     null,
     Number.NaN,
+    Infinity,
+    -Infinity,
+    null,
+    true,
+    "true",
+    1,
+    "1",
+    [],
     -0,
     0,
     false,
@@ -137,6 +103,7 @@ it("matches JSON patches through consecutive revisions and audience changes", ()
       value: values[revision % values.length],
       ...(revision % 2 ? { audience: "viewer" } : {}),
       nested: { z: revision % 3, a: { ignored: undefined, nil: Number.NaN } },
+      usage: { input: 4, output: revision },
     });
     const previousJson = JSON.stringify(previous);
     const currentJson = JSON.stringify(row);

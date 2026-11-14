@@ -15,6 +15,7 @@ import {
   invalidateSessionAutomationIndex,
   registerSessionAutomationSource,
 } from "./session-automation-index.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import * as membership from "./session-membership-projection.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { ready } from "./session-row-projection-record.js";
@@ -128,7 +129,7 @@ describe("automation bindings", () => {
 
   it("rebuilds only changed automation bindings and preserves complete unrelated rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const keys = ["bound", "next", "parent", "other"].map((name) => `agent:main:${name}`);
+      const keys = ["cron:binding", "next", "parent", "other"].map((name) => `agent:main:${name}`);
       for (const [index, sessionKey] of keys.entries()) {
         rowFixture.seedRow(sessionKey, {
           sessionId: `session-${index}`,
@@ -149,6 +150,9 @@ describe("automation bindings", () => {
         projection.describe({ agentId: "main", key });
       }
       const before = snapshot();
+      for (const row of before) {
+        expect(buildGatewaySessionSnapshot({ sessionRow: row }).hasAutomation).toBe(false);
+      }
       const databaseReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       const refresh = async (expectedCount: number, boundKey?: string) => {
@@ -163,9 +167,14 @@ describe("automation bindings", () => {
         );
       };
       await refresh(0);
-      const binding = cronTestJob({ id: "binding", sessionTarget: `session:${keys[0]}` });
+      const binding = cronTestJob({ id: "binding", sessionTarget: "isolated" });
       jobs.push(binding);
       await refresh(1, keys[0]);
+      expect(
+        snapshot()
+          .filter((row) => row.key === keys[0])
+          .map((row) => buildGatewaySessionSnapshot({ sessionRow: row }).hasAutomation),
+      ).toEqual([true]);
       binding.sessionTarget = `session:${keys[1]}`;
       await refresh(2, keys[1]);
       expect(databaseReads).not.toHaveBeenCalled();

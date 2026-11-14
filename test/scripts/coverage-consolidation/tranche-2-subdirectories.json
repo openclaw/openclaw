@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "removedFiles": ["src/gateway/openclaw-id/claw-store.test.ts"],
+  "consolidations": [
+    {
+      "removed": {"file": "src/gateway/talk/handlers/index.test.ts", "case": "passes authenticated creator isolation through $method", "rows": ["talk.client.create", "talk.session.create"]},
+      "keeper": {"file": "src/gateway/talk/handlers/target.test.ts", "case": "$method retains the identified creator and required isolation (sandbox=$sandbox)", "rows": ["talk.client.create, sandbox=true", "talk.session.create, sandbox=true"]},
+      "invariant": "Authenticated creator and required sandbox isolation reach both Talk creation paths with only operator.talk scope.",
+      "transferredAssertions": ["Both RPC methods succeed for the restricted identified creator.", "Actual stored createdActor exactly names the authenticated human profile.", "Actual stored sandbox equals required."]
+    },
+    {
+      "removed": {"file": "src/gateway/talk/handlers/target.test.ts", "case": "retains the identified creator when a restricted role creates its first Talk session"},
+      "keeper": {"file": "src/gateway/talk/handlers/target.test.ts", "case": "$method retains the identified creator and required isolation (sandbox=$sandbox)", "rows": ["talk.client.create, sandbox=false", "talk.session.create, sandbox=false"]},
+      "invariant": "Restricted first-session creation retains the identified creator without adding mandatory isolation.",
+      "transferredAssertions": ["The original client-create success and exact persisted creator assertion remain; relay creation also runs the same check."]
+    },
+    {
+      "removed": {"file": "src/gateway/openclaw-id/claw-store.test.ts", "case": "keeps full-capacity sections below the persisted value budget for escaped and Unicode text", "rows": ["U+0001 repeated 256", "界 repeated 256", "😀 repeated 128"]},
+      "keeper": {"file": "src/gateway/openclaw-id/claw-store.persistence.test.ts", "case": "saves bounded full-capacity partitions and restores every section after reopening", "rows": ["U+0001 repeated 256", "界 repeated 256", "😀 repeated 128"]},
+      "invariant": "Every full-capacity serialized partition stays below the byte cap, while the monolithic record exceeds it.",
+      "transferredAssertions": ["Exact production serializer and byte limit for every row.", "Exactly eight member partitions.", "Monolithic serialization rejects.", "Real write, database close and complete default escaped record readback; all three original serialized-size rows remain."]
+    },
+    {
+      "removed": {"file": "src/gateway/openclaw-id/claw-store.persistence.test.ts", "case": "saves an escaped full-capacity claw and restores every section after reopening"},
+      "keeper": {"file": "src/gateway/openclaw-id/claw-store.persistence.test.ts", "case": "saves bounded full-capacity partitions and restores every section after reopening", "row": "U+0001 repeated 256"},
+      "invariant": "The default escaped full-capacity record survives a real database reopen.",
+      "transferredAssertions": ["Full write/close/readback sequence and complete record match retained."]
+    },
+    {
+      "removed": {"file": "src/gateway/openclaw-id/claw-store.test.ts", "case": "keeps bindings saved inside an older record until the next write moves them out"},
+      "keeper": {"file": "src/gateway/openclaw-id/claw-store.persistence.test.ts", "case": "moves prior rows without losing bindings and refuses an incomplete partitioned record"},
+      "invariant": "Monolithic bindings remain readable until an explicit partition overrides them; an empty partition overrides them too.",
+      "transferredAssertions": ["Read the old embedded binding before a partition exists.", "Read an empty binding list after writing an empty partition.", "Retain migration, reopen, binding readback and missing-partition rejection."]
+    }
+  ],
+  "validation": {"testsRun": false, "reason": "Root owns proof, formatting and review.", "productionChanges": false, "sharedHelperChanges": false}
+}

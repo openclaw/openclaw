@@ -1,0 +1,34 @@
+{
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "deletedFiles": [],
+  "retiredCases": [
+    {
+      "file": "src/gateway/worker-environments/local-workspace-store.test.ts",
+      "case": "adopts native committed facts after reply loss without replaying the mutation",
+      "keeperFile": "src/gateway/worker-environments/local-workspace-store.test.ts",
+      "keeperCase": "adopts native committed facts after reply loss without replaying the mutation",
+      "keeperRow": "oversized=false in $name table",
+      "invariant": "One native mutation after lost reply; returned and persisted identity match authoritative base commit; pending edits block deletion; clearing and deleting use three total writes without replay.",
+      "movedUniqueAssertions": ["writes=1 before cleanup", "authoritative base_commit", "store.get equals acknowledgement", "unsettled-edit deletion rejection", "writes=3 after clear/delete", "absent final row"]
+    },
+    {
+      "file": "src/gateway/worker-environments/local-workspace-store.test.ts",
+      "case": "recovers an oversized committed row after reply loss without replaying or trimming bytes",
+      "keeperFile": "src/gateway/worker-environments/local-workspace-store.test.ts",
+      "keeperCase": "recovers an oversized committed row after reply loss without replaying or trimming bytes",
+      "keeperRow": "oversized=true in $name table",
+      "invariant": "Lost-reply recovery retains the complete oversized baseline, authoritative base commit, normalized null field, expired retained guard, and original Uint8Array buffer view without replay or copying.",
+      "movedUniqueAssertions": ["writes=1", "retained guard rejects", "full baseline JSON equality in acknowledgement and persisted row", "journal_json and paused_runtimes_json", "Uint8Array constructor, buffer, byteOffset and byteLength", "persisted row equals acknowledgement"]
+    }
+  ],
+  "fixtureConsolidations": [
+    {
+      "file": "src/gateway/worker-environments/local-workspace-template.test.ts",
+      "removedFixture": "prewarmFixture.seed and three repeated allocation-owned clone call sites",
+      "keeper": "prewarmFixture.clone(name, commit, signal)",
+      "keeperCases": ["joins background preparation through the allocation owner", "prepares the current base of a previously sandboxed project with sandbox mode off", "keeps prewarming reusable when only a retained commit is recent (canonical removed: false)", "keeps prewarming reusable when only a retained commit is recent (canonical removed: true)"],
+      "invariant": "Identical source, repository, commit, branch, destination, temporary/template root, environment and sandbox options; allocation guard and its signal remain authoritative. Existing publication, dependency bytes, install counts, idle retention and ownership assertions remain in their cases."
+    }
+  ],
+  "validation": "No tests, typecheck, formatter, installs or network commands executed. Syntax parsing, manifest parsing and git diff --check only. Parent owns format, proof and review."
+}

@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "removedFiles": [],
+  "implementation": "src/gateway/worker-environments/store-migration-contract.test-support.ts",
+  "consolidations": [
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-resource-receipt-migration.test.ts", "case": "migrates v36 through %s without inventing resource identity, then persists through the worker", "rows": ["runtime", "doctor"]},
+      "keeper": {"file": "src/gateway/worker-environments/store-resource-receipt-migration.test.ts", "case": "migrates v36 through %s without inventing custody or provisioning authority", "rows": ["runtime", "doctor"]},
+      "failureClass": "invented resource identity or lost worker persistence",
+      "transferredAssertions": ["runtime and doctor migration", "all row fields plus nullable receipt and retention", "unavailable pending authority", "scope-preserved tables", "recordResourceReceipt and reopen"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-resource-receipt-migration.test.ts", "case": "rolls back receipt DDL and schema markers if migration publication fails"},
+      "keeper": {"file": "src/gateway/worker-environments/store-resource-receipt-migration.test.ts", "case": "rolls back v36 DDL, rows, and schema publication together"},
+      "failureClass": "non-atomic receipt migration",
+      "transferredAssertions": ["publication abort message", "original rows", "original user_version and schema_meta"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-resource-receipt-migration.test.ts", "case": "keeps PostgreSQL predecessor backups and nullable receipt column migration aligned"},
+      "keeper": {"file": "src/gateway/worker-environments/store-resource-receipt-migration.test.ts", "case": "keeps PostgreSQL v36 backups and the next column migration aligned"},
+      "failureClass": "PostgreSQL predecessor or receipt column drift",
+      "transferredAssertions": ["descriptor absence and next-version text column", "migration presence", "predecessor absence", "canonical text collation", "ALTER TABLE SQL"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-retained-lifecycle-migration.test.ts", "case": "migrates v38 through %s without changing existing disk custody or inventing retention", "rows": ["runtime", "doctor"]},
+      "keeper": {"file": "src/gateway/worker-environments/store-retained-lifecycle-migration.test.ts", "case": "migrates v38 through %s without inventing custody or provisioning authority", "rows": ["runtime", "doctor"]},
+      "failureClass": "changed disk custody or invented retention",
+      "transferredAssertions": ["runtime and doctor migration", "full retained row and repository custody", "null retention and source", "schema markers", "older-runtime incompatibility", "receipt retained after reopen"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-retained-lifecycle-migration.test.ts", "case": "rolls back retention DDL and version publication together"},
+      "keeper": {"file": "src/gateway/worker-environments/store-retained-lifecycle-migration.test.ts", "case": "rolls back v38 DDL, rows, and schema publication together"},
+      "failureClass": "non-atomic retention migration",
+      "transferredAssertions": ["publication abort message", "original rows", "original user_version and schema_meta"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-retained-lifecycle-migration.test.ts", "case": "keeps PostgreSQL v38 backups independent of the nullable v39 retention column"},
+      "keeper": {"file": "src/gateway/worker-environments/store-retained-lifecycle-migration.test.ts", "case": "keeps PostgreSQL v38 backups and the next column migration aligned"},
+      "failureClass": "PostgreSQL retention column or predecessor receipt drift",
+      "transferredAssertions": ["descriptor absence and next-version text column", "predecessor retains resource_receipt_json", "predecessor excludes retention_json", "canonical text collation", "ALTER TABLE SQL"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-provision-source-migration.test.ts", "case": "migrates v39 through %s without inventing original provisioning authority", "rows": ["runtime", "doctor"]},
+      "keeper": {"file": "src/gateway/worker-environments/store-provision-source-migration.test.ts", "case": "migrates v39 through %s without inventing custody or provisioning authority", "rows": ["runtime", "doctor"]},
+      "failureClass": "invented provisioning authority or lost allocation custody",
+      "transferredAssertions": ["runtime and doctor migration", "all seven states and maintenance owner-epoch distinction", "full rows and scope preservation", "older-runtime incompatibility", "requested/provisioning/initial-bootstrap unavailable authority", "ready/idle/attached/failed/maintenance no invented source", "uncertain receipt and source survive reopen"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-provision-source-migration.test.ts", "case": "rolls back source DDL, legacy refusal, and schema publication together"},
+      "keeper": {"file": "src/gateway/worker-environments/store-provision-source-migration.test.ts", "case": "rolls back v39 DDL, rows, and schema publication together"},
+      "failureClass": "non-atomic provisioning authority migration",
+      "transferredAssertions": ["publication abort message", "all original rows", "original user_version and schema_meta"]
+    },
+    {
+      "removed": {"file": "src/gateway/worker-environments/store-provision-source-migration.test.ts", "case": "keeps PostgreSQL v39 backups free of source metadata and migrates pending authority"},
+      "keeper": {"file": "src/gateway/worker-environments/store-provision-source-migration.test.ts", "case": "keeps PostgreSQL v39 backups and the next column migration aligned"},
+      "failureClass": "PostgreSQL provisioning-source descriptor drift",
+      "transferredAssertions": ["descriptor absence and next-version text column", "predecessor absence", "canonical text collation"]
+    }
+  ],
+  "validation": { "testsRun": false, "reason": "Root owns proof, formatting and review after this lane freezes.", "productionChanges": false, "existingSharedHelperChanges": false, "inventoryEntryPointsPreserved": true }
+}

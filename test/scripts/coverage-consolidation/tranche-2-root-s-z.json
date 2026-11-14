@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "strategy": "Consolidate repeated config RPC arrangements into explicit rows; use the canonical admitted-write recovery contract instead of replaying it through an installed-package fixture.",
+  "removedFiles": [],
+  "entries": [
+    {
+      "file": "src/gateway/server.config-patch.test.ts",
+      "removedCases": [
+        "accepts runtime-shaped config.set when bundled provider baseUrl was only defaulted",
+        "accepts config.patch when bundled provider baseUrl was only defaulted",
+        "preserves authored empty bundled provider models during config.patch"
+      ],
+      "keeperFile": "src/gateway/server.config-patch.test.ts",
+      "keeperCase": "preserves provider source ownership through $method (authored models: $authoredModels)",
+      "rows": [
+        "config.set / false / 19002",
+        "config.patch / false / 19003",
+        "config.patch / true / 19004"
+      ],
+      "invariant": "Full runtime-shaped replacement and partial patch preserve authored model lists without writing defaulted provider base URLs.",
+      "carriedUniqueAssertions": "Original provider shapes, ports, empty runtime baseUrl/models for set, absent persisted baseUrl, omitted default model list for patch, retained authored empty list, and cleanup."
+    },
+    {
+      "file": "src/gateway/server.config-patch.test.ts",
+      "removedCases": [
+        "allows config.patch to append array entries without replacePaths",
+        "allows config.patch to shrink an existing array with replacePaths"
+      ],
+      "keeperFile": "src/gateway/server.config-patch.test.ts",
+      "keeperCase": "allows config.patch to $name",
+      "rows": [
+        "append array entries without replacePaths",
+        "shrink an existing array with replacePaths"
+      ],
+      "invariant": "Append is non-destructive; shrinking an array requires explicit replacement authority.",
+      "carriedUniqueAssertions": "Identical seeded and replacement bindings, presence or absence of replacePaths, successful seed/patch, final array equality, and config restoration."
+    },
+    {
+      "file": "src/gateway/server.config-patch.test.ts",
+      "removedCases": [
+        "rejects config.set when SecretRef resolution fails",
+        "rejects config.patch when merged SecretRefs cannot resolve",
+        "rejects config.apply when SecretRef resolution fails"
+      ],
+      "keeperFile": "src/gateway/server.config-patch.test.ts",
+      "keeperCase": "rejects $method when active SecretRefs cannot resolve without changing the source",
+      "rows": [
+        "config.set",
+        "config.patch",
+        "config.apply"
+      ],
+      "invariant": "Every config write endpoint rejects unresolved active SecretRefs before committing.",
+      "carriedUniqueAssertions": "Full replacement versus partial patch, original missing-variable prefixes, 20000ms timeout, resolution error and unchanged hash. Apply raw-byte assertion now covers all endpoints. Prior sendConfigSet/sendConfigApply wrappers directly delegate to rpcReq."
+    },
+    {
+      "file": "src/gateway/server.config-patch.test.ts",
+      "removedCases": [
+        "rejects config.patch that removes existing array entries without shrinking length",
+        "rejects nested destructive array patches when replacePaths names only a parent object",
+        "rejects deleting a nested parent object inside id-keyed arrays without replacePaths"
+      ],
+      "keeperFile": "src/gateway/server.config-patch.test.ts",
+      "keeperCase": "rejects config.patch that $name",
+      "rows": [
+        "removes existing array entries without shrinking length",
+        "shrinks a nested array with only its parent in replacePaths",
+        "deletes the parent of a nested array without replacePaths"
+      ],
+      "invariant": "Destructive array changes require exact array-path replacement authority, including ancestor deletion.",
+      "carriedUniqueAssertions": "Original seeded arrays, patches, parent-only replacePaths, exact error paths, rejection, unchanged hash/disk bytes, and retained bindings/entries."
+    },
+    {
+      "file": "src/gateway/server-plugin-reload.installed-package.test.ts",
+      "removedCases": [
+        "retries after an admitted call outlasts the replacement deadline without restarting its sibling"
+      ],
+      "keeperFile": "src/gateway/server-plugin-reload.recovery.test.ts",
+      "keeperCase": "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
+      "rows": [
+        "70000"
+      ],
+      "invariant": "An admitted write outlives replacement observation without disposal; the prior generation keeps serving, then retry retires it once and leaves its sibling untouched.",
+      "carriedUniqueAssertions": "Existing keeper verifies file write exactly once, uncommitted drain error, old registry/live signal, no disposal/start/stop during timeout, restored serving/readiness, successful retry, one disposal and unchanged sibling. Installed-package pending/candidate/recovery disposal rows retain captured-code/resource-lock coverage."
+    }
+  ],
+  "validation": "Code-only self-review and git diff --check. Coordinator owns formatting, types, and runtime proof."
+}

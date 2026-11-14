@@ -1,0 +1,140 @@
+{
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "deletedFiles": [],
+  "groups": [
+    {
+      "deletedFile": "src/gateway/server/health-state.test.ts",
+      "keeperFile": "src/gateway/server/health-state.test.ts",
+      "keeperCase": "projects update metadata with detail access=%s",
+      "cases": [
+        {
+          "deletedCase": "omits the schedule and projects legacy availability without update detail access",
+          "keeperRow": "false",
+          "invariant": "Public snapshot excludes privileged update metadata.",
+          "transferredAssertions": "Exact public version/channel object; absent schedule; schedule getter not called; sole session ownership; resolved config hash."
+        },
+        {
+          "deletedCase": "includes the full update availability and schedule with update detail access",
+          "keeperRow": "true",
+          "invariant": "Privileged snapshot retains full update objects.",
+          "transferredAssertions": "Availability and schedule retain reference identity, including commit details."
+        }
+      ]
+    },
+    {
+      "deletedFile": "src/gateway/server/health-state.test.ts",
+      "keeperFile": "src/gateway/server/health-state.test.ts",
+      "keeperCase": "coalesces refresh waiters by strength and recovers after probe %s",
+      "cases": [
+        {
+          "deletedCase": "does not let a post-connect passive refresh absorb an explicit probe",
+          "keeperRow": "success",
+          "invariant": "Probe and passive strength lanes collect separately and publish in settlement order.",
+          "transferredAssertions": "Two exact public collector calls; probe cache/version/broadcast then passive cache/version/broadcast."
+        },
+        {
+          "deletedCase": "retains a displaced passive refresh after a faster probe settles",
+          "keeperRow": "rejection",
+          "invariant": "Failed probe cannot discard in-flight passive work.",
+          "transferredAssertions": "Probe rejects; joining passive waiter starts no third collection; both passive waiters resolve to the original summary."
+        },
+        {
+          "deletedCase": "recovers each strength lane after rejection without discarding an older success",
+          "keeperRow": "rejection",
+          "invariant": "A failed probe releases only its lane and allows later probe recovery.",
+          "transferredAssertions": "Passive result survives; a fresh probe invokes collection a third time and replaces the cache."
+        }
+      ]
+    },
+    {
+      "deletedFile": "src/gateway/server/hooks.agent-trust.test.ts",
+      "keeperFile": "src/gateway/server/hooks.agent-trust.test.ts",
+      "keeperCase": "validates $name at its delivery boundary",
+      "cases": [
+        {
+          "deletedCase": "rejects an invalid explicit delivery account before the agent runner",
+          "keeperRow": "invalid explicit account",
+          "invariant": "Admission validates explicit account before scheduling execution.",
+          "transferredAssertions": "First validation rejects with exact HTTP 400 error and runId; runner never called."
+        },
+        {
+          "deletedCase": "binds omitted delivery accounts to the channel default",
+          "keeperRow": "channel default",
+          "invariant": "Omitted account resolves to the configured channel default.",
+          "transferredAssertions": "Successful admission; runner trigger=event and job.delivery.accountId=default."
+        },
+        {
+          "deletedCase": "revalidates an explicit delivery account against queued-run config",
+          "keeperRow": "account removed before queued run",
+          "invariant": "Queued execution revalidates the accepted account.",
+          "transferredAssertions": "First validation succeeds; second rejects with exact HTTP 400 error and runId; runner never called."
+        }
+      ]
+    },
+    {
+      "deletedFile": "src/gateway/server/hooks.agent-trust.test.ts",
+      "keeperFile": "src/gateway/server/hooks.agent-trust.test.ts",
+      "keeperCase": "serializes same-session hooks with $name",
+      "cases": [
+        {
+          "deletedCase": "serializes canonical aliases for the same session in dispatch order",
+          "keeperRow": "canonical aliases",
+          "invariant": "Canonical aliases share one queue while retaining original expressions.",
+          "transferredAssertions": "Only first runner starts before gate; ordered first/second messages and original session keys; root work drains."
+        },
+        {
+          "deletedCase": "uses fresh config when a queued hook starts after reload",
+          "keeperRow": "fresh config after reload",
+          "invariant": "Queue identity remains accepted while execution reads fresh config.",
+          "transferredAssertions": "Second run remains queued before gate; receives reloaded config, main agent and original main session; root work drains."
+        },
+        {
+          "deletedCase": "continues a same-session hook queue after a failed run",
+          "keeperRow": "failed predecessor",
+          "invariant": "Failed predecessor reports failure and releases its queue.",
+          "transferredAssertions": "Exact Hook First error event to agent:main:main; second shared-session runner starts; root work drains."
+        }
+      ]
+    },
+    {
+      "deletedFile": "src/gateway/server/hooks.early-failure.test.ts",
+      "keeperFile": "src/gateway/server/hooks.early-failure.test.ts",
+      "keeperCase": "settles an explicit waiter when $outcome without private run data",
+      "cases": [
+        {
+          "deletedCase": "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
+          "keeperRow": "suppressed",
+          "invariant": "Suppressed execution settles its waiter with the public terminal result.",
+          "transferredAssertions": "HTTP 200 and exact ok/runId/completion including empty disposition, attempted delivery, and empty suppression reason."
+        },
+        {
+          "deletedCase": "returns categorical delivery failure without private run data",
+          "keeperRow": "delivery failed",
+          "invariant": "Delivery error is categorical and cannot leak raw diagnostics.",
+          "transferredAssertions": "HTTP 200; exact completion delivery-failed; excludes credentials, private output/summary/session identifiers and long raw error."
+        },
+        {
+          "deletedCase": "settles an admitted waiter when the isolated runner throws",
+          "keeperRow": "runner threw",
+          "invariant": "Post-admission exception settles the waiter safely.",
+          "transferredAssertions": "Execution-start callback precedes throw; HTTP 200 and exact error/empty completion; private exception omitted."
+        }
+      ]
+    }
+  ],
+  "retainedIndependentCases": [
+    {
+      "file": "src/gateway/server/health-state.test.ts",
+      "case": "coalesces concurrent explicit probe waiters",
+      "reason": "Keeps probe-only joining independent of the passive-overlap lifecycle."
+    }
+  ],
+  "fixtureConsolidation": [
+    {
+      "file": "src/gateway/server/hooks.early-failure.test.ts",
+      "removedHelperBody": "postAgentHook inline HTTP request/response construction",
+      "keeper": "post(handler, path, payload)",
+      "invariant": "Same POST JSON, bearer token, local peer, handled=true assertion, status and response body."
+    }
+  ]
+}

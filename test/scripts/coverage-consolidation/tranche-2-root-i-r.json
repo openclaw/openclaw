@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "lane": "gateway-root-i-r",
+  "removedFiles": [],
+  "consolidations": [
+    {
+      "removed": { "file": "src/gateway/operator-approval-store.test.ts", "case": "returns the first terminal answer and distinguishes same and conflicting retries" },
+      "keeper": { "file": "src/gateway/operator-approval-store.worker.test.ts", "case": "preserves serialized records, first-answer wins, consumption and history through the worker" },
+      "invariant": "Concurrent duplicate insertion and competing terminal writes preserve the first decision and resolver.",
+      "transferredAssertions": ["duplicate inserts return inserted then existing with pending identity", "concurrent winner, same-decision retry, conflicting retry and forced denial retain distinct outcomes", "losing channel resolver and late system denial cannot replace the winning device resolver", "worker responses retain byte parity with the native kernel"]
+    },
+    {
+      "removed": { "file": "src/gateway/operator-approval-store.test.ts", "case": "consumes allow-once exactly once without erasing the terminal decision" },
+      "keeper": { "file": "src/gateway/operator-approval-store.worker.test.ts", "case": "preserves serialized records, first-answer wins, consumption and history through the worker" },
+      "invariant": "Concurrent consumers can redeem Allow Once only once; terminal decision and winning consumer remain durable.",
+      "transferredAssertions": ["first consume succeeds; competing consume reports already-consumed", "allowed status and allow-once decision remain", "resolved, updated and consumed timestamps clamp to the future creation timestamp", "winning consumer identity survives replay", "native and worker consumption/history bytes agree"]
+    },
+    {
+      "removed": { "file": "src/gateway/operator-approval-store.test.ts", "case": "cancels pending rows from older runtime epochs after reopen" },
+      "keeper": { "file": "src/gateway/operator-approval-store.worker.test.ts", "case": "runs startup recovery, lookup, expiry and history without host SQLite calls through close" },
+      "invariant": "After reopening, startup recovery cancels only the old epoch and prevents redeeming its approval.",
+      "transferredAssertions": ["close the database before recovery", "exact affected/pruned counts and cancelled deny record with gateway-restart reason", "cancellation timestamps clamp to creation time", "cancelled approval is not redeemable", "current-epoch approval remains pending, then expires through replay", "all operations remain off the host SQL path"]
+    }
+  ],
+  "validation": { "testsRun": false, "reason": "Parent owns formatting, scoped proof and review; this lane was instructed not to run tests or install dependencies.", "productionChanges": false, "sharedHelperChanges": false }
+}

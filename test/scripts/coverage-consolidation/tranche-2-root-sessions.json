@@ -1,0 +1,115 @@
+{
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "lane": "root gateway sessions and chat",
+  "deletedFiles": [],
+  "consolidations": [
+    {
+      "file": "src/gateway/session-row-delta-fields.test.ts",
+      "deletedCases": [
+        "preserves JSON values and removes fields that disappear from the wire",
+        "compares nested JSON semantically and replaces a changed nested field whole"
+      ],
+      "keeperFile": "src/gateway/session-row-delta-fields.test.ts",
+      "keeperCase": "matches JSON patches through consecutive revisions and audience changes",
+      "keeperRows": [
+        "cyclic value revisions",
+        "alternating audience field",
+        "changing usage field",
+        "adjacent reordered nested object values"
+      ],
+      "failureDetection": "The independent JSON round-trip oracle asserts the complete set/remove patch: omitted or undefined fields disappear, falsy/empty-array values survive, semantically equal nested JSON stays unchanged, and changed nested fields are replaced whole.",
+      "transferredAssertions": [
+        "added null/booleans/numbers/strings/empty array values",
+        "whole usage replacement on every revision"
+      ]
+    },
+    {
+      "file": "src/gateway/session-row-delta-fields.test.ts",
+      "deletedCases": [
+        "compares primitive JSON values -0 \u2192 0",
+        "compares primitive JSON values NaN \u2192 null",
+        "compares primitive JSON values Infinity \u2192 null",
+        "compares primitive JSON values -Infinity \u2192 null",
+        "compares primitive JSON values null \u2192 NaN",
+        "compares primitive JSON values 1 \u2192 \"1\"",
+        "compares primitive JSON values true \u2192 \"true\"",
+        "compares primitive JSON values \"\" \u2192 \"\"",
+        "compares primitive JSON values \"allow\" \u2192 \"allow\""
+      ],
+      "keeperFile": "src/gateway/session-row-delta-fields.test.ts",
+      "keeperCase": "matches JSON patches through consecutive revisions and audience changes",
+      "keeperRows": [
+        "null/NaN/Infinity/-Infinity/null",
+        "true/\"true\"",
+        "1/\"1\"",
+        "-0/0",
+        "unchanged title each revision"
+      ],
+      "additionalKeeperCase": "keeps a short JSON string equivalent to an object encoding the same value: %j",
+      "additionalKeeperRows": [
+        "\"\"",
+        "\"allow\""
+      ],
+      "failureDetection": "Equivalent JSON null numeric values and signed zero must produce no value patch; number/string and boolean/string changes must produce a patch. The retained short-string encoding table detects unequal fingerprints for unchanged empty/allow JSON values. Dedicated ASCII-width and Unicode mismatch rows remain.",
+      "transferredAssertions": [
+        "expanded independent JSON oracle with non-finite numbers, booleans, typed string counterparts, and empty array"
+      ]
+    },
+    {
+      "file": "src/gateway/session-utils.test.ts",
+      "deletedCases": [
+        "session rows project automation bindings and event fields forward them"
+      ],
+      "keeperFile": "src/gateway/session-row-projection.selection-progress.test.ts",
+      "keeperCase": "rebuilds only changed automation bindings and preserves complete unrelated rows",
+      "keeperRows": [
+        "isolated cron:binding row",
+        "unbound next/parent/other rows",
+        "binding moved to explicit next session"
+      ],
+      "failureDetection": "An isolated automation binding must appear on the materialized row and event snapshot; unbound row event snapshots must expose false. Moving the binding must rebuild the old and new rows while preserving unrelated rows.",
+      "transferredAssertions": [
+        "each initial event snapshot has hasAutomation strictly false; missing fields fail",
+        "isolated bound snapshot has hasAutomation true"
+      ],
+      "retainedUniqueCase": "resolveSessionStoreKey honors global scope remains in session-utils.test.ts because the worker owner assertion was not duplicated exactly"
+    },
+    {
+      "file": "src/gateway/server.chat.gateway-server-chat.test.ts",
+      "deletedCases": [
+        "chat.send interrupt ignores subordinate session-effect interruption hooks"
+      ],
+      "keeperFile": "src/gateway/server.chat.gateway-server-chat.test.ts",
+      "keeperCase": "chat.send interrupt leaves a subordinate session effect with its owner",
+      "keeperRows": [
+        "active admitted subordinate effect"
+      ],
+      "failureDetection": "Interrupting chat must not call the subordinate owner hook, must start the new run without interruptedActiveRun, and must leave no controller/root work after the owner releases its effect. The dormant throwing-hook variant asserted the same not-called boundary.",
+      "transferredAssertions": [
+        "root work count returns to zero",
+        "sessions.reset succeeds after release"
+      ]
+    },
+    {
+      "file": "src/gateway/server.chat.gateway-server-chat.test.ts",
+      "deletedCases": [
+        "sessions.abort stops active dashboard runs",
+        "sessions.abort resolves active runs by runId without a caller session key"
+      ],
+      "keeperFile": "src/gateway/server.chat.gateway-server-chat.test.ts",
+      "keeperCase": "sessions.abort stops active dashboard runs (key supplied=%s)",
+      "keeperRows": [
+        "true: supplied dashboard key and runId",
+        "false: runId only"
+      ],
+      "failureDetection": "Both abort addressing forms retain success/status/runId checks and request drainage; both now assert the cancelled lifecycle event and agent.wait RPC stop reason when aborted. No-active-run retains its null abortedRunId assertion.",
+      "transferredAssertions": [
+        "full terminal lifecycle and agent.wait checks also run for the runId-only row"
+      ]
+    }
+  ],
+  "validation": {
+    "execution": "No tests, installs, or dependency-backed checks run in this lane; parent owns proof and formatting.",
+    "review": "Bounded diff review; unique global worker-owner case retained; auth, race, and lifecycle suites otherwise untouched."
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "removedFiles": [],
+  "consolidations": [
+    {
+      "removed": {
+        "file": "src/gateway/server-methods/sessions-typing.test.ts",
+        "case": "keeps a draft beside boolean-only typing until its connection stops"
+      },
+      "keeper": {
+        "file": "src/gateway/server-methods/sessions-typing.test.ts",
+        "case": "keeps per-connection drafts and activity until an identity's last connection stops (preview=%s)",
+        "row": "still drafting",
+        "section": "boolean-only second tab preserves first-tab preview; stopping preview tab clears preview while the second remains typing"
+      },
+      "invariant": "Per-identity aggregation retains the live draft without assigning it to a boolean-only connection; stopping that draft connection does not stop the other connection."
+    },
+    {
+      "removed": {
+        "file": "src/gateway/server-methods/sessions-typing.test.ts",
+        "case": "keeps an identity typing until its last active connection stops"
+      },
+      "keeper": {
+        "file": "src/gateway/server-methods/sessions-typing.test.ts",
+        "case": "keeps per-connection drafts and activity until an identity's last connection stops (preview=%s)",
+        "row": "undefined",
+        "section": "two starts; first stop remains typing; final stop emits false; activity records only the two starts"
+      },
+      "invariant": "Two boolean-only connections aggregate by identity and only the last stop ends typing; stops and timer flushes never record client activity."
+    },
+    {
+      "removed": {
+        "file": "src/gateway/server-methods/session-typing-state.test.ts",
+        "case": "attempts only the latest draft at the trailing edge after delivery"
+      },
+      "keeper": {
+        "file": "src/gateway/server-methods/sessions-typing.test.ts",
+        "case": "broadcasts bounded draft previews and never includes previews after typing stops",
+        "section": "50ms superseded draft, 100ms latest draft, 250ms flush; 300ms after-edge draft waits until 500ms"
+      },
+      "invariant": "The real handler coalesces previews at the 250ms trailing edge and schedules the next update from the delivered trailing edge."
+    }
+  ],
+  "validation": {
+    "testsRun": false,
+    "reason": "Parent owns scoped execution and formatting; this lane performed code-only review.",
+    "productionChanges": false,
+    "sharedHelperChanges": false,
+    "suggestedCommand": "node scripts/run-vitest.mjs src/gateway/server-methods/session-typing-state.test.ts src/gateway/server-methods/sessions-typing.test.ts src/gateway/server-methods/sessions-typing.delivery.test.ts"
+  }
+}

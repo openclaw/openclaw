@@ -1,0 +1,68 @@
+{
+  "baseline": "eacadf5279137c919ce18de71688886fe28eecfe",
+  "lane": "methods-other",
+  "note": "Only repeated memory-search rejection setup/assertion bodies were consolidated. All original request inputs and failure checks remain. No production files, shared helpers, or suites were removed.",
+  "sourceLoc": {
+    "added": 28,
+    "removed": 59,
+    "net": -31
+  },
+  "deletedFiles": [],
+  "file": "src/gateway/server-methods/memory-search.test.ts",
+  "keeper": {
+    "file": "src/gateway/server-methods/memory-search.test.ts",
+    "case": "%s (input-rejection table)"
+  },
+  "consolidatedCases": [
+    {
+      "removedCase": "rejects a missing or whitespace-only query before acquiring a manager",
+      "baselineLines": [
+        447,
+        462
+      ],
+      "keeperRow": "rejects a missing or whitespace-only query before acquiring a manager",
+      "retainedFailureDetection": "Both absent query and whitespace query return INVALID_REQUEST with query must be a non-empty string, without manager acquisition.",
+      "transferredUniqueAssertions": []
+    },
+    {
+      "removedCase": "rejects an unknown agentId without acquiring a manager",
+      "baselineLines": [
+        507,
+        521
+      ],
+      "keeperRow": "rejects an unknown agentId without acquiring a manager",
+      "retainedFailureDetection": "An unconfigured agent ID returns INVALID_REQUEST with unknown agentId, without manager acquisition.",
+      "transferredUniqueAssertions": []
+    },
+    {
+      "removedCase": "rejects a non-string agentId without acquiring a manager",
+      "baselineLines": [
+        550,
+        564
+      ],
+      "keeperRow": "rejects a non-string agentId without acquiring a manager",
+      "retainedFailureDetection": "A numeric agent ID returns INVALID_REQUEST with agentId must be a string, without manager acquisition.",
+      "transferredUniqueAssertions": []
+    },
+    {
+      "removedCase": "rejects a normalization-empty agentId without acquiring a manager: %j",
+      "baselineLines": [
+        566,
+        584
+      ],
+      "keeperRow": "rejects normalization-empty agentIds without acquiring a manager",
+      "retainedFailureDetection": "All three original inputs (spaces, ---, ſ) return INVALID_REQUEST with unknown agentId. Neither default-agent resolution nor manager acquisition is allowed.",
+      "transferredUniqueAssertions": [],
+      "expandedCases": [
+        "rejects a normalization-empty agentId without acquiring a manager: \"   \"",
+        "rejects a normalization-empty agentId without acquiring a manager: \"---\"",
+        "rejects a normalization-empty agentId without acquiring a manager: \"ſ\""
+      ],
+      "keeperInputs": [
+        "   ",
+        "---",
+        "ſ"
+      ]
+    }
+  ]
+}

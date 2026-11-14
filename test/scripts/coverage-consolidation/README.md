@@ -47,3 +47,21 @@ typecheck. When local dependencies are unqualified, record the actual command
 failure and use the existing exact-head CI route on the draft PR. A full
 Testbox baseline is not a prerequisite. Passing formatting or syntax parsing
 does not claim passing runtime tests or typechecking.
+
+## Gateway tranche 2
+
+Baseline: `eacadf5279137c919ce18de71688886fe28eecfe`.
+
+The twelve `tranche-2-*.json` manifests record gateway test consolidation.
+This packet removes 1,300 net executable test/support lines across 29 test paths,
+including the new shared migration fixture. Production LOC delta is zero.
+The 50,000–100,000-line target remains unmet; distinct authority, lifecycle,
+persistence, and cancellation checks remain separate.
+
+`node scripts/run-vitest.mjs src/gateway --maxWorkers=1` stopped before loading
+tests because this checkout has no qualified dependencies. The scoped gateway
+typecheck (`node scripts/run-tsgo.mjs -p
+test/tsconfig/tsconfig.core.test.gateway-other.json --incremental`) stopped on
+missing `tsrs/package.json`; the other gateway typecheck shards were not run.
+Pinned formatting and syntax checks passed for all 28 surviving TypeScript
+files. Runtime/typecheck validation remains pending exact-head draft CI.

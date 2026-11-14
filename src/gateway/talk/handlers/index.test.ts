@@ -13,11 +13,8 @@ import {
 } from "../../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
-import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-view-tool.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
@@ -2729,87 +2726,6 @@ describe("talk.client.create handler", () => {
     expect(mocks.ensureClientVoiceAgentSessionEntry).not.toHaveBeenCalled();
     expectRespondError(respond, {
       message: 'Realtime provider "custom" does not support client-owned realtime sessions',
-    });
-  });
-});
-describe("role-required Talk session creation", () => {
-  it.each([
-    { method: "talk.client.create" as const, params: { sessionKey: "agent:main:talk-required" } },
-    {
-      method: "talk.session.create" as const,
-      params: {
-        sessionKey: "agent:main:talk-required",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-      },
-    },
-  ])("passes authenticated creator isolation through $method", async ({ method, params }) => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      vi.clearAllMocks();
-      const profile = ensureProfileForEmail("talk-required@example.test");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      providerMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-        provider: {
-          id: "openai",
-          label: "OpenAI Realtime",
-          isConfigured: () => true,
-          createBrowserSession: vi.fn(async () => ({
-            provider: "openai",
-            transport: "webrtc" as const,
-            clientSecret: "test-session-secret",
-          })),
-          createBridge: vi.fn(),
-        },
-        providerConfig: {},
-      });
-      providerMocks.resolveRealtimeVoiceProviderCapabilitiesAsync.mockImplementation(
-        ({ provider }: { provider: { capabilities?: unknown } }) => provider.capabilities,
-      );
-      mocks.createOrResumeClientVoiceSession.mockResolvedValue("voice-required");
-      mocks.createTalkRealtimeRelaySession.mockReturnValue({
-        provider: "openai",
-        transport: "gateway-relay",
-        relaySessionId: "relay-required",
-      });
-      const config: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "none" },
-                agents: ["main"],
-                scopes: ["operator.talk"],
-                sandbox: "required",
-              },
-            },
-          },
-        },
-        ...realtimeConfig({ provider: "openai", providers: { openai: {} } }),
-      };
-
-      const respond = await invokeTalkHandler(method, {
-        params,
-        client: {
-          connId: "conn-required",
-          connect: { scopes: ["operator.talk"] },
-          authenticatedUserProfile: { profileId: profile.id },
-        },
-        context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
-      });
-
-      expectRespondOk(respond);
-      expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "main",
-          sessionKey: "agent:main:talk-required",
-          creation: expect.objectContaining({
-            actor: { type: "human", source: "profile", id: profile.id },
-            sandbox: "required",
-          }),
-        }),
-      );
     });
   });
 });
