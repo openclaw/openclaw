@@ -2,7 +2,10 @@ import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { buildStrictAnthropicReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  bindsClaudeThinkingPrefix,
+  buildStrictAnthropicReplayPolicy,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OMITTED_COPILOT_REASONING_TEXT = "[assistant reasoning omitted]";
@@ -48,5 +51,12 @@ export function buildGithubCopilotReplayPolicy(
     // leaves the persisted transcript untouched. Core-side rewriting would
     // mutate that transcript instead.
     sanitizeToolCallIds: false,
+    // Prefix-binding Claude models need append-only runtime context here too, as on the
+    // Anthropic, Bedrock and Vertex routes. With transient carriers, every Copilot tool-loop
+    // request re-wrote the whole conversation into the prompt cache instead of reading it.
+    appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
+      id: ctx.modelId,
+      params: ctx.model?.params,
+    }),
   });
 }
