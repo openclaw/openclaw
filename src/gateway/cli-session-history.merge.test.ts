@@ -3,7 +3,7 @@ import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { mergeImportedChatHistoryMessages, user } from "./cli-session-history.test-support.js";
 
 describe("imported Claude history merge", () => {
-  it.each(["alone", "drift", "legacy"])("deduplicates resumed context %s", (kind) => {
+  it.each(["alone", "drift", "legacy", "gap"])("deduplicates resumed context %s", (kind) => {
     const timestamp = Date.parse("2026-09-10T10:57:09.764Z");
     const localMeta = { id: "local-review-ask" };
     const importedMeta = {
@@ -22,14 +22,14 @@ describe("imported Claude history merge", () => {
     ].join("\n");
     const driftNote = kind === "drift" ? `${buildCliSessionDriftNote(["prompt-tools"])}\n\n` : "";
     const gapNote =
-      kind === "legacy"
-        ? '\n\n[OpenClaw: 2 messages occurred outside this Claude session from 2026-11-03T12:00:00.000Z to 2026-11-03T12:01:00.000Z, using "claude-cli/claude-sonnet-4-6". Their contents are not included here.]'
+      kind === "legacy" || kind === "gap"
+        ? '\n\n[OpenClaw: 2 earlier messages in this chat from 2026-11-03T12:00:00.000Z to 2026-11-03T12:01:00.000Z, using "claude-cli/claude-sonnet-4-6". Their contents are not included here.]'
         : "";
     const importedMessage = user(
       [
         {
           type: "text",
-          text: `${driftNote}${carried}${gapNote}\n\n[Thu 2026-03-26 16:29 GMT] What did the review find?`,
+          text: `${driftNote}${kind === "gap" ? gapNote.slice(2) : carried + gapNote}\n\n[Thu 2026-03-26 16:29 GMT] What did the review find?`,
         },
       ],
       timestamp + 1_531,
