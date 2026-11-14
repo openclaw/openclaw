@@ -1,7 +1,12 @@
 import type { SystemAgentChatParams } from "../../packages/gateway-protocol/src/index.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { SystemAgentTurnDirective } from "./agent-turn.js";
 import type { SystemAgentAssistantPlan } from "./assistant.js";
-import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import type { SystemAgentChatReply } from "./chat-wizard-host.js";
+import {
+  SystemAgentInferenceUnavailableError,
+  isSystemAgentInferenceUnavailableError,
+} from "./inference-error.js";
 import { isInvalidConfigSetOperation } from "./operations-internal.js";
 import {
   describeSystemAgentPersistentOperation,
@@ -112,4 +117,45 @@ export function formatSystemAgentTurnInput(
       ? `[pending-proposal] Awaiting the user's approval: ${formatPendingOperationForAssistant(pending)}. It is already host-seeded; if they want it (or a variant), drive it through the openclaw tool yourself.\n${text}`
       : text
   }`;
+}
+
+/** Translate host directives into replies; Template review failures never stage a write. */
+export async function applyTurnDirective(params: {
+  loopReply: { text: string; directive?: SystemAgentTurnDirective };
+  runOperation: (operation: SystemAgentOperation) => Promise<SystemAgentChatReply>;
+  applyApproved: (operation: SystemAgentOperation) => Promise<SystemAgentChatReply>;
+}): Promise<SystemAgentChatReply> {
+  const { loopReply, runOperation, applyApproved } = params;
+  const directive = loopReply.directive;
+  if (!directive) {
+    return { text: loopReply.text, action: "none" };
+  }
+  let reply: SystemAgentChatReply;
+  if (directive.kind === "template-operation") {
+    try {
+      reply = await runOperation(directive.operation);
+    } catch (error) {
+      if (isSystemAgentInferenceUnavailableError(error)) {
+        throw error;
+      }
+      reply = {
+        text:
+          "That did not go through: " + (error instanceof Error ? error.message : String(error)),
+        action: "none",
+        applied: false,
+      };
+    }
+  } else {
+    reply =
+      directive.kind === "approved-operation"
+        ? await applyApproved(directive.operation)
+        : await runOperation(directive);
+  }
+  return {
+    ...reply,
+    text:
+      directive.kind === "open-tui" && reply.action === "open-tui"
+        ? loopReply.text
+        : [loopReply.text, reply.text].filter(Boolean).join("\n\n"),
+  };
 }

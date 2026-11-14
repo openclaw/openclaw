@@ -65,6 +65,51 @@ const proposalTransition = (args: Record<string, unknown>, resultText: string) =
   resolveSystemAgentProposalTransition({ args, resultText });
 
 describe("openclaw tool", () => {
+  it("hands published Template review to the host without installing in the model loop", async () => {
+    const { call, directiveRef, proposalRef } = gatewayFixture({ operatorApprovalOnly: true });
+    await call({
+      action: "template_review",
+      source: { packageName: "@fixture/research", version: "1.0.0" },
+    });
+    expect(directiveRef.current).toEqual({
+      kind: "template-operation",
+      operation: {
+        kind: "template-review",
+        source: { packageName: "@fixture/research", version: "1.0.0" },
+      },
+    });
+    expect(proposalRef).toEqual({});
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it.each(["template_review", "template_install"])(
+    "mirrors %s through native MCP without transferring host authority",
+    async (action) => {
+      const args = {
+        action,
+        source: { packageName: "@fixture/research", version: "1.0.0" },
+        ...(action === "template_install"
+          ? { agentId: "research", planIntegrity: "exact-plan" }
+          : {}),
+      };
+      const resultText = toolText(
+        await makeTool({ operatorApprovalOnly: true }).execute("native", args),
+      );
+      expect(directiveTransition(args, resultText)).toEqual({
+        kind: "template-operation",
+        operation: {
+          kind: action === "template_review" ? "template-review" : "template-install",
+          source: args.source,
+          ...(action === "template_install"
+            ? { agentId: "research", planIntegrity: "exact-plan" }
+            : {}),
+        },
+      });
+      expect(proposalTransition(args, resultText)).toBeNull();
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+
   it("stays directly callable instead of entering tool catalogs", () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     expect(tool.catalogMode).toBe("direct-only");

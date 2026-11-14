@@ -172,7 +172,13 @@ describe("Gateway Template Add activation policy", () => {
           expect(JSON.parse(await fs.readFile(env.OPENCLAW_CONFIG_PATH, "utf8"))).toMatchObject({
             legacyFixture: { value: "retained" },
           });
-          return { agent: plan.agent, status: "complete" };
+          return {
+            agent: plan.agent,
+            status: "complete",
+            packages: [],
+            mcpServers: [],
+            cronJobs: [],
+          };
         },
       );
       try {
@@ -210,7 +216,13 @@ describe("Gateway Template Add activation policy", () => {
           await options.reloadPlugins!([
             { pluginId: "fixture", installHash: "fixture-hash", sourceDigests: {} },
           ]);
-          return { agent: plan.agent, status: "complete" };
+          return {
+            agent: plan.agent,
+            status: "complete",
+            packages: [],
+            mcpServers: [],
+            cronJobs: [],
+          };
         },
       );
       await expect(

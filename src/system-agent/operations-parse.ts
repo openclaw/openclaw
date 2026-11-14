@@ -16,6 +16,7 @@ import type { loadSystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
 export type { SystemAgentOperation };
+export type { SystemAgentOperatorProposal } from "./operation-types.js";
 
 export type SystemAgentOperationResult = {
   applied: boolean;
@@ -420,6 +421,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
     operation.kind === "plugin-activate-artifact" ||
+    operation.kind === "template-install" ||
     operation.kind === "plugin-uninstall" ||
     operation.kind === "create-team" ||
     (operation.kind === "create-agent" &&
@@ -458,6 +460,8 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
     case "plugin-install":
       return `install plugin ${operation.spec}`;
+    case "template-install":
+      return `add ClawHub Template ${operation.source.packageName}@${operation.source.version} as agent ${operation.agentId} using reviewed plan ${operation.planIntegrity}`;
     case "plugin-activate-artifact":
       return `install the trusted plugin artifact ${operation.path} (SHA256 ${operation.sha256}), including its declared capabilities and native UI; restart the Gateway to load it`;
     case "plugin-uninstall":
