@@ -36,6 +36,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
   const state = await createOpenClawTestState(kernelGatewayTestStateOptions("member-role-reload"));
   const clients: Array<Awaited<ReturnType<typeof connectGatewayClient>>> = [];
   let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+  const requestRecoveryRestart = vi.fn();
   const port = await getFreePort();
   const origin = `http://127.0.0.1:${port}`;
   const token = "member-role-reload-test-token";
@@ -88,7 +89,11 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       ),
     ).toMatchObject({ ok: true });
     await claw.authority.bindToken("previous-member-browser", "operator", peer);
-    server = await startGatewayServerCore(port, { bind: "loopback", controlUiEnabled: false });
+    server = await startGatewayServerCore(port, {
+      bind: "loopback",
+      controlUiEnabled: false,
+      hotReloadRecovery: requestRecoveryRestart,
+    });
     let ownerHello: HelloOk | undefined;
     const owner = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
@@ -164,6 +169,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     expect(await withinTest(viewer.closed.promise, signal)).toBe(4001);
     await viewer.client.stopAndWait();
     await expect(connectMember()).rejects.toThrow();
+    expect(requestRecoveryRestart).not.toHaveBeenCalled();
   } finally {
     for (const client of clients) {
       await client.stopAndWait();
@@ -200,6 +206,7 @@ it("orders delayed startup presets before live policy and reports reload-off act
     });
   let starting: ReturnType<typeof startGatewayServerCore> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+  const requestRecoveryRestart = vi.fn();
   let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   const apply = async (config: OpenClawConfig) => {
     const application = createRuntimeConfigWriteApplication();
@@ -218,7 +225,11 @@ it("orders delayed startup presets before live policy and reports reload-off act
         openclawId: { enabled: true },
       },
     });
-    starting = startGatewayServerCore(port, { bind: "loopback", controlUiEnabled: false });
+    starting = startGatewayServerCore(port, {
+      bind: "loopback",
+      controlUiEnabled: false,
+      hotReloadRecovery: requestRecoveryRestart,
+    });
     await withinTest(entered.promise, signal);
     const publishedBeforePresets = getRuntimeConfigSnapshot()?.gateway?.openclawId?.enabled;
     const managedBeforePresets = hasManagedRuntimeConfigWriteOwner(state.configPath);
@@ -266,6 +277,7 @@ it("orders delayed startup presets before live policy and reports reload-off act
     expect(await owner.request("openclawId.status", {})).toMatchObject({
       status: { state: "off" },
     });
+    expect(requestRecoveryRestart).not.toHaveBeenCalled();
   } finally {
     release.resolve();
     await owner?.stopAndWait();

@@ -9,4 +9,5 @@
 # CI consumer fixtures: explicit member catalogs, runtime publication, and cleanup.
 # Publication: attested member capture/restoration, revocation, legacy/nonmember parity,
 # malformed-record isolation, task handoff, and accepted-snapshot retry preservation.
-1194
+# CI integration: committed member fixture snapshot and owned hot-reload recovery.
+1241
