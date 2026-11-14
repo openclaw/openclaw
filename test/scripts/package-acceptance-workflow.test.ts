@@ -9451,20 +9451,13 @@ test "$package_manager" = "pnpm@12.1.0"
     const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
     const watcher = workflowJob(FULL_RELEASE_STATE_WATCHER, "watch");
     const decisionStep = workflowStep(watcher, "Evaluate release state");
-    const drainStep = workflowStep(watcher, "Evaluate release state");
     const decisionUpload = workflowStep(watcher, "Upload release state");
-    const drainUpload = workflowStep(watcher, "Upload release state");
     const planInputsStep = workflowStep(
       executionPlan,
       "Prepare immutable release execution plan inputs",
     );
     const planStep = workflowStep(executionPlan, "Seal immutable release execution plan");
     const planCache = workflowStep(executionPlan, "Cache immutable release execution plan");
-    const planRestore = workflowStep(
-      executionPlan,
-      "Restore immutable release execution plan artifact",
-    );
-    const planUpload = workflowStep(executionPlan, "Upload immutable release execution plan");
     const manifestStep = workflowStep(summary, "Write release validation manifest");
     const selectState = workflowStep(summary, "Select newest compatible release state artifacts");
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
@@ -9491,12 +9484,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')";
     expect(decision.if).toBe(waiterCondition);
     expect(drain.if).toBe(waiterCondition);
-    expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
-      FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
-      FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
-    });
-    expect(drainStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
       FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
     });
@@ -9532,31 +9520,9 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(planCache.uses).toBe(
       ACTIONS_CACHE_V6.replace("actions/cache@", "actions/cache/restore@"),
     );
-    expect(planCache["continue-on-error"]).toBe(true);
-    expect(planCache.with).toMatchObject({
-      key: "full-release-execution-plan-v2-${{ github.run_id }}",
-    });
-    expect(planCache.with).not.toHaveProperty("fail-on-cache-miss");
-    expect(planRestore.if).toBe(
-      "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
-    );
-    expect(planRestore["continue-on-error"]).toBe(true);
-    expect(planRestore.with).toMatchObject({
-      "github-token": "${{ github.token }}",
-      name: "full-release-execution-plan-${{ github.run_id }}",
-      "run-id": "${{ github.run_id }}",
-    });
-    expect(planUpload.if).toBe(
-      "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
-    );
-    expect(planUpload.with?.name).toBe("full-release-execution-plan-${{ github.run_id }}");
-    expect(planUpload.with?.overwrite).toBe(false);
     expect(manifestStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
     expect(manifestStep.run).not.toContain("needs.evidence_reuse.outputs");
     expect(decisionUpload.with?.name).toBe(
-      "full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(drainUpload.with?.name).toBe(
       "full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(decisionDownloads.with).toMatchObject({
@@ -9783,15 +9749,6 @@ describe("package artifact reuse", () => {
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
-    expect(workflow).toContain("package_artifact_name:");
-    expect(workflow).toContain("package_artifact_digest:");
-    expect(workflow).toContain("package_artifact_id:");
-    expect(workflow).toContain("package_artifact_run_attempt:");
-    expect(workflow).toContain("package_artifact_run_id:");
-    expect(workflow).toContain("package_file_name:");
-    expect(workflow).toContain("package_source_sha:");
-    expect(workflow).toContain("package_sha256:");
-    expect(workflow).toContain("package_version:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
@@ -9807,15 +9764,10 @@ describe("package artifact reuse", () => {
       "OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}",
       "OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}",
       "OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
-      "Download current-run OpenClaw Docker E2E package",
-      "Download previous-run OpenClaw Docker E2E package",
       "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
       'bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"',
       'functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"',
-      "artifact-ids: ${{ inputs.package_artifact_id }}",
       '[[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]]',
-      '--arg digest "sha256:${ARTIFACT_DIGEST}"',
-      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
     ]);
     expect(workflow).not.toContain("uses: ./.github/actions/docker-e2e-plan");
     expect(workflow).toContain("Checkout trusted release harness");
@@ -15659,35 +15611,16 @@ promote_windows_release_assets
 
     const bootstrapWorkflow = ".github/workflows/plugin-clawhub-new.yml";
     const authorizationJob = workflowJob(bootstrapWorkflow, "validate_release_publish_approval");
-    const approvalDownload = workflowStep(
-      authorizationJob,
-      "Download parent ClawHub bootstrap approval",
-    );
     const authorization = workflowStep(authorizationJob, "Validate release publish approval run");
 
-    expect(authorizationJob.permissions).toMatchObject({
-      actions: "read",
-      attestations: "read",
-      contents: "read",
-    });
-    expect(approvalDownload.with).toMatchObject({
-      name: "clawhub-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}",
-      "run-id": "${{ inputs.release_publish_run_id }}",
-    });
     expect(authorization.env).toMatchObject({
       APPROVAL_PATH: "${{ runner.temp }}/clawhub-bootstrap-approval/approval.json",
-      CHILD_WORKFLOW_SHA: "${{ inputs.bootstrap_workflow_sha }}",
       EXPECTED_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
       EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_publish_branch }}",
       RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-      RELEASE_TARGET_SHA: "${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}",
     });
     expectTextToIncludeAll(authorization.run, [
       '${GITHUB_ACTOR}" != "github-actions[bot]"',
-      "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
-      "repository: .repository.full_name",
-      '--source-ref "${EXPECTED_WORKFLOW_REF}"',
-      '--source-digest "${EXPECTED_WORKFLOW_SHA}"',
       "validate-release-publish-approval.mjs",
     ]);
   });

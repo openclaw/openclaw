@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "removedFiles": [],
+  "consolidations": [
+    {
+      "removed": {"file": "test/scripts/crabbox-routing-policy.test.ts", "case": "routes %s through Boat, Daytona, Azure, then AWS"},
+      "keeper": {"file": "test/scripts/crabbox-routing-policy.test.ts", "cases": ["routes ci-fast from blacksmith-testbox on linux", "routes ci-proof from blacksmith-testbox on linux", "routes release-proof from blacksmith-testbox on linux"]},
+      "invariant": "ordered eligible CI providers for all three workloads",
+      "transferredAssertions": "exact provider-array equality; all original workload, target and configured-provider inputs retained"
+    },
+    {
+      "removed": {"file": "test/scripts/crabbox-routing-policy.test.ts", "case": "does not let persistent cloud config outrank the CI policy"},
+      "keeper": {"file": "test/scripts/crabbox-routing-policy.test.ts", "cases": ["routes ci-proof from aws on linux"]},
+      "invariant": "configured AWS does not override CI preference",
+      "transferredAssertions": "exact provider-array equality; all original workload, target and configured-provider inputs retained"
+    },
+    {
+      "removed": {"file": "test/scripts/crabbox-routing-policy.test.ts", "case": "prefers Daytona for interactive Linux work"},
+      "keeper": {"file": "test/scripts/crabbox-routing-policy.test.ts", "cases": ["routes interactive from blacksmith-testbox on linux"]},
+      "invariant": "interactive provider preference",
+      "transferredAssertions": "exact provider-array equality; all original workload, target and configured-provider inputs retained"
+    },
+    {
+      "removed": {"file": "test/scripts/crabbox-routing-policy.test.ts", "case": "keeps untrusted work off Blacksmith and Daytona pending isolation proof"},
+      "keeper": {"file": "test/scripts/crabbox-routing-policy.test.ts", "cases": ["routes untrusted from blacksmith-testbox on linux"]},
+      "invariant": "untrusted provider isolation",
+      "transferredAssertions": "exact provider-array equality; all original workload, target and configured-provider inputs retained"
+    },
+    {
+      "removed": {"file": "test/scripts/crabbox-routing-policy.test.ts", "case": "uses Azure then AWS for Windows and only AWS for macOS"},
+      "keeper": {"file": "test/scripts/crabbox-routing-policy.test.ts", "cases": ["routes ci-fast from blacksmith-testbox on windows", "routes ci-fast from blacksmith-testbox on macos"]},
+      "invariant": "platform eligibility and ordering",
+      "transferredAssertions": "exact provider-array equality; all original workload, target and configured-provider inputs retained"
+    },
+    {
+      "removed": {"file": "test/scripts/run-with-env.test.ts", "case": "cleans up wrapped command descendants on wrapper shutdown"},
+      "keeper": {"file": "test/scripts/run-with-env.test.ts", "cases": ["settles wrapped command descendants (graceful=false)"]},
+      "invariant": "forced descendant cleanup after parent exit",
+      "transferredAssertions": "positive live PID before SIGTERM, signal outcome, observed descendant exit"
+    },
+    {
+      "removed": {"file": "test/scripts/run-with-env.test.ts", "case": "lets wrapped command descendants finish during the shutdown grace period"},
+      "keeper": {"file": "test/scripts/run-with-env.test.ts", "cases": ["settles wrapped command descendants (graceful=true)"]},
+      "invariant": "graceful descendant completion before teardown",
+      "transferredAssertions": "SIGTERM outcome and exact done marker"
+    }
+  ],
+  "validation": { "testsRun": false, "reason": "Root owns scoped tests and typechecking.", "productionChanges": false, "sharedHelperChanges": false }
+}

@@ -1,0 +1,126 @@
+{
+  "baseline": "299b36e7429539440214dd63e061e9261a7270b2",
+  "lane": "package",
+  "note": "Broad same-case source-layer cuts were reverted after preservation review. Only independently verified canonical duplicates remain. All unique actor, validator, consumer, upgrade, command execution, artifact identity, auth and cleanup checks are preserved.",
+  "deletedFiles": [],
+  "deletedCases": [],
+  "canonicalDuplicateConsolidations": [
+    {
+      "file": "test/scripts/package-acceptance-workflow.test.ts",
+      "case": "runs Release Decision and Diagnostic Drain in parallel from exact child tuples",
+      "baselineLineRanges": [
+        [
+          9463,
+          9467
+        ],
+        [
+          9535,
+          9553
+        ]
+      ],
+      "removedLines": 24,
+      "keeper": {
+        "file": "test/scripts/full-release-validation-continuation-workflow.test.ts",
+        "case": "restores the immutable attempt-one plan instead of rebuilding child identity"
+      },
+      "invariant": "Same immutable attempt-one cache/restore/upload conditions, parent run identity and overwrite=false. Keep the exact cache action pin in the source case.",
+      "transferredUniqueAssertions": []
+    },
+    {
+      "file": "test/scripts/package-acceptance-workflow.test.ts",
+      "case": "publish requires the credentialed authorization path",
+      "baselineLineRanges": [
+        [
+          15662,
+          15665
+        ],
+        [
+          15668,
+          15676
+        ],
+        [
+          15679,
+          15679
+        ],
+        [
+          15683,
+          15683
+        ],
+        [
+          15687,
+          15690
+        ]
+      ],
+      "removedLines": 19,
+      "keeper": {
+        "file": "test/scripts/plugin-clawhub-new-workflow.test.ts",
+        "case": "requires an exact attested parent tuple for approved dry-run validation"
+      },
+      "invariant": "Duplicate bootstrap permissions, approval artifact tuple, child/target SHA and attestation source arguments. Keep unique approval path, expected attempt/branch, actor and validator checks.",
+      "transferredUniqueAssertions": []
+    },
+    {
+      "file": "test/scripts/package-acceptance-workflow.test.ts",
+      "case": "lets reusable Docker E2E consume an already resolved package artifact",
+      "baselineLineRanges": [
+        [
+          9786,
+          9794
+        ],
+        [
+          9810,
+          9811
+        ],
+        [
+          9815,
+          9815
+        ],
+        [
+          9817,
+          9818
+        ]
+      ],
+      "removedLines": 14,
+      "keeper": {
+        "file": "test/scripts/release-no-push-workflow.test.ts",
+        "case": "builds shared images locally, verifies artifacts, and cannot fall back to a registry"
+      },
+      "invariant": "Duplicate reusable artifact input keys, named current/previous downloads, artifact IDs, digest and attempt-bound URL. Keep every consumer, selected-source and upgrade check.",
+      "transferredUniqueAssertions": []
+    },
+    {
+      "file": "test/scripts/package-acceptance-workflow.test.ts",
+      "case": "runs Release Decision and Diagnostic Drain in parallel from exact child tuples",
+      "baselineLineRanges": [
+        [
+          9454,
+          9454
+        ],
+        [
+          9456,
+          9456
+        ],
+        [
+          9494,
+          9494
+        ],
+        [
+          9499,
+          9502
+        ],
+        [
+          9559,
+          9561
+        ]
+      ],
+      "removedLines": 10,
+      "keeper": {
+        "file": "test/scripts/package-acceptance-workflow.test.ts",
+        "case": "runs Release Decision and Diagnostic Drain in parallel from exact child tuples",
+        "row": "decisionStep and decisionUpload"
+      },
+      "invariant": "Both aliases select the identical watcher step. Keep one environment/upload assertion and remove only the self-comparison and second copies.",
+      "transferredUniqueAssertions": []
+    }
+  ]
+}

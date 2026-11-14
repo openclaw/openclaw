@@ -2299,8 +2299,35 @@ describe("release validation no-push transport", () => {
     }
   });
 
-  it("fails a missing required local live image before any registry pull", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-live-local-image-"));
+  it.each([
+    {
+      name: "fails a missing required local live image before any registry pull",
+      prefix: "openclaw-live-local-image-",
+      args: [resolve(LIVE_BUILD)],
+      image: "openclaw-live-test:required-local",
+      label: "live-test",
+      env: {
+        DOCKER_COMMAND_TIMEOUT: "5s",
+        OPENCLAW_LIVE_IMAGE: "openclaw-live-test:required-local",
+        OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: "1",
+      },
+    },
+    {
+      name: "fails a missing required local Docker E2E image before pull or build fallback",
+      prefix: "openclaw-docker-e2e-local-image-",
+      args: [
+        "-c",
+        `source "$1"
+docker_e2e_build_or_reuse "openclaw-e2e:required-local" "required local image test"`,
+        "bash",
+        resolve(DOCKER_E2E_IMAGE_HELPER),
+      ],
+      image: "openclaw-e2e:required-local",
+      label: "Docker E2E",
+      env: { OPENCLAW_DOCKER_BUILD_ON_MISSING: "1", OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1" },
+    },
+  ])("$name", ({ prefix, args, image, label, env }) => {
+    const root = mkdtempSync(join(tmpdir(), prefix));
     const bin = join(root, "bin");
     const calls = join(root, "docker.log");
     try {
@@ -2322,77 +2349,18 @@ exit 2
 `,
       );
       chmodSync(docker, 0o755);
-
-      const result = runWorkflowCommand("bash", [resolve(LIVE_BUILD)], {
+      const result = runWorkflowCommand("bash", args, {
         env: {
           ...process.env,
-          DOCKER_COMMAND_TIMEOUT: "5s",
+          ...env,
           FAKE_DOCKER_LOG: calls,
-          OPENCLAW_LIVE_IMAGE: "openclaw-live-test:required-local",
-          OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: "1",
           OPENCLAW_SKIP_DOCKER_BUILD: "1",
           PATH: `${bin}:${process.env.PATH ?? ""}`,
         },
       });
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Required local live-test image not found: openclaw-live-test:required-local",
-      );
-      expect(readFileSync(calls, "utf8")).toBe("image inspect openclaw-live-test:required-local\n");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("fails a missing required local Docker E2E image before pull or build fallback", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-local-image-"));
-    const bin = join(root, "bin");
-    const calls = join(root, "docker.log");
-    try {
-      mkdirSync(bin);
-      writeFileSync(calls, "");
-      const docker = join(bin, "docker");
-      writeFileSync(
-        docker,
-        `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [[ "$1" == "image" && "$2" == "inspect" ]]; then
-  exit 1
-fi
-if [[ "$1" == "pull" ]]; then
-  exit 0
-fi
-exit 2
-`,
-      );
-      chmodSync(docker, 0o755);
-
-      const result = runWorkflowCommand(
-        "bash",
-        [
-          "-c",
-          `source "$1"
-docker_e2e_build_or_reuse "openclaw-e2e:required-local" "required local image test"`,
-          "bash",
-          resolve(DOCKER_E2E_IMAGE_HELPER),
-        ],
-        {
-          env: {
-            ...process.env,
-            FAKE_DOCKER_LOG: calls,
-            OPENCLAW_DOCKER_BUILD_ON_MISSING: "1",
-            OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
-            OPENCLAW_SKIP_DOCKER_BUILD: "1",
-            PATH: `${bin}:${process.env.PATH ?? ""}`,
-          },
-        },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Required local Docker E2E image not found: openclaw-e2e:required-local",
-      );
-      expect(readFileSync(calls, "utf8")).toBe("image inspect openclaw-e2e:required-local\n");
+      expect(result.stderr).toContain(`Required local ${label} image not found: ${image}`);
+      expect(readFileSync(calls, "utf8")).toBe(`image inspect ${image}\n`);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

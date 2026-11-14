@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "baseline": "c564e14d997",
+  "file": "test/scripts/ci-workflow-planning.test.ts",
+  "deletedFiles": [],
+  "deletedCases": [],
+  "consolidatedCases": [
+    {"case":"keeps docs i18n CI on the workflow-owned Go toolchain","keeper":{"case":"keeps docs i18n CI on the workflow-owned Go toolchain","helper":"expectNodePrerequisite","rows":"0..15"},"invariant":"requires_go","preservedSelectionRows":16,"movedUniqueAssertions":[]},
+    {"case":"provisions pinned Bun for Node-hosted standalone code generation","keeper":{"case":"provisions pinned Bun for Node-hosted standalone code generation","helper":"expectNodePrerequisite","rows":"0..7"},"invariant":"requires_bun","preservedSelectionRows":8,"movedUniqueAssertions":[]},
+    {"case":"provisions ripgrep for filesystem, SQLite ratchet, and native PR wrapper selections","keeper":{"case":"provisions ripgrep for filesystem, SQLite ratchet, and native PR wrapper selections","helper":"expectNodePrerequisite","rows":"0..31"},"invariant":"requires_ripgrep","preservedSelectionRows":32,"movedUniqueAssertions":[]},
+    {"case":"prepares the Docker sandbox image only for selected container E2E cases","keeper":{"case":"prepares the Docker sandbox image only for selected container E2E cases","helper":"expectNodePrerequisite","rows":"0..6"},"invariant":"requires_sandbox_image","preservedSelectionRows":7,"movedUniqueAssertions":[]},
+    {"case":"provisions native OAuth binaries for selected Gateway proof rows","keeper":{"case":"provisions native OAuth binaries for selected Gateway proof rows","helper":"expectNodePrerequisite","rows":"0..2"},"invariant":"requires_native_secret_service","preservedSelectionRows":3,"movedUniqueAssertions":[]}
+  ],
+  "preservedContracts": ["All 66 input selections and expected prerequisite values", "Go uses exact boolean equality; other prerequisites retain Boolean coercion", "Bun rows retain node runtime policy assertions", "Go toolchain/cache and Docker/native OAuth setup assertions remain in their original cases"],
+  "validation": {"sourceReview": "All 66 table selections and expected values compared to the pre-edit AST; TypeScript syntax parse clean", "execution": "Not run: root owns tests and typecheck"}
+}

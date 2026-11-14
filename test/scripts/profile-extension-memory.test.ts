@@ -220,120 +220,118 @@ describe("scripts/profile-extension-memory", () => {
     expect(result.stderr).not.toContain("at ");
   });
 
-  it.each([
-    {
-      name: "package-local output without a root dist tree",
-      files: ["extensions/external/dist/index.js"],
-      selected: ["external"],
-      expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
-    },
-  ])("profiles $name", ({ files, selected, expected }) => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
-    try {
-      for (const relativeFile of [
-        ...files,
-        "extensions/external/index.ts",
-        "extensions/internal/index.ts",
-        "extensions/source-only/index.ts",
-      ]) {
-        const file = path.join(root, relativeFile);
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(
-          file,
-          file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
-          "utf8",
-        );
-      }
-      const reportPath = path.join(root, "report.json");
-      const result = runProfileExtensionMemory(
-        [
-          ...selected.flatMap((id) => ["--extension", id]),
-          "--concurrency",
-          "1",
-          "--json",
-          reportPath,
-        ],
-        root,
+  it.each(["package-local", "noisy", "nested-report", "default-report"] as const)(
+    "writes complete import reports for %s",
+    (scenario) => {
+      const root = realpathSync(
+        mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")),
       );
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).not.toContain("cliStartup");
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.repoRoot).toBe(root);
-      expect(report.selectedExtensions).toEqual(expected.map(({ dir }) => dir));
-      expect(report.results).toEqual(
-        expected.map(({ dir, file }) =>
-          expect.objectContaining({
-            dir,
+      const reports: string[] = [];
+      const external = scenario === "package-local";
+      const id = external ? "external" : "simple";
+      const file = external
+        ? "extensions/external/dist/index.js"
+        : "dist/extensions/simple/index.js";
+      const put = (relative: string, contents: string) => {
+        const target = path.join(root, relative);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, contents, "utf8");
+      };
+      try {
+        put(
+          file,
+          scenario === "noisy"
+            ? [
+                'const fs = require("node:fs");',
+                'fs.writeSync(2, "old stderr " + "x".repeat(160000) + "\\n");',
+                'fs.writeSync(1, "old stdout " + "y".repeat(160000) + "\\n");',
+                'process.on("exit", () => fs.writeSync(2, "exit tail\\n"));',
+              ].join("\n")
+            : "export {};\n",
+        );
+        if (external) {
+          for (const name of ["external", "internal", "source-only"]) {
+            put(`extensions/${name}/index.ts`, 'throw new Error("source imported");\n');
+          }
+        }
+        for (let run = 0; run < (scenario === "default-report" ? 2 : 1); run++) {
+          const explicitPath =
+            scenario === "default-report"
+              ? undefined
+              : path.join(
+                  root,
+                  scenario === "nested-report" ? ".artifacts/memory/report.json" : "report.json",
+                );
+          const result = runProfileExtensionMemory(
+            [
+              "--extension",
+              id,
+              "--concurrency",
+              "1",
+              ...(external ? [] : ["--skip-combined"]),
+              ...(explicitPath ? ["--json", explicitPath] : []),
+            ],
+            root,
+          );
+          expect(result.status, result.stderr).toBe(0);
+          const reportPath = explicitPath ?? extractReportPath(result.stdout);
+          reports.push(reportPath);
+          if (!explicitPath) {
+            expect(path.dirname(reportPath)).toBe(tmpdir());
+            expect(path.basename(reportPath)).toMatch(
+              /^openclaw-extension-memory-\d+-\d+-[0-9a-f-]+\.json$/u,
+            );
+          }
+          const report = JSON.parse(readFileSync(reportPath, "utf8"));
+          expect(report.counts).toEqual({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
+          expect(report.results).toHaveLength(1);
+          expect(report.results[0]).toMatchObject({
+            dir: id,
             file: path.join(root, file),
             relativeFile: file,
             status: "ok",
             maxRssMb: expect.any(Number),
-          }),
-        ),
-      );
-      expect(report.scope).toBe("cold-import");
-      expect(report.qualification).toMatchObject({
-        qualified: false,
-        temporaryHomeRemoved: true,
-      });
-      expect(report.qualification.gaps).toContain("canonical build identity unavailable");
-      for (const row of [report.combined, ...report.results]) {
-        expect(row.completion).toBe("imports");
-        expect(row.resources.totalCpuUs).toBe(row.resources.userCpuUs + row.resources.systemCpuUs);
-        expect(row.cpuDeltaFromBaseline.totalCpuUs).toBe(
-          row.resources.totalCpuUs - report.baseline.resources.totalCpuUs,
-        );
-        expect(row.cleanup.childClosed).toBe(true);
+          });
+          if (scenario === "noisy") {
+            const preview = report.results[0].stderrPreview;
+            for (const text of ["[output truncated", "[stderr preview truncated", "exit tail"]) {
+              expect(preview).toContain(text);
+            }
+            expect(preview).not.toContain("old stderr");
+            expect(preview.length).toBeLessThan(9_000);
+          }
+          if (external) {
+            expect(result.stderr).not.toContain("cliStartup");
+            expect(report).toMatchObject({
+              repoRoot: root,
+              selectedExtensions: [id],
+              scope: "cold-import",
+            });
+            expect(report.qualification).toMatchObject({
+              qualified: false,
+              temporaryHomeRemoved: true,
+            });
+            expect(report.qualification.gaps).toContain("canonical build identity unavailable");
+            expect(report.combined).toMatchObject({ status: "ok", maxRssMb: expect.any(Number) });
+            for (const row of [report.combined, ...report.results]) {
+              expect(row.completion).toBe("imports");
+              expect(row.resources.totalCpuUs).toBe(
+                row.resources.userCpuUs + row.resources.systemCpuUs,
+              );
+              expect(row.cpuDeltaFromBaseline.totalCpuUs).toBe(
+                row.resources.totalCpuUs - report.baseline.resources.totalCpuUs,
+              );
+              expect(row.cleanup.childClosed).toBe(true);
+            }
+          }
+        }
+        if (scenario === "default-report") expect(reports[0]).not.toBe(reports[1]);
+      } finally {
+        for (const report of reports) rmSync(report, { force: true });
+        rmSync(root, { recursive: true, force: true });
       }
-      expect(report.combined).toMatchObject({ status: "ok", maxRssMb: expect.any(Number) });
-      expect(report.counts).toEqual({
-        totalEntries: expected.length,
-        ok: expected.length,
-        fail: 0,
-        timeout: 0,
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("bounds noisy child output without losing RSS samples", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    try {
-      const extensionDir = path.join(root, "dist", "extensions", "noisy");
-      const reportPath = path.join(root, "report.json");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(
-        path.join(extensionDir, "index.js"),
-        [
-          `const fs = require("node:fs");`,
-          `fs.writeSync(2, "old stderr " + "x".repeat(160000) + "\\n");`,
-          `fs.writeSync(1, "old stdout " + "y".repeat(160000) + "\\n");`,
-          `process.on("exit", () => fs.writeSync(2, "exit tail\\n"));`,
-        ].join("\n"),
-        "utf8",
-      );
-
-      const result = runProfileExtensionMemory(
-        ["--extension", "noisy", "--skip-combined", "--concurrency", "1", "--json", reportPath],
-        root,
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.results).toHaveLength(1);
-      expect(report.results[0].status).toBe("ok");
-      expect(report.results[0].maxRssMb).toEqual(expect.any(Number));
-      expect(report.results[0].stderrPreview).toContain("[output truncated");
-      expect(report.results[0].stderrPreview).toContain("[stderr preview truncated");
-      expect(report.results[0].stderrPreview).toContain("exit tail");
-      expect(report.results[0].stderrPreview).not.toContain("old stderr");
-      expect(report.results[0].stderrPreview.length).toBeLessThan(9_000);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("preserves split UTF-8 output and rejects later descendant resource samples", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-utf8-"));
@@ -406,65 +404,6 @@ describe("scripts/profile-extension-memory", () => {
         },
       });
     } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("creates parent directories for nested JSON report paths", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    try {
-      const extensionDir = path.join(root, "dist", "extensions", "simple");
-      const reportPath = path.join(root, ".artifacts", "memory", "report.json");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
-
-      const result = runProfileExtensionMemory(
-        ["--extension", "simple", "--skip-combined", "--concurrency", "1", "--json", reportPath],
-        root,
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, "utf8"));
-      expect(report.counts).toMatchObject({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("uses distinct default JSON report paths for separate runs", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
-    const reportPaths: string[] = [];
-    try {
-      const extensionDir = path.join(root, "dist", "extensions", "simple");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
-
-      for (let index = 0; index < 2; index += 1) {
-        const result = runProfileExtensionMemory(
-          ["--extension", "simple", "--skip-combined", "--concurrency", "1"],
-          root,
-        );
-
-        expect(result.status, result.stderr).toBe(0);
-        const reportPath = extractReportPath(result.stdout);
-        reportPaths.push(reportPath);
-        expect(path.dirname(reportPath)).toBe(tmpdir());
-        expect(path.basename(reportPath)).toMatch(
-          /^openclaw-extension-memory-\d+-\d+-[0-9a-f-]+\.json$/u,
-        );
-        expect(JSON.parse(readFileSync(reportPath, "utf8")).counts).toMatchObject({
-          totalEntries: 1,
-          ok: 1,
-          fail: 0,
-          timeout: 0,
-        });
-      }
-
-      expect(reportPaths[0]).not.toBe(reportPaths[1]);
-    } finally {
-      for (const reportPath of reportPaths) {
-        rmSync(reportPath, { force: true });
-      }
       rmSync(root, { recursive: true, force: true });
     }
   });

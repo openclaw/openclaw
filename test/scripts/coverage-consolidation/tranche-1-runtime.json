@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "baseline": "c564e14d997",
+  "removedFiles": [],
+  "consolidations": [
+    {
+      "removed": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "profiles package-local output without a root dist tree" },
+      "keeper": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "writes complete import reports for %s", "row": "package-local" },
+      "invariant": "Profile the built package-local entry without importing source or requiring a root dist tree.",
+      "transferredAssertions": ["CLI success and no cliStartup error", "exact selected entry and count", "repo root and cold-import scope", "unqualified canonical identity with removed temporary home", "individual and combined import completion, RSS, CPU arithmetic and closed child"]
+    },
+    {
+      "removed": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "bounds noisy child output without losing RSS samples" },
+      "keeper": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "writes complete import reports for %s", "row": "noisy" },
+      "invariant": "Noisy successful imports retain RSS and the exit tail while bounding captured output.",
+      "transferredAssertions": ["CLI success", "one successful result with numeric RSS", "output and preview truncation markers", "exit tail retained", "old stderr discarded", "preview under 9000 characters"]
+    },
+    {
+      "removed": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "creates parent directories for nested JSON report paths" },
+      "keeper": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "writes complete import reports for %s", "row": "nested-report" },
+      "invariant": "The CLI creates nested report directories and writes the completed import result.",
+      "transferredAssertions": ["CLI success", "report read from .artifacts/memory/report.json", "one successful entry, no failures or timeouts"]
+    },
+    {
+      "removed": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "uses distinct default JSON report paths for separate runs" },
+      "keeper": { "file": "test/scripts/profile-extension-memory.test.ts", "case": "writes complete import reports for %s", "row": "default-report" },
+      "invariant": "Separate invocations produce separate valid reports under the platform temporary directory.",
+      "transferredAssertions": ["two successful CLI invocations", "temporary parent directory", "timestamp/PID/UUID filename shape", "successful report counts", "distinct report paths"]
+    },
+    {
+      "removed": { "file": "test/scripts/bench-gateway-concurrency.test.ts", "case": "parses bounded mock and live benchmark controls without booting a gateway", "fragment": "repeated per-option setup and assertions" },
+      "keeper": { "file": "test/scripts/bench-gateway-concurrency.test.ts", "case": "parses bounded mock and live benchmark controls without booting a gateway", "rows": "controls, invalid arguments, accepted boundaries" },
+      "invariant": "Benchmark option defaults, selected values, mode restrictions, argument rejection and workload limits remain independently checked.",
+      "transferredAssertions": ["all original default fields", "23 explicit flag-to-field mappings and six boolean flags", "live provider acceptance and four incompatible options", "all original invalid argument/error pairs", "upper accepted agent/session counts and load CPU profile path"]
+    }
+  ],
+  "validation": { "testsRun": false, "reason": "User requested code-only implementation; root owns proof.", "productionChanges": false, "sharedHelperChanges": false }
+}

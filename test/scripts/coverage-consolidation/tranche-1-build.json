@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "removedFiles": [],
+  "consolidations": [
+    {
+      "removed": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "rejects changed output until its postbuild owner verifies and updates the hash"},
+      "keeper": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "keeps emitted module identity authoritative through postbuild updates and corrupt metadata", "section": "stale and mismatched original hashes, then verified batch update"},
+      "invariant": "Changed emitted bytes reject lookup until the postbuild owner verifies original bytes and publishes the replacement hashes."
+    },
+    {
+      "removed": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "updates multiple chunks with one read and write per metadata ledger"},
+      "keeper": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "keeps emitted module identity authoritative through postbuild updates and corrupt metadata", "section": "multi-chunk update read/write spies and resolved module identity"},
+      "invariant": "One metadata ledger is read and written once for a batch of multiple emitted chunks; lookup succeeds after the update."
+    },
+    {
+      "removed": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "requires fresh producer metadata instead of inferring an emitted location"},
+      "keeper": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "keeps emitted module identity authoritative through postbuild updates and corrupt metadata", "section": "version, missing facade source, and removed metadata directory"},
+      "invariant": "Outdated, incomplete, or absent producer metadata rejects lookup with the build instruction rather than inferring an output."
+    },
+    {
+      "removed": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "rejects two recorded bodies inside one configuration"},
+      "keeper": {"file": "test/scripts/bun-standalone-source-module-urls.test.ts", "case": "keeps emitted module identity authoritative through postbuild updates and corrupt metadata", "section": "duplicate-body lookup and source graph rejection"},
+      "invariant": "Both source entry lookup and source graph chunk admission reject two emitted bodies for one source in the same configuration."
+    },
+    {
+      "removed": {"file": "test/scripts/bun-standalone-imports.test.ts", "case": "maps the CJS %s resolver handoff while preserving external paths and restoration", "rows": ["key", "\"_resolveFilename\"", "direct", "typed-arrow"]},
+      "keeper": {"file": "test/scripts/bun-standalone-imports.test.ts", "case": "retains the typed %s resolver's handoff, receiver, arguments and restoration", "rowMapping": {"key": "satisfies", "\"_resolveFilename\"": "as", "direct": "direct", "typed-arrow": "typed-arrow"}},
+      "invariant": "Computed, literal, and direct property assignments plus typed arrow resolvers map embedded handoffs while preserving external paths, receiver state, arguments, errors, and restoration; every row executes both type-preserving and stripped-source rewrites."
+    }
+  ],
+  "validation": { "testsRun": false, "reason": "Root owns scoped tests and test typechecking.", "productionChanges": false, "sharedHelperChanges": false }
+}

@@ -7,38 +7,41 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const resolverPath = path.resolve("scripts/secrets/openclaw-bws-resolver.mjs");
 
+function resolveWithBws(script: string[], ids: string[], env: NodeJS.ProcessEnv = {}) {
+  const fakeBwsPath = path.join(tempDirs.make("openclaw-bws-resolver-"), "bws");
+  writeFileSync(fakeBwsPath, ["#!/usr/bin/env node", ...script].join("\n"), { mode: 0o755 });
+  chmodSync(fakeBwsPath, 0o755);
+  const result = spawnSync(process.execPath, [resolverPath], {
+    encoding: "utf8",
+    env: {
+      BWS_ACCESS_TOKEN: "test-token",
+      BWS_BIN: fakeBwsPath,
+      PATH: process.env.PATH ?? "",
+      ...env,
+    },
+    input: JSON.stringify({ protocolVersion: 1, ids }),
+  });
+  expect(result.status).toBe(0);
+  expect(result.stderr).toBe("");
+  return JSON.parse(result.stdout);
+}
+
 describe("openclaw-bws-resolver", () => {
   it("forwards the self-hosted server URL without inheriting unrelated variables", () => {
-    const dir = tempDirs.make("openclaw-bws-resolver-");
-    const fakeBwsPath = path.join(dir, "bws");
-    writeFileSync(
-      fakeBwsPath,
+    const result = resolveWithBws(
       [
-        "#!/usr/bin/env node",
         'if (process.env.BWS_ACCESS_TOKEN !== "test-token") process.exit(10);',
         'if (process.env.BWS_SERVER_URL !== "https://bws.example.test") process.exit(11);',
         "if (process.env.UNRELATED_PARENT_VALUE !== undefined) process.exit(12);",
         'process.stdout.write(JSON.stringify([{ key: "example", value: "resolved" }]));',
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    chmodSync(fakeBwsPath, 0o755);
-
-    const result = spawnSync(process.execPath, [resolverPath], {
-      encoding: "utf8",
-      env: {
-        BWS_ACCESS_TOKEN: "test-token",
-        BWS_BIN: fakeBwsPath,
+      ],
+      ["example"],
+      {
         BWS_SERVER_URL: "https://bws.example.test",
-        PATH: process.env.PATH ?? "",
         UNRELATED_PARENT_VALUE: "do-not-forward",
       },
-      input: JSON.stringify({ protocolVersion: 1, ids: ["example"] }),
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toEqual({
+    );
+    expect(result).toEqual({
       protocolVersion: 1,
       values: { example: "resolved" },
       errors: {},
@@ -46,34 +49,16 @@ describe("openclaw-bws-resolver", () => {
   });
 
   it("returns bounded error codes for missing and ambiguous keys", () => {
-    const dir = tempDirs.make("openclaw-bws-resolver-");
-    const fakeBwsPath = path.join(dir, "bws");
-    writeFileSync(
-      fakeBwsPath,
+    const result = resolveWithBws(
       [
-        "#!/usr/bin/env node",
         "process.stdout.write(JSON.stringify([",
         '  { key: "duplicate", value: "first" },',
         '  { key: "duplicate", value: "second" },',
         "]));",
-      ].join("\n"),
-      { mode: 0o755 },
+      ],
+      ["missing", "duplicate"],
     );
-    chmodSync(fakeBwsPath, 0o755);
-
-    const result = spawnSync(process.execPath, [resolverPath], {
-      encoding: "utf8",
-      env: {
-        BWS_ACCESS_TOKEN: "test-token",
-        BWS_BIN: fakeBwsPath,
-        PATH: process.env.PATH ?? "",
-      },
-      input: JSON.stringify({ protocolVersion: 1, ids: ["missing", "duplicate"] }),
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toEqual({
+    expect(result).toEqual({
       protocolVersion: 1,
       values: {},
       errors: {

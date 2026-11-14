@@ -328,41 +328,30 @@ setInterval(() => {}, 1000);
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "cleans up wrapped command descendants on wrapper shutdown",
-    async ({ signal }) => {
-      const fixture = descendantFixture(signal, false);
-
+  it.runIf(process.platform !== "win32").for([false, true])(
+    "settles wrapped command descendants (graceful=%s)",
+    async (graceful, { signal }) => {
+      const fixture = descendantFixture(signal, graceful);
       await runQaGatewayFixture(async () => {
         await fixture.ready();
-        const grandchildPid = Number(readFileSync(fixture.files.GRANDCHILD_PID_FILE, "utf8"));
-        expect(grandchildPid).toBeGreaterThan(0);
-        expect(isProcessAlive(grandchildPid)).toBe(true);
-
+        const grandchildPid = graceful
+          ? undefined
+          : Number(readFileSync(fixture.files.GRANDCHILD_PID_FILE, "utf8"));
+        if (grandchildPid !== undefined) {
+          expect(grandchildPid).toBeGreaterThan(0);
+          expect(isProcessAlive(grandchildPid)).toBe(true);
+        }
         fixture.signal("SIGTERM");
-        const exit = await fixture.waitForExit();
-        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        await waitForFixtureExit(
-          () => !isProcessAlive(grandchildPid),
-          "wrapped command descendant cleanup",
-          signal,
-        );
-      }, fixture.cleanup);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "lets wrapped command descendants finish during the shutdown grace period",
-    async ({ signal }) => {
-      const fixture = descendantFixture(signal, true);
-
-      await runQaGatewayFixture(async () => {
-        await fixture.ready();
-        fixture.signal("SIGTERM");
-
-        const exit = await fixture.waitForExit();
-        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        expect(readFileSync(fixture.files.GRACEFUL_FILE, "utf8")).toBe("done");
+        expect(await fixture.waitForExit()).toEqual({ code: null, signal: "SIGTERM" });
+        if (grandchildPid !== undefined) {
+          await waitForFixtureExit(
+            () => !isProcessAlive(grandchildPid),
+            "wrapped command descendant cleanup",
+            signal,
+          );
+        } else {
+          expect(readFileSync(fixture.files.GRACEFUL_FILE, "utf8")).toBe("done");
+        }
       }, fixture.cleanup);
     },
   );

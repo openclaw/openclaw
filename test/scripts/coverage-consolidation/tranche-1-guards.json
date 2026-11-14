@@ -1,0 +1,120 @@
+{
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "deletedFiles": [],
+  "retiredCases": [
+    {
+      "file": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "case": "finds tmpdir named import calls from node:os",
+      "keeperFile": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "keeperCases": [
+        "allows plugin test support while rejecting runtime tmpdir calls through the guard"
+      ],
+      "invariant": "Host tmpdir imports are rejected only in messaging runtime sources; local functions and plugin test support remain allowed.",
+      "movedUniqueAssertions": "src/channels/named.ts uses named node:os tmpdir and must produce exactly its :2 diagnostic."
+    },
+    {
+      "file": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "case": "finds tmpdir calls imported from os",
+      "keeperFile": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "keeperCases": [
+        "allows plugin test support while rejecting runtime tmpdir calls through the guard"
+      ],
+      "invariant": "Host tmpdir imports are rejected only in messaging runtime sources; local functions and plugin test support remain allowed.",
+      "movedUniqueAssertions": "src/channels/default.ts uses the default bare os import and must produce exactly its :2 diagnostic; node:os defaults remain exercised in every governed root."
+    },
+    {
+      "file": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "case": "ignores tmpdir symbols that are not imported from node:os",
+      "keeperFile": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "keeperCases": [
+        "allows plugin test support while rejecting runtime tmpdir calls through the guard"
+      ],
+      "invariant": "Host tmpdir imports are rejected only in messaging runtime sources; local functions and plugin test support remain allowed.",
+      "movedUniqueAssertions": "src/channels/local.ts defines and calls a local tmpdir; first guard invocation must leave exitCode unchanged and emit no errors; second invocation must exclude it from the exact diagnostic set."
+    },
+    {
+      "file": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "case": "guards src/media against host tmpdir usage",
+      "keeperFile": "test/scripts/check-no-random-messaging-tmp.test.ts",
+      "keeperCases": [
+        "allows plugin test support while rejecting runtime tmpdir calls through the guard"
+      ],
+      "invariant": "Host tmpdir imports are rejected only in messaging runtime sources; local functions and plugin test support remain allowed.",
+      "movedUniqueAssertions": "src/media/runtime.ts must appear in the exact executable diagnostic set. The same case now exercises src/channels, src/infra/outbound, src/line, src/media-understanding and both plugin source/public runtime paths."
+    },
+    {
+      "file": "test/scripts/check-control-ui-controllers.test.ts",
+      "case": "ratchets imported %s aliases and namespace calls only",
+      "keeperFile": "test/scripts/check-control-ui-controllers.test.ts",
+      "keeperCases": [
+        "ratchets imported flush without counting unrelated or shadowed bindings",
+        "ratchets imported getOwner without counting unrelated or shadowed bindings",
+        "ratchets imported runWithOwner without counting unrelated or shadowed bindings"
+      ],
+      "invariant": "Only live Solid imports count toward the per-pattern ratchet.",
+      "movedUniqueAssertions": "All unrelated-module, owner property/computed, parameter, namespace parameter, block local, hoisted var, destructured and catch bindings first pass with an empty baseline. Appending imported generic, optional namespace and computed namespace calls passes at allowance 3; a fourth imported call fails with the same pattern-specific growth diagnostic."
+    },
+    {
+      "file": "test/scripts/check-control-ui-controllers.test.ts",
+      "case": "ignores non-Solid and shadowed %s bindings",
+      "keeperFile": "test/scripts/check-control-ui-controllers.test.ts",
+      "keeperCases": [
+        "ratchets imported flush without counting unrelated or shadowed bindings",
+        "ratchets imported getOwner without counting unrelated or shadowed bindings",
+        "ratchets imported runWithOwner without counting unrelated or shadowed bindings"
+      ],
+      "invariant": "Only live Solid imports count toward the per-pattern ratchet.",
+      "movedUniqueAssertions": "All unrelated-module, owner property/computed, parameter, namespace parameter, block local, hoisted var, destructured and catch bindings first pass with an empty baseline. Appending imported generic, optional namespace and computed namespace calls passes at allowance 3; a fourth imported call fails with the same pattern-specific growth diagnostic."
+    },
+    {
+      "file": "test/scripts/check-deadcode-exports.test.ts",
+      "case": "models named Solid lazy consumers without retaining a deleted loader",
+      "keeperFile": "test/scripts/check-deadcode-exports.test.ts",
+      "keeperCases": [
+        "models named Solid lazy consumers without retaining removed consumers"
+      ],
+      "invariant": "Named Solid lazy exports are real graph consumers only while their loader exists.",
+      "movedUniqueAssertions": "Exact generated named import; removing loader omits ShellSettingsSidebar."
+    },
+    {
+      "file": "test/scripts/check-deadcode-exports.test.ts",
+      "case": "models only Vite runner members consumed by the build",
+      "keeperFile": "test/scripts/check-deadcode-exports.test.ts",
+      "keeperCases": [
+        "models only Vite runner members consumed by the build without retaining removed consumers"
+      ],
+      "invariant": "Vite graph edges retain only referenced exports.",
+      "movedUniqueAssertions": "Exact APP_ROUTE_PATHS generated import, no APP_ROUTE_OFFLINE_PREFIXES, actual ui/vite.config.ts read, unrelated compiler input unchanged and config project inventory membership."
+    },
+    {
+      "file": "test/scripts/check-deadcode-exports.test.ts",
+      "case": "models the locale catalogue members consumed through Vite's runner",
+      "keeperFile": "test/scripts/check-deadcode-exports.test.ts",
+      "keeperCases": [
+        "models the locale catalogue members consumed through Vite's runner without retaining removed consumers"
+      ],
+      "invariant": "Locale startup/catalog reads project their named graph edges.",
+      "movedUniqueAssertions": "Exact two-member generated import; removing only the startup member leaves its name absent. Both config entries remain script workspace roots."
+    },
+    {
+      "file": "test/scripts/check-deadcode-exports.test.ts",
+      "case": "models ordinary UI Vite imports into the script workspace",
+      "keeperFile": "test/scripts/check-deadcode-exports.test.ts",
+      "keeperCases": [
+        "models ordinary UI Vite imports into the script workspace without retaining removed consumers"
+      ],
+      "invariant": "Ordinary UI-to-script imports participate in the script graph while present.",
+      "movedUniqueAssertions": "Exact ordinary generated import; removing the import omits isControlUiOptionalAsset."
+    },
+    {
+      "file": "test/scripts/check-dynamic-import-warts.test.ts",
+      "case": "flags direct dynamic imports inside execute paths",
+      "keeperFile": "test/scripts/check-dynamic-import-warts.test.ts",
+      "keeperCases": [
+        "flags direct dynamic imports inside execute paths"
+      ],
+      "invariant": "Uncached imports inside execute paths emit an actionable advisory.",
+      "movedUniqueAssertions": "Original three-line fixture, exact line 2 and full cached-loader guidance retained in existing exact-advisory result table."
+    }
+  ]
+}
