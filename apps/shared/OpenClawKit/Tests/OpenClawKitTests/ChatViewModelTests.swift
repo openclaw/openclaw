@@ -3,6 +3,7 @@ import Observation
 import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
+import Synchronization
 import Testing
 #if os(macOS)
 import AppKit
@@ -2845,22 +2846,72 @@ struct ChatViewModelTests {
         #expect(summary?.additionalRequestsText == "4 more questions")
     }
 
-    @Test @MainActor func `locally expired question remains in transcript`() {
+    @Test(arguments: [0.0, 15.0]) @MainActor
+    func `local question expiry invalidates controls and keeps its transcript summary`(lateness: TimeInterval) {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
             transport: TestChatTransport(historyResponses: []))
-        let expiresAt = Date(timeIntervalSince1970: 1500)
-        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_local", expiresAtMs: 1_500_000))
+        defer { viewModel.detachTransport() }
+        let expiresAt = Date(timeIntervalSince1970: 4_000_000_000)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_local"))
         let model = viewModel.questionCards[0]
+        model.toggleOption(questionID: "choice", value: "One")
+        let invalidations = Mutex(0)
+        withObservationTracking { _ = model.status() } onChange: { invalidations.withLock { $0 += 1 } }
 
-        viewModel.expireQuestionIfNeeded(model, at: expiresAt)
-        #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
-        #expect(model.status(at: expiresAt) == .expired)
+        viewModel.expireQuestionIfNeeded(model, at: expiresAt.addingTimeInterval(-0.001))
+        #expect(model.canSubmit)
+        #expect(invalidations.withLock { $0 } == 0)
+        #expect(viewModel.questionExpiryTasks[model.id] != nil)
 
-        viewModel.expireQuestionIfNeeded(
-            model,
-            at: expiresAt.addingTimeInterval(15))
+        viewModel.expireQuestionIfNeeded(model, at: expiresAt.addingTimeInterval(lateness))
+        #expect(invalidations.withLock { $0 } == 1)
+        #expect(model.status() == .expired)
+        #expect(!model.canSubmit)
+        #expect(model.beginSubmission() == nil)
+        #expect(!model.beginSkip())
+        #expect(!model.toggleOption(questionID: "choice", optionNumber: 1))
+        #expect(model.selectedOptions.isEmpty)
+        #expect(viewModel.pendingQuestionAttentionRequests.isEmpty)
+        #expect(viewModel.questionExpiryTasks.isEmpty)
+        #expect(viewModel.questionExpiryDeadlines.isEmpty)
+        #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Expired")
+
+        let timelineRevision = viewModel.timelineRevision
+        let questionRevision = viewModel.questionStateRevision
+        // The label crossing and scheduled task may both report expiry; settlement remains idempotent.
+        viewModel.expireQuestionIfNeeded(model, at: expiresAt.addingTimeInterval(15))
         #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
+        #expect(viewModel.timelineRevision == timelineRevision)
+        #expect(viewModel.questionStateRevision == questionRevision)
+    }
+
+    @Test @MainActor func `foreground return expires overdue question drafts before async refresh`() async {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: [historyPayload()]))
+        defer { viewModel.detachTransport() }
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_overdue"))
+        let model = viewModel.questionCards[0]
+        model.toggleOption(questionID: "choice", value: "One")
+        viewModel.upsertQuestion(chatQuestionRecord(id: model.id, expiresAtMs: 1_500_000))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_future"))
+        let future = viewModel.questionCards[1]
+        future.toggleOption(questionID: "choice", value: "Two")
+        #expect(!model.isLocallyExpired)
+        #expect(!model.selectedOptions.isEmpty)
+
+        // No suspension: foreground reconciliation must not wait for the expiry task or network.
+        let refresh = viewModel.resumeFromForeground()
+        #expect(model.isLocallyExpired)
+        #expect(model.selectedOptions.isEmpty)
+        #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Expired")
+        #expect(viewModel.questionExpiryTasks[model.id] == nil)
+        #expect(viewModel.questionExpiryDeadlines[model.id] == nil)
+        #expect(future.status() == .pending)
+        #expect(future.selectedOptions["choice"] == ["Two"])
+        #expect(viewModel.pendingQuestionAttentionRequests.map(\.id) == [future.id])
+        await refresh.value
     }
 
     @Test @MainActor func `stale question list cannot overwrite a newer event`() async {
@@ -14468,9 +14519,14 @@ struct ChatStreamPresentationTests {
         #expect(bubble.count == 1)
         #expect(transcript.count == 0)
         #expect(vm.timelineRevision == before)
+        // The transcript hides the bubble on a clear; emptied in its own scope, the bubble laid out
+        // at zero before the transcript changed and collapsed it.
+        let cleared = Fired()
+        withObservationTracking { _ = vm.displayedStreamingAssistantText } onChange: { cleared.count += 1 }
         vm.updateStreamingAssistantText(nil)
         #expect(transcript.count == 1)
-        #expect(vm.displayedStreamingAssistantText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
+        #expect(cleared.count == 0)
     }
 
     @Test @MainActor func `retired callback cannot publish old or new session text`() throws {

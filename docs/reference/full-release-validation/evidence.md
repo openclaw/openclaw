@@ -240,7 +240,10 @@ producer receipts and payload digests. Only the candidate version authenticated 
 the original admission selects checked-in P-owned waivers. Recovery rechecks exact
 failed aggregate causes, preserves raw child conclusions, and records the matched
 waivers in its new seal. Strict readers independently recompute that policy and
-reject added or omitted waivers. Ordinary green-only child reuse is unchanged.
+reject added or omitted waivers. Previously reused children retain their original
+dispatch origin; recovery checks the original qualification parent’s exact reuse
+digest witness with the same validator used by ordinary aggregation. Ordinary
+green-only child reuse is unchanged.
 Missing payloads, incomplete job history, changed attempts, or lost authority fail
 closed. Each recovery child verification
 has a ten-minute budget to read its complete rerun history; ordinary child reuse
