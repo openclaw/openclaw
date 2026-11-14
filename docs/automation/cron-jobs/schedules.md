@@ -335,14 +335,22 @@ time first, and start as soon as a running check finishes or its condition fires
 A queued check is not deferred or retried later, holds no run slot, spends none of
 its time budget, and keeps its occurrence across a Gateway restart.
 
-A scheduled check does not use one of the scheduler's eight run slots, so checks keep
-running while eight long runs are active. Only the payload of a fired condition needs a
-run slot. If a condition fires while all eight are busy, the run waits for a free slot and
+A scheduled check does not use one of the scheduler's run slots, so checks keep running
+while every run slot holds a long run. Only the payload of a fired condition needs a run
+slot. If a condition fires while every slot is busy, the run waits for a free slot and
 then runs its payload on the result of that one check; the wait does not count against
 the run's time budget. A cron config change keeps the wait; a Gateway stop or restart
 ends it without running the payload. Freed slots go to waiting payloads and queued runs in due-time
 order, so a run due before the condition's check still starts first. A check started by a manual or stream
 run, and the check of a job with a script payload, takes a run slot first.
+
+There are eight run slots by default. With
+[`cron.dynamicConcurrency`](/gateway/config-automation) on, run slots come from the agent
+concurrency limit ([`agents.defaults.maxConcurrent`](/gateway/config-agents/models)), which
+automation then shares with conversations: it uses the slots that conversation turns leave
+free and always keeps at least eight. After a provider rate limit it runs fewer jobs at once
+and adds one back each minute without pushback. See
+[how automation works](/automation/cron-jobs/how-it-works).
 
 Cold runtime preparation can continue after an evaluation times out, so a later
 tick can reuse it. Preparation is limited to two minutes, or the script payload's
