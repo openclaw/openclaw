@@ -622,7 +622,6 @@ describe("CI changed Node test plan", () => {
         "src/cli/gateway-cli/pre-bootstrap.process.test.ts",
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
-        "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
         "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",
         "src/infra/update-managed-service-handoff-foreground.test.ts",
         "src/node-host/node-worker-supervisor.recovery.test.ts",
@@ -638,7 +637,6 @@ describe("CI changed Node test plan", () => {
         "test/scripts/pr-merge-prior-ci.test.ts",
         "test/scripts/pr-merge-receipt.test.ts",
         "test/scripts/pr-merge-recovery.test.ts",
-        "test/scripts/pr-merge-rest.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-provision.test.ts",
       ];

@@ -18,7 +18,6 @@ const COMPAT_CONFIG_API_FILES = new Set([
   // Released cold getter stays synchronous; migrate to readRuntimeConfig after async preparation.
   "src/plugin-sdk/runtime-config-legacy.ts",
   "src/plugins/compat/registry.ts",
-  "src/plugins/registry.runtime-config.test.ts",
   "src/plugins/registry.ts",
   "src/plugins/contracts/config-boundary-guard.test.ts",
   "src/plugins/contracts/deprecated-internal-config-api.test.ts",
