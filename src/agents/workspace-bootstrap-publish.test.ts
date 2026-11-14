@@ -8,6 +8,7 @@ import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import { runWorkspaceFilesystemOperation } from "./workspace-filesystem.js";
 import { executeWorkspaceFilesystemOperation } from "./workspace-filesystem.worker.js";
+import { runWorkspacePreparation } from "./workspace-preparation.js";
 import { captureWorkspaceFilesystemEvidence } from "./workspace-state-guard.js";
 import * as workspace from "./workspace.js";
 
@@ -154,7 +155,11 @@ describe("bootstrap publication atomicity", () => {
     ];
 
     const created = await Promise.all(
-      contents.map((content) => publishBootstrapFile(agentsPath, content)),
+      contents.map((content) =>
+        runWorkspacePreparation(tempDir, (filesystem) =>
+          publishBootstrapFile(agentsPath, content, { filesystem: [filesystem] }),
+        ),
+      ),
     );
 
     expect(created.filter(Boolean)).toHaveLength(1);

@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import {
@@ -546,15 +550,16 @@ describe("client voice session lifecycle", () => {
       const releaseFirst = createDeferred();
       const secondEntered = createDeferred();
       const resolveTarget = targetReads.resolveSessionSqliteTargetInWorker;
-      let discoveries = 0;
+      const discoveries: Array<ReturnType<typeof resolveTarget>> = [];
+      const discoveryLifetime = new AbortController();
       using capture = vi.spyOn(targetReads, "resolveSessionSqliteTargetInWorker");
       capture.mockImplementation((...args) => {
         const pending = resolveTarget(...args);
-        if (++discoveries === 2) {
-          expect(agentDatabaseWriteAdmissionState.acquisition).toBeDefined();
+        discoveries.push(pending);
+        if (discoveries.length === 2) {
           secondEntered.resolve();
         }
-        return pending;
+        return withinTest(pending, discoveryLifetime.signal);
       });
       const first = ensureClientVoiceAgentSessionEntry({
         agentId: "main",
@@ -568,17 +573,30 @@ describe("client voice session lifecycle", () => {
           },
         }),
       });
+      void first.catch(() => {});
+      let second: Promise<string> | undefined;
       try {
-        await withinTest(firstEntered.promise, signal);
-        const second = ensureClientVoiceAgentSessionEntry({
+        await withinTest(
+          awaitGateBeforeSettlement(firstEntered.promise, first, "First writer did not enter"),
+          signal,
+        );
+        second = ensureClientVoiceAgentSessionEntry({
           agentId: "main",
           storePath,
           sessionKey: "agent:main:talk:second",
         });
-        const completed = Promise.all([first, second]);
-        await withinTest(secondEntered.promise, signal);
+        void second.catch(() => {});
+        await withinTest(
+          awaitGateBeforeSettlement(
+            secondEntered.promise,
+            second,
+            "Second discovery did not enter",
+          ),
+          signal,
+        );
+        expect(agentDatabaseWriteAdmissionState.acquisition).toBeDefined();
         releaseFirst.resolve();
-        const ids = await withinTest(completed, signal);
+        const ids = await withinTest(Promise.all([first, second]), signal);
         expect(ids.every(Boolean)).toBe(true);
         expect(ids[0]).not.toBe(ids[1]);
         for (const [index, name] of ["first", "second"].entries()) {
@@ -588,7 +606,11 @@ describe("client voice session lifecycle", () => {
           ).toBe(ids[index]);
         }
       } finally {
+        // Break a failed discovery wait before joining the real reads and accepted writes.
+        discoveryLifetime.abort(new Error("Talk creation test finished"));
         releaseFirst.resolve();
+        await Promise.allSettled([first, second]);
+        await Promise.allSettled(discoveries);
       }
     });
 

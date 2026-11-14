@@ -63,15 +63,12 @@ export function createSqliteDatabaseDescriptorOwner(
       }
       const key = identity(observed);
       const custody = state.registry.descriptors.get(key);
-      if (custody && seals.isLoaded(custody)) {
-        assertDatabaseFileIdentity(custody.file, params.expectedIdentity);
-        const current = state.registry.records.get(key);
-        const retained =
-          current && !isRetired(current)
-            ? current
-            : state.registry.retainDescriptor(canonical, custody.descriptor, custody.file);
-        state.registry.observeLocation(params.location, retained.identity);
-        seals.markLoaded(retained);
+      if (
+        retainPreparedSqliteDatabaseAdmissionLocation(params.location, params.expectedIdentity, {
+          identity: key,
+          canonicalPath: canonical,
+        })
+      ) {
         return;
       }
       const descriptor =
@@ -184,18 +181,12 @@ export function createSqliteDatabaseDescriptorOwner(
       const custody = exists ? state.registry.descriptors.get(key) : undefined;
       if (custody) {
         assertDatabaseFileIdentity(custody.file, observed);
-        if (seals.isLoaded(custody)) {
-          const current = state.registry.records.get(key);
-          const retained =
-            current && !isRetired(current)
-              ? current
-              : state.registry.retainDescriptor(
-                  observed.canonicalPath,
-                  custody.descriptor,
-                  custody.file,
-                );
-          state.registry.observeLocation(filename, retained.identity);
-          seals.markLoaded(retained);
+        if (
+          retainPreparedSqliteDatabaseAdmissionLocation(filename, undefined, {
+            identity: key,
+            canonicalPath: observed.canonicalPath,
+          })
+        ) {
           return observed;
         }
       }
