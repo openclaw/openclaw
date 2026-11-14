@@ -33,8 +33,6 @@ const runtimeOnlyUnitFiles = new Set([
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/agents/sessions/agent-session-steering-context.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
-  "src/agents/subagents/registry/subagent-control.accounting.test.ts",
-  "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
   "src/agents/tools/sessions-send-communication.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",

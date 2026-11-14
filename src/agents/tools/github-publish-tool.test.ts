@@ -250,7 +250,6 @@ it.each([
   expect(callGateway).not.toHaveBeenCalled();
 });
 
-// Unbound sandboxed conversations yield first; github-publish-tool.handoff.test.ts owns that path.
 it.each([
   {},
   { conflictsResolved: false },

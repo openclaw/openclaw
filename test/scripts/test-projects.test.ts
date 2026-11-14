@@ -1380,7 +1380,7 @@ export const single = {
     it.each([toolRoot, `${toolRoot}/**/*.test.ts`])(
       "intersects inherited includes for %s without dropping an explicit file",
       (target) => {
-        const selected = `${toolRoot}/computer-tool.schema.test.ts`;
+        const selected = `${toolRoot}/computer-tool.test.ts`;
         const explicit = `${failoverRoot}/classify.legacy-provider-predicates.test.ts`;
         withIncludeFile([selected], (includeFile) => {
           const specs = runSpecs([target, explicit], {
