@@ -17,6 +17,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
+import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
@@ -125,7 +126,7 @@ it("preserves shared ancestor references across staggered roster reads and first
   });
 });
 
-it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer) => {
+it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", async (producer) => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
@@ -180,7 +181,27 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
       ),
     );
     const publish = async (ids: string[]) => {
-      if (producer === "lifecycle") {
+      if (producer === "summary") {
+        vi.useFakeTimers({ toFake: ["setTimeout"] });
+        try {
+          const work = broadcastSessionActivitySummary(
+            {
+              key,
+              agentId: "main",
+              storePath: projection.describe({ key, agentId: "main" })!.storeTarget.storePath,
+            },
+            {
+              getSessionRowProjection: () => projection,
+              broadcast: (event, payload, options) =>
+                connection.broadcastToConnIds(event, payload, new Set(ids), options),
+            },
+          );
+          await vi.advanceTimersByTimeAsync(750);
+          await work;
+        } finally {
+          vi.useRealTimers();
+        }
+      } else if (producer === "lifecycle") {
         await createLifecycleEventBroadcastHandler({
           broadcastToConnIds: connection.broadcastToConnIds,
           sessionEventSubscribers: { getAll: () => new Set(ids) },

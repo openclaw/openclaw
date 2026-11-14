@@ -103,7 +103,8 @@ export function prepareSessionEventProjection(
   projection: SessionRowProjection,
   read?: SessionRowReadView,
   prepared?: {
-    ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
+    /** Omission resolves lazily; explicit undefined means ancestry could not be certified. */
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
     /** The producer owns a plain envelope with stable fields throughout synchronous fanout. */
@@ -174,7 +175,10 @@ export function prepareSessionEventProjection(
           }
         : undefined;
     const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
-    const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
+    const ancestors =
+      prepared && "ancestors" in prepared
+        ? prepared.ancestors
+        : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
     const ancestorRevision = randomUUID();
     const audiences = new Map<
