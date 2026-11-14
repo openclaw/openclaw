@@ -73,6 +73,7 @@ vi.mock("../../../tts/tts.js", async () => ({
   synthesizeSpeech: mocks.synthesizeSpeech,
 }));
 
+// mock-isolation: Catalog tests stub synthesis so native audio providers remain outside this fixture.
 vi.mock("../../../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: mocks.synthesizeSpeech }));
 
 vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({

@@ -1614,51 +1614,9 @@ describe("ci workflow guards", () => {
       export const hasControlUiPerformanceAffectingChange = (paths) => paths.includes("packages/ui-shared/index.ts");
     `;
 
-    it.each(
-      [
-        {
-          path: "src/shared/runtime.ts",
-          lintCoreStripes: [1, 2],
-          lintCentralScripts: true,
-        },
-        {
-          path: "src/agents/session.test.ts",
-          tasks: ["guards", "lint", "test-types", "guards-architecture"],
-          lintCoreStripes: [1, 2],
-          lintCentralScripts: true,
-          graphs: ["core-test-agents-root", "test-root-tooling"],
-        },
-        {
-          path: "ui/src/styles/chat.css",
-          tasks: ["lint"],
-          baselineRatchets: false,
-          coreStripes: [],
-          lintCoreStripes: [],
-          lintCentralScripts: false,
-        },
-        {
-          path: "packages/ui-shared/index.ts",
-          performance: true,
-          lintCoreStripes: [1],
-          lintCentralScripts: false,
-        },
-        {
-          path: "extensions/telegram/src/send.ts",
-          boundaryOwner: "additional-checks",
-          coreStripes: [],
-          lintCoreStripes: [],
-          lintExtensionStripes: [3],
-          lintCentralScripts: false,
-          graphs: ["extensions", "extensions-test", "test-root-tooling"],
-        },
-        {
-          path: "src/wizard/i18n/locales/en.ts",
-          nodeDataOnly: true,
-          baselineRatchets: false,
-          lintCoreStripes: [1, 2],
-          lintCentralScripts: true,
-        },
-      ].map((scenario) => ({
+    it.each([
+      {
+        path: "src/shared/runtime.ts",
         tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
         fastTasks: [],
         baselineRatchets: true,
@@ -1666,10 +1624,80 @@ describe("ci workflow guards", () => {
         channelContracts: false,
         performance: false,
         coreStripes: [1],
+        lintCoreStripes: [1, 2],
         lintExtensionStripes: [],
-        ...scenario,
-      })),
-    )(
+        lintCentralScripts: true,
+      },
+      {
+        path: "src/agents/session.test.ts",
+        tasks: ["guards", "lint", "test-types", "guards-architecture"],
+        fastTasks: [],
+        baselineRatchets: true,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [1],
+        lintCoreStripes: [1, 2],
+        lintExtensionStripes: [],
+        lintCentralScripts: true,
+        graphs: ["core-test-agents-root", "test-root-tooling"],
+      },
+      {
+        path: "ui/src/styles/chat.css",
+        tasks: ["lint"],
+        fastTasks: [],
+        baselineRatchets: false,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [],
+        lintCoreStripes: [],
+        lintExtensionStripes: [],
+        lintCentralScripts: false,
+      },
+      {
+        path: "packages/ui-shared/index.ts",
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
+        fastTasks: [],
+        baselineRatchets: true,
+        contracts: false,
+        channelContracts: false,
+        performance: true,
+        coreStripes: [1],
+        lintCoreStripes: [1],
+        lintExtensionStripes: [],
+        lintCentralScripts: false,
+      },
+      {
+        path: "extensions/telegram/src/send.ts",
+        boundaryOwner: "additional-checks",
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
+        fastTasks: [],
+        baselineRatchets: true,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [],
+        lintCoreStripes: [],
+        lintExtensionStripes: [3],
+        lintCentralScripts: false,
+        graphs: ["extensions", "extensions-test", "test-root-tooling"],
+      },
+      {
+        path: "src/wizard/i18n/locales/en.ts",
+        nodeDataOnly: true,
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
+        fastTasks: [],
+        baselineRatchets: false,
+        contracts: false,
+        channelContracts: false,
+        performance: false,
+        coreStripes: [1],
+        lintCoreStripes: [1, 2],
+        lintExtensionStripes: [],
+        lintCentralScripts: true,
+      },
+    ])(
       "emits and wires narrow families for $path",
       ({
         path: changedPath,
@@ -8754,107 +8782,130 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it.each(
-    (
-      [
-        {
-          eventName: "pull_request",
-          policy: "bun-all",
-          uiPolicy: "bun-all",
-        },
-        {
-          uiPolicy: "dual-all",
-        },
-        {
-          releaseGate: true,
-          uiPolicy: "dual-all",
-        },
-        {
-          eventName: "push",
-          policy: "bun-all",
-          uiPolicy: "bun-all",
-        },
-        {
-          capability: false,
-          uiCapability: false,
-          policy: "node",
-          bun: false,
-        },
-        {
-          eventName: "pull_request",
-          uiCapability: false,
-          policy: "bun-all",
-        },
-        {
-          uiCapability: "requires-ftl-flag",
-        },
-        {
-          historicalCompatibility: true,
-        },
-      ] as const
-    ).map((scenario) => ({
-      eventName: "workflow_dispatch" as const,
+  it.each([
+    {
+      eventName: "pull_request",
       capability: true,
       uiCapability: true,
-      policy: "dual-all" as const,
-      uiPolicy: "node" as const,
+      policy: "bun-all",
+      uiPolicy: "bun-all",
       bun: true,
-      ...scenario,
-    })),
-  )("routes test runtimes without adding jobs ($eventName, capability=$capability)", (scenario) => {
-    const { eventName, capability, uiCapability, policy, uiPolicy, bun } = scenario;
-    const manifest = runCiManifestFixture({
-      historicalCompatibility: false,
-      ...scenario,
-      bundledPlanner: true,
-      bunTestRuntime: capability,
-      bunUiTestRuntime: uiCapability,
-      eventName,
-      nodeTestShards: [
-        {
-          checkName: "runtime-proof",
-          shardName: "runtime-proof",
-          configs: ["fixture-bun.config.ts"],
-          requiresDist: false,
-          runner: "ubuntu-24.04",
-        },
-      ],
-      changedPaths: ["scripts/lib/ci-node-test-plan.mts"],
-    });
-    expect(manifest.status, manifest.output).toBe(0);
-    const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ test_runtime_policy: policy });
-    expect(rows[0].requires_bun === undefined ? false : rows[0].requires_bun).toBe(bun);
-    expect(manifest.outputs.ui_test_runtime_policy).toBe(uiPolicy);
-    const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
-    const context = ciContext({
-      eventName,
-      matrix: rows[0],
-    });
-    const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
-    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
-    expect(setup.with["install-bun"]).toBe("false");
-    const bunSetup = requiredWorkflowStep(job.steps, "Setup pinned Bun test runtime");
-    expect(bunSetup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
-    expect(evaluateWorkflowCondition(bunSetup.if, context)).toBe(bun);
-    expect(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, context)).toBe(
-      policy,
-    );
-    const ui = readCiWorkflow().jobs["checks-ui"];
-    const uiContext = {
-      ...context,
-      preflightOutputs: manifest.outputs,
-      steps: { node_setup: { outputs: {}, outcome: "success" as const } },
-    };
-    const uiBunSetup = requiredWorkflowStep(ui.steps, "Setup pinned Bun test runtime");
-    expect(uiBunSetup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
-    expect(evaluateWorkflowCondition(uiBunSetup.if, uiContext)).toBe(uiPolicy !== "node");
-    const uiRun = requiredWorkflowStep(ui.steps, "Test Control UI");
-    expect(evaluateWorkflowExpression(uiRun.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, uiContext)).toBe(
-      uiPolicy,
-    );
-  });
+    },
+    {
+      eventName: "workflow_dispatch",
+      capability: true,
+      uiCapability: true,
+      policy: "dual-all",
+      uiPolicy: "dual-all",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      capability: true,
+      uiCapability: true,
+      policy: "dual-all",
+      uiPolicy: "dual-all",
+      bun: true,
+    },
+    {
+      eventName: "push",
+      capability: true,
+      uiCapability: true,
+      policy: "bun-all",
+      uiPolicy: "bun-all",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      capability: false,
+      uiCapability: false,
+      policy: "node",
+      uiPolicy: "node",
+      bun: false,
+    },
+    {
+      eventName: "pull_request",
+      capability: true,
+      uiCapability: false,
+      policy: "bun-all",
+      uiPolicy: "node",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      capability: true,
+      uiCapability: "requires-ftl-flag",
+      policy: "dual-all",
+      uiPolicy: "node",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      historicalCompatibility: true,
+      capability: true,
+      uiCapability: true,
+      policy: "dual-all",
+      uiPolicy: "node",
+      bun: true,
+    },
+  ] as const)(
+    "routes test runtimes without adding jobs ($eventName, capability=$capability)",
+    (scenario) => {
+      const { eventName, capability, uiCapability, policy, uiPolicy, bun } = scenario;
+      const manifest = runCiManifestFixture({
+        historicalCompatibility: false,
+        ...scenario,
+        bundledPlanner: true,
+        bunTestRuntime: capability,
+        bunUiTestRuntime: uiCapability,
+        eventName,
+        nodeTestShards: [
+          {
+            checkName: "runtime-proof",
+            shardName: "runtime-proof",
+            configs: ["fixture-bun.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+          },
+        ],
+        changedPaths: ["scripts/lib/ci-node-test-plan.mts"],
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ test_runtime_policy: policy });
+      expect(rows[0].requires_bun === undefined ? false : rows[0].requires_bun).toBe(bun);
+      expect(manifest.outputs.ui_test_runtime_policy).toBe(uiPolicy);
+      const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+      const context = ciContext({
+        eventName,
+        matrix: rows[0],
+      });
+      const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
+      const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+      expect(setup.with["install-bun"]).toBe("false");
+      const bunSetup = requiredWorkflowStep(job.steps, "Setup pinned Bun test runtime");
+      expect(bunSetup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
+      expect(evaluateWorkflowCondition(bunSetup.if, context)).toBe(bun);
+      expect(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, context)).toBe(
+        policy,
+      );
+      const ui = readCiWorkflow().jobs["checks-ui"];
+      const uiContext = {
+        ...context,
+        preflightOutputs: manifest.outputs,
+        steps: { node_setup: { outputs: {}, outcome: "success" as const } },
+      };
+      const uiBunSetup = requiredWorkflowStep(ui.steps, "Setup pinned Bun test runtime");
+      expect(uiBunSetup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
+      expect(evaluateWorkflowCondition(uiBunSetup.if, uiContext)).toBe(uiPolicy !== "node");
+      const uiRun = requiredWorkflowStep(ui.steps, "Test Control UI");
+      expect(evaluateWorkflowExpression(uiRun.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, uiContext)).toBe(
+        uiPolicy,
+      );
+    },
+  );
 
   it("runs the selected startup corpus once when a canonical PR admits every selected Node file", () => {
     const revision = "a".repeat(40);
