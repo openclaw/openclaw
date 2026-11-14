@@ -157,6 +157,40 @@ ${formatHelpExamples([
     });
 
   agents
+    .command("render-blobster <design>")
+    .description("Render a validated Blobster design JSON to SVG or PNG")
+    .requiredOption("--out <path>", "Output file path (.svg or .png)")
+    .option("--json", "Output JSON summary", false)
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  [
+    "openclaw agents render-blobster design.json --out avatars/blobster.svg",
+    "Render a Blobster SVG.",
+  ],
+  [
+    "openclaw agents render-blobster design.json --out avatars/blobster.png",
+    "Render a 256x256 PNG.",
+  ],
+  [
+    "openclaw agents render-blobster - --out avatars/blobster.svg --json",
+    "Render design JSON from stdin.",
+  ],
+])}
+`,
+    )
+    .action(async (design, opts): Promise<void> => {
+      await runAgentsCommandAction(async () => {
+        const { agentsRenderBlobsterCommand } =
+          await import("../../commands/agents.commands.blobster.js");
+        await agentsRenderBlobsterCommand({ ...opts, design });
+      });
+    });
+
+  agents
     .command("delete <id>")
     .description("Delete an agent and prune workspace/state")
     .option("--force", "Skip confirmation", false)

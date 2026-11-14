@@ -157,6 +157,12 @@ vi.mock("../commands/agents.commands.identity.js", () => {
   return { agentsSetIdentityCommand: vi.fn(async () => {}) };
 });
 
+// mock-isolation: detect cold import without loading the action module.
+vi.mock("../commands/agents.commands.blobster.js", () => {
+  loaded.mark("agents-blobster-command");
+  return { agentsRenderBlobsterCommand: vi.fn(async () => {}) };
+});
+
 vi.mock("../commands/agents.commands.list.js", () => {
   loaded.mark("agents-list-command");
   return { agentsListCommand: vi.fn(async () => {}) };

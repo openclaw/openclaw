@@ -561,6 +561,8 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
+  // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
+  "skills/create-blobster/scripts/cli.mjs!",
   // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
   "skills/create-template/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
