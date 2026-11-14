@@ -33,6 +33,7 @@ export type NewSessionComposerOptions = {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
+  dictationError?: string | null;
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;

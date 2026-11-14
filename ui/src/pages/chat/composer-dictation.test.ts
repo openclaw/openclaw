@@ -563,7 +563,7 @@ describe("ComposerDictationOwner", () => {
       expect(controller.startDirect()).toBe(true);
       await waitForFast(() => expect(getUserMedia).toHaveBeenCalledOnce());
 
-      // Safari's prompt blurs the page while the microphone is still opening.
+      // The permission prompt blurs the page while the microphone is still opening.
       window.dispatchEvent(new Event("blur"));
       expect(controller.connecting).toBe(true);
 

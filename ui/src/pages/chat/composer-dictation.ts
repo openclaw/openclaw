@@ -282,9 +282,9 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  // Safari's microphone permission prompt takes focus from the page while the
-  // microphone is still opening. Keep waiting so Allow starts listening and a
-  // denial reports its error; once listening, blur ends dictation as usual.
+  // The browser's microphone permission prompt (Safari, Chrome) takes focus from
+  // the page while the microphone is still opening. Keep waiting so Allow starts
+  // listening and a denial reports its error; once listening, blur ends dictation.
   private readonly handleWindowBlur = (): void => {
     if (this.phase !== "connecting") {
       this.leaveWindow();
