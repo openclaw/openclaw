@@ -62,6 +62,11 @@ final class DeepLinkHandler {
     }
 
     func handle(url: URL) async {
+        if let link = CatalogInstallDeepLink(url: url) {
+            // No action query: opening a package never installs or enables executable code.
+            await DashboardManager.shared.show(atPath: link.dashboardPath, search: link.dashboardSearch)
+            return
+        }
         guard let route = DeepLinkParser.parse(url) else {
             deepLinkLogger.debug("ignored deep link \(Self.invalidRouteMetadata(url), privacy: .public)")
             return

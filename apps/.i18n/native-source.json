@@ -1488,6 +1488,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt","kind":"ui-call","surface":"android","id":"native.android.a7e023acac2c2a2a","source":"OPENCLAW"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt","kind":"ui-call","surface":"android","id":"native.android.c2b152fd48621b0b","source":"Too many shares are waiting to be added."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt","kind":"ui-named-argument","surface":"android","id":"native.android.a7e023acac2c2a2a","source":"OPENCLAW"},
+    {"path":"apps/macos/Sources/OpenClaw/CatalogInstallDeepLink.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.1267a81f10d02a35","source":"?clawhub=\\(self.encodedName)"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift","kind":"ui-call","surface":"apple","id":"native.apple.50ae97042e9ad1b0","source":"Close"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift","kind":"ui-call","surface":"apple","id":"native.apple.c2d28a4d94bc50da","source":"Loading full message…"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatFullMessageReader.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.e2aff001a823cc0b","source":"Full message unavailable"},
