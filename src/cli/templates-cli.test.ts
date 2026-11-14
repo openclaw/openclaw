@@ -366,6 +366,39 @@ describe("templates cli", () => {
     });
   });
 
+  it("reports success after a completed Add", async () => {
+    const workspace = join(tempDirs.make("openclaw-template-add-output-"), "workspace");
+    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
+    await add(["--workspace", workspace]);
+    expect(logLines()).toContain("Added agent: demo-agent");
+    expect(logLines()).toContain(`Workspace: ${expectedWorkspace}`);
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.for([
+    { retained: false, message: "Workspace creation failed." },
+    {
+      retained: true,
+      message:
+        "Setup failed. The agent was already made available and was kept. Continue setup in this agent; do not add another copy.",
+    },
+  ])("does not report success for a partial Add ($retained)", async ({ retained, message }) => {
+    mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan) => ({
+      status: "partial",
+      agent: plan.agent,
+      configCommitted: retained,
+      workspaceCreated: retained,
+      ...(retained ? { agentRetained: true } : {}),
+      error: { code: "fixture_partial", message },
+    }));
+
+    await add();
+
+    expect(logLines()).not.toContainEqual(expect.stringMatching(/^(?:Added agent|Workspace):/));
+    expect(mocks.runtime.error).toHaveBeenCalledWith(message);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("does not Add when Labs was switched off after planning", async () => {
     mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
     expect(await add(["--json"])).toMatchObject({

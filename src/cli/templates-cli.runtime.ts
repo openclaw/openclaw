@@ -504,8 +504,10 @@ async function runTemplatesAddFromSource(
   if (opts.json) {
     writeRuntimeJson(runtime, addResult);
   } else {
-    runtime.log(`Added agent: ${addResult.agent.finalId}`);
-    runtime.log(`Workspace: ${addResult.agent.workspace}`);
+    if (addResult.status === "complete") {
+      runtime.log(`Added agent: ${addResult.agent.finalId}`);
+      runtime.log(`Workspace: ${addResult.agent.workspace}`);
+    }
     if (addResult.error) {
       runtime.error(addResult.error.message);
     }
