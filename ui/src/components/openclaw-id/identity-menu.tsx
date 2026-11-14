@@ -83,6 +83,7 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
             resetCopied.schedule();
           },
           onKeysChanged: () => context.sidebarAttention.refreshOpenClawId(),
+          onOpenSettings: () => props.onNavigate("openclaw-id"),
         }),
     };
   });

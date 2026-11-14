@@ -403,8 +403,11 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   their tokens revoked as devices. To end someone's access, remove them on
   **Access**; to remove one of your own owner browsers, use **Your devices** in
   the account menu. Nodes and other devices are managed as before.
-- There is no owner reset in this version: a claw keeps the recovery kit it was
-  linked with, so store the kit safely.
+- If the recovery kit is lost or leaked, use **Reset owner access** in
+  **Settings → OpenClaw ID** on the computer that runs the claw, or
+  `openclaw id reset` there (also with the Gateway stopped). It makes a new kit
+  and removes every owner device, person and invite; the claw's address, keys
+  and data stay ([CLI](/cli/id#reset-owner-access)).
 - To move a claw to new connection keys (a lost or leaked key file, a new computer
   without the key files, or routine rotation), run `openclaw id rebind` on the
   computer that runs it, with its recovery kit. Devices, people, nodes and invites
