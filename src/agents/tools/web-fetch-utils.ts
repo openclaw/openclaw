@@ -102,10 +102,10 @@ function escapeMarkdownLinkDestination(href: string): string {
       break;
     }
   }
-  // Angle destinations allow spaces and unmatched parentheses, but not line endings.
+  // Protect URL whitespace from prose normalization; angle form permits unmatched parentheses.
   const destination = escapePreMarkerText(href)
     .replace(/[\\<>]/g, "\\$&")
-    .replace(/[\r\n]/g, encodeURIComponent);
+    .replace(/\s/g, encodeURIComponent);
   return depth === 0 && !/\s/.test(href) ? destination : `<${destination}>`;
 }
 
