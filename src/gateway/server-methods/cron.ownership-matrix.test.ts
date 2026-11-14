@@ -230,7 +230,7 @@ describe("cron ownership access matrix", () => {
         ...createCronJob({
           agentId: identity.agentId,
           sessionKey,
-          sessionTarget: "session:" + sessionKey,
+          sessionTarget: `session:${sessionKey}`,
           ownerProfileId: "gateway-owner",
           ...(scenario !== "legacy-cap"
             ? { scheduledToolPolicy: { version: 1, mode: "trusted" } }
@@ -304,7 +304,13 @@ describe("cron ownership access matrix", () => {
         scenario === "metadata-local"
           ? { displayName: "Operator job" }
           : scenario.startsWith("model")
-            ? { payload: { model: "provider/model-b", fallbacks: ["provider/model-c"] } }
+            ? {
+                payload: {
+                  kind: "agentTurn",
+                  model: "provider/model-b",
+                  fallbacks: ["provider/model-c"],
+                },
+              }
             : {
                 payload: {
                   kind: "agentTurn",

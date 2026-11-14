@@ -239,7 +239,7 @@ const suite = createControlUiE2eSuite({
             createdAtMs: 1,
             updatedAtMs: 1,
             schedule: { kind: "every", everyMs: 3_600_000 },
-            sessionTarget: "session:" + legacyRunKey,
+            sessionTarget: `session:${legacyRunKey}`,
             wakeMode: "now",
             payload: {
               kind: "agentTurn",
