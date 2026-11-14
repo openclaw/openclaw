@@ -2467,10 +2467,10 @@ src/state/user-model-account-id.ts
 src/state/user-profile-authority.ts
 src/state/user-profile-events.ts
 src/utils/normalize-secret-input.ts
-
 src/tui/gateway-chat-requests.ts
 packages/gateway-client/src/request-error.ts
 packages/gateway-client/src/protocol-request.ts
 packages/gateway-protocol/src/connect-error-details.ts
 packages/gateway-protocol/src/startup-unavailable.ts
+src/shared/state-lease-loss-format.ts
 src/shared/state-lease-loss.ts

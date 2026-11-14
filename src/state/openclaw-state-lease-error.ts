@@ -1,4 +1,5 @@
-import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+import { formatStateLeaseLoss } from "../shared/state-lease-loss-format.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 
 export type OpenClawStateLeaseErrorCode =
   | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
