@@ -806,7 +806,7 @@ suite.define(() => {
           (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
             label.trim(),
           ),
-        ).toEqual(["All", "Active", "Paused", "Activity history"]);
+        ).toEqual(["All", "Enabled", "Disabled", "Activity history"]);
         expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
           0,
         );

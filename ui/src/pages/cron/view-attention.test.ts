@@ -22,7 +22,7 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   expect(warning?.textContent).toContain("Provider rejected the request");
   expect(warning?.textContent).toContain("No response was recorded");
   expect(warning?.textContent).toContain("Check for completed actions before running again");
-  expect(warning?.textContent).not.toContain("Paused");
+  expect(warning?.textContent).not.toContain("Disabled");
 });
 
 it("does not flag a manually paused historical error as an active failure", async () => {
@@ -32,7 +32,7 @@ it("does not flag a manually paused historical error as an active failure", asyn
   });
   const container = await renderView({ editingJob: job });
   expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')?.textContent).toContain(
-    "Paused",
+    "Disabled",
   );
   expect(container.querySelector(".cron-failure-details")).toBeNull();
 });

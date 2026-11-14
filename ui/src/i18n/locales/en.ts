@@ -1529,7 +1529,7 @@ const startupEnglish = {
       automationEmpty: "No automations yet.",
       automationMore: "Load more automations",
       automationAttention: "Needs attention",
-      automationPaused: "Paused",
+      automationPaused: "Disabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",

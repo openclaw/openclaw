@@ -6,6 +6,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { CronJobActionProps, CronProps } from "./view-types.ts";
@@ -54,7 +55,7 @@ export function AdminRequired(props: CronProps) {
     </>
   );
 }
-// Run now and pause/resume are visible controls (rows and detail header);
+// Run now and enable/disable are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
 export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
   const id = createUniqueId();
@@ -128,15 +129,21 @@ export function EnabledSwitch(
       : props.job.enabled
         ? t("cron.detail.active")
         : t("cron.detail.paused");
-  const actionLabel = () =>
-    t(props.job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
-      name: props.job.displayName ?? props.job.name,
-    });
+  const actionLabel = createMemo(() =>
+    t(
+      props.job.enabled
+        ? isCronJobRunning(props.job)
+          ? "cron.actions.stopAndDisableJob"
+          : "cron.actions.pauseJob"
+        : "cron.actions.resumeJob",
+      { name: props.job.displayName ?? props.job.name },
+    ),
+  );
   return (
     <span
       class="cron-enabled-toggle"
       data-test-id={props.compact ? `cron-row-toggle-${props.job.id}` : "cron-toggle-enabled"}
-      title={props.compact ? actionLabel() : undefined}
+      title={actionLabel()}
     >
       <SettingsToggle
         checked={props.job.enabled}
@@ -146,7 +153,7 @@ export function EnabledSwitch(
           !props.canManage ||
           (props.busy && props.toggleSavingJobId !== props.job.id)
         }
-        ariaLabel={props.compact ? actionLabel() : stateLabel()}
+        ariaLabel={actionLabel()}
         onChange={(checked) => {
           if (props.canManage) {
             props.onToggle(props.job, checked);

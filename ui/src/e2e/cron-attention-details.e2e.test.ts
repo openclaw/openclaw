@@ -105,7 +105,7 @@ suite.define(() => {
           expect(await fitsViewport()).toBe(true);
           // History already exposes the saved job's full cause, even without a retained run.
           expect(await review.count()).toBe(0);
-          expect(await page.locator(".cron-detail-header").textContent()).not.toContain("Paused");
+          expect(await page.locator(".cron-detail-header").textContent()).not.toContain("Disabled");
           if (name === "phone") {
             expect(await page.locator(".cron-run-entry").count()).toBe(0);
           } else {

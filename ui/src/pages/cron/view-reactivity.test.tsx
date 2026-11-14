@@ -41,7 +41,7 @@ it("updates a keyed job row from a replacement owner snapshot", () => {
   expect(view.container.querySelector('[data-test-id="cron-row-job-update"]')).toBe(row);
   expect(row?.textContent).toContain("Paused until tomorrow");
   expect(row?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(
-    "Paused",
+    "Disabled",
   );
 });
 
@@ -76,7 +76,7 @@ it("checks each retained row's permission once while typing and dispatches curre
 it("publishes refreshed runtime facts from the mutable selected job", async () => {
   const job = createCronViewJob("job-runtime", {
     trigger: { script: "json({ fire: false })" },
-    state: { triggerEvalCount: 1 },
+    state: { triggerEvalCount: 1, runningAtMs: 1 },
   });
   const [props, setProps] = createSignal(
     createCronViewProps({ editingJob: job, detailTab: "history" }),
@@ -91,10 +91,13 @@ it("publishes refreshed runtime facts from the mutable selected job", async () =
       (node) => node.textContent,
     );
   expect(counts()[0]).toBe("1");
+  const toggle = view.container.querySelector('[data-test-id="cron-toggle-enabled"] input');
+  expect(toggle?.getAttribute("aria-label")).toBe(`Stop and disable: ${job.name}`);
   job.state = { triggerEvalCount: 2 };
   setProps((previous) => ({ ...previous }));
   flush();
   expect(counts()[0]).toBe("2");
+  expect(toggle?.getAttribute("aria-label")).toBe(`Disable: ${job.name}`);
 });
 
 it("keeps pagination current while a query is pending without mounting editor suggestions", () => {

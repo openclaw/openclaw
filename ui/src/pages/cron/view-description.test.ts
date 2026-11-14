@@ -35,7 +35,7 @@ it.each([
     expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(0);
     const toggle = getElement(row, `[data-test-id="cron-row-toggle-${job.id}"]`, HTMLSpanElement);
     const toggleInput = getElement(toggle, "input.settings-toggle__input", HTMLInputElement);
-    const actionLabel = `${enabled ? "Pause" : "Resume"}: ${expected}`;
+    const actionLabel = `${enabled ? "Disable" : "Enable"}: ${expected}`;
     expect(getByRole(toggle, "switch", { name: actionLabel })).toBe(toggleInput);
     expect(toggle).toMatchObject({ title: actionLabel });
     expect(toggleInput.checked).toBe(enabled);

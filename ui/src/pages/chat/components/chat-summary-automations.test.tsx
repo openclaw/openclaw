@@ -404,7 +404,7 @@ it.each([false, true])(
       if (loaded) {
         current.cron();
         await advance();
-        expect(current.element.textContent).toContain("Paused");
+        expect(current.element.textContent).toContain("Disabled");
       }
       expect(current.find(".chat-summary__automation-retry")).toBeNull();
       const count = request.mock.calls.length;
@@ -414,7 +414,7 @@ it.each([false, true])(
       expect(request).toHaveBeenCalledTimes(count);
       await advance(1);
       expect(current.element.textContent).toContain("Recovered automation");
-      expect(current.element.textContent).toContain("Paused");
+      expect(current.element.textContent).toContain("Disabled");
       expect(current.find(".chat-summary__automation-retry")).toBeNull();
       expect(request).toHaveBeenCalledTimes(count + 1);
       expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
@@ -459,7 +459,7 @@ it.each(["retry", "event", "reconnect"] as const)(
       }
       await advance();
       expect(current.element.textContent).toContain("Authorized automation");
-      expect(current.element.textContent).toContain("Paused");
+      expect(current.element.textContent).toContain("Disabled");
       expect(request).toHaveBeenCalledTimes(3);
       expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
     } finally {
@@ -608,7 +608,7 @@ it("uses the inventory continuation rather than silently dropping additional aut
   );
   const { element, find } = current;
   await current.ready("First automation");
-  expect(element.textContent).toContain("Paused");
+  expect(element.textContent).toContain("Disabled");
   find<HTMLButtonElement>(".chat-summary__automation-more")!.click();
   await current.ready("Second automation");
   expect(current.request.mock.calls[1]?.[1]).toMatchObject({
@@ -849,7 +849,7 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   const { element } = current;
   await current.ready("Needs attention");
   const attention = element.querySelector<HTMLAnchorElement>('[href$="job=attention"]')!;
-  expect(attention.textContent).not.toContain("Paused");
+  expect(attention.textContent).not.toContain("Disabled");
   expect(attention.querySelector(".chat-summary__automation-attention")).not.toBeNull();
   expect(element.querySelectorAll(".chat-summary__automation-paused")).toHaveLength(1);
   expect(element.querySelectorAll(".session-run-spinner")).toHaveLength(1);
