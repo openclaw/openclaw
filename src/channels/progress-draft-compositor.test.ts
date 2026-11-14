@@ -381,6 +381,36 @@ it("shares reasoning merge state with inactive preview renderers", () => {
   expect(progress.mergeReasoningProgress("Checking again")).toBe("Checking again");
 });
 
+it("keeps the reasoning burst open when its own projection is admitted as a line", async () => {
+  const { progress } = createProgress({ toolProgress: true, maxLines: 8 });
+  const reasoningRow = (text: string) => ({
+    id: "reasoning:1",
+    kind: "item" as const,
+    text,
+    label: "Reasoning",
+  });
+
+  // The raw text keeps the trailing space the display text drops.
+  expect(progress.mergeReasoningProgress("Reading ")).toBe("Reading");
+  await progress.pushToolProgress(reasoningRow("Reading"), {
+    startImmediately: true,
+    reasoningLine: true,
+  });
+  expect(progress.mergeReasoningProgress("the handler")).toBe("Reading the handler");
+
+  // The opening tag survives admission so the delta that closes it still parses.
+  expect(progress.mergeReasoningProgress("<think>Fresh", { snapshot: true })).toBe("Fresh");
+  await progress.pushToolProgress(reasoningRow("Fresh"), {
+    startImmediately: true,
+    reasoningLine: true,
+  });
+  expect(progress.mergeReasoningProgress(" snapshot</think>")).toBe("Fresh snapshot");
+
+  // Admitted work still delimits the burst.
+  await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+  expect(progress.mergeReasoningProgress("Next thought")).toBe("Next thought");
+});
+
 it("cancels delayed startup before final delivery", async () => {
   const { progress, update } = createProgress();
   await progress.pushToolProgress("Exec");

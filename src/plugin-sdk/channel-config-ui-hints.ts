@@ -163,6 +163,7 @@ const STREAMING_HINT_LABELS = {
   "preview.commandText": "Draft Command Text",
   "progress.style": "Progress Style",
   "progress.nativeTaskCards": "Native Progress Task Cards",
+  "progress.reasoning": "Progress Reasoning Presentation",
 } as const;
 
 type StreamingHintKey = keyof typeof STREAMING_HINT_LABELS;

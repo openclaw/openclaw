@@ -546,16 +546,14 @@ vi.mock("../../stream-mode.js", () => ({
   }),
 }));
 
+// mock-isolation: The Slack stream transport is the recorded boundary under test.
 vi.mock("../../streaming.js", () => ({
   appendSlackStream: appendSlackStreamMock,
-  markSlackStreamFallbackDelivered: (session: {
-    delivered: boolean;
-    pendingText: string;
-    stopped: boolean;
-  }) => {
+  markSlackStreamFallbackDelivered: (session: ReturnType<typeof createNativeStreamSession>) => {
     session.pendingText = "";
     session.stopped = !session.delivered;
   },
+  SlackStreamMessageTooLongError: class extends TestSlackStreamNotDeliveredError {},
   SlackStreamNotDeliveredError: TestSlackStreamNotDeliveredError,
   startSlackStream: async (input: unknown) =>
     Object.assign(await startSlackStreamMock(input), { streamer: { ts: STREAM_MESSAGE_TS } }),

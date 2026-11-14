@@ -53,6 +53,12 @@ export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
   style?: "card" | "compact";
   /** Use Slack-native task cards for card-style progress. Default: true. */
   nativeTaskCards?: boolean;
+  /**
+   * Presentation of streamed reasoning (`reasoningDefault: "stream"`) on the native task card.
+   * "narration" streams one compacted line as text; "cards" renders reasoning segments as task rows.
+   * Default: "narration".
+   */
+  reasoning?: "narration" | "cards";
 };
 export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;
 export type SlackExecApprovalConfig = ChannelExecApprovalConfig;

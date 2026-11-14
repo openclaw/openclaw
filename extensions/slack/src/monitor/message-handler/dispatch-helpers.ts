@@ -104,6 +104,13 @@ export function resolveSlackNativeProgressTaskCards(
   return entry?.streaming?.progress?.nativeTaskCards !== false;
 }
 
+// Reasoning cards are an opt-in; the default keeps reasoning in the stream's narration text.
+export function resolveSlackProgressReasoningMode(
+  entry: SlackProgressConfigEntry,
+): "narration" | "cards" {
+  return entry?.streaming?.progress?.reasoning ?? "narration";
+}
+
 export type SlackEventDeliveryAttempt = {
   kind: ReplyDispatchKind;
   payload: ReplyPayload;

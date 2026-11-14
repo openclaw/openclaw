@@ -59,6 +59,8 @@ export const slackChannelConfigUiHints = {
         'Slack progress presentation: "card" uses structured task/session cards; "compact" keeps a temporary editable text draft. The final response is posted as a new message, then the draft is deleted after confirmed delivery. Outside reply threads, unset progress presentation is quiet. Any explicit streaming.progress setting in the merged root and account config opts top-level turns into a preview, except nativeTaskCards: true, which only affects threads. This includes commentary or label alone. The style defaults to "compact" when toolProgress is explicitly false, otherwise "card".',
       "progress.nativeTaskCards":
         'Slack native task-card progress updates when channels.slack.streaming.mode="progress", progress.style="card", and streaming.nativeTransport is enabled. Set false to fall back to the Block Kit progress card. Default: true.',
+      "progress.reasoning":
+        'Streamed reasoning (agents.defaults.reasoningDefault="stream") on the native task card: "narration" streams one compacted line as text; "cards" renders reasoning segments as task rows when progress.toolProgress is true. Default: "narration".',
     },
     progress: { labels: "openclaw" },
   }),

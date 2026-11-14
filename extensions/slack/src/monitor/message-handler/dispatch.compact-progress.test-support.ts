@@ -37,7 +37,7 @@ export function contentTaskId(prefix: string) {
   return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
 }
 
-type Checkpoint = { kind: "checkpoint"; run: () => Promise<void> };
+type Checkpoint = { kind: "checkpoint"; run: () => Promise<unknown> };
 export function checkpoint(run: Checkpoint["run"]): Checkpoint {
   return { kind: "checkpoint", run };
 }
@@ -171,7 +171,7 @@ export type TestDispatchSequenceEntry =
     }
   | { kind: "queued_followup" }
   | { kind: "item"; progressText: string }
-  | { kind: "checkpoint"; run: () => Promise<void> };
+  | { kind: "checkpoint"; run: () => Promise<unknown> };
 
 export function preamble(
   progressText: string,

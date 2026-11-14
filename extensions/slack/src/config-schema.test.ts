@@ -59,4 +59,22 @@ describe("slack config schema", () => {
       expect(paths).toEqual(exact ? [path] : expect.arrayContaining([path]));
     }
   });
+
+  it("accepts the reasoning card presentation and rejects other values", () => {
+    for (const reasoning of ["narration", "cards"]) {
+      expect(
+        SlackConfigSchema.safeParse({ streaming: { mode: "progress", progress: { reasoning } } })
+          .success,
+      ).toBe(true);
+    }
+    const result = SlackConfigSchema.safeParse({
+      streaming: { progress: { reasoning: "inline" } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toEqual([
+        "streaming.progress.reasoning",
+      ]);
+    }
+  });
 });
