@@ -619,7 +619,7 @@ describe("ClawHub chat recommendations", () => {
       if (!installed) {
         expect(part(card, "dismiss")).toBeNull();
         expect(part(card, "install")?.textContent?.trim()).toBe("Install");
-        context.navigate.mockClear();
+        vi.mocked(context.navigate).mockClear();
         part(card, "install")!.click();
         expect(context.navigate).toHaveBeenCalledWith("skills", {
           search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
