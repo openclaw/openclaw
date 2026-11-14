@@ -94,7 +94,9 @@ export function prepareCompactionFloorMessage(message: AgentMessage): Compaction
       anchors.set(key, row);
     }
   }
-  return {
+  // Excerpts and regex captures can retain the entire payload as sliced strings.
+  // Detach these bounded facts before the worker caches them across transcript reads.
+  return structuredClone({
     ...(message.role === "user"
       ? {
           user: {
@@ -104,7 +106,7 @@ export function prepareCompactionFloorMessage(message: AgentMessage): Compaction
         }
       : { assistant: clip(text, MAX_FLOOR_OUTCOME_CHARS) }),
     anchors: [...anchors.values()],
-  };
+  });
 }
 
 /** Keep only the suffix and ranked identifiers any supported floor budget can emit. */
