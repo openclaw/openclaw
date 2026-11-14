@@ -9,7 +9,6 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { getHeapStatistics } from "node:v8";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
@@ -75,24 +74,22 @@ if (isMainThread) {
   const sample = () => {
     peak = Math.max(peak, getHeapStatistics().used_heap_size);
   };
-  // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the native database receiver.
-  const nativePrepare = DatabaseSync.prototype.prepare;
-  DatabaseSync.prototype.prepare = function (...args) {
-    const statement = Reflect.apply(nativePrepare, this, args);
+  const prepare = database.db.prepare.bind(database.db);
+  database.db.prepare = (...args) => {
+    const statement = prepare(...args);
     for (const method of ["get", "all", "run"]) {
-      const original = statement[method];
-      statement[method] = function (...bindings) {
-        const result = Reflect.apply(original, this, bindings);
+      const original = statement[method].bind(statement);
+      statement[method] = (...bindings) => {
+        const result = original(...bindings);
         if (active && ++queries % 128 === 0) {
           sample();
         }
         return result;
       };
     }
-    // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the statement receiver.
-    const iterate = statement.iterate;
+    const iterate = statement.iterate.bind(statement);
     statement.iterate = function* (...bindings) {
-      for (const row of Reflect.apply(iterate, this, bindings)) {
+      for (const row of iterate(...bindings)) {
         if (active && ++rows % 128 === 0) {
           sample();
         }
