@@ -94,6 +94,8 @@ const repositoryScriptEntries = [
   "scripts/perf/state-private-store-modes-measure.mjs!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   "scripts/perf/sandbox-projection-fetch-measure.ts!",
+  // ws-compression-measure.ts forks the receiving peers by exact path.
+  "scripts/perf/ws-compression-peers.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -1614,6 +1616,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",
