@@ -1469,8 +1469,6 @@ const workerCachePreset = (shard) => {
 };
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
-// CLI audit evidence has a separate namespace and one upload per scheduled run.
-let auditCliObservationsAssigned = false;
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1505,7 +1503,6 @@ const nodeTestShards = targetNodeTestShards
           ])
         : undefined;
     const auditCliObservations =
-      !auditCliObservationsAssigned &&
       eventName === "schedule" &&
       isCanonicalRepository &&
       !frozenTarget &&
@@ -1516,7 +1513,6 @@ const nodeTestShards = targetNodeTestShards
           group.configs[0] === "test/vitest/vitest.cli-process.config.ts",
       ) &&
       !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
-    auditCliObservationsAssigned ||= Boolean(auditCliObservations);
     const row = {
       check_name: shard.checkName,
       audit_cli_observations: auditCliObservations || undefined,
@@ -1622,6 +1618,15 @@ const nodeTestShards = targetNodeTestShards
     }
     return row;
   });
+// Vary the single audit capture across runs instead of always observing the first row.
+const auditCliRows = nodeTestShards.filter((row) => row.audit_cli_observations);
+if (auditCliRows.length > 0) {
+  const runId = process.env.GITHUB_RUN_ID ?? "";
+  const auditIndex = /^\d+$/u.test(runId) ? Number(BigInt(runId) % BigInt(auditCliRows.length)) : 0;
+  auditCliRows.forEach((row, index) => {
+    row.audit_cli_observations = index === auditIndex || undefined;
+  });
+}
 const nodeTestGroupPools = {};
 if (
   typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&

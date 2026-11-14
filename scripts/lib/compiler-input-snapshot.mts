@@ -517,25 +517,47 @@ export class CompilerInputSnapshot {
     required: string[],
     outputRoot?: string,
     resolutionFingerprint?: string,
+    onMismatch?: (reason: string) => void,
   ) {
-    try {
-      return (
-        record?.inputs !== undefined &&
-        record.signature ===
-          this.signature(config, args, record.inputs, outputRoot, resolutionFingerprint) &&
-        required.every((file) => Object.hasOwn(record.outputs, file)) &&
-        (!outputRoot ||
-          listCacheFiles(
-            this.rootDir,
-            [{ path: outputRoot, extensions: [".d.ts", ".d.mts", ".d.cts"] }],
-            fs,
-          ).every((file) =>
-            Object.hasOwn(record.outputs, portableRelativePath(this.rootDir, file)),
-          )) &&
-        Object.entries(record.outputs).every(([file, hash]) => this.hash(file) === hash)
-      );
-    } catch {
+    const mismatch = (reason: string) => {
+      onMismatch?.(reason);
       return false;
+    };
+    try {
+      if (record?.inputs === undefined) {
+        return mismatch("compiler input inventory is missing");
+      }
+      if (
+        record.signature !==
+        this.signature(config, args, record.inputs, outputRoot, resolutionFingerprint)
+      ) {
+        return mismatch("compiler signature changed (inputs, config, toolchain or runtime)");
+      }
+      const missing = required.find((file) => !Object.hasOwn(record.outputs, file));
+      if (missing !== undefined) {
+        return mismatch(`required output is missing: ${JSON.stringify(missing)}`);
+      }
+      if (outputRoot) {
+        const unexpected = listCacheFiles(
+          this.rootDir,
+          [{ path: outputRoot, extensions: [".d.ts", ".d.mts", ".d.cts"] }],
+          fs,
+        ).find((file) => !Object.hasOwn(record.outputs, portableRelativePath(this.rootDir, file)));
+        if (unexpected !== undefined) {
+          return mismatch(
+            `unexpected declaration output: ${JSON.stringify(portableRelativePath(this.rootDir, unexpected))}`,
+          );
+        }
+      }
+      const changed = Object.entries(record.outputs).find(
+        ([file, hash]) => this.hash(file) !== hash,
+      );
+      if (changed !== undefined) {
+        return mismatch(`output bytes changed: ${JSON.stringify(changed[0])}`);
+      }
+      return true;
+    } catch {
+      return mismatch("compiler inputs or outputs could not be read");
     }
   }
 }

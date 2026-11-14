@@ -6,7 +6,7 @@ export type ProbeEvent = { t: number; e: string; k?: string; v?: string };
 export type ProbeLog = { frames: ProbeFrame[]; events: ProbeEvent[] };
 
 /** Fastest real fling step is about 8000 pt/s at 60 Hz; a bigger one-frame move is a jump. */
-export const TELEPORT_PT = 400;
+const TELEPORT_PT = 400;
 /** Sub-point moves are rounding between layout passes, not motion a reader sees. */
 const STILL_PT = 0.5;
 

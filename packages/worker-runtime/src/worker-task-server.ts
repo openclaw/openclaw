@@ -72,6 +72,8 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource: (key?: string) => void | Promise<void>;
+    /** Keys whose cleanup cannot touch the running task's resources skip waiting for that task. */
+    closesBesideExecution?: (key?: string) => boolean;
     encodeResourceError?: (error: unknown) => unknown;
     /** Unknown native state cannot publish a reusable task failure before isolate exit. */
     retireOnError?: boolean;
@@ -186,7 +188,9 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
       host.onMessage(message.sampleMemory === true);
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;
-        const precedingExecution = execution;
+        const precedingExecution = options.closesBesideExecution?.(message.key)
+          ? undefined
+          : execution;
         pendingResourceClosures++;
         resourceClosures = resourceClosures
           .then(() => precedingExecution)

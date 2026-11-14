@@ -768,6 +768,58 @@ the supervisor to fall back. It does not perform managed-service ancestry checks
 The default admission budget is 120 seconds and follows the canary timeout
 budget resolution.
 
+### Candidate-owned rehearsal
+
+Candidates that declare `openclaw.updateRehearsalProtocol: 1` in `package.json`
+rehearse themselves. After staging, the installed updater runs the candidate's
+hidden `openclaw update rehearse --request <absolute-path>` command in place of
+its own rehearsal. The candidate copies state, runs its Doctor and validation,
+and probes a private Gateway with its own logic and its own size-aware budgets,
+so a fix to those checks takes effect on the update that ships it.
+
+The request is a private file holding the configuration source the updater
+resolved, the serving package root for bundled plugin paths, and the operator's
+`--timeout` and `--full-integrity-check` choices. The candidate receives no
+update or service authority, rejects inherited authority variables, and touches
+copied state only. The previous Gateway keeps serving throughout.
+
+The candidate reports each check to the updater as it starts and finishes, and
+the updater records those steps in the run history as before. The candidate
+waits for the updater's answer to each report on its stdin before it continues,
+so no check starts or completes ahead of a recorded step. If the updater cannot
+record a step, or stops answering, the candidate stops before the announced
+check.
+
+Each check runs in its own process group, and so does each command that
+inventories or copies state. The candidate reports those processes to the
+updater, and the updater stops any that are still running after the candidate
+exits, crashes, or is forced to stop. A process is signalled only while it
+still has the start time it had when it was reported.
+
+Stdout carries one
+JSON document with `protocol: 1` and the rehearsal result. Exit `0` means the
+checks passed and `3` means the candidate refuses the update; a refusal is
+binding. The candidate refuses only when its Doctor rehearsal or its private
+Gateway fails on the copied state. A check that ran out of time, including a
+private Gateway that stalls before it is ready, or a state copy that failed is
+not a refusal: the candidate returns no result, and the updater runs its own
+rehearsal. A pass grants nothing: the installed updater still owns drain,
+activation, verification, and rollback.
+
+The updater runs its own rehearsal instead when the target lacks the marker, or
+when the candidate exits with any other status, returns an invalid or
+contradictory document, sends a report the updater cannot read, or stays silent
+for 15 minutes. A report too large to deliver ends the rehearsal the same way,
+before the candidate sends it. The candidate sends a
+heartbeat every 15 seconds, so that limit detects a dead or blocked candidate
+process and does not bound slow checks. The update output says when the
+candidate ran its own checks, and names the reason when the updater took them
+back. An explicit `--timeout` still ends the rehearsal.
+
+Both the installed updater and the candidate must support this. An older
+installed updater ignores the marker and runs its own rehearsal with its own
+budgets.
+
 ### External supervisor readiness
 
 Candidates that declare `openclaw.updatePreflightProtocol: 1` in `package.json`
@@ -1101,6 +1153,15 @@ install link and leaves the external checkout untouched. If activation fails,
 restoring that link and its launchers does not verify the mutable checkout's
 runtime. Recovery stays unverified and does not authorize an automatic restart;
 inspect the checkout and recovery report before restarting it.
+
+A directory cannot replace a link in one step, so the package path is briefly
+empty during that replacement. If the updater is killed at that moment, the link
+remains beside it as `.openclaw.package-backup-<pid>-<time>` and the `openclaw`
+launcher no longer resolves. Run the same update again from the checkout, with
+the same `--channel`. The updater puts the link back when it names the checkout
+running the update, then continues. `--dry-run` reports the link it would
+restore and moves nothing. To return to the dev install without updating, move
+that entry back to the package name.
 
 For a profile without a runtime database, an older npm target initializes its
 compatible state before the updater records history. The selected release's

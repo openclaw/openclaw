@@ -155,10 +155,10 @@ it("keeps an all-cold catalog disabled with provider setup", async () => {
   );
   const container = draw();
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain(luna.name);
-  const options = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
+  const options = [...container.querySelectorAll<HTMLElement>("[data-chat-model-option]")];
   expect(options).toHaveLength(2);
   expect(options[0]?.getAttribute("aria-label")).toContain("Sign-in needed");
-  expect(options.every((option) => option.disabled)).toBe(true);
+  expect(options.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
   expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
     "Sign-in needed",
   );
@@ -181,7 +181,7 @@ it("does not restore a stale preference when picker-open recovery succeeds", asy
   control.invalidate(false);
   control.load(context, "main", true, options);
   expect(find("model-catalog-state")).toBeNull();
-  expect(find("model-option", "openai/gpt-5.6-sol")?.disabled).toBe(false);
+  expect(find("model-option", "openai/gpt-5.6-sol")?.getAttribute("aria-disabled")).toBeNull();
   find("model-option", "openai/gpt-5.6-sol")!.click();
   expect(control.selected).toBe("openai/gpt-5.6-sol");
   refresh.reject(new Error("refresh failed"));

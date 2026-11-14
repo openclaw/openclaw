@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { nativeRuntime } from "../../test-helpers/chat-model.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -122,6 +122,7 @@ it("uses model-picker changes and configured defaults as the environment authori
   await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
   await waitForModelControl(control, context, "main", agent);
   openPicker();
+  await waitForSolid(() => expect(find("model-runtime", "agentsapi")).not.toBeNull());
   find("model-runtime", "agentsapi")!.click();
   expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
   expect(control.selectHostEnvironment()).toBe(true);
@@ -140,6 +141,7 @@ it("returns to the Gateway's implicit host runtime without pinning it", async ()
   control.load(context, "main", true, { agent });
   await waitForModelControl(control, context, "main", agent);
   openPicker();
+  await waitForSolid(() => expect(find("model-runtime", "agentsapi")).not.toBeNull());
   find("model-runtime", "agentsapi")!.click();
   expect(control.selectHostEnvironment()).toBe(true);
   expect(control.agentRuntime).toBeUndefined();

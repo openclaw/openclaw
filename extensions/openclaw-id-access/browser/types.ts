@@ -1,5 +1,11 @@
 // Response shapes of the Gateway's openclawId.* methods that the members page reads.
-import type { IrohEndpointKey, MemberRole, NodeDescription } from "@openclaw/openclaw-id-protocol";
+import type {
+  IrohEndpointKey,
+  KeyFingerprint,
+  MemberDeviceApprover,
+  MemberRole,
+  NodeDescription,
+} from "@openclaw/openclaw-id-protocol";
 
 /** An active owner device as `openclawId.status` lists it. */
 export type OwnerDevice = {
@@ -16,6 +22,11 @@ type MemberRun = { runId: string; sessionKey: string };
 /** One of a member's device keys with its live activity on this Gateway. */
 export type MemberDevice = {
   peerKey: string;
+  deviceFp: KeyFingerprint | null;
+  label: string;
+  approvedBy: MemberDeviceApprover | null;
+  /** Persisted last seen, seconds since the epoch. */
+  lastSeen: number | null;
   /** Open relayed Gateway connections for this key. */
   connections: number;
   /** Last activity this Gateway saw, ms since the epoch; null when not seen since it started. */
@@ -27,6 +38,7 @@ export type MemberDevice = {
 export type Member = {
   accountId: string;
   role: string;
+  roleDefined?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -72,6 +84,7 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
+  roles?: Array<{ name: string; defined: boolean }>;
   invites?: Invite[];
   nodes?: NodeRecord[];
   nodeInvites?: NodeInvite[];

@@ -13,6 +13,8 @@
 // writes per logical second, with --row-update-population and --row-update-field selecting them.
 // --search-discovery measures the real sessions_search inventory sweep, excluding transcript FTS.
 // Use --list-shape all --sessions 3500 --archived-sessions 3000 --updates-per-list 0.
+// --list-shape people --row-updates-per-list 1 --row-update-field inputTokens measures
+// selection invalidation under display-only churn. --count-visits also counts owner projections.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -95,6 +97,10 @@ if (values["source-ref"]) {
       "src/gateway/session-list-view-cache.ts",
       "src/gateway/session-sharing-read.ts",
       "src/gateway/session-row-presentation.ts",
+      "src/gateway/session-row-projection-revisions.ts",
+      "src/gateway/session-row-projection.ts",
+      "src/gateway/session-row-projection-publication.ts",
+      "src/gateway/session-row-publication.ts",
       "src/agents/tools/sessions-search-tool.ts",
     ].map((file) => [
       new URL(`../../${file}`, import.meta.url).href,
@@ -449,6 +455,7 @@ if (values["list-shape"] && values["list-shape"] !== "mixed") {
     all: { archived: "all" },
     sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
     full: { source: "sessions-page", limit: 100, archived: "all" },
+    people: { source: "sessions-page", includePeople: true, limit: 100, archived: "all" },
     search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
     "runtime-search": { source: "sessions-page", search: "openclaw", limit: 100, archived: "all" },
     agent: { source: "sessions-page", agentId: "reviewer", limit: 100, archived: false },
@@ -969,7 +976,16 @@ try {
   };
   await run(warmup, false);
   let partitionEntriesVisited = 0;
+  let ownerProjections = 0;
   if (values["count-visits"]) {
+    const identities = projection.state.rowContext.identityProjection;
+    if (identities) {
+      const owner = identities.owner.bind(identities);
+      identities.owner = (...args) => {
+        ownerProjections++;
+        return owner(...args);
+      };
+    }
     const prepared = lists.prepareSessionRowSelection(
       projection,
       { archived: "all" },
@@ -1014,6 +1030,7 @@ try {
   const beforeSelections = workMetrics.getSessionRowSelectionMetrics();
   const before = process.threadCpuUsage();
   await run(iterations, true);
+  const measuredOwnerProjections = ownerProjections;
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
   await nextTurn();
@@ -1124,6 +1141,7 @@ try {
       }),
     ),
     partitionEntriesVisited: values["count-visits"] ? partitionEntriesVisited : undefined,
+    ownerProjections: values["count-visits"] ? measuredOwnerProjections : undefined,
     partitions: {
       hits: lastPartitions.hits - firstPartitions.hits,
       misses: lastPartitions.misses - firstPartitions.misses,

@@ -1,0 +1,2 @@
+# Cached parent activity must not allocate an unused clock view; extends propagation/settlement proof.
+2

@@ -116,10 +116,10 @@ it.each([
         "Cooldown 12m",
       ),
     );
-    const row = view.container.querySelector<HTMLButtonElement>(
+    const row = view.container.querySelector<HTMLElement>(
       '[data-chat-model-option="example/model"]',
     );
-    expect(row?.disabled).toBe(true);
+    expect(row?.getAttribute("aria-disabled")).toBe("true");
     expect(row?.getAttribute("aria-label")).toContain("Cooling down");
     expect(view.container.querySelector(".chat-controls__context-trigger")).toBeNull();
     const header = view.container.querySelector(".chat-controls__provider-heading");
@@ -129,10 +129,10 @@ it.each([
     );
     expect(header?.querySelector("openclaw-tooltip")).toBeNull();
     expect(header?.textContent).not.toMatch(/expires|3m/);
-    const other = view.container.querySelector<HTMLButtonElement>(
+    const other = view.container.querySelector<HTMLElement>(
       '[data-chat-model-option="example/other"]',
     );
-    expect(other?.disabled).toBe(all);
+    expect(other?.getAttribute("aria-disabled") === "true").toBe(all);
     expect(other?.querySelector(".chat-controls__model-option-meta")?.textContent ?? "").toBe(
       all ? "" : "400k",
     );
