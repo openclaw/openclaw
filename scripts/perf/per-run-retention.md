@@ -148,3 +148,41 @@ listener removal, with tiny synthetic authority-release callbacks. It excludes
 database commits and full operator/source teardown, so it cannot establish Gateway
 latency. A correct release can allocate temporarily while reducing retained memory;
 report that tradeoff rather than treating allocation and retention as equivalent.
+
+## Sandbox preparation
+
+Add `--sandbox-image <existing-local-image>` to the fixed-session workload to
+prepare real Docker sandboxes. Each agent workspace contains 135 synthetic skills
+with eight supporting files each. Use 50 fixed sessions and 150 turns to compare
+first preparation with two reuse passes; force GC every 25 turns and include a
+quiet checkpoint. The Gateway runs the normal agent/Responses flow. The synthetic
+provider does not execute container tools.
+
+Add `--sandbox-worktrees` to create each active session through the real managed
+worktree RPC before its first turn. This commits the synthetic source repositories
+and asserts the returned worktree identities. Managed fixtures and `--fixture-gib
+35` fixtures contain 62,000 additional files totaling 1.116 GB across the two
+agent workspaces. The database-size option remains independent: only
+`--fixture-gib 35` establishes the large database population. Report filesystem
+and backend differences; Docker/APFS does not prove Podman/Btrfs behavior.
+
+The rig leaves task containers and synthetic state for inspection. After its
+Gateway exits, remove only the containers belonging to that run's
+`heap-rig-<port>-` prefix, then remove its state when analysis is complete.
+Use a safe host temporary directory; the state/output volume may have shared
+ancestors that are unsuitable for temporary credential files.
+
+For the separate browser HTTP listener owner, run:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/sandbox-browser-context-retention.ts --count 50 --measure timing
+```
+
+The real authenticated bridge serves HTTP while synthetic preparation scopes
+become unreachable. Each scope contains a labeled 1 MiB array; the measured
+bytes are a scaled ownership test, not production bytes per sandbox. Select a
+frozen listener with `--owner <file>` for baseline/candidate pairs, and run
+`--measure allocation` separately. This does not launch Chromium or exercise
+sandbox provisioning. Explicit capability callbacks have their own lifetimes;
+the test isolates implicit async-context retention by the listener.

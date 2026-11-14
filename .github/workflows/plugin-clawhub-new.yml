@@ -399,6 +399,7 @@ jobs:
                 event,
                 status,
                 conclusion,
+                path,
                 url: .html_url,
                 runAttempt: .run_attempt
               }'

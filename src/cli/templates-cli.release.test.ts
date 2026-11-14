@@ -20,16 +20,10 @@ describe("templates release", () => {
 
   async function editedManagedAgent() {
     const root = path.dirname(process.env.OPENCLAW_STATE_DIR!);
-    const { plan } = await makeProvenancePlan(
-      root,
-      { schemaVersion: 1, agent: { id: "worker" } },
-      {
-        openClawProfile: {
-          schemaVersion: 1,
-          agent: { tools: { profile: "full", allow: ["read"] } },
-        },
-      },
-    );
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker", tools: { profile: "full", allow: ["read"] } },
+    });
     seedLegacyTemplateInstall(plan, { env: process.env });
     const { id, tools, ...agent } = plan.agent.config;
     const editedTools = { ...tools, exec: { mode: "full" as const } };

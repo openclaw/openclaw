@@ -1,2 +1,0 @@
-# Preserve parsed paragraph gaps, native RichText, and chunk-start recovery.
-60

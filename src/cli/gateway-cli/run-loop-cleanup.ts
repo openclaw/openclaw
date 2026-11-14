@@ -26,6 +26,7 @@ export function createGatewayRunCleanup(
   logger: Pick<SubsystemLogger, "warn" | "error">,
   isForegroundUpdateClosed: () => boolean,
   onRetained: () => void,
+  onFailed: () => void,
 ) {
   // Process-owned signal handling must survive gaps with no listening server.
   // Node's signal listeners and pending promises do not retain the event loop.
@@ -36,8 +37,7 @@ export function createGatewayRunCleanup(
   let processResourcesDrained = false;
   let resourcesRetained = false;
   const retainedDetails = new Set<string>();
-  const canClearRequestWatchdogs = () =>
-    !resourcesRetained && (!ownsProcessLifecycle || !cleanupFailed);
+  const canClearRequestWatchdogs = () => !resourcesRetained;
   const retainResources = (name: string, detail: string) => {
     resourcesRetained = true;
     onRetained();
@@ -80,6 +80,7 @@ export function createGatewayRunCleanup(
         }
         cleanupFailed = true;
         logger.error(`gateway lifecycle completion failed: ${formatErrorMessage(error)}`);
+        onFailed();
       },
     );
   };
@@ -170,10 +171,14 @@ export function createGatewayRunCleanup(
           this.classifyShutdownFailure(error, "final-resource-cleanup");
         }
       }
+      const exitCode = cleanupFailed && code === 0 ? 1 : code;
       if (ownsProcessLifecycle && canClearRequestWatchdogs()) {
         // Settled cleanup retired the deadline watchdogs. A handle nobody closed must not
         // hold the process until the supervisor's stop timeout once the CLI finishes.
-        requestSettledExitWatchdog(SETTLED_EXIT_WATCHDOG_MS);
+        requestSettledExitWatchdog(
+          SETTLED_EXIT_WATCHDOG_MS,
+          cleanupFailed && exitCode === 1 ? "SIGUSR2" : undefined,
+        );
       }
       // Final diagnostics follow the actual producer joins, including failed cleanup.
       finishDiagnosticsTimeline(
@@ -192,7 +197,6 @@ export function createGatewayRunCleanup(
           cause: errors[0],
         });
       }
-      const exitCode = cleanupFailed && code === 0 ? 1 : code;
       if (ownsProcessLifecycle) {
         // Leaked handles remain the deadline or settled-exit watchdog's responsibility.
         process.exitCode = exitCode;

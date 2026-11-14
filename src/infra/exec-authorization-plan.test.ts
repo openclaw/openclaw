@@ -2,10 +2,10 @@ import { expect, it } from "vitest";
 import { analyzeArgvCommand } from "./exec-approvals-analysis.js";
 import { planExecAuthorization, planShellAuthorization } from "./exec-authorization-plan.js";
 
-const planFor = (input: string | string[]) =>
+const planFor = async (input: string | string[]) =>
   typeof input === "string"
     ? planShellAuthorization({ command: input })
-    : planExecAuthorization({ analysis: analyzeArgvCommand({ argv: input }) });
+    : planExecAuthorization({ analysis: await analyzeArgvCommand({ argv: input }) });
 function direct(input: string | string[], argv: string[], reasons?: string[]) {
   return {
     input,

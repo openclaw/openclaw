@@ -324,7 +324,7 @@
   border-radius: var(--radius-md);
   color: var(--text);
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

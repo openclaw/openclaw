@@ -724,34 +724,42 @@ a.oc-menu-item[href] {
   flex: none;
   align-items: center;
   min-width: 12rem;
-  gap: var(--space-1);
+  /* Hosts set the slot and gap so the icon and text sit on their rows' icon and label columns. */
+  gap: var(--header-search-gap, 8px);
   min-height: var(--menu-item-height);
   margin-block-end: 6px;
   padding-block-end: 6px;
   padding-inline: 8px 2px;
   border-block-end: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  /* The field reads at the size of the rows it filters. */
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.4;
 }
 
-.header-search__title,
+.header-search__icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--header-search-icon-slot, 16px);
+  height: 16px;
+  /* A click on the icon lands in the field. */
+  cursor: text;
+}
+
+.header-search__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .header-search__input {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.header-search__title {
-  overflow: hidden;
-  font-weight: var(--control-ui-font-weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 :is(.header-search, .oc-menu-item__label) .header-search__input,
 :is(.header-search, .oc-menu-item__label) .header-search__input:focus,
 :is(.header-search, .oc-menu-item__label) .header-search__input:focus-visible {
-  width: 100%;
   min-height: 0;
   height: auto;
   padding: 0;
@@ -763,6 +771,16 @@ a.oc-menu-item[href] {
   font: inherit;
 }
 
+.oc-menu-item__label > .header-search__input {
+  width: 100%;
+}
+
+/* The rows size the card; the field takes what is left, not its intrinsic 20 characters. */
+.header-search > .header-search__input {
+  flex: 1 1 0;
+  width: 0;
+}
+
 .header-search__input::placeholder {
   color: var(--muted);
 }
@@ -771,7 +789,8 @@ a.oc-menu-item[href] {
   display: none;
 }
 
-.header-search__toggle {
+.header-search__toggle,
+.header-search__clear {
   display: inline-grid;
   flex: none;
   place-items: center;
@@ -784,17 +803,25 @@ a.oc-menu-item[href] {
   color: var(--muted);
 }
 
-.header-search__toggle:hover:not(:disabled) {
+/* Clearing appears with the first character, so it must not change the row's height. */
+.header-search__clear {
+  margin-block: -4px;
+}
+
+.header-search__toggle:hover:not(:disabled),
+.header-search__clear:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-.header-search__toggle:focus-visible {
+.header-search__toggle:focus-visible,
+.header-search__clear:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.header-search__toggle svg {
+.header-search__toggle svg,
+.header-search__clear svg {
   width: 14px;
   height: 14px;
 }

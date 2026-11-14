@@ -211,6 +211,7 @@ it("starts literal dashboard history on the early transport after hello", async 
     ok: true,
     payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
     expect.objectContaining({
@@ -283,6 +284,7 @@ async function connectWarmGateway() {
       auth: { method: "token", role: "operator", scopes: [], recoveryScope: "account-a" },
     },
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   return socket;
 }
@@ -298,6 +300,7 @@ it.each(["before", "after"])(
     const socket = await connectWarmGateway();
     if (timing === "after") {
       await warm.resolve();
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(0);
     }
     expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
@@ -344,6 +347,7 @@ it.each(["different route cache", "foreground handoff", "retired recovery scope"
       warm.transport.client.retireOfflineRecoveryScope();
     }
     await warm.resolve();
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
     expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
   },

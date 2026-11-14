@@ -49,6 +49,7 @@ import {
   buildFallbackStateMismatchError,
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
+import { callDevicesGateway as callGatewayCli, readUnlessAborted } from "./devices-cli-gateway.js";
 import {
   findPairedDevicePendingNodeApprovalNotices,
   formatKeptOpenClawIdNote,
@@ -59,7 +60,6 @@ import {
 } from "./devices-cli-paired-notices.js";
 import { isUnknownRequestIdError } from "./devices-cli.unknown-id.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
-import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
@@ -87,22 +87,8 @@ type ApprovePairingGatewayContext = {
 };
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
-const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
-
-const callGatewayCli = async (
-  method: string,
-  opts: DevicesRpcOpts,
-  params?: unknown,
-  callOpts?: { scopes?: OperatorScope[] },
-) =>
-  callGatewayFromCliWithTransport(method, opts, params, {
-    label: `Devices ${method}`,
-    defaultTimeoutMs: DEFAULT_DEVICES_TIMEOUT_MS,
-    scopes: callOpts?.scopes,
-    sharedStateMode: "read-only",
-  });
 
 function isDevicePairingApprovalDenied(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error)).includes(
@@ -124,12 +110,16 @@ function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   };
 }
 
-async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
+async function listPairingWithFallback(
+  opts: DevicesRpcOpts,
+  signal?: AbortSignal,
+): Promise<DevicePairingList> {
   try {
     return parseDevicePairingList(
-      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE] }),
+      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE], signal }),
     );
   } catch (error) {
+    signal?.throwIfAborted();
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
       throw error;
@@ -545,9 +535,9 @@ function failDevicesCommand(json: boolean | undefined, ...lines: string[]): void
 }
 
 export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void> {
-  let list: DevicePairingList;
+  let list: DevicePairingList | null;
   try {
-    list = await listPairingWithFallback(opts);
+    list = await readUnlessAborted((signal) => listPairingWithFallback(opts, signal));
   } catch (error) {
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
@@ -558,6 +548,9 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
       }
     }
     throw error;
+  }
+  if (!list) {
+    return;
   }
   const pairedByDeviceId = indexPairedDevices(list.paired);
   if (opts.json) {
@@ -742,7 +735,10 @@ export async function runDevicesApproveCommand(
   const usingImplicitSelection = !resolvedRequestId || Boolean(opts.latest);
   let selectedRequest: PendingDevice | null = null;
   if (usingImplicitSelection) {
-    pairingList = await listPairingWithFallback(opts);
+    pairingList = await readUnlessAborted((signal) => listPairingWithFallback(opts, signal));
+    if (!pairingList) {
+      return;
+    }
     selectedRequest = selectLatestPendingRequest(pairingList.pending);
     resolvedRequestId = selectedRequest?.requestId?.trim();
   }

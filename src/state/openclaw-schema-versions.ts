@@ -1,7 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION = 41;
+export const AGENT_TOOL_USAGE_SCHEMA_VERSION = 42;
 
+// v42 adds opt-in, decayed tool usage without backfilling transcripts.
 // v41 keeps active transcript byte and dependency facts outside payload overflow chains.
 // v40 commits durable session creation receipts with their original incarnation.
 // v39 retains cold transcript navigation while payloads remain in their verified archives.
@@ -12,8 +14,9 @@ export const AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION = 41;
 // v34 aligns non-null PostgreSQL index keys with default query ordering.
 // v33 adds a stored PostgreSQL binary vector candidate projection.
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 41;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 42;
 
+// v40 retains the original provisioning source before worker allocation and recovery.
 // v39 retains worker policy and uncertain pause/resume operations across restart.
 // v38 retains repository disk authority and the original authority of pending results.
 // v37 retains immutable provider resource identity through environment teardown.
@@ -49,7 +52,7 @@ export const OPENCLAW_AGENT_SCHEMA_VERSION = 41;
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 39;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 40;
 
 export type OpenClawSchemaVersions = {
   state: number;

@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
+import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
 import { semanticQualificationInputs } from "../../scripts/release-qualification-admission.mjs";
 import {
   createDispatchFixture,
@@ -26,6 +29,66 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("rejects an incompatible publication selector before qualification or registry work", () => {
+    const f = createDispatchFixture({ candidateOwned: true });
+    const result = f.run([
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      `publication_selection_json=${JSON.stringify({
+        route: "extended-stable",
+        npmDistTag: "extended-stable",
+        publishOpenclawNpm: true,
+        pluginPublishScope: "all-publishable",
+        plugins: [],
+      })}`,
+    ]);
+    expectDispatchFailure(
+      result,
+      "publication selection does not match the committed release version",
+    );
+    expect(dispatches(f)).toEqual([]);
+    expect(f.readCalls(f.npmCallsPath)).toEqual([]);
+    expect(f.readCalls(f.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET")).toEqual([]);
+  });
+
+  it("warns about a retired publication line without replacing the publisher approval", () => {
+    const f = createDispatchFixture({
+      candidateOwned: true,
+      includeTargetRef: false,
+      targetSource: {
+        "package.json": JSON.stringify({
+          name: "openclaw",
+          version: "2026.6.37",
+          dependencies: { "@openclaw/ai": "workspace:*" },
+        }),
+        "packages/ai/package.json": JSON.stringify({
+          name: "@openclaw/ai",
+          version: "2026.6.37",
+          dependencies: {},
+        }),
+        "CHANGELOG.md": "## 2026.6.37\n\nMaintenance release for the frozen Gateway line.\n",
+      },
+    });
+    const result = f.run([
+      "--dry-run",
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      `publication_selection_json=${JSON.stringify({
+        route: "extended-stable",
+        npmDistTag: "extended-stable",
+        publishOpenclawNpm: true,
+        pluginPublishScope: "all-publishable",
+        plugins: [],
+      })}`,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("protected main 2026.8.1 allows 2026.7.PATCH, not 2026.6.37");
+    expect(result.stderr).toContain("Qualification does not authorize publication");
+    expect(dispatches(f)).toEqual([]);
+  });
+
   it("rejects an invalid candidate signature before publication dispatch", () => {
     const f = createDispatchFixture({
       candidateOwned: true,
@@ -92,6 +155,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
     expect(advancedP).not.toBe(f.workflowSha);
     expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
+    expect(result.stdout).not.toContain("WARNING: Cross-revision diagnostics");
     const retained = f.record();
     expect(retained.admission.workflowSha).toBe(advancedP);
     expect(retained.request.workflowSha).toBe(f.targetSha);
@@ -283,6 +347,55 @@ describe("candidate-owned full release dispatch entry point", () => {
     const again = f.run(["--resume-request", f.requestPath()], true);
     expect(again.status, again.stderr).toBe(0);
     expect(dispatches(f)).toEqual([P, Q]);
+  });
+
+  it("rejects an incompatible retained publication before resuming qualification", async () => {
+    const f = createDispatchFixture({ candidateOwned: true, stopAfterAccepted: "admission" });
+    expect(f.run().status).toBe(78);
+    const pending = f.record();
+    // Recreate the internally consistent pre-Q intent accepted by the old CLI.
+    const envelope = JSON.parse(pending.request.inputs.trusted_workflow_json);
+    envelope.validationPurpose = "publish";
+    envelope.publicationSelection = {
+      ...publicationSelectionFixture(),
+      route: "extended-stable",
+      npmDistTag: "extended-stable",
+    };
+    const packed = JSON.stringify(envelope);
+    pending.request.inputs.trusted_workflow_json = packed;
+    pending.request.wireInputs.trusted_workflow_json = packed;
+    pending.admission.request.inputs = semanticQualificationInputs(pending.request.wireInputs);
+    const receipt = JSON.parse(readFileSync(f.admissionReceiptPath, "utf8"));
+    receipt.request = pending.admission.request;
+    receipt.inputsDigest = `sha256:${createHash("sha256")
+      .update(JSON.stringify(canonicalizeJsonValue(receipt.request.inputs)))
+      .digest("hex")}`;
+    const zip = new JSZip();
+    zip.file("qualification-admission.json", JSON.stringify(receipt));
+    const bytes = await zip.generateAsync({ type: "nodebuffer" });
+    const metadataPath = `${f.admissionReceiptPath}.artifact.json`;
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    metadata.digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    metadata.size_in_bytes = bytes.length;
+    writeFileSync(`${f.admissionReceiptPath}.zip`, bytes);
+    writeFileSync(metadataPath, JSON.stringify(metadata));
+    const before = `${JSON.stringify(pending)}\n`;
+    writeFileSync(f.requestPath(), before);
+    const start = f.calls().length;
+    const resumed = f.run(["--resume-request", f.requestPath()], true);
+    expectDispatchFailure(
+      resumed,
+      "publication selection does not match the committed release version",
+    );
+    expect(dispatches(f)).toEqual([P]);
+    expect(
+      f
+        .calls()
+        .slice(start)
+        .filter((args) => ghApiMethod(args) !== "GET"),
+    ).toEqual([]);
+    expect(f.refs()).toEqual([]);
+    expect(readFileSync(f.requestPath(), "utf8")).toBe(before);
   });
 
   it("resumes an accepted ref creation after its verification read failed", () => {

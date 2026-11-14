@@ -18,6 +18,7 @@ import {
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
+import { readGitHubPublicationConfiguration } from "../../agents/github-tool-identity-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -115,6 +116,10 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     replyToMode: optionalCacheString(context.replyToMode),
     webSearchEnabled: context.toolOverrides?.webSearch !== false,
     githubPublicationAvailable: context.githubPublicationAvailable,
+    githubPublicationConfiguration:
+      !context.agentRuntime || context.agentRuntime === "openclaw"
+        ? readGitHubPublicationConfiguration({ config: context.cfg, agentId: context.agentId })
+        : undefined,
     // Prepared session ceilings can change without a config or session-id change.
     policy: Object.values<ToolPolicyLike | undefined>(
       resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),

@@ -345,7 +345,7 @@ a.activity-current-work__row:hover {
 
 .activity-pulse--loading {
   background: var(--skeleton-base);
-  height: 108px;
+  height: 128px;
 }
 
 .activity-pulse__header,
@@ -354,7 +354,7 @@ a.activity-current-work__row:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .activity-pulse__header {
@@ -389,16 +389,39 @@ a.activity-current-work__row:hover {
 }
 
 .activity-pulse__bars {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 34px;
+  height: 54px;
+  padding-top: 20px;
   margin-top: var(--space-2);
 }
 
 .activity-pulse__bar {
+  position: relative;
   flex: 1;
   border-radius: 2px 2px 0 0;
+}
+
+.activity-pulse__count {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  translate: -50%;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.activity-pulse__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: var(--control-ui-text-xs);
 }
 
 .activity-pulse__bar[data-bucket="past"] {
@@ -413,10 +436,10 @@ a.activity-current-work__row:hover {
 .activity-pulse__axis {
   display: flex;
   gap: 3px;
-  height: calc(16px * var(--control-ui-text-scale));
+  height: 16px;
   margin-top: var(--space-1);
   font-size: var(--control-ui-text-xs);
-  line-height: calc(16px * var(--control-ui-text-scale));
+  line-height: 16px;
 }
 
 .activity-pulse__axis > span {
@@ -484,6 +507,10 @@ a.activity-current-work__row:hover {
 .activity-feed__recap-text {
   max-width: 88ch;
   margin: 0;
+  /* Recap prose keeps macOS stem darkening so it does not read thin; the recap
+     note, retry action and other app chrome keep the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .activity-feed__recap-skeleton {

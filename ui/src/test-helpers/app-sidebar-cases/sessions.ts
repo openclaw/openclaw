@@ -78,15 +78,15 @@ describe("AppSidebar session sort persistence", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const first = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
     const firstSidebar = first.sidebar as unknown as SidebarSortModeHost;
-    expect(firstSidebar.sessionSortMode).toBe("created");
+    expect(firstSidebar.sessionSortMode).toBe("updated");
 
-    firstSidebar.setSessionSortMode("updated");
-    expect(localStorage.getItem("openclaw:sidebar:sessions:sort-mode")).toBe("updated");
+    firstSidebar.setSessionSortMode("created");
+    expect(localStorage.getItem("openclaw:sidebar:sessions:sort-mode")).toBe("created");
 
     document.body.replaceChildren();
     const second = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
 
-    expect((second.sidebar as unknown as SidebarSortModeHost).sessionSortMode).toBe("updated");
+    expect((second.sidebar as unknown as SidebarSortModeHost).sessionSortMode).toBe("created");
   });
 });
 
@@ -108,6 +108,8 @@ describe("AppSidebar session pagination", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", olderKeys);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.setSessionSortMode("created");
+    await sidebar.updateComplete;
     const refreshed = createSessionState("main", [...olderKeys, "agent:main:external-new"]);
     required(refreshed.result?.sessions.at(-1)).createdAt = 2_000;
 

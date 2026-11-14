@@ -59,6 +59,7 @@ import {
 } from "../vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
+import { createBoundaryVitestConfig } from "../vitest/vitest.boundary.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
@@ -2391,11 +2392,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }));
       const options = compactOptions(profile, "push");
       const unmeasured = bundleTests(options);
-      const initialGroup = unmeasured
+      const supportGroups = unmeasured
         .flatMap(jobGroups)
-        .find((group) => group.shard_name === shardName);
+        .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+      const initialGroup = supportGroups.find((group) => group.shard_name === shardName);
       expect(initialGroup?.timing_key).toMatch(
-        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+        new RegExp(
+          `^agentic-agents-support#selector-.+#generation-.+#part-2-of-${supportGroups.length}#include-.+$`,
+          "u",
+        ),
       );
       const timingKey = initialGroup!.timing_key!;
       directTimings = { [timingKey]: 1 };
@@ -2821,8 +2826,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(planFiles(selected)).toEqual([fast]);
   });
 
-  it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
-    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
+  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", () => {
+    const proofFiles = [
+      "src/gateway/server.codex-failure-recovery.test.ts",
+      "src/gateway/server.feature-session-actions.test.ts",
+    ];
     const files = (mode: "push" | "pull-request") => planFiles(committedPlan(mode));
     const mainFiles = files("push");
     const prFiles = files("pull-request");
@@ -2832,6 +2840,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(prFiles.filter((target) => target === file)).toHaveLength(1);
       const rawConfig = required(buildVitestRunPlans([file])[0]?.config);
       const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(config).toBe(configPath("gateway-server-isolated"));
       expect(
         manual.filter(
           (shard) =>
@@ -3275,6 +3284,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         isDatabaseWorkerCoreTestFile: () => false,
       });
       mockTrackedFiles((root: string) => (root === "src/infra" ? files : []));
+      await mockFastPaths();
       mockPlanTimings(() =>
         Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
       );
@@ -3804,7 +3814,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(hasTooling(automatic)).toBe(false);
     const files = automatic.flatMap(optionalPatterns);
     expectNone(files, (file) => file.startsWith("test/scripts/"));
-    expect(files).toContain("src/infra/home-dir.test.ts");
+    expect(automatic.flatMap((shard) => shard.configs)).toContain(configPath("boundary"));
+    expect(listMatchedTestFiles(createBoundaryVitestConfig({}, []))).toContain(
+      "src/infra/home-dir.test.ts",
+    );
   });
 
   it.each([
@@ -3977,9 +3990,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       owner: "infra",
       prefix: "core-runtime-infra-",
       config: configPath("infra"),
-      expectedFiles: () => [
-        ...new Set([...listTestFiles("src/infra"), ...databaseWorkerCoreTestFiles]),
-      ],
+      expectedFiles: () => listMatchedTestFiles(createInfraVitestConfig({})),
     },
     {
       owner: "cron",

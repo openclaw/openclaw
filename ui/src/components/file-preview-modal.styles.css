@@ -22,7 +22,7 @@ openclaw-file-preview-modal {
     flex: 1;
     min-width: 0;
     margin: 0;
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
     overflow-wrap: anywhere;
   }
   .close-button {
@@ -63,7 +63,7 @@ openclaw-file-preview-modal {
     align-items: center;
     padding: 9px 10px;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
   .folder > summary svg {
     width: 16px;
@@ -84,21 +84,24 @@ openclaw-file-preview-modal {
     border-bottom: 1px solid var(--border);
   }
   .markdown {
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     line-height: 1.65;
     overflow-wrap: anywhere;
+    /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
   }
   .markdown > :first-child {
     margin-top: 0;
   }
   .markdown h1 {
-    font-size: calc(24px * var(--control-ui-text-scale));
+    font-size: 24px;
   }
   .markdown h2 {
-    font-size: calc(20px * var(--control-ui-text-scale));
+    font-size: 20px;
   }
   .markdown h3 {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
   }
   .markdown pre {
     white-space: pre-wrap;
@@ -136,7 +139,7 @@ openclaw-file-preview-modal {
     outline: none;
     color: var(--text-strong);
     font: inherit;
-    font-size: calc(18px * var(--control-ui-text-scale));
+    font-size: 18px;
     font-weight: 400;
     padding: 4px 0;
   }
@@ -156,7 +159,7 @@ openclaw-file-preview-modal {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
     padding: 5px 10px;
     border: 1px solid var(--border);
@@ -181,7 +184,7 @@ openclaw-file-preview-modal {
   }
 
   .list-section {
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--muted);
@@ -247,7 +250,7 @@ openclaw-file-preview-modal {
 
   .item-name {
     font-family: var(--mono);
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -256,12 +259,12 @@ openclaw-file-preview-modal {
 
   .item-meta {
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 
   .empty-list {
     color: var(--muted);
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     padding: 12px;
   }
 
@@ -296,7 +299,7 @@ openclaw-file-preview-modal {
     min-width: 0;
     margin: 0;
     font-family: var(--mono);
-    font-size: calc(22px * var(--control-ui-text-scale));
+    font-size: 22px;
     color: var(--text-strong);
     font-weight: 700;
     letter-spacing: -0.01em;
@@ -345,7 +348,7 @@ openclaw-file-preview-modal {
     align-items: center;
     padding: 3px 10px;
     border-radius: 999px;
-    font-size: calc(11.5px * var(--control-ui-text-scale));
+    font-size: 11.5px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     color: var(--muted);
@@ -378,7 +381,7 @@ openclaw-file-preview-modal {
     margin: 0;
     min-width: 0;
     font-family: var(--mono);
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     line-height: 1.7;
     color: var(--text);
     white-space: pre-wrap;
@@ -396,7 +399,7 @@ openclaw-file-preview-modal {
     padding: 12px 20px;
     border-top: 1px solid var(--border);
     background: var(--bg);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
   }
 
@@ -408,7 +411,7 @@ openclaw-file-preview-modal {
 
   .kbd {
     font-family: var(--mono);
-    font-size: calc(10.5px * var(--control-ui-text-scale));
+    font-size: 10.5px;
     padding: 2px 6px;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -441,7 +444,7 @@ openclaw-file-preview-modal {
   }
 
   .empty-title {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
     font-weight: 600;
     color: var(--text-strong);
     margin: 0 0 8px;
@@ -449,7 +452,7 @@ openclaw-file-preview-modal {
 
   .empty-subtitle {
     margin: 0;
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     color: var(--muted);
     max-width: 380px;
   }

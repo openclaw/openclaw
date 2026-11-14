@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { withWorktreePreparationTiming } from "../worktrees/preparation-timing.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
@@ -137,7 +138,17 @@ it.each([undefined, "PNPM_CONFIG_STORE_DIR", "npm_config_store_dir"])(
             ...cfg,
             docker: { ...cfg.docker, env: { ...cfg.docker.env, [key]: storeDir } },
           };
-    expect(await prepare(config)).toEqual({ installed: true });
+    const spans = new Map<string, number>();
+    const prepared = await withDiagnosticsTimelineObserver(
+      (name, _attributes, duration) => {
+        if (duration !== undefined) {
+          spans.set(name, duration);
+        }
+      },
+      () => withWorktreePreparationTiming("managed", () => prepare(config)),
+    );
+    expect(prepared).toEqual({ installed: true });
+    expect(spans.get("worktree.managed.templateRetire")).toEqual(expect.any(Number));
     const admitted = mocks.ensure.mock.calls[0]![0];
     expect(admitted.cfg.docker).toMatchObject({
       image,

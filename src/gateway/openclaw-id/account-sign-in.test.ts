@@ -312,3 +312,222 @@ describe("createOpenClawIdSignIn", () => {
     });
   });
 });
+
+// A fake issuer offering the device grant; `decision` is what the user did on /device.
+function fakeDeviceIssuer(options: { idToken?: Record<string, unknown> } = {}) {
+  let decision: "pending" | "approved" | "denied" = "pending";
+  let slowDown = false;
+  const tokenPolls: URLSearchParams[] = [];
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const form = new URLSearchParams(init?.body instanceof URLSearchParams ? init.body : "");
+    if (url.endsWith("/.well-known/openid-configuration")) {
+      return Response.json({
+        issuer: ISSUER,
+        authorization_endpoint: `${ISSUER}/oauth2/authorize`,
+        token_endpoint: `${ISSUER}/oauth2/token`,
+        device_authorization_endpoint: `${ISSUER}/oauth2/device-authorization`,
+      });
+    }
+    if (url.endsWith("/oauth2/device-authorization")) {
+      expect(form.get("client_id")).toBe("ui");
+      expect(form.get("scope")).toBe("openid profile email");
+      return Response.json({
+        device_code: "the-device-code",
+        user_code: "WDJB-MJHT",
+        verification_uri: "https://issuer.example.test/device",
+        verification_uri_complete: "https://issuer.example.test/device?user_code=WDJB-MJHT",
+        expires_in: 600,
+        interval: 5,
+      });
+    }
+    if (url.endsWith("/oauth2/token")) {
+      tokenPolls.push(form);
+      if (slowDown) {
+        slowDown = false;
+        return Response.json({ error: "slow_down" }, { status: 400 });
+      }
+      if (decision !== "approved") {
+        return Response.json(
+          { error: decision === "denied" ? "access_denied" : "authorization_pending" },
+          { status: 400 },
+        );
+      }
+      return Response.json({
+        id_token: jwt(
+          options.idToken ?? {
+            iss: ISSUER,
+            aud: "ui",
+            sub: "acct-1",
+            exp: 1_700_036_000,
+            email: "person@example.test",
+            name: "Person",
+          },
+        ),
+        token_type: "Bearer",
+      });
+    }
+    return new Response("not found", { status: 404 });
+  });
+  return {
+    fetchImpl,
+    tokenPolls,
+    decide: (next: "approved" | "denied") => {
+      decision = next;
+    },
+    slowDown: () => {
+      slowDown = true;
+    },
+  };
+}
+
+describe("device sign-in", () => {
+  function clock() {
+    let ms = 1_700_000_000_000;
+    return { now: () => ms, advance: (by: number) => (ms += by) };
+  }
+
+  async function beginDevice(signIn: ReturnType<typeof createOpenClawIdSignIn>, owner = "p1") {
+    const started = await signIn.beginDevice({ issuerUrl: ISSUER, clientId: "ui", owner });
+    if ("ok" in started) {
+      throw new Error(started.detail);
+    }
+    return started;
+  }
+
+  it("shows the user code, polls at the issuer's pace and returns the account once", async () => {
+    const time = clock();
+    const issuer = fakeDeviceIssuer();
+    const signIn = createOpenClawIdSignIn({ fetchImpl: issuer.fetchImpl, now: time.now });
+    const started = await beginDevice(signIn);
+    expect(started).toMatchObject({
+      userCode: "WDJB-MJHT",
+      verificationUri: "https://issuer.example.test/device",
+      verificationUriComplete: "https://issuer.example.test/device?user_code=WDJB-MJHT",
+      interval: 5,
+      expiresAt: time.now() + 600_000,
+    });
+
+    // Polling sooner than the interval never reaches the issuer.
+    expect(await signIn.pollDevice({ state: started.state, owner: "p1" })).toEqual({
+      pending: true,
+      interval: 5,
+    });
+    expect(issuer.tokenPolls).toHaveLength(0);
+    time.advance(5_000);
+    expect(await signIn.pollDevice({ state: started.state, owner: "p1" })).toEqual({
+      pending: true,
+      interval: 5,
+    });
+    expect(issuer.tokenPolls[0]?.get("grant_type")).toBe(
+      "urn:ietf:params:oauth:grant-type:device_code",
+    );
+    expect(issuer.tokenPolls[0]?.get("device_code")).toBe("the-device-code");
+
+    issuer.slowDown();
+    time.advance(5_000);
+    expect(await signIn.pollDevice({ state: started.state, owner: "p1" })).toEqual({
+      pending: true,
+      interval: 10,
+    });
+
+    // Another connection identity can neither redeem nor cancel this sign-in.
+    issuer.decide("approved");
+    time.advance(10_000);
+    expect(await signIn.pollDevice({ state: started.state, owner: "p2" })).toMatchObject({
+      ok: false,
+      code: "state_mismatch",
+    });
+    expect(await signIn.pollDevice({ state: started.state, owner: "p1" })).toMatchObject({
+      account: { sub: "acct-1", email: "person@example.test", name: "Person" },
+      idToken: expect.any(String),
+    });
+    time.advance(10_000);
+    expect(await signIn.pollDevice({ state: started.state, owner: "p1" })).toMatchObject({
+      ok: false,
+      code: "state_mismatch",
+    });
+  });
+
+  it("reports a denial and refuses a token for another client or carrying a nonce", async () => {
+    const time = clock();
+    const denied = fakeDeviceIssuer();
+    const signIn = createOpenClawIdSignIn({ fetchImpl: denied.fetchImpl, now: time.now });
+    const started = await beginDevice(signIn);
+    denied.decide("denied");
+    time.advance(5_000);
+    expect(await signIn.pollDevice({ state: started.state, owner: "p1" })).toMatchObject({
+      ok: false,
+      code: "access_denied",
+    });
+
+    for (const idToken of [
+      { iss: ISSUER, aud: "someone-else", sub: "acct-1", exp: 1_700_036_000 },
+      { iss: ISSUER, aud: "ui", sub: "acct-1", exp: 1_700_036_000, nonce: "injected" },
+      { iss: ISSUER, aud: "ui", sub: "acct-1", exp: 1_699_999_000 },
+    ]) {
+      const issuer = fakeDeviceIssuer({ idToken });
+      const other = createOpenClawIdSignIn({ fetchImpl: issuer.fetchImpl, now: time.now });
+      const pending = await beginDevice(other);
+      issuer.decide("approved");
+      time.advance(5_000);
+      expect(await other.pollDevice({ state: pending.state, owner: "p1" })).toMatchObject({
+        ok: false,
+        code: "id_token_invalid",
+      });
+    }
+  });
+
+  it("reuses only a held token it redeemed, for the same profile, issuer and client", async () => {
+    const time = clock();
+    const issuer = fakeDeviceIssuer();
+    const signIn = createOpenClawIdSignIn({ fetchImpl: issuer.fetchImpl, now: time.now });
+    const started = await beginDevice(signIn);
+    issuer.decide("approved");
+    time.advance(5_000);
+    const done = await signIn.pollDevice({ state: started.state, owner: "p1" });
+    if (!("idToken" in done)) {
+      throw new Error("device sign-in did not finish");
+    }
+    const held = { idToken: done.idToken, owner: "p1", issuerUrl: ISSUER, clientId: "ui" };
+    expect(signIn.verifyHeld(held)).toEqual({ account: done.account });
+    expect(signIn.verifyHeld({ ...held, issuerUrl: `${ISSUER}/` })).toEqual({
+      account: done.account,
+    });
+
+    const notHeld = { ok: false, code: "sign_in_not_held" };
+    // Another profile, issuer or client; a token with the same claims the issuer never sent.
+    for (const other of [
+      { ...held, owner: "p2" },
+      { ...held, issuerUrl: "https://other-issuer.example.test" },
+      { ...held, clientId: "other-client" },
+      { ...held, idToken: jwt({ iss: ISSUER, aud: "ui", sub: "acct-1", exp: 1_700_036_000 }) },
+      { ...held, idToken: undefined },
+    ]) {
+      expect(signIn.verifyHeld(other)).toMatchObject(notHeld);
+    }
+    expect(createOpenClawIdSignIn({ now: time.now }).verifyHeld(held)).toMatchObject(notHeld);
+
+    // Once its exp passes, the held token is refused and forgotten.
+    time.advance(36_000_000);
+    expect(signIn.verifyHeld(held)).toMatchObject(notHeld);
+  });
+
+  it("refuses an issuer without a device endpoint on its own origin", async () => {
+    for (const device of [undefined, "https://elsewhere.example.test/device-authorization"]) {
+      const signIn = createOpenClawIdSignIn({
+        fetchImpl: vi.fn(async () =>
+          Response.json({
+            issuer: ISSUER,
+            authorization_endpoint: `${ISSUER}/oauth2/authorize`,
+            token_endpoint: `${ISSUER}/oauth2/token`,
+            ...(device ? { device_authorization_endpoint: device } : {}),
+          }),
+        ),
+      });
+      expect(
+        await signIn.beginDevice({ issuerUrl: ISSUER, clientId: "ui", owner: "p1" }),
+      ).toMatchObject({ ok: false, code: "device_unsupported" });
+    }
+  });
+});

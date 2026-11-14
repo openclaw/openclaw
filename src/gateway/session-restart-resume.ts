@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
@@ -37,11 +38,7 @@ import {
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  GatewayDrainingError,
-  isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
@@ -59,6 +56,7 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import {
   discoverRestartSessionStores,
   prepareRestartStores,
@@ -196,7 +194,8 @@ async function persistRunningSessions(
   }
   for (const process of listRunningSessions()) {
     const sessionKey = process.sessionKey ?? process.scopeKey;
-    if (sessionKey) {
+    // Durable processes survive restart; the registry adopts them and wakes on exit.
+    if (sessionKey && !process.durable) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
   }
@@ -386,8 +385,9 @@ function createPreparedRestartRecovery(
 
 /** Recover markers and unfinished predecessor runs without reviving older orphans. */
 export async function resumeMarkedSessions(
-  params: RestartResumeParams & { onPrepared?: () => void },
+  params: RestartResumeParams & { onPrepared?: () => void | Promise<void> },
 ): Promise<void> {
+  const owner = params.context.agentDatabaseStartup;
   const recovery = getRestartRecovery(params.context);
   const prepared = new Map<string, PreparedRestartStore[]>();
   const byAgent = new Map<string, RestartStoreTarget[]>();
@@ -405,10 +405,7 @@ export async function resumeMarkedSessions(
     }
     for (const [agentId, stores] of byAgent) {
       params.signal.throwIfAborted();
-      if (
-        !recovery.agents.has(agentId) &&
-        !params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(agentId)
-      ) {
+      if (!recovery.agents.has(agentId) && !owner?.isAgentInputRecoveryPending(agentId)) {
         const batch = await prepareRestartStores(params, stores);
         if (batch) {
           prepared.set(agentId, batch);
@@ -419,7 +416,6 @@ export async function resumeMarkedSessions(
     // The startup observer reaches here only after deletion and subagent restoration.
     recovery.ready.resolve();
   }
-  const owner = params.context.agentDatabaseStartup;
   const pending = [...prepared].map(([agentId, stores]) => {
     const work = createPreparedRestartRecovery(params, agentId, stores);
     const completion = createDeferredCore();
@@ -431,20 +427,17 @@ export async function resumeMarkedSessions(
   });
   // Discovery installs per-session waits before reconnecting turns can reach admission.
   if (owner) {
-    params.onPrepared?.();
+    await params.onPrepared?.();
   }
   throwIfSettledRejected(
     await Promise.allSettled(pending.map((run) => run())),
     "Restart recovery failed",
   );
   if (!owner) {
-    params.onPrepared?.();
+    await params.onPrepared?.();
   }
   for (const agentId of byAgent.keys()) {
-    await params.context.agentDatabaseStartup?.waitForAgentPreparation(agentId, {
-      signal: params.signal,
-      forInput: true,
-    });
+    await owner?.waitForAgentPreparation(agentId, { signal: params.signal, forInput: true });
   }
   for (const work of recovery.agents.values()) {
     await work;
@@ -456,12 +449,10 @@ async function resumeRestartStore(
   { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
 ): Promise<boolean> {
   let completed = true;
-  const assertRecoveryCurrent = () => {
-    signal.throwIfAborted();
-    if (isGatewayRestartDraining()) {
-      throw new GatewayDrainingError();
-    }
-  };
+  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
+    { context, signal, log },
+    { target, entries },
+  );
   const summary = createRestartResumeSummary("startup");
   const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
@@ -586,7 +577,7 @@ async function resumeRestartStore(
         });
         if (!resumed) {
           summary.record(
-            parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
+            agentId,
             sessionKey,
             interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
           );
@@ -607,6 +598,9 @@ async function resumeRestartStore(
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
+          log.warn(
+            `Parked restart resume (yield-waiting): ${truncateUtf16Safe(JSON.stringify({ agentId, sessionKey }), 1024)}`,
+          );
         } else {
           try {
             authority = await prepareSessionSystemTurnAuthority({
@@ -728,5 +722,7 @@ async function resumeRestartStore(
   } finally {
     summary.publish();
   }
+  // Admit restart inputs before recovered completion notices can start a turn.
+  resume();
   return completed;
 }

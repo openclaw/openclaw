@@ -144,7 +144,9 @@ statuses: `completed`, `waiting`, or `failed`.
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-  runs.`.
+  runs.`. Cells submitted with outer `awaitResults: true` retain ownership through
+  completion instead of publishing a suspended run, so they do not reserve a
+  slot. They still obey tool authority, cancellation, and execution limits.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
@@ -213,7 +215,9 @@ it forms a direct branch extension, bounded to 256 events and 1 MiB. An unchange
 suffix returns no writes. Divergent branches, rewrites, and larger or non-linear
 suffixes use the canonical branch selector. Both paths validate historical
 shapes, keys, and provenance in the reader, then return only each key's final
-write or delete. The main thread applies that compact result in the attributed
+write or delete. Cold replay folds each selected store payload before reading the
+next, so superseded snapshots do not accumulate in the reader. The main thread
+applies that compact result in the attributed
 `sessions.transcript-maintenance:apply` task; superseded values never cross the
 worker boundary.
 

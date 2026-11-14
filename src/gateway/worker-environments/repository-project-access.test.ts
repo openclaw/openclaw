@@ -74,7 +74,6 @@ it.each([
   });
   const access = createWorkerEnvironmentAccess({
     store: fixture.store,
-    getCleanupError: () => undefined,
     readStartStatus: () => undefined,
     getConfig: () => fixture.config,
     projectNamespace: "gateway",

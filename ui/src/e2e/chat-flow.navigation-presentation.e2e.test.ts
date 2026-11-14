@@ -626,8 +626,10 @@ suite.define(() => {
     ]);
     await page.addInitScript(
       ({ storageKey, entry }) => {
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
         localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
       },
       {
         storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),

@@ -108,6 +108,7 @@ describe("session activity semantics", () => {
     ["24h", 38, false, "38 sessions · 12 started · 6 people · 3 running now"],
     ["7d", 0, false, "0 sessions · 0 people · 0 running now"],
     ["all", 1, false, "1 session · 1 person · 0 running now"],
+    ["all", 40, false, "40 sessions · 40 people · 0 running now"],
     ["all", 1, true, "1 session · 1+ people · 0 running now"],
   ] as const)(
     "renders the %s pulse (sessions=%i, incomplete=%s)",
@@ -115,14 +116,17 @@ describe("session activity semantics", () => {
       const periods = {
         "24h": [25, new Date(2026, 0, 2), { hour: "numeric" }, "Last 24 hours"],
         "7d": [8, new Date(2026, 0, 8), { month: "short", day: "numeric" }, "Last 7 days"],
-        all: [12, new Date(2026, 11, 1), { month: "short" }, "All time"],
+        all: [12, new Date(2026, 11, 1), { month: "short" }, "Last 12 months"],
       } satisfies Record<string, [number, Date, Intl.DateTimeFormatOptions, string]>;
       const [length, last, format, label] = periods[time];
       const hourly = time === "24h";
-      const buckets: number[] = Array.from({ length }, () => (count === 0 ? 0 : 1));
+      const buckets: number[] = Array.from({ length }, () => 0);
+      if (count > 0) {
+        buckets[0] = 1;
+      }
       if (hourly) {
         buckets.fill(0);
-        buckets[10] = 12;
+        buckets[10] = 35;
         buckets[24] = 3;
       }
       const input = props({ filters: { personId: null, query: "", time } });
@@ -142,10 +146,11 @@ describe("session activity semantics", () => {
       const formatter = new Intl.DateTimeFormat(undefined, format);
       const bars = all(".activity-pulse__bar");
       const labels = all(".activity-pulse__axis > span > span");
-      expect(text(".activity-pulse__heading")?.trim()).toBe(label);
+      expect(text(".activity-pulse__heading strong")).toBe("Sessions by last activity");
+      expect(text(".activity-pulse__heading > span")).toBe(label);
       expect(bars).toHaveLength(length);
       expect(bars[length - 1]?.getAttribute("data-bucket")).toBe("current");
-      const bucketCount = hourly ? "3 sessions" : count === 0 ? "0 sessions" : "1 session";
+      const bucketCount = hourly ? "3 sessions" : "0 sessions";
       expect(bars[length - 1]?.getAttribute("title")).toBe(
         formatter.format(last) + " · " + bucketCount,
       );
@@ -154,18 +159,22 @@ describe("session activity semantics", () => {
       expect(text(".activity-pulse__stats")?.replace(/\s+/g, " ").trim()).toBe(stats);
       const peak = new Date(2026, 0, 1, hourly ? 10 : 0);
       expect(attr('[role="img"]', "aria-label")).toBe(
-        label +
-          ": " +
-          (count === 1 ? "1 session" : count + " sessions") +
-          "; busiest " +
-          formatter.format(peak),
+        count === 0
+          ? label + ": no recorded activity."
+          : label +
+              ": " +
+              (hourly ? "38 sessions" : "1 session") +
+              " by last activity; most sessions at " +
+              formatter.format(peak),
       );
+      expect(text(".activity-pulse__count") ?? "").toBe(count === 0 ? "" : hourly ? "35" : "1");
+      expect(Boolean(find(".activity-pulse__empty"))).toBe(count === 0);
       expect(find(".activity-pulse__running") !== null).toBe(hourly);
       if (hourly) {
         expect(bars[10]?.getAttribute("style")).toContain("100%");
-        expect(bars[24]?.getAttribute("style")).toContain("25%");
+        expect(bars[24]?.getAttribute("style")).toContain("8.571");
       } else if (count === 0) {
-        expect(bars[0]?.getAttribute("style")).toContain("0%");
+        expect(bars[0]?.getAttribute("style")).toContain("0");
       }
       const note = find('.activity-feed__people-panel [role="status"]');
       expect(all(".activity-pulse__stats > span")[hourly ? 2 : 1]?.hasAttribute("title")).toBe(
@@ -175,7 +184,7 @@ describe("session activity semantics", () => {
         const warning = "People and counts describe visible recorded session associations";
         expect(note?.textContent).toContain(warning);
         expect(all(".activity-pulse__stats > span")[1]?.getAttribute("title")).toBe(
-          warning + "; retained history and this people list may be incomplete.",
+          "Counts cover recorded sessions you can access. Older history and people may be missing.",
         );
         expect(find(".activity-feed__people-panel")?.lastElementChild).toBe(note);
         expect(text(".activity-feed__main")).not.toContain(warning);

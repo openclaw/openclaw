@@ -98,7 +98,7 @@ describe("Gateway automatic Workshop learning", () => {
       using recoverySpy = vi.spyOn(recovery, "resumeMarkedSessions");
       recoverySpy.mockImplementation(async ({ onPrepared }) => {
         await startup.run();
-        onPrepared?.();
+        await onPrepared?.();
       });
       try {
         await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), workspaceInstructions);

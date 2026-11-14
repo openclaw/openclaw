@@ -565,7 +565,7 @@ it("records advisory restoration when the service runs without verified readines
       status: "ok",
       warnings: expect.arrayContaining(
         [
-          "Gateway started but readiness was not verified",
+          "Gateway started after Doctor maintenance, but readiness was not verified",
           "synthetic readiness failure",
           ...["status --deep", "diagnostics export"].map((command) =>
             formatCliCommand(`openclaw gateway ${command}`, state.env),
@@ -578,7 +578,7 @@ it("records advisory restoration when the service runs without verified readines
     expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
     expect(events).toEqual(["stop", "repair", "restart"]);
     expect(runtime.log).not.toHaveBeenCalledWith(
-      "Gateway restarted and verified after Doctor repair.",
+      "Gateway restarted and verified after Doctor maintenance.",
     );
   });
 });

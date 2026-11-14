@@ -16,6 +16,7 @@ import {
 } from "./full-release-publication-contract.mjs";
 import {
   releaseChildSpec,
+  terminalPolicyPass,
   validateReleaseChildDispatchBinding,
 } from "./full-release-validation-policy.mjs";
 import {
@@ -31,21 +32,21 @@ import { releaseChildDispatchInputs } from "./lib/full-release-child-request.mjs
 import { manifestContextFromEnvironment } from "./lib/full-release-manifest.mjs";
 import { validateQualificationBaselinePolicy } from "./lib/qualification-admission-baselines.mjs";
 import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
+import {
+  evaluateReleaseChildPolicy,
+  releaseChildAdvisories,
+} from "./lib/release-validation-waivers.mjs";
+import {
   PREPARED_NPM_MANIFEST,
   validatePreparedNpmRelease,
 } from "./plugin-npm-prepared-release.mjs";
-import {
-  revalidateQualificationAdmissionAuthority,
-  verifyReleaseQualificationOperators,
-} from "./release-qualification-admission.mjs";
+import { createReleaseEvidenceClient } from "./release-ci-summary.mjs";
+import { revalidateQualificationAdmissionAuthority } from "./release-qualification-admission.mjs";
 import { validateQualificationJobs } from "./release-qualification-coverage.mjs";
-import {
-  runReleaseToolingGh,
-  verifyReleaseToolingIdentity,
-  verifyReleaseWorkflowRun,
-} from "./release-tooling-identity.mjs";
-
-export const RECEIPT_RECOVERY_WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
+import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 export const RECEIPT_RECOVERY_SCHEMA = "openclaw.full-release-receipt-recovery/v1";
 const ROLES = [
   "normalCi",
@@ -221,34 +222,6 @@ function producerFromManifest(manifest) {
   };
 }
 
-export function verifyReceiptRecoveryAuthority(repository, producer, completed = true) {
-  requireValue(producer.fullRef === "refs/heads/main", "recovery must execute trusted P on main");
-  verifyReleaseToolingIdentity({
-    repository,
-    workflowRef: "main",
-    workflowFullRef: producer.fullRef,
-    workflowSha: producer.sha,
-  });
-  const run = verifyReleaseWorkflowRun({
-    repository,
-    workflowRef: "main",
-    workflowFullRef: producer.fullRef,
-    workflowSha: producer.sha,
-    runId: producer.runId,
-    runAttempt: String(producer.runAttempt),
-    workflowPath: RECEIPT_RECOVERY_WORKFLOW,
-    workflowEvent: "workflow_dispatch",
-    runStatePolicy: completed ? "success" : "active",
-  });
-  verifyReleaseQualificationOperators(
-    repository,
-    run.actor,
-    run.triggering_actor,
-    runReleaseToolingGh,
-  );
-  return run;
-}
-
 async function readPayload(repository, artifact, workflowSha, deps, mode, providedMetadata) {
   const metadata = providedMetadata ?? (await deps.client.getArtifact(artifact.id));
   const expected = {
@@ -276,7 +249,6 @@ async function readPayload(repository, artifact, workflowSha, deps, mode, provid
 // the original successful seal. Admission omits it and verifies every payload byte.
 export async function verifyOriginalReceiptQualification(requestValue, dependencies = {}) {
   const request = validateReceiptRecoveryRequest(requestValue);
-  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
   const client = dependencies.client ?? createReleaseEvidenceClient(request.repository);
   const deps = { client, token: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN };
   const authenticatedPayloads = dependencies.authenticatedPayloads;
@@ -372,12 +344,14 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
   const children = [];
   for (const role of ROLES) {
     const selection = request.children[role];
-    requireValue(
-      selection.sourceParentRunId === request.originalParent.runId &&
+    const fresh = selection.sourceParentRunId === request.originalParent.runId;
+    if (fresh) {
+      requireValue(
         selection.sourceParentAttempt === 1 &&
-        selection.workflowRef === admission.request.transportRef,
-      "child does not belong to the original parent",
-    );
+          selection.workflowRef === admission.request.transportRef,
+        "child does not belong to the original parent",
+      );
+    }
     const spec = releaseChildSpec(role);
     const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
     const inputs = receiptRecoveryChildInputs(role, admission, binding, source);
@@ -389,12 +363,31 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         workflowSha: qualificationSha,
         role,
         inputs,
+        policyTargetVersion: binding.package.version,
       },
       // Recovery must enumerate every historical attempt, including long rerun chains.
       { deadlineMs: Date.now() + 10 * 60_000 },
     );
     const coverage = admission.coverage.children.find((child) => child.key === role);
-    validateQualificationJobs(verified.receipt.jobs, coverage.requiredJobs, "Original " + role);
+    const child = {
+      key: role,
+      runId: selection.runId,
+      runAttempt: selection.runAttempt,
+      status: verified.run.status,
+      conclusion: verified.run.conclusion,
+      jobs: verified.receipt.jobs,
+    };
+    requireValue(
+      terminalPolicyPass(child, binding.package.version),
+      "original child failed release policy",
+    );
+    const policy = evaluateReleaseChildPolicy({ child, targetVersion: binding.package.version });
+    validateQualificationJobs(
+      verified.receipt.jobs,
+      coverage.requiredJobs,
+      "Original " + role,
+      policy.waivedJobNames,
+    );
     const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);
     requireValue(
       dispatchJobs.length === 1 &&
@@ -404,6 +397,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     );
     validateReleaseChildDispatchBinding({
       child: { key: role, runId: selection.runId },
+      childReuse: fresh ? undefined : selection,
       log: await client.getJobLog(dispatchJobs[0].id),
       coveragePolicy: "npm-beta-v1",
       plannedRunAttempt: 1,
@@ -415,8 +409,10 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       runId: selection.runId,
       runAttempt: selection.runAttempt,
       workflowSha: qualificationSha,
-      sourceParentRunId: request.originalParent.runId,
-      conclusion: "success",
+      sourceParentRunId: selection.sourceParentRunId,
+      conclusion: verified.run.conclusion,
+      waivers: policy.waivers,
+      advisoryJobs: releaseChildAdvisories(child),
       receipt: verified.receipt,
     });
   }
@@ -561,7 +557,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       "original publication payload inventory changed",
     );
   }
-  await revalidateReceiptRecoveryRuns(request, client);
+  await revalidateReceiptRecoveryRuns(request, client, children);
   client.revalidateQualificationAdmissionAuthority({
     descriptor: request.qualificationAdmission,
     admission,
@@ -569,7 +565,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
   return { admission, children, originalRoot, publication };
 }
 
-export async function revalidateReceiptRecoveryRuns(request, client) {
+export async function revalidateReceiptRecoveryRuns(request, client, verifiedChildren = []) {
   const tuples = [
     ...ROLES.map((role) => request.children[role]),
     request.candidateBinding.producer,
@@ -587,7 +583,9 @@ export async function revalidateReceiptRecoveryRuns(request, client) {
         Number(current.run_attempt) === Number(tuple.runAttempt) &&
         current.head_sha === request.candidateBinding.request.toolingSha &&
         current.status === "completed" &&
-        current.conclusion === "success",
+        current.conclusion ===
+          (verifiedChildren.find((child) => child.runId === String(tuple.runId))?.conclusion ??
+            "success"),
       "original producer or child current attempt changed: " + tuple.runId,
     );
   }
@@ -618,7 +616,11 @@ export async function authenticateReceiptRecovery({
     "sealed payload inventory is unavailable",
   );
   const producer = producerFromManifest(manifest);
-  verifyReceiptRecoveryAuthority(request.repository, producer);
+  const revalidateRecoveryAuthority = () =>
+    client.verifyReceiptRecoveryAuthority
+      ? client.verifyReceiptRecoveryAuthority(producer)
+      : verifyReceiptRecoveryAuthority(request.repository, producer);
+  revalidateRecoveryAuthority();
   const workflow = client.getWorkflowSource(producer.sha, RECEIPT_RECOVERY_WORKFLOW);
   requireValue(
     /^ {2}FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"$/mu.test(workflow),
@@ -655,8 +657,6 @@ export async function authenticateReceiptRecovery({
       !manifest.candidateBinding,
     "aggregate must not impersonate historical qualification",
   );
-  same(manifest.waivers, [], "aggregate cannot add runtime waivers");
-  same(manifest.advisoryJobs, [], "aggregate cannot hide jobs as advisory");
   same(
     manifest.controls,
     {
@@ -750,6 +750,16 @@ export async function authenticateReceiptRecovery({
     client,
     authenticatedPayloads: manifest.retainedPublicationPayloads,
   });
+  same(
+    manifest.waivers,
+    verified.children.flatMap((child) => child.waivers),
+    "aggregate waivers differ from trusted policy",
+  );
+  same(
+    manifest.advisoryJobs,
+    verified.children.flatMap((child) => child.advisoryJobs),
+    "aggregate advisories differ from trusted policy",
+  );
   const expectedSource = receiptRecoverySourceRequest(verified.admission, producer);
   const source = validatePublicationSourceBinding(manifest);
   requireValue(
@@ -771,7 +781,7 @@ export async function authenticateReceiptRecovery({
   }
   // The original qualification owner just refreshed its runs and admission.
   // Only synchronous binding checks intervene; recovery authority is separate.
-  verifyReceiptRecoveryAuthority(request.repository, producer);
+  revalidateRecoveryAuthority();
   const current = {
     artifact: {
       id: String(artifact.id),
@@ -801,11 +811,13 @@ export async function authenticateReceiptRecovery({
     root: current,
     manifest: current.manifest,
     children: verified.children,
-    waivers: [],
+    waivers: verified.children.flatMap((child) => child.waivers),
     conclusions: {
       current: "success",
       root: "success",
-      children: Object.fromEntries(ROLES.map((role) => [role, "success"])),
+      children: Object.fromEntries(
+        verified.children.map((child) => [child.role, child.conclusion]),
+      ),
     },
     controls: manifest.controls,
     directRoot: true,
@@ -837,8 +849,8 @@ async function main() {
   if (process.argv[2] === "admit") {
     const verified = await verifyOriginalReceiptQualification(request);
     writeFileSync(
-      join(directory, "verified-payloads.json"),
-      JSON.stringify(verified.publication.payloads),
+      join(directory, "verified-qualification.json"),
+      JSON.stringify({ payloads: verified.publication.payloads, children: verified.children }),
     );
     const source = receiptRecoverySourceRequest(verified.admission, producer);
     writeFileSync(join(directory, "source-request.json"), JSON.stringify(source));
@@ -880,6 +892,7 @@ async function main() {
         observed.workflow_run.head_sha === producer.sha,
       "new observation upload changed",
     );
+    const verified = json(join(directory, "verified-qualification.json"));
     const context = manifestContextFromEnvironment(source, {
       GITHUB_RUN_ID: producer.runId,
       GITHUB_RUN_ATTEMPT: String(producer.runAttempt),
@@ -913,9 +926,9 @@ async function main() {
       ),
       publicationArtifacts: request.publicationArtifacts,
       receiptRecovery: request,
-      retainedPublicationPayloads: json(join(directory, "verified-payloads.json")),
-      waivers: [],
-      advisoryJobs: [],
+      retainedPublicationPayloads: verified.payloads,
+      waivers: verified.children.flatMap((child) => child.waivers),
+      advisoryJobs: verified.children.flatMap((child) => child.advisoryJobs),
       controls: {
         stableSoakRequired: false,
         performanceBlocking: false,
@@ -923,9 +936,8 @@ async function main() {
       },
       childRuns: Object.fromEntries(ROLES.map((role) => [role, request.children[role].runId])),
     };
-    const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
     const client = createReleaseEvidenceClient(request.repository);
-    await revalidateReceiptRecoveryRuns(request, client);
+    await revalidateReceiptRecoveryRuns(request, client, verified.children);
     client.verifyQualificationAdmission({
       descriptor: request.qualificationAdmission,
       repository: request.repository,

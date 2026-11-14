@@ -94,7 +94,7 @@ const consumerHooks = takeHooks();
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
 const gatewayHelpers = await import("./test-helpers.server.js");
-const fixtureWorkers = createVitestWorkerRun();
+const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "runtime");
 afterAll(() => fixtureWorkers.dispose());
 try {
   await fixtureWorkers.prepare();

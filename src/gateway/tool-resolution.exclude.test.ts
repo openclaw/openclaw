@@ -52,7 +52,8 @@ vi.mock("../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: getChannelPlugin,
 }));
 
-vi.mock("../agents/lazy-exec-tool.js", () => ({
+vi.mock("../agents/lazy-exec-tool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/lazy-exec-tool.js")>()),
   createLazyExecTool: createExec,
   resolveExecToolConfig: vi.fn(() => ({})),
 }));

@@ -193,9 +193,9 @@ export function readShellView(host: ShellViewHost) {
     !host.desktopNavigationExpanded &&
     !navDrawerOpen() &&
     !settingsTakeover;
-  const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
+  const railAvailable = !nativeEmbed && !onboarding && (!settingsTakeover || !mobileNavLayout);
   const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
-  // Settings replaces the rail and sidebar without moving the desktop reading surface.
+  // Settings replaces the adjacent sidebar without moving the desktop reading surface.
   const expandedNavWidth =
     navigationSnapshot.navWidth +
     (settingsTakeover && !mobileNavLayout ? NAVIGATION_RAIL_WIDTH : railWidth);
@@ -280,6 +280,12 @@ export function readShellView(host: ShellViewHost) {
     onOpenPalette: host.openPalette,
     onRetryConnect: callbacks.retryGateway,
     onToggleSidebar: callbacks.toggleSidebar,
+    onExitSettings: settingsTakeover
+      ? () => {
+          context.navigation.update({ navCollapsed: false });
+          host.shellNavigation.exitSettings();
+        }
+      : undefined,
     onOpenNewSession: callbacks.requestOpenNewSession,
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,

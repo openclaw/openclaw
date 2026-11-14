@@ -2,7 +2,8 @@
 // actually happens: the owner key signs the claw's binding in this browser;
 // the Gateway pins the owner key and admits this browser over loopback;
 // the claw registers with Discovery, proving it holds its Gateway key, which
-// reserves the address; and the claw's outbound relay connection is up.
+// reserves the address; and the claw's outbound relay connection is up, which the dialog
+// keeps checking while it stays open.
 import type { OpenClawIdPublication } from "./types.ts";
 
 /** The steps, in the order the dialog shows them. */
@@ -23,21 +24,35 @@ export type LinkStepActions = {
   sign: () => Promise<void>;
   /** Commits the signed statements; resolves with the Discovery publication outcome. */
   commit: () => Promise<OpenClawIdPublication | null>;
-  /** Whether the claw's relay connection is up right now. */
-  relayOnline: () => Promise<boolean>;
 };
 
 /** Messages for the non-fatal outcomes, supplied by the dialog's catalog. */
 export type LinkStepMessages = {
   notPublished: (publication: OpenClawIdPublication | null) => string;
-  relayOffline: string;
+};
+
+/** How often the relay step reads the claw's relay connection while the dialog is open. */
+const RELAY_CHECK_INTERVAL_MS = 2_000;
+/** How long the relay step shows progress before it warns that the relay isn't up yet. */
+const RELAY_GRACE_MS = 30_000;
+
+/** What the relay step needs; injected so the watch is testable without a Gateway or timers. */
+export type RelayWatch = {
+  /** Whether the claw's relay connection is up right now. */
+  relayOnline: () => Promise<boolean>;
+  /** Resolves after `ms`. */
+  sleep: (ms: number) => Promise<void>;
+  /** False once the dialog has closed; the watch then stops without reporting. */
+  active: () => boolean;
+  /** Milliseconds since an arbitrary origin. */
+  now: () => number;
 };
 
 /**
- * Runs the steps in order and reports each state change. A failure in signing
- * or pinning stops the sequence and rejects; an unpublished claw or a relay
- * that isn't up yet is a warning, because the claw is linked and the Gateway
- * keeps trying on its own. Resolves with the publication outcome.
+ * Runs the signing, pinning and registration steps in order and reports each state change.
+ * A failure in signing or pinning stops the sequence and rejects; an unpublished claw is a
+ * warning, because the claw is linked and the Gateway keeps trying on its own. Resolves with
+ * the publication outcome; the relay step is `watchRelay`'s.
  */
 export async function runLinkSteps(
   actions: LinkStepActions,
@@ -69,11 +84,40 @@ export async function runLinkSteps(
   } else {
     report("reserve", { state: "warning", message: messages.notPublished(publication) });
   }
-  report("relay", { state: "running" });
-  const online = await actions.relayOnline().catch(() => false);
-  report(
-    "relay",
-    online ? { state: "done" } : { state: "warning", message: messages.relayOffline },
-  );
   return publication;
+}
+
+/**
+ * Reports the relay step from the claw's current relay connection, which comes up a few
+ * seconds after the commit. It reads the status every `RELAY_CHECK_INTERVAL_MS` until the
+ * relay is online, then reports done. Before then the step runs; after `RELAY_GRACE_MS` it
+ * warns with `offline`, and keeps reading so the step turns done once the relay connects.
+ * Stops as soon as `watch.active()` is false.
+ */
+export async function watchRelay(
+  watch: RelayWatch,
+  offline: string,
+  report: (step: LinkStep, state: LinkStepState) => void,
+): Promise<void> {
+  const started = watch.now();
+  let warned = false;
+  report("relay", { state: "running" });
+  for (;;) {
+    const online = await watch.relayOnline().catch(() => false);
+    if (!watch.active()) {
+      return;
+    }
+    if (online) {
+      report("relay", { state: "done" });
+      return;
+    }
+    if (!warned && watch.now() - started >= RELAY_GRACE_MS) {
+      warned = true;
+      report("relay", { state: "warning", message: offline });
+    }
+    await watch.sleep(RELAY_CHECK_INTERVAL_MS);
+    if (!watch.active()) {
+      return;
+    }
+  }
 }

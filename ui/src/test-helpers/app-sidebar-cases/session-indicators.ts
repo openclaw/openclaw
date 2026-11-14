@@ -392,6 +392,7 @@ describe("AppSidebar session indicators", () => {
       } as ApplicationGatewaySnapshot["hello"],
     });
     const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+    sidebar.setSessionSortMode("created");
     sessions.publishList({
       result: {
         ts: 2,

@@ -1,5 +1,3 @@
-import { serialize } from "node:v8";
-import { deflateRawSync } from "node:zlib";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -36,13 +34,13 @@ import {
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
+import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
-  LocalWorkspacePreparedUpdate,
 } from "./local-workspace-store.types.js";
 import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
@@ -109,6 +107,10 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       : input.action.kind === "archive"
         ? "canonical"
         : undefined;
+  // Conversion preserves admission; discovery and repair consume it. Other actions
+  // must not inflate inline/CAS path documents into the compressed worker snapshot.
+  const needsSourcePaths =
+    target !== undefined || input.action.kind === "convert" || input.action.kind === "repair";
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -117,7 +119,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "revision",
         "projection_path",
         "base_commit",
-        "source_paths_json",
         "baseline_json",
         "baseline_ref",
         "tree_root_digest",
@@ -126,12 +127,15 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       ])
       // Keep the snapshot shape without materializing fingerprints this action never consumes.
       .select((eb) => [
-        (target === "projection" ? eb.ref("canonical_fingerprints") : eb.val(null)).as(
-          "canonical_fingerprints",
-        ),
-        (target === "canonical" ? eb.ref("projection_fingerprints") : eb.val(null)).as(
-          "projection_fingerprints",
-        ),
+        (needsSourcePaths ? eb.ref("source_paths_json") : eb.val("[]")).as("source_paths_json"),
+        (target === "projection" || input.action.kind === "scan"
+          ? eb.ref("canonical_fingerprints")
+          : eb.val(null)
+        ).as("canonical_fingerprints"),
+        (target === "canonical" || input.action.kind === "scan"
+          ? eb.ref("projection_fingerprints")
+          : eb.val(null)
+        ).as("projection_fingerprints"),
       ])
       .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
@@ -139,7 +143,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   if (!row || row.revision !== input.revision) {
     throw new Error("Local workspace binding changed");
   }
-  if (row.source_paths_digest) {
+  if (needsSourcePaths && row.source_paths_digest) {
     row.source_paths_json = readLocalWorkspaceSourcePaths(db, row.source_paths_digest);
   }
   if (
@@ -170,33 +174,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     }
   }
   return { row, records };
-}
-
-function prepareUpdate(
-  mutation: Extract<LocalWorkspaceMutation, { kind: "update" }>,
-  preparations: Uint8Array[] = [],
-): LocalWorkspacePreparedUpdate {
-  const manifest = mutation.manifest;
-  const patch = {
-    ...mutation.patch,
-    ...(manifest ? { baseline_ref: manifest.resultingRoot, baseline_json: null } : {}),
-    ...(manifest?.treeRoot
-      ? { tree_root_digest: localWorkspaceDigestBytes(manifest.treeRoot) }
-      : {}),
-    ...(manifest?.fingerprints
-      ? {
-          [manifest.fingerprints.target === "canonical"
-            ? "canonical_fingerprints"
-            : "projection_fingerprints"]: Buffer.from(manifest.fingerprints.blob, "base64"),
-        }
-      : {}),
-  };
-  return {
-    revision: mutation.revision,
-    patch,
-    mutation: deflateRawSync(serialize({ ...mutation, patch })),
-    preparations,
-  };
 }
 
 export async function executeLocalWorkspaceManifestRead(
@@ -365,7 +342,7 @@ export async function executeLocalWorkspaceManifestRead(
         if (rebuiltRoot === expectedRoot) {
           return {
             kind: "replace",
-            update: prepareUpdate(
+            update: prepareLocalWorkspaceUpdate(
               {
                 kind: "update",
                 revision: row.revision,
@@ -424,7 +401,7 @@ export async function executeLocalWorkspaceManifestRead(
     // Keep the full tree between workers; the host publishes only the accepted root.
     return {
       kind: "replace",
-      update: prepareUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
+      update: prepareLocalWorkspaceUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
     };
   }
   if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {
@@ -472,7 +449,7 @@ export async function executeLocalWorkspaceManifestRead(
     }
     return {
       kind: "replace",
-      update: prepareUpdate(
+      update: prepareLocalWorkspaceUpdate(
         {
           kind: "update",
           revision: row.revision,
@@ -500,7 +477,7 @@ export async function executeLocalWorkspaceManifestRead(
     }
     return {
       kind: "replace",
-      update: prepareUpdate(
+      update: prepareLocalWorkspaceUpdate(
         {
           kind: "update",
           revision: row.revision,
@@ -662,6 +639,19 @@ export async function executeLocalWorkspaceManifestRead(
       previousNodes.push(previous.node);
     }
   }
+  // Capture the target's old slot layout before advancing the shared tree. Only acceptance
+  // publishes these hints; changed paths must acquire new identities on their next scan.
+  const oppositeFingerprints =
+    changes.length && previousTreeRoot
+      ? prepareLocalWorkspaceFingerprints(
+          records,
+          previousTreeRoot,
+          fingerprintTarget === "canonical"
+            ? row.projection_fingerprints
+            : row.canonical_fingerprints,
+          scanStartedAtMs,
+        )
+      : undefined;
   const delta = updateLocalWorkspaceManifestTree(records, changes);
   const currentNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
@@ -684,13 +674,23 @@ export async function executeLocalWorkspaceManifestRead(
     blob && changedFingerprint
       ? { target: fingerprintTarget, blob: blob.toString("base64") }
       : undefined;
+  if (fingerprints && oppositeFingerprints) {
+    const rebound = oppositeFingerprints.encode(
+      records,
+      treeRoot,
+      new Set(changes.map(({ path }) => path)),
+    );
+    if (rebound) {
+      fingerprints.oppositeBlob = rebound.toString("base64");
+    }
+  }
   const admitted = retained.length ? parseLocalWorkspaceSourcePaths(row.source_paths_json) : [];
   const known = new Set(admitted);
   const added = retained.filter((entryPath) => !known.has(entryPath));
   const unchanged = resultingRoot === row.baseline_ref;
   const observation =
     added.length || (unchanged && changedFingerprint)
-      ? prepareUpdate({
+      ? prepareLocalWorkspaceUpdate({
           kind: "update",
           revision: row.revision,
           patch: {
