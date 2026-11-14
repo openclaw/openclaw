@@ -6,6 +6,7 @@ import {
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
 } from "../infra/clawhub-skills.js";
+import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { searchSkillsFromClawHub } from "../skills/lifecycle/clawhub.js";
@@ -40,6 +41,13 @@ export function registerSkillsSearchCli(skills: Command): void {
         } catch (error) {
           if (signal?.aborted) {
             return;
+          }
+          // fetch rejects with a bare "fetch failed"; the cause names the network failure.
+          if (error instanceof TypeError && error.message === "fetch failed") {
+            throw new Error(
+              `ClawHub skill search failed: ${formatErrorMessage(readErrorCause(error) ?? error)}. Check your network connection and retry.`,
+              { cause: error },
+            );
           }
           throw error;
         }

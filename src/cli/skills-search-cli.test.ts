@@ -92,3 +92,13 @@ it("rejects partial numeric search limits", async () => {
   );
   expect(searchSkillsFromClawHubMock).not.toHaveBeenCalled();
 });
+
+it("names the network failure when ClawHub cannot be reached", async () => {
+  const cause = Object.assign(new Error("getaddrinfo ENOTFOUND clawhub.ai"), { code: "ENOTFOUND" });
+  searchSkillsFromClawHubMock.mockRejectedValue(new TypeError("fetch failed", { cause }));
+  await runCommand(["skills", "search", "calendar"]);
+  expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(
+    "ClawHub skill search failed: getaddrinfo ENOTFOUND clawhub.ai. Check your network connection and retry.",
+  );
+  expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+});
