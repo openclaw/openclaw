@@ -6,6 +6,7 @@ export {
   declareAgentWorkspaceAccess,
   registerAgentWorkspaceAccess,
   getAgentWorkspaceAccess,
+  assertLocalAgentWorkspaceScanAccess,
   prepareAgentWorkspaceAttachments,
   type AgentWorkspaceAccess,
 } from "../agents/workspace-access.js";
