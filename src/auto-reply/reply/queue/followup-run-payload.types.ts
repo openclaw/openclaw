@@ -103,7 +103,11 @@ export type FollowupRunPayload = {
   /** Run-lifecycle observers bound to the source request; the drain's runner may belong to another turn. */
   runObservers?: Pick<
     GetReplyOptions,
-    "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+    | "onAgentRunStart"
+    | "onPreparedAgentRunStart"
+    | "onAgentRunTerminalOutcome"
+    | "onModelSelected"
+    | "onPartialReply"
   > & {
     awaitSessionDiffBaseline?: () => Promise<void>;
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;

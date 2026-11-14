@@ -54,6 +54,14 @@ generic `:thread:` bookkeeping, and dispatch. For configured agent group
 threads, core also owns participant selection, follow-up rounds, and turn
 budgets. Keep those policies out of channel adapters.
 
+For source-owned task transports, `replyOptions.onQueuedPartialReply` receives
+sanitized cumulative assistant previews after a turn enters the follow-up queue.
+Keep its receiver alive until that source settles, independently of the original
+HTTP request. Ordinary `onPartialReply` remains the direct-turn preview callback;
+core does not retain short-lived channel previews automatically. Collected turns
+share their native preview with each participating source. Preview delivery never
+replaces the source's terminal completion callback.
+
 Core also owns model-picker product actions. A channel that renders a
 `ModelPickerAction` declares its `ModelPickerCapabilityProfile`, then encodes
 the typed action in a transport-private authenticated callback envelope. Keep

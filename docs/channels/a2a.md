@@ -122,6 +122,29 @@ The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_
 
 `CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
 
+## Stream a task
+
+Use `SendStreamingMessage` with the same parameters as `SendMessage` to receive
+`text/event-stream`. The first JSON-RPC SSE event contains the accepted Task.
+Native assistant previews then arrive as `artifactUpdate` events with a stable
+`artifactId`, `append: false`, and cumulative replacement text. These are sanitized
+preview snapshots from the running agent, including when its turn was queued;
+they are not individual model tokens. Tool output, reasoning, and approval details
+are not forwarded. A final artifact update and terminal status follow only after
+the original Task's completion has been recorded.
+
+Disconnecting only ends that subscription. Reconnect with `SubscribeToTask` and
+`params: { "id": "<task-id>" }`, using the same peer credential. The first event is
+the current complete Task snapshot; no inference is restarted. Intermediate
+previews are transient and may be coalesced or lost across Gateway restart.
+The final result follows the persistence and retention rules below.
+
+Streaming requires a single JSON-RPC request with an `id`; batches and notifications
+cannot stream. Each account permits 64 concurrent streams. A subscription closes
+after two minutes, so subscribe to the original Task again if it is still working.
+Slow readers retain only the latest Task snapshot while their socket drains.
+Preview text is capped at 512 KiB; the existing final-result limits still apply.
+
 ## Configure outbound peers
 
 Add a peer URL when OpenClaw should send messages to another A2A agent. Set `outboundToken` when the remote agent requires its own bearer token:
@@ -184,6 +207,8 @@ Agent Card discovery is intentionally public: anyone who can reach the gateway c
 
 Every JSON-RPC request requires a configured peer bearer token. There is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
 
+Peer credentials are rechecked against the active runtime configuration after request and storage waits, before dispatch, and before returning task results. Removing the account or peer, disabling A2A, or rotating its token blocks the old credential when that configuration is activated. An admitted task that loses authorization before dispatch keeps its original ID and becomes rejected; retrying its message ID does not start new work.
+
 A2A peers send tasks, not user commands. Messages beginning with `/` are rejected with `TASK_STATE_REJECTED` and an explanation. Command-like text inside an ordinary task stays literal. It cannot change session settings or resolve approvals. This also applies when the peer sets the protocol message role to `ROLE_USER`: that field does not authenticate a human user.
 
 Ordinary tasks retain the tools and permissions of their routed agent. Work requiring approval still needs an authorized operator's decision through a supported user channel or the Control UI. Existing integrations that sent slash commands over A2A must use plain-text tasks for agent work and an authorized user surface for commands. There is no peer command opt-in.
@@ -196,7 +221,7 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 ## A2A 1.0 limitations
 
-The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
+The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
 The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
 
@@ -208,7 +233,9 @@ reply text completes without an artifact; stopping the channel fails unfinished 
 
 Completed and other terminal tasks are persisted per account before they are returned to peers. They survive Gateway restarts for up to 24 hours from their original completion time, with a maximum of 500 retained entries in finish order. Peer ownership and message deduplication survive with each retained task. Active inference is not resumed after a restart; stopping the channel records unfinished tasks as failed.
 
-A definite storage validation refusal (for example, a result exceeding the plugin-state size limit) becomes a visible failed task whose status explains that it will not survive a restart; any completed artifact remains available until the process stops or retention expires. An uncertain write acknowledgement is not replaced with a synthetic failure, because the original result may already have committed.
+Before dispatching a new task or returning it to a peer, the plugin persists its identity and message deduplication key. Pending records do not expire or evict one another; at 500 outstanding records per account, new admissions fail until records are settled. On restart, an unfinished record becomes a failed task with its original ID and an explicit warning that external effects may have occurred. Replaying its `messageId` returns that task while its recovered terminal result is retained. Inspect external effects before deciding to submit new work with a new message ID. This does not resume inference or guarantee exactly-once external effects, and cannot recover tasks already lost by an older Gateway.
+
+A definite storage validation refusal (for example, a result exceeding the plugin-state size limit) becomes a visible failed task whose status explains that its outcome may be unknown after restart; any completed artifact remains available until the process stops or retention expires. Its pending record remains for recovery. An uncertain write acknowledgement is not replaced with a synthetic failure, because the original result may already have committed. Pending records are deleted only after a terminal result commits. If that cleanup fails, the known result remains available and an error is logged; a later restart retries cleanup or conservatively reports an unknown outcome if the terminal result has already expired. Such pending records continue to consume admission capacity.
 
 ## Related
 

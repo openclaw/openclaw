@@ -72,6 +72,7 @@ const key = "followup-turn-callback-ownership";
 
 function createObservers() {
   return {
+    onPartialReply: vi.fn<(payload: { text?: string }) => void>(),
     onDeliberateSilentTerminalReply: vi.fn(),
     onPreparedAgentRunStart: vi.fn<Observers["onPreparedAgentRunStart"]>(),
     onAgentRunTerminalOutcome: vi.fn<Observers["onAgentRunTerminalOutcome"]>(),
@@ -137,6 +138,8 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
       await opts?.internalEventExecution?.onTerminal(runId, "completed");
       opts?.onDeliberateSilentTerminalReply?.();
       opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
+      await opts?.onPartialReply?.({ text: `${item}: first` });
+      await opts?.onPartialReply?.({ text: `${item}: first second` });
       opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
       opts?.prepareAssistantTranscriptMessage?.(message, item);
       await opts?.resolveReplyDelivery?.(1);
@@ -209,6 +212,7 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
         expect(own.onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
         expectCalls(
           [own.onPreparedAgentRunStart, [[{ runId: `execution-${item}`, transcriptStart: null }]]],
+          [own.onPartialReply, [[{ text: `${item}: first` }], [{ text: `${item}: first second` }]]],
           [own.onModelSelected, [[{ provider: "test", model: item, thinkLevel: undefined }]]],
           [own.onAgentRunTerminalOutcome, [["completed"]]],
           [own.prepareAssistantTranscriptMessage, [[message, item]]],

@@ -229,7 +229,7 @@ export async function executeFollowupTurn(params: {
     runId: turn.runId,
     onBlockReply: undefined,
     onPreparedBlockReply: undefined,
-    onPartialReply: undefined,
+    onPartialReply: wrapVisibility(turn.queued.runObservers?.onPartialReply),
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),

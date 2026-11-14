@@ -460,6 +460,7 @@ export async function executePreparedReplyRun(
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     runObservers: {
+      onPartialReply: opts?.onQueuedPartialReply,
       awaitSessionDiffBaseline: opts?.awaitSessionDiffBaseline,
       onAgentRunStart: opts?.onAgentRunStart,
       onPreparedAgentRunStart: opts?.onPreparedAgentRunStart,

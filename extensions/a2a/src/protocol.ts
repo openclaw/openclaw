@@ -80,13 +80,15 @@ export const A2aTaskRequestParamsSchema = z.object({
   tenant: z.string().optional(),
 });
 
-type A2aCanonicalMethod = "SendMessage" | "GetTask";
+type A2aCanonicalMethod = "SendMessage" | "GetTask" | "SendStreamingMessage" | "SubscribeToTask";
 
 // Hermes-generation A2A 0.3 peers use dotted RPC names; only these
 // explicitly supported interoperability aliases are accepted.
 const A2A_METHOD_ALIASES: Readonly<Record<string, A2aCanonicalMethod>> = {
   SendMessage: "SendMessage",
   GetTask: "GetTask",
+  SendStreamingMessage: "SendStreamingMessage",
+  SubscribeToTask: "SubscribeToTask",
   "message/send": "SendMessage",
   "tasks/get": "GetTask",
 };
@@ -98,8 +100,6 @@ const A2A_UNSUPPORTED_METHODS = new Set([
   "CancelTask",
   "tasks/cancel",
   "ListTasks",
-  "SendStreamingMessage",
-  "SubscribeToTask",
   "GetExtendedAgentCard",
 ]);
 

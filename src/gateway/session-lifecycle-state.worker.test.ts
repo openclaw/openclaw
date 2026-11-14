@@ -111,6 +111,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
         marker: { queuedInputIds: [] },
       },
       { name: "cron", shutdown: true, key: "agent:main:cron:scheduled" },
+      { name: "a2a", shutdown: true, key: "agent:main:a2a:default:direct:peer:ctx-proof" },
       { name: "child", shutdown: true, key: "agent:main:subagent:child" },
       { name: "external", shutdown: true, entry: { modelSelectionLocked: true } },
       { name: "archived", shutdown: true, entry: { archivedAt: 1_500 } },

@@ -322,6 +322,10 @@ export type GetReplyOptions = {
   onPartialReply?: (
     payload: PartialReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Source-owned preview after queue handoff; unlike the direct preview, outlives dispatch. */
+  onQueuedPartialReply?: (
+    payload: PartialReplyPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onReasoningStream?: (
     payload: ReasoningStreamPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;

@@ -601,6 +601,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
         },
       },
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
+      { sessionKey: "agent:main:a2a:default:direct:peer:ctx-proof", entry: {} },
     ];
     try {
       for (const { sessionKey, entry, resumable } of cases) {
