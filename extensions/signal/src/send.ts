@@ -41,6 +41,8 @@ export type SignalSendOpts = {
   replyToId?: string | null;
   replyToAuthor?: string | null;
   replyToBody?: string | null;
+  /** Timestamp of an earlier message from this account; the send replaces its text in place. */
+  editTimestamp?: number;
   /** Revalidate the originating request before every daemon mutation. */
   assertDirectAdapterHandoff?: () => void;
 };
@@ -217,6 +219,9 @@ export async function sendMessageSignal(
   }
 
   Object.assign(params, buildTargetParams(target));
+  if (opts.editTimestamp !== undefined) {
+    params["edit-timestamp"] = opts.editTimestamp;
+  }
 
   const rawReplyToId = normalizeOptionalString(opts.replyToId);
   const quoteTimestamp =

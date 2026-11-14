@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginStateKeyedStoreV2ForTests as openStore } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeModule from "./runtime.js";
 
 const sendReactionsModule = await import("./send-reactions.js");
 const sendReactionSignalMock = vi
@@ -8,7 +13,18 @@ const sendReactionSignalMock = vi
 const removeReactionSignalMock = vi
   .spyOn(sendReactionsModule, "removeReactionSignal")
   .mockResolvedValue({ ok: true });
+const sendModule = await import("./send.js");
+const sendMessageSignalMock = vi.spyOn(sendModule, "sendMessageSignal").mockResolvedValue({
+  messageId: "1700000000999",
+  receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
+});
 const { signalMessageActions } = await import("./message-actions.js");
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 const DEFAULT_CFG: OpenClawConfig = { channels: { signal: { account: "+15550001111" } } };
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
@@ -45,19 +61,56 @@ describe("signalMessageActions", () => {
 
   it.each([
     ["unconfigured", {}, undefined, []],
-    ["reactions disabled", disabledCfg, undefined, ["send"]],
-    ["any enabled account", overrideCfg, undefined, ["send", "react"]],
-    ["default account", overrideCfg, "default", ["send"]],
-    ["work account", overrideCfg, "work", ["send", "react"]],
+    ["reactions disabled", disabledCfg, undefined, ["send", "edit"]],
+    ["any enabled account", overrideCfg, undefined, ["send", "edit", "react"]],
+    ["default account", overrideCfg, "default", ["send", "edit"]],
+    ["work account", overrideCfg, "work", ["send", "edit", "react"]],
   ] as const)("discovers actions for %s", (_name, cfg, accountId, actions) => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg, accountId })?.actions ?? [],
     ).toStrictEqual(actions);
   });
 
-  it("supports only reactions for plugin dispatch", () => {
+  it("supports reactions and edits for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
+    expect(signalMessageActions.supportsAction?.({ action: "edit" })).toBe(true);
+  });
+
+  it("aims a second edit of the original message at its newest revision", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("signal-edit-action-") };
+    const runtime = createPluginRuntimeMock({
+      state: {
+        openKeyedStoreV2: <T>(options: Parameters<typeof openStore>[1]) =>
+          openStore<T>("signal", { ...options, env }, { assertCurrent() {} }),
+      },
+    });
+    const runtimeSpy = vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);
+    sendMessageSignalMock.mockClear();
+    const edit = (text: string) =>
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "edit",
+        cfg: DEFAULT_CFG,
+        params: { to: "+15559999998", messageId: "1700000000500", text },
+      });
+    sendMessageSignalMock.mockResolvedValueOnce({
+      messageId: "1700000000600",
+      receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
+    });
+    await edit("rev 1");
+    await edit("rev 2");
+    expect(
+      sendMessageSignalMock.mock.calls.map(([to, text, options]) => [
+        to,
+        text,
+        options?.editTimestamp,
+      ]),
+    ).toEqual([
+      ["+15559999998", "rev 1", 1700000000500],
+      ["+15559999998", "rev 2", 1700000000600],
+    ]);
+    runtimeSpy.mockRestore();
   });
 
   it.each(["implicit", "explicit"] as const)(

@@ -632,6 +632,9 @@ export async function containerRpcRequest<T = unknown>(
         number: (p.account as string) ?? "",
         recipients: finalRecipients,
       };
+      if (p["edit-timestamp"] !== undefined) {
+        payload.edit_timestamp = p["edit-timestamp"];
+      }
       if (textStyles?.length) {
         payload.message = renderContainerStyledText(message, textStyles);
         payload.text_mode = "styled";
