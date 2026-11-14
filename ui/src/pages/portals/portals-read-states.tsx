@@ -30,11 +30,15 @@ export function PendingEnvironment(props: {
     <section class="portals-empty" role="status" aria-live="polite">
       <div class="portals-empty__title">
         {t(
-          failed()
-            ? "portalsPage.environmentUnavailable"
-            : environment()?.status === "available"
-              ? "portalsPage.waitingForApp"
-              : "portalsPage.environmentStarting",
+          props.error
+            ? "portalsPage.environmentStatusFailed"
+            : environment()?.status === "stopping"
+              ? "portalsPage.environmentStopping"
+              : failed()
+                ? "portalsPage.environmentUnavailable"
+                : environment()?.status === "available"
+                  ? "portalsPage.waitingForApp"
+                  : "portalsPage.environmentStarting",
         )}
       </div>
       <Show when={props.error || environment()?.worker?.error}>
@@ -52,7 +56,7 @@ export function PendingEnvironment(props: {
             }
           }}
         >
-          {t("portalsPage.retry")}
+          {t("portalsPage.checkAgain")}
         </button>
       </Show>
     </section>
