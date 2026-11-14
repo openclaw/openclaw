@@ -401,13 +401,11 @@ describe("collapseCompletedTurnWork", () => {
         assistant("All done.", 4_000),
       ],
     });
-    expectKinds(items, ["group", "work-group", "group", "group"]);
+    expectKinds(items, ["group", "work-group", "group", "group", "group"]);
     expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
-    expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual([
-      "assistant",
-      "tool",
-    ]);
-    expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
+    expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual(["tool"]);
+    expect(messageRecord(requireGroup(items[3])).content).toBe("Checking the details.");
+    expect(messageRecord(requireGroup(items[4])).content).toBe("All done.");
   });
 
   it("keeps completed work expanded for non-dashboard session", () => {

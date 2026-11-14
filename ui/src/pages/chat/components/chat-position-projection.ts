@@ -34,6 +34,7 @@ export function projectChatPositions(
   expandedWork: ReadonlyMap<string, boolean>,
   messageRowKeysById: Map<string, string>,
   searchActive = false,
+  workAlreadyProjected = false,
 ): ChatPositionIndex {
   const markers = new Map<string, ChatPositionMarker>();
   const markerIdsByMessageId = new Map<string, string>();
@@ -93,7 +94,7 @@ export function projectChatPositions(
       for (const part of item.groups) {
         group(part, rowKey);
       }
-    } else if (item.kind === "work-group" && expandedWork.get(item.key)) {
+    } else if (item.kind === "work-group" && !workAlreadyProjected && expandedWork.get(item.key)) {
       // Folded work has no mounted bubble to reveal. Its visible final reply owns the anchor.
       for (const part of item.groups) {
         group(part, rowKey === item.key ? `${item.key}:${part.key}` : rowKey);

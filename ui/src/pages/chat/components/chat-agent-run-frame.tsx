@@ -354,17 +354,6 @@ function RunFrame(props: FrameProps) {
                       presentation: "continuation",
                     }}
                   />
-                  <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
-                    <For each={work().groups} keyed={(group) => group.key}>
-                      {(group) => (
-                        <MessageGroupContent
-                          group={group()}
-                          options={groupOptions(group())}
-                          footerReactionMessageKey={footerReactionMessageKey()}
-                        />
-                      )}
-                    </For>
-                  </Show>
                 </>
               )}
             </Match>
