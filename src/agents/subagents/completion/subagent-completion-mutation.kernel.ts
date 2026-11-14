@@ -152,8 +152,7 @@ function prepareBlockedSubagentCompletion(
   if (
     !successful &&
     !params.operatorAuthorityUnavailable &&
-    ((params.suspendedReason !== undefined && !params.storeReplaced) ||
-      !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
+    !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending")
   ) {
     return undefined;
   }
@@ -186,9 +185,8 @@ function prepareBlockedSubagentCompletion(
   }
   Object.assign(delivery, {
     status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-    disposition: params.storeReplaced
-      ? ("intentional_non_delivery" as const)
-      : params.suspendedReason
+    disposition:
+      params.suspendedReason || params.storeReplaced
         ? ("permanent_failure" as const)
         : (params.disposition ?? delivery.disposition),
     lastError: params.reason,

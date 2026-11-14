@@ -1,9 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
@@ -46,6 +50,7 @@ import {
   loadSubagentRegistryFromSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
+import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   initSubagentRegistry,
@@ -69,9 +74,162 @@ function expectNoSystemEvents(database: ReturnType<typeof openOpenClawStateDatab
 
 const retiredDelivery = {
   status: "suspended",
-  disposition: "intentional_non_delivery",
+  disposition: "permanent_failure",
   lastError: "store replaced",
 } as const;
+
+it.each([
+  "direct",
+  "batch",
+  "yielded-batch",
+  "legacy-yielded-batch",
+  "replaced-session",
+  "replaced-revision",
+] as const)(
+  "records a required failed completion in its original requester transcript (%s)",
+  async (route) => {
+    const { subagent } = records();
+    const target = {
+      agentId: "main",
+      sessionKey: subagent.requesterSessionKey,
+      sessionId: "failed-delivery-requester",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    await upsertSessionEntryCore(target, {
+      sessionId: route === "replaced-session" ? "replacement-requester" : target.sessionId,
+      lifecycleRevision:
+        route === "replaced-revision" ? "replacement-revision" : "requester-revision",
+      updatedAt: Date.now(),
+    });
+    Object.assign(subagent, {
+      completionTarget: "parent",
+      completionRequesterSessionId: target.sessionId,
+      completionRequesterLifecycleRevision: "requester-revision",
+      requesterStorePath: target.storePath,
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    subagent.execution.outcome = {
+      status: "error",
+      error: "Descendant completion can no longer continue this yielded requester.",
+    };
+    subagent.completion = { required: true, resultText: null, capturedAt: Date.now() };
+    const batch = [subagent];
+    if (route.endsWith("yielded-batch")) {
+      subagent.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        requesterRunId: "yielded-requester",
+        batchRunIds: [subagent.runId, "second-child"],
+      };
+      if (route === "legacy-yielded-batch") {
+        delete subagent.requesterSettleWake.requesterRunId;
+        delete subagent.requesterSettleWake.batchRunIds;
+      }
+      batch.push({ ...structuredClone(subagent), runId: "second-child", taskRunId: "second-task" });
+    }
+    for (const sibling of batch.slice(1)) {
+      publishCommittedRecords(sibling);
+    }
+    publishCommittedRecords(subagent);
+    subagentRuns.retireCompletionAuthority(subagent);
+    if (route !== "batch" && !route.endsWith("yielded-batch")) {
+      expect(
+        await blockSubagentCompletionDelivery({
+          subagent,
+          reason: "store replaced",
+          storeReplaced: true,
+          suspendedReason: "permanent_failure",
+        }),
+      ).toBe(true);
+    } else {
+      await mutateRequesterCompletionBatch({
+        entries: batch,
+        assertCurrent: () => {},
+        operation: {
+          kind: "settle",
+          outcome: {
+            delivered: false,
+            path: "none",
+            storeReplaced: true,
+            disposition: "intentional_non_delivery",
+            error: "store replaced",
+          },
+        },
+      });
+    }
+    const events = await loadTranscriptEvents({
+      ...target,
+      sessionId: route === "replaced-session" ? "replacement-requester" : target.sessionId,
+    });
+    const notices = events.filter((event) => isRecord(event) && event.type === "custom_message");
+    expect(notices).toEqual(
+      route.startsWith("replaced-")
+        ? []
+        : [
+            expect.objectContaining({
+              type: "custom_message",
+              customType: "run-failed-before-reply",
+              display: true,
+              content: expect.stringContaining("child result couldn't be delivered"),
+            }),
+          ],
+    );
+    expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.disposition).toBe(
+      "permanent_failure",
+    );
+  },
+);
+
+it.each([false, true])(
+  "settles an unreachable yielded task only after custody retires (%s)",
+  async (retired) => {
+    const { subagent } = records();
+    await upsertSessionEntryCore(
+      {
+        agentId: "main",
+        sessionKey: subagent.requesterSessionKey,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      },
+      {
+        sessionId: "resumed-requester",
+        updatedAt: Date.now(),
+        lifecycleRunId: "resumed-requester-run",
+        activeWriterRunId: "resumed-requester-run",
+      },
+    );
+    markSubagentRunPausedAfterYield({ entry: subagent });
+    subagentRuns.set(subagent.runId, subagent);
+    if (retired) {
+      subagentRuns.retireCompletionAuthority(subagent);
+    }
+    const complete = vi.fn<Parameters<typeof settleUnreachableYieldedSubagentRun>[0]["complete"]>(
+      async () => {},
+    );
+    expect(
+      await settleUnreachableYieldedSubagentRun({
+        runId: subagent.runId,
+        entry: subagent,
+        complete,
+      }),
+    ).toBe(retired);
+    if (retired) {
+      expect(complete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          endedAt: subagent.execution.endedAt,
+          settleYielded: true,
+          outcome: {
+            status: "error",
+            error: "Descendant completion can no longer continue this yielded requester.",
+          },
+        }),
+        "sweeper-unreachable-yield",
+      );
+    } else {
+      expect(complete).not.toHaveBeenCalled();
+    }
+  },
+);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;
@@ -169,7 +327,7 @@ it("leaves yielded tasks with their owner until a final result needs store retir
   await settleRootWork(true);
   expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
     completion: { resultText: "retained final result" },
-    delivery: { status: "suspended", disposition: "intentional_non_delivery" },
+    delivery: { status: "suspended", disposition: "permanent_failure" },
   });
 });
 
@@ -406,7 +564,7 @@ it.each(["same", "failed", "pending acknowledgment"] as const)(
       }
       expect(subagentRuns.get(subagent.runId)?.delivery).toMatchObject({
         status: "suspended",
-        disposition: "intentional_non_delivery",
+        disposition: "permanent_failure",
       });
       expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
     } else {
