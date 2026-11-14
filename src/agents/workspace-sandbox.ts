@@ -21,6 +21,7 @@ export type WorkspaceSandboxParams = Pick<
   | "agentId"
   | "config"
   | "cwd"
+  | "disableTools"
   | "execOverrides"
   | "permissionMode"
   | "sandboxSessionKey"
@@ -156,6 +157,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
               sessionKey: sandboxSessionKey,
               skillsSnapshot: params.skillsSnapshot,
               workspaceDir: resolvedWorkspace,
+              disableTools: params.disableTools,
               assertCurrent,
               abortSignal: params.abortSignal,
               admittedRunContext: params.admittedRunContext,
