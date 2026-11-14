@@ -2995,7 +2995,7 @@ describe("chat model controls", () => {
       (button) =>
         button.getAttribute("aria-selected") === "false" && button.dataset.chatModelOption !== "",
     );
-    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
+    expect(modelOption?.getAttribute("role")).toBe("option");
     modelOption?.click();
     expect(onModelSelect).toHaveBeenCalledWith(
       modelOption?.dataset.chatModelOption,
