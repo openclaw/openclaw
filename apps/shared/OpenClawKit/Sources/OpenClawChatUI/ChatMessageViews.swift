@@ -545,7 +545,7 @@ extension ChatMessageBubble {
                     resolverReady: self.inlineWidgetResolverReady,
                     resolveResource: self.inlineWidgetResourceResolver)
                     // A retained row must not lend its browser or callbacks to another chat owner.
-                    .id(self.inlineWidgetScope)
+                        .id(self.inlineWidgetScope)
             }
 
             self.footer

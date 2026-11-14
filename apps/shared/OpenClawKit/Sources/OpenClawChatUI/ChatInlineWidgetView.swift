@@ -267,8 +267,8 @@ struct ChatInlineWidgetScope: Hashable {
     let sessionGeneration: UInt64
 }
 
-// Resource equality describes navigation identity, not the latest recovery route.
-// SwiftUI must also deliver role/attempt changes to a retained coordinator.
+/// Resource equality describes navigation identity, not the latest recovery route.
+/// SwiftUI must also deliver role/attempt changes to a retained coordinator.
 private struct ChatInlineWidgetResolution: Equatable {
     let resource: OpenClawChatWidgetResource
 
