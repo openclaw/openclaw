@@ -361,6 +361,10 @@ not consume identity-scope grants and are unaffected by these edits. Pending han
 mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
+Temporary access-policy evaluation failures refuse the affected operation without
+revoking accepted work, including restart recovery and subagent completions.
+Completion delivery keeps its existing retry policy; definite denial or a changed
+original grant still cancels retained work.
 
 When `gateway.roles.default` is set, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a

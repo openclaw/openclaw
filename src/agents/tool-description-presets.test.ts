@@ -17,6 +17,10 @@ it("keeps ask_user native-control requirements visible to the model", () => {
   expect(description).toContain("native controls");
   expect(description).toContain("Put every selectable choice in `options`");
   expect(description).toContain("Use `multiSelect` only");
+  expect(description).toContain("observed external prerequisite");
+  expect(description).toContain("Do not invent approval or manual prerequisites");
+  expect(description).toContain("not the current user-requested turn");
+  expect(description).toContain("finish the turn first");
 });
 
 it("distinguishes secret config references from egress permission without offering plaintext", () => {
