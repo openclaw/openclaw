@@ -32,14 +32,14 @@ it
     "finish",
     "root-source-stopped",
     "other-agent",
-    "retired-message",
+    "parked-message",
     "completed-before",
     "policy-unavailable",
   ] as const)(
   "preserves yielded work through an actual Gateway restart (%s)",
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
-    const parkedRoot = action === "root-source-stopped" || action === "retired-message";
+    const parkedRoot = action === "root-source-stopped" || action === "parked-message";
     const restartRoot = parkedRoot || action === "completed-before";
     const childAgent = action === "other-agent" ? "other" : "main";
     const rootKey = parkedRoot
@@ -61,6 +61,7 @@ it
     let finishChild: (() => void) | undefined;
     let yieldRequester: (() => void) | undefined;
     let yieldedAfterOutage = false;
+    let requesterFinished = false;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -132,10 +133,13 @@ it
           assert(receipt, `Spawn did not return an accepted child: ${String(spawned.output)}`);
           childKey ??= receipt.childSessionKey;
           childRunId ??= receipt.runId;
-          if (text.includes("The Gateway restarted while you were working.")) {
+          const recoveryInput =
+            text.includes("The Gateway restarted while you were working.") ||
+            text.includes("CONTINUE_RETAINED_CHILD");
+          if (recoveryInput) {
             rootResumes++;
           }
-          if (action === "retired-message" && rootResumes === 0) {
+          if (action === "parked-message" && rootResumes === 0) {
             yieldRoot = () => call("sessions_yield", {});
             return;
           }
@@ -147,8 +151,16 @@ it
             call("sessions_yield", {});
             return;
           }
-          if (text.includes("The Gateway restarted while you were working.")) {
-            finishRequester = () => reply("REQUESTER_FINISHED_WITHOUT_CONTINUATION");
+          if (recoveryInput) {
+            finishRequester = () => {
+              requesterFinished = true;
+              reply("REQUESTER_FINISHED_WITHOUT_CONTINUATION");
+            };
+            if (requesterFinished && !text.includes("CONTINUE_RETAINED_CHILD")) {
+              // A retained pause notice can arrive after the restart turn finishes.
+              reply("REQUESTER_ACKNOWLEDGED_PAUSED_CHILD");
+              return;
+            }
             if (text.includes("PARKED_CHILD_COMPLETED")) {
               reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
               return;
@@ -315,7 +327,7 @@ it
         } else {
           await vi.waitFor(() => expect(childCalls).toBe(1), { timeout: 30_000 });
         }
-        if (action === "retired-message") {
+        if (action === "parked-message") {
           assert(yieldRoot);
           yieldRoot();
         }
@@ -325,7 +337,7 @@ it
           ).toMatchObject({ status: "ok", yielded: true });
           // agent.wait observes the yielded terminal before controller cleanup.
           // Restart only after the real root execution and terminal write have drained.
-          if (action !== "retired-message") {
+          if (action !== "parked-message") {
             await vi.waitFor(
               async () => {
                 const history = await client!.request<{
@@ -357,7 +369,7 @@ it
             )?.resumeAfterRestart,
           )
           .toBeDefined();
-        if (action === "retired-message") {
+        if (action === "parked-message") {
           expect(readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId).toBe(
             root.runId,
           );
@@ -366,7 +378,7 @@ it
         client = await connect();
         await vi.waitFor(
           () =>
-            action === "root-source-stopped"
+            action === "root-source-stopped" || action === "parked-message"
               ? expect(
                   readRestartSession(
                     instance.state.agentDir(restartRoot ? "main" : childAgent),
@@ -376,6 +388,19 @@ it
               : expect(rootResumes).toBe(1),
           { timeout: 20_000 },
         );
+        if (action === "parked-message") {
+          expect(rootResumes).toBe(0);
+          expect(readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId).toBe(
+            root.runId,
+          );
+          await client.request("chat.send", {
+            sessionKey: rootKey,
+            message: "CONTINUE_RETAINED_CHILD",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          await vi.waitFor(() => expect(rootResumes).toBe(1), { timeout: 15_000 });
+        }
         if (action === "root-source-stopped") {
           phase = "root reconciles its stopped child execution";
           await vi.waitFor(
@@ -397,6 +422,14 @@ it
           return;
         }
         phase = "restored parked child";
+        if (action === "parked-message") {
+          const history = await client.request<{ messages: unknown[] }>("chat.history", {
+            sessionKey: rootKey,
+          });
+          expect(JSON.stringify(history.messages)).not.toContain(
+            "The Gateway restarted while you were working.",
+          );
+        }
         const restored = readRestartSession(instance.state.agentDir(childAgent), childKey);
         process.stdout.write(
           `[yield-restart-proof] ${JSON.stringify({
