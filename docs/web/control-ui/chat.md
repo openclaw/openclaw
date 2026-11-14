@@ -640,6 +640,8 @@ In **Plugins**, administrators can select **Add MCP server** and choose a scope.
 
 Select an MCP server's row to expand its tools inline; its switch enables or disables the server. Toggle individual tools in the expanded list once a run has discovered them. Before that, the list explains why it is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
 
+When the agent's tool policy denies an entire MCP server namespace, Plugins marks that server as unavailable for the agent and disables its switch. The switch still shows the session's saved selection; the policy denial remains in force.
+
 If a server's tools are already expanded, the list refreshes when the current session's run finishes; you do not need to collapse and expand it to see newly discovered tools.
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. If your account cannot read plugin configuration, **Plugins** explains that its settings are unavailable instead of showing an empty server list. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
