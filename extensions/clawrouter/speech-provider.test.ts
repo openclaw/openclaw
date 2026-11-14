@@ -28,6 +28,12 @@ type Fixture = {
   cfg: OpenClawConfig;
   home: string;
   requests: Request[];
+  arrivals: Array<{
+    method: string | undefined;
+    responseClosed: boolean;
+    socketClosed: boolean;
+    retired: Promise<unknown>;
+  }>;
   request: (providerConfig?: Record<string, unknown>) => SpeechSynthesisRequest;
   tts: (
     options?: Partial<Parameters<typeof synthesizeSpeech>[0]>,
@@ -57,6 +63,7 @@ async function withFixture(
   await withTempHome(
     async (home) => {
       const requests: Request[] = [];
+      const arrivals: Fixture["arrivals"] = [];
       const catalogRequests: string[] = [];
       const catalog: Catalog = {
         providerId: "openai",
@@ -68,6 +75,23 @@ async function withFixture(
       };
       await withServer(
         (req, res) => {
+          const responseClosed = createDeferred();
+          const socketClosed = createDeferred();
+          const arrival = {
+            method: req.method,
+            responseClosed: false,
+            socketClosed: false,
+            retired: Promise.all([responseClosed.promise, socketClosed.promise]),
+          };
+          arrivals.push(arrival);
+          res.once("close", () => {
+            arrival.responseClosed = true;
+            responseClosed.resolve();
+          });
+          req.socket.once("close", () => {
+            arrival.socketClosed = true;
+            socketClosed.resolve();
+          });
           void (async () => {
             if (req.url === "/v1/catalog") {
               catalogRequests.push(req.headers.authorization ?? "");
@@ -174,6 +198,7 @@ async function withFixture(
             cfg,
             home,
             requests,
+            arrivals,
             catalog,
             catalogRequests,
             tts: (options = {}) =>
@@ -438,7 +463,7 @@ describe("ClawRouter native speech", () => {
         });
         const provider = speech(cfg);
         const storedCfg = withoutKey(cfg);
-        await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
+        await expect(tts({ cfg: storedCfg, timeoutMs: 5000 })).resolves.toMatchObject({
           audioBuffer: AUDIO,
         });
         await expect(
@@ -518,20 +543,25 @@ describe("ClawRouter native speech", () => {
     });
   });
 
-  it("aborts an in-flight HTTP body at the request deadline and releases its socket", async () => {
-    const closed = createDeferred();
+  it("expires the whole registered speech operation and retires any started requests", async () => {
     await withFixture(
-      async ({ cfg, request, requests }) => {
+      async ({ cfg, request, requests, arrivals }) => {
         await expect(speech(cfg).synthesize({ ...request(), timeoutMs: 250 })).rejects.toThrow(
           /timed out|abort/i,
         );
-        expect(requests).toHaveLength(1);
-        await closed.promise;
+        // Preparation can consume the budget before dispatch; this is not body-retirement proof.
+        expect(arrivals.filter((arrival) => arrival.method === "POST").length).toBeLessThanOrEqual(
+          1,
+        );
+        expect(requests.length).toBeLessThanOrEqual(1);
+        await Promise.all(arrivals.map((arrival) => arrival.retired));
+        expect(arrivals.every((arrival) => arrival.responseClosed && arrival.socketClosed)).toBe(
+          true,
+        );
       },
       (res) => {
         res.setHeader("content-type", "audio/mpeg");
         res.write(AUDIO.subarray(0, 1));
-        res.once("close", () => closed.resolve());
       },
     );
   });

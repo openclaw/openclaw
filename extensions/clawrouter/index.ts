@@ -13,7 +13,10 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildOpenAICompatibleReplayPolicy,
+  buildProviderReplayFamilyHooks,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createAnthropicThinkingPrefillPayloadWrapper,
@@ -45,6 +48,7 @@ import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
+import { createClawRouterOllamaStream } from "./ollama-stream.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
@@ -674,6 +678,7 @@ export default defineSingleProviderPluginEntry({
         return baseUrl !== providerConfig.baseUrl ? { ...providerConfig, baseUrl } : undefined;
       },
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
+      createStreamFn: createClawRouterOllamaStream,
       resolveFastModeSupport,
       resolveServiceTiers,
       resolveNativeWebSearch,
@@ -682,6 +687,13 @@ export default defineSingleProviderPluginEntry({
         wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {
+        if (ctx.modelApi === "ollama") {
+          const replayPolicy = buildOpenAICompatibleReplayPolicy("openai-completions", {
+            sanitizeToolCallIds: false,
+            dropReasoningFromHistory: false,
+          });
+          return { ...replayPolicy, sanitizeToolCallIds: false };
+        }
         if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
           return mistralReplay.buildReplayPolicy?.(ctx);
         }
@@ -698,9 +710,11 @@ export default defineSingleProviderPluginEntry({
           ? googleReplay.sanitizeReplayHistoryAsync?.(ctx)
           : undefined,
       resolveReasoningOutputMode: (ctx) =>
-        ctx.modelApi === "google-generative-ai"
-          ? googleReplay.resolveReasoningOutputMode?.(ctx)
-          : undefined,
+        ctx.modelApi === "ollama"
+          ? "native"
+          : ctx.modelApi === "google-generative-ai"
+            ? googleReplay.resolveReasoningOutputMode?.(ctx)
+            : undefined,
       resolveThinkingProfile: resolveClawRouterThinkingProfile,
       normalizeToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").normalizeToolSchemas(ctx),
       inspectToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),

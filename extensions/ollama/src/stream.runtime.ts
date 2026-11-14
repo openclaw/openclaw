@@ -14,13 +14,14 @@ import { createAssistantMessageEventStream, transformMessages } from "openclaw/p
 import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
-import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
+import {
+  createProviderOperationDeadline,
+  readProviderResponseErrorText,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   applyProviderPayloadHook,
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
-  mergeTransportHeaders,
   createPlainTextToolCallCompatWrapper,
   createProviderWaitObserver,
   failTransportStream,
@@ -43,9 +44,7 @@ import {
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
 } from "./defaults.js";
-import { normalizeOllamaWireModelId } from "./model-id.js";
-import { applyOllamaThinkingFloor } from "./model-reasoning.js";
-import { resolveOllamaBaseUrlForRun, resolveOllamaChatUrl } from "./provider-base-url.js";
+import { resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
 import {
   createOllamaVisibleContentSanitizer,
@@ -53,7 +52,6 @@ import {
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
 import {
-  type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
   resolveOllamaConfiguredThink,
   supportsNativeOllamaMax,
@@ -71,10 +69,21 @@ import {
   createOllamaStreamCooperativeScheduler,
   throwIfOllamaStreamAborted,
 } from "./stream-scheduler.js";
+import {
+  buildOllamaChatRequest,
+  buildOllamaRequestHeaders,
+  type OllamaStreamTransport,
+  type OllamaTool,
+  resolveOllamaRemainingTimeout,
+  resolveOllamaRequestTimeoutMs,
+  resolveOllamaTransportUrl,
+  serializeOllamaBody,
+} from "./stream-transport.js";
 import { normalizeOllamaToolCallName, wrapOllamaToolNames } from "./tool-name-aliases.js";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
 
 export { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
+export { buildOllamaChatRequest, type OllamaStreamTransport } from "./stream-transport.js";
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
@@ -161,25 +170,6 @@ function resolveStreamingTextDelta(previousText: string, nextText: string): stri
   return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
 }
 
-export function buildOllamaChatRequest(params: {
-  modelId: string;
-  providerId?: string;
-  messages: OllamaChatMessage[];
-  tools?: OllamaTool[];
-  options?: Record<string, unknown>;
-  requestParams?: Record<string, unknown>;
-  stream?: boolean;
-}): OllamaChatRequest {
-  return {
-    model: normalizeOllamaWireModelId(params.modelId, params.providerId),
-    messages: params.messages,
-    stream: params.stream ?? true,
-    ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
-    ...(params.options ? { options: params.options } : {}),
-    ...params.requestParams,
-  };
-}
-
 function resolveOllamaResponseFormat(
   responseFormat: Record<string, unknown> | undefined,
   params: { baseUrl: string; modelId: string },
@@ -214,25 +204,6 @@ type StreamModelDescriptor = {
 type OllamaUsageFallback = Partial<Record<"input" | "output", number | (() => number)>>;
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-
-interface OllamaChatRequest {
-  model: string;
-  messages: OllamaChatMessage[];
-  stream: boolean;
-  tools?: OllamaTool[];
-  options?: Record<string, unknown>;
-  think?: OllamaThinkValue;
-  format?: "json" | Record<string, unknown>;
-}
-
-interface OllamaTool {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-}
 
 function estimateJsonChars(value: unknown): number {
   return estimateStringChars(JSON.stringify(value) ?? "");
@@ -382,17 +353,6 @@ export function buildAssistantMessage(
   return message;
 }
 
-function resolveOllamaRequestTimeoutMs(
-  model: object,
-  options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
-): number | undefined {
-  const raw =
-    options?.requestTimeoutMs ??
-    options?.timeoutMs ??
-    (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
-  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
-}
-
 type OllamaStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
   topP?: number;
   frequencyPenalty?: number;
@@ -404,12 +364,22 @@ function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: ModelRequestHeaders,
   localService?: OllamaLocalService,
+  transport?: OllamaStreamTransport,
 ): StreamFn {
-  const chatUrl = resolveOllamaChatUrl(baseUrl);
+  const chatUrl = resolveOllamaTransportUrl(baseUrl, transport);
+  const bodyMode = transport?.bodyMode;
   const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
 
   return (model, context, options?: OllamaStreamOptions) => {
     const stream = createAssistantMessageEventStream();
+    const suppliedTimeout = bodyMode ? resolveOllamaRequestTimeoutMs(model, options) : undefined;
+    const operationDeadline =
+      suppliedTimeout === undefined
+        ? undefined
+        : createProviderOperationDeadline({
+            timeoutMs: suppliedTimeout,
+            label: "Catalog-selected Ollama",
+          });
     const localModel =
       model.provider !== OLLAMA_CLOUD_PROVIDER_ID &&
       !isOllamaCloudModel(model.id) &&
@@ -479,27 +449,29 @@ function createRawOllamaStreamFn(
           options: ollamaOptions,
           requestParams,
         });
+        const selectedWireModel = body.model;
         const requestBody = await applyProviderPayloadHook(options, body, model);
-        const headers =
-          omitNullRequestHeaders(
-            mergeTransportHeaders(
-              { "Content-Type": "application/json" },
-              defaultHeaders,
-              options?.headers,
-            ),
-          ) ?? {};
+        if (bodyMode) {
+          throwIfOllamaStreamAborted(options?.signal);
+        }
+        const headers = buildOllamaRequestHeaders(
+          defaultHeaders,
+          options?.headers,
+          bodyMode && options?.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : undefined,
+        );
         if (
           options?.apiKey &&
           (!headers.Authorization || !isNonSecretApiKeyMarker(options.apiKey))
         ) {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
-        const requestTimeoutMs = resolveOllamaRequestTimeoutMs(
+        const requestTimeoutMs = resolveOllamaRemainingTimeout(
           model,
-          options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
+          options,
+          operationDeadline,
+          suppliedTimeout,
         );
-        // Applied after payload hooks, so a `false` from any writer gets the model's floor.
-        const serializedBody = JSON.stringify(applyOllamaThinkingFloor(requestBody, model));
+        const serializedBody = serializeOllamaBody(requestBody, model, selectedWireModel, bodyMode);
 
         // Acquire after request composition and release after guarded cleanup;
         // reversing either boundary can leak the lease or stop inference mid-stream.
@@ -527,12 +499,15 @@ function createRawOllamaStreamFn(
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),
           timeoutMs: requestTimeoutMs,
+          ...(bodyMode ? { maxRedirects: 0 } : {}),
           auditContext: "ollama-stream.chat",
         }).catch((error: unknown) => {
           localServiceLease?.release();
           throw error;
         });
         const { response, release, refreshTimeout } = guardedFetch;
+        let releasePromise: Promise<void> | undefined;
+        const releaseResponse = () => (releasePromise ??= release());
 
         try {
           await notifyProviderHttpResponse({ options, response, model });
@@ -775,6 +750,13 @@ function createRawOllamaStreamFn(
           closeThinkingBlock();
           closeTextBlock();
 
+          // The router's absolute deadline owns physical cleanup as well as decoding.
+          // Legacy callers retain their existing terminal-before-release ordering.
+          if (bodyMode) {
+            await releaseResponse();
+            throwIfOllamaStreamAborted(options?.signal);
+          }
+
           if (suppressedThinkingChars > 0) {
             const error = recordSuppressedReasoning(assistantMessage);
             if (error) {
@@ -827,7 +809,7 @@ function createRawOllamaStreamFn(
           });
         } finally {
           try {
-            await release();
+            await releaseResponse();
           } finally {
             localServiceLease?.release();
           }
@@ -863,9 +845,12 @@ function createRawOllamaStreamFn(
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: ModelRequestHeaders,
+  transport?: OllamaStreamTransport,
 ): StreamFn {
   return wrapOllamaToolNames(
-    createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders)),
+    createPlainTextToolCallCompatWrapper(
+      createRawOllamaStreamFn(baseUrl, defaultHeaders, undefined, transport),
+    ),
   );
 }
 

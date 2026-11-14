@@ -7,6 +7,7 @@ export {
   isOllamaCompatProvider,
   OLLAMA_NATIVE_BASE_URL,
   parseNdjsonStream,
+  type OllamaStreamTransport,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
