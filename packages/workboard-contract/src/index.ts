@@ -1,6 +1,7 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
   inspectWorkboardPortSource(db: Database): {
     version: number;
     migrationRequired: boolean;
@@ -74,6 +75,8 @@ export const WORKBOARD_LINK_TYPES = [
   "relates_to",
 ] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
+export const WORKBOARD_OBSERVATION_OUTCOMES = ["succeeded", "failed"] as const;
+export const WORKBOARD_VERIFICATION_OUTCOMES = ["confirmed", "disputed", "inconclusive"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "stranded_ready",
@@ -106,6 +109,8 @@ export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
+export type WorkboardObservationOutcome = (typeof WORKBOARD_OBSERVATION_OUTCOMES)[number];
+export type WorkboardVerificationOutcome = (typeof WORKBOARD_VERIFICATION_OUTCOMES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
 export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
@@ -172,6 +177,61 @@ export type WorkboardProof = {
   url?: string;
   note?: string;
 };
+
+/**
+ * Optional result evidence, kept apart by who produced it. None of these records gate
+ * completion, change proof statuses, or affect dependency scheduling.
+ */
+export type WorkboardResultClaim = {
+  kind: "claim";
+  id: string;
+  recordedAt: number;
+  /** Caller identity Workboard stamped when the worker completed the card. */
+  claimedBy: string;
+  statement: string;
+  proofId?: string;
+  runId?: string;
+};
+
+/** What the execution owner observed. Only Workboard's session lifecycle sync writes these. */
+export type WorkboardResultObservation = {
+  kind: "observation";
+  id: string;
+  recordedAt: number;
+  observedAt: number;
+  source: "session-lifecycle";
+  outcome: WorkboardObservationOutcome;
+  sessionKey: string;
+  runId?: string;
+};
+
+export type WorkboardResultVerification = {
+  kind: "verification";
+  id: string;
+  recordedAt: number;
+  /** Caller identity Workboard stamped; never taken from the request. */
+  checkerId: string;
+  /**
+   * True when the checker matches the card's assignee, claim owner, or a claim author.
+   * False only means no match was found; it does not establish independence.
+   */
+  checkedOwnWork: boolean;
+  /** What was checked, in the checker's words. */
+  scope: string;
+  outcome: WorkboardVerificationOutcome;
+  /** The claim, proof, artifact, or run this check covered, when it named one. */
+  claimId?: string;
+  proofId?: string;
+  artifactId?: string;
+  runId?: string;
+  note?: string;
+  url?: string;
+};
+
+export type WorkboardResultEvidence =
+  | WorkboardResultClaim
+  | WorkboardResultObservation
+  | WorkboardResultVerification;
 
 export type WorkboardArtifact = {
   id: string;
@@ -316,6 +376,8 @@ export type WorkboardAutomation = {
   maxRetries?: number;
   scheduledAt?: number;
   summary?: string;
+  /** Owned by Workboard's evidence writers; raw metadata patches cannot add entries. */
+  evidence?: WorkboardResultEvidence[];
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
@@ -349,6 +411,8 @@ export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "
 export type WorkboardOrchestrationSettings = {
   autoDecompose?: boolean;
   autoDecomposePerDispatch?: number;
+  /** Running or claimed cards one owner may hold while starting a card on this board. Default 1. */
+  maxActivePerOwner?: number;
   defaultAssignee?: string;
   orchestratorProfile?: string;
 };

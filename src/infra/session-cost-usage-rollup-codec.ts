@@ -9,6 +9,11 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 export const USAGE_COST_ROLLUP_VERSION = 11;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
+/**
+ * Fingerprint of a rollup whose totals no catalog price can change: every turn with usage
+ * recorded its own cost. It stays valid when pricing changes (a new build or catalog update).
+ */
+export const USAGE_COST_UNPRICED_FINGERPRINT = "unpriced";
 const zstd = resolveZstdCodec();
 
 export type UsageCostJsonlCheckpoint = {
@@ -19,6 +24,8 @@ export type UsageCostJsonlCheckpoint = {
   device: number;
   inode: number;
   anchorHash: string;
+  /** Last committed totals carried to an archive that can no longer be decoded; never fresh. */
+  undecodable?: 1;
 };
 
 export type UsageCostSqliteCheckpoint = {
@@ -89,12 +96,19 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
 }
 
 export type UsageCostFreshnessCheckpoint =
-  | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
+  | Pick<
+      UsageCostJsonlCheckpoint,
+      "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode" | "undecodable"
+    >
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
 
-export function readUsageCostDeferredMetadata(
-  envelope: UsageCostRollupEnvelope,
-): { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number } | undefined {
+export function readUsageCostDeferredMetadata(envelope: UsageCostRollupEnvelope):
+  | {
+      checkpoint: UsageCostFreshnessCheckpoint;
+      scannedAt: number;
+      sqliteGenerationHash?: string;
+    }
+  | undefined {
   const source = envelope.checkpoint;
   const checkpoint: UsageCostFreshnessCheckpoint =
     source.kind === "jsonl"
@@ -104,6 +118,7 @@ export function readUsageCostDeferredMetadata(
           observedMtimeMs: source.observedMtimeMs,
           device: source.device,
           inode: source.inode,
+          ...(source.undecodable ? { undecodable: source.undecodable } : {}),
         }
       : {
           kind: source.kind,
@@ -112,14 +127,21 @@ export function readUsageCostDeferredMetadata(
           size: source.size,
           mtimeMs: source.mtimeMs,
         };
-  // Only numeric freshness facts fit the reserved descriptor allowance.
+  // Keep numeric checkpoints and a fixed generation digest within the descriptor allowance.
   if (
     Object.entries(checkpoint).every(
       ([key, value]) => key === "kind" || (typeof value === "number" && Number.isFinite(value)),
     ) &&
     Number.isFinite(envelope.scannedAt)
   ) {
-    return { checkpoint, scannedAt: envelope.scannedAt };
+    return {
+      checkpoint,
+      scannedAt: envelope.scannedAt,
+      // Keep generation equality within the fixed descriptor allowance, regardless of token length.
+      ...(source.kind === "sqlite"
+        ? { sqliteGenerationHash: sha256Hex(JSON.stringify(source.generation ?? null)) }
+        : {}),
+    };
   }
   return undefined;
 }
@@ -137,7 +159,9 @@ export function decodeUsageCostRollupEnvelope(
       record.version !== USAGE_COST_ROLLUP_VERSION ||
       record.format !== USAGE_COST_ROLLUP_FORMAT_VERSION ||
       typeof record.pricingFingerprint !== "string" ||
-      (pricingFingerprint !== undefined && record.pricingFingerprint !== pricingFingerprint) ||
+      (pricingFingerprint !== undefined &&
+        record.pricingFingerprint !== pricingFingerprint &&
+        record.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT) ||
       !isRecord(record.checkpoint) ||
       (record.checkpoint.kind !== "jsonl" && record.checkpoint.kind !== "sqlite") ||
       typeof record.scannedAt !== "number" ||
@@ -246,6 +270,7 @@ export function isUsageCostRollupFresh(params: {
   }
   if (checkpoint.kind === "jsonl") {
     return (
+      !checkpoint.undecodable &&
       checkpoint.observedSize === params.file.size &&
       checkpoint.observedMtimeMs === params.file.mtimeMs &&
       checkpoint.device === params.file.device &&

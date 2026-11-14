@@ -1,7 +1,8 @@
 import type { OpenAICompatibleModelDiscoveryOptions } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asOptionalRecord,
@@ -67,7 +68,9 @@ function projectSyntheticModels(
       input: input.includes("image") ? ["text", "image"] : ["text"],
       contextWindow,
       maxTokens: Math.min(
-        asPositiveSafeInteger(record.max_output_length) ?? seed?.maxTokens ?? 8192,
+        asPositiveSafeInteger(record.max_output_length) ??
+          seed?.maxTokens ??
+          resolveDefaultModelMaxTokens(contextWindow),
         contextWindow,
       ),
       cost: {

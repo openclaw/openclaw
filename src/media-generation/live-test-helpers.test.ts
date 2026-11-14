@@ -3,6 +3,7 @@ import {
   parseLiveCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
+  resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "./live-test-helpers.js";
 
@@ -27,6 +28,20 @@ describe("media-generation live-test helpers", () => {
       new Map([
         ["google", "google/veo-3.1-fast-generate-preview"],
         ["xai", "xai/grok-imagine-video"],
+      ]),
+    );
+  });
+
+  it("collects configured primary and fallback models, skipping invalid refs", () => {
+    expect(
+      resolveConfiguredLiveProviderModels({
+        primary: "openai/gpt-image-2",
+        fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+      }),
+    ).toEqual(
+      new Map([
+        ["openai", "openai/gpt-image-2"],
+        ["google", "google/gemini-3.1-flash-image-preview"],
       ]),
     );
   });

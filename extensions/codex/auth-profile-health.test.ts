@@ -76,6 +76,9 @@ it("reports missing agent-local profiles without importing native credentials, t
   const services = vi.spyOn(captured.api, "registerService");
   plugin.register(captured.api);
   const recovery = services.mock.calls.find(([service]) => service.id === CHECK_ID)?.[0];
+  if (recovery?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   assert(recovery, "Gateway startup must register the same recovery check");
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   await recovery.start({ config, stateDir: state.stateDir, logger, scheduler });

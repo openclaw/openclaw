@@ -2,6 +2,11 @@ import { createMemo } from "@solidjs/signals";
 import { createSignal, onSettled, Show } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -16,6 +21,7 @@ import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
+import { bareNameAddress } from "./browser-url.ts";
 
 registerEnglishCatalog(registerBrowserEnglish);
 
@@ -26,7 +32,10 @@ export function BrowserToolbar(
   },
 ) {
   const menuId = `browser-actions-${generateUUID()}`;
+  const hintId = `browser-address-hint-${generateUUID()}`;
   const [editing, setEditing] = createSignal(false);
+  // The draft can be neither opened nor searched; cleared once the user edits or leaves it.
+  const [invalid, setInvalid] = createSignal(false);
   const [favicon, setFavicon] = createSignal<string | undefined>(undefined);
   let addressText!: HTMLSpanElement;
   onSettled(() => {
@@ -42,11 +51,30 @@ export function BrowserToolbar(
     () =>
       nativeTab()?.url || props.controller.view?.metrics?.url || props.controller.view?.url || "",
   );
+  // Take-over covers browsers this Gateway hosts, as the Gateway confirmed for this route;
+  // node-routed and native app tabs have no fence.
+  const canTakeControl = createMemo(
+    () =>
+      props.controller.controlling ||
+      (!nativeTab() &&
+        Boolean(props.controller.activeTargetId) &&
+        props.controller.controlAvailable &&
+        !props.controller.host.dashboardTarget?.sessionScoped),
+  );
   const addressEdited = createMemo(
     () =>
       Boolean(props.controller.urlDraft.trim()) &&
       (props.controller.pendingNewTab || props.controller.urlDraft !== activeUrl()),
   );
+  // A bare name ("devbox") searches; this keeps the address it used to open one pick away.
+  const bareAddress = createMemo(() =>
+    addressEdited() ? bareNameAddress(props.controller.urlDraft) : null,
+  );
+  function commitAddress(): boolean {
+    const committed = props.controller.commitUrlDraft();
+    setInvalid(!committed);
+    return committed;
+  }
   const suppliedFavicon = createMemo(
     () =>
       nativeTab()?.favicon ||
@@ -175,7 +203,10 @@ export function BrowserToolbar(
       case "copy":
         void copyToClipboard(activeUrl(), () => props.controller.host.isConnected).then(
           (copied) => {
-            showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+            showToast({
+              severity: copied ? "success" : "error",
+              message: t(copied ? "common.copied" : "common.copyFailed"),
+            });
           },
         );
         break;
@@ -223,6 +254,7 @@ export function BrowserToolbar(
         <PanelIconButton
           class={["bp-icon", { "session-panel-rail__button": !props.mobilePresentation }]}
           label={t("browser.back")}
+          title={false}
           icon={<Icon name="chevronLeft" />}
           disabled={
             nativeTab()
@@ -237,6 +269,7 @@ export function BrowserToolbar(
         <PanelIconButton
           class={["bp-icon", { "session-panel-rail__button": !props.mobilePresentation }]}
           label={t("browser.forward")}
+          title={false}
           icon={<Icon name="chevronRight" />}
           disabled={
             nativeTab()
@@ -249,7 +282,11 @@ export function BrowserToolbar(
           }}
         />
       </div>
-      <div class="bp-toolbar-location" data-editing={editing() ? "true" : "false"}>
+      <div
+        class="bp-toolbar-location"
+        data-editing={editing() ? "true" : "false"}
+        data-invalid={invalid() ? "true" : undefined}
+      >
         <span class="bp-toolbar-favicon" aria-hidden="true">
           <Show when={faviconSource()} keyed>
             {(source) => <FaviconLifetime source={source} />}
@@ -277,6 +314,8 @@ export function BrowserToolbar(
             spellcheck="false"
             autocomplete="off"
             aria-label={t("browser.address")}
+            aria-invalid={invalid() ? "true" : undefined}
+            aria-describedby={invalid() ? hintId : undefined}
             title={props.controller.urlDraft}
             disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
             placeholder={t("browser.urlPlaceholder")}
@@ -286,15 +325,27 @@ export function BrowserToolbar(
               props.controller.urlDraftEditing = true;
               event.currentTarget.select();
             }}
-            onBlur={() => {
+            onBlur={(event) => {
+              clearCompositionEnd(event);
               setEditing(false);
+              setInvalid(false);
             }}
-            onInput={(event) => props.controller.setState("urlDraft", event.currentTarget.value)}
+            onInput={(event) => {
+              setInvalid(false);
+              props.controller.setState("urlDraft", event.currentTarget.value);
+            }}
+            onCompositionEnd={recordCompositionEnd}
+            onKeyUp={clearCompositionEnd}
             onKeyDown={(event) => {
+              if (isComposingKeyboardEvent(event)) {
+                return;
+              }
               if (event.key === "Enter") {
                 event.preventDefault();
-                props.controller.commitUrlDraft();
-                event.currentTarget.blur();
+                // Stay in the field on unusable input so it can be corrected.
+                if (commitAddress()) {
+                  event.currentTarget.blur();
+                }
               } else if (event.key === "Escape") {
                 props.controller.resetUrlDraftFromView();
                 event.currentTarget.blur();
@@ -302,6 +353,29 @@ export function BrowserToolbar(
             }}
           />
         </div>
+        <Show when={invalid()}>
+          <div id={hintId} class="bp-toolbar-hint" role="alert">
+            {t("browser.addressUnsupported")}
+          </div>
+        </Show>
+        <Show when={bareAddress()} keyed>
+          {(url) => (
+            <button
+              type="button"
+              class="bp-toolbar-go"
+              // Keep focus in the field so the option stays open while it is clicked.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                props.controller.urlDraftEditing = false;
+                props.controller.commitUrlDraft(url);
+                event.currentTarget.blur();
+                props.controller.addressInput?.blur();
+              }}
+            >
+              {t("browser.goToAddress", { url })}
+            </button>
+          )}
+        </Show>
       </div>
       <div
         class={["bp-toolbar-group", { "session-panel-rail__group": !props.mobilePresentation }]}
@@ -317,6 +391,7 @@ export function BrowserToolbar(
                 ? "browser.stop"
                 : "browser.reload",
           )}
+          title={false}
           icon={
             <Icon name={addressEdited() ? "arrowRight" : nativeTab()?.loading ? "x" : "refresh"} />
           }
@@ -325,12 +400,39 @@ export function BrowserToolbar(
           onClick={() => {
             props.controller.urlDraftEditing = false;
             if (addressEdited()) {
-              props.controller.commitUrlDraft();
+              if (!commitAddress()) {
+                props.controller.addressInput?.focus();
+              }
             } else {
               props.controller.reloadPage();
             }
           }}
         />
+        <Show when={canTakeControl()}>
+          <PanelIconButton
+            class={[
+              "bp-icon",
+              {
+                "session-panel-rail__button": !props.mobilePresentation,
+                "bp-toolbar-active": props.controller.controlling,
+              },
+            ]}
+            label={t(
+              props.controller.controlling ? "browser.releaseControl" : "browser.takeControl",
+            )}
+            title={t(
+              props.controller.controlling
+                ? "browser.releaseControlHint"
+                : "browser.takeControlHint",
+            )}
+            pressed={props.controller.controlling}
+            icon={<Icon name={props.controller.controlling ? "bot" : "hand"} />}
+            onClick={() => {
+              props.controller.urlDraftEditing = false;
+              props.controller.toggleControl();
+            }}
+          />
+        </Show>
         <Menu
           id={menuId}
           class="bp-toolbar-menu-anchor"

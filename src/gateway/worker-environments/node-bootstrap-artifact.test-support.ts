@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, expect, vi } from "vitest";
+import { collectPackageRootModules } from "../../../scripts/lib/package-root-modules.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
@@ -111,7 +112,7 @@ export function useNodeBootstrapArtifactFixtures() {
     }),
   );
   const createProvider = (options: Parameters<typeof createNodeBootstrapArtifactProvider>[0]) => {
-    const provider = createNodeBootstrapArtifactProvider(options);
+    const provider = createNodeBootstrapArtifactProvider({ install: "npm", ...options });
     providers.push(provider);
     return provider;
   };
@@ -166,12 +167,7 @@ export function useNodeBootstrapArtifactFixtures() {
       'import "./cli-invocation.mjs"; import "./dist/entry.js";',
       { mode: 0o755 },
     );
-    for (const filename of [
-      "cli-invocation.mjs",
-      "cli-parent-lifetime.mjs",
-      "gateway-shutdown-budget.mjs",
-      "node-runtime-env.mjs",
-    ]) {
+    for (const filename of collectPackageRootModules(["cli-invocation.mjs"])) {
       await fs.copyFile(filename, path.join(packageRoot, filename));
     }
     await writeFiles(packageRoot, {
@@ -208,6 +204,20 @@ export function useNodeBootstrapArtifactFixtures() {
       ".env": "FAKE_PRIVATE_VALUE=do-not-transfer",
       "src/private.ts": "source-only",
       "extensions/remote-runtime/package.json": pluginPackage,
+    });
+    await writeFiles(packageRoot, {
+      "node_modules/native-runtime/package.json": {
+        name: "native-runtime",
+        version: "1.2.3",
+        main: "index.js",
+      },
+      "node_modules/native-runtime/index.js": "module.exports = 42;",
+      "extensions/remote-runtime/node_modules/native-runtime/package.json": {
+        name: "native-runtime",
+        version: "1.2.3",
+        main: "index.js",
+      },
+      "extensions/remote-runtime/node_modules/native-runtime/index.js": "module.exports = 42;",
     });
     const aiRoot =
       mode === "source"

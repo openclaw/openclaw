@@ -1,4 +1,4 @@
-import { toStringifiedError } from "@openclaw/normalization-core";
+import { toStringifiedError } from "@openclaw/normalization-core/stringified-error";
 
 export type DeviceAuthTokenRecord = {
   token?: string;

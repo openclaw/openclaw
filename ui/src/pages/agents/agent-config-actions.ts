@@ -57,6 +57,19 @@ export function createAgentConfigActions(params: {
         edit(agentId, modelId !== null, (config, target) =>
           stage(config, [...target.path, "decisionModel"], modelId ?? undefined),
         ),
+      // null inherits the default primary; "" disables utility for this agent.
+      // The agent's own utility fallbacks survive every choice.
+      onUtilityModelChange: (agentId: string, modelId: string | null) =>
+        edit(agentId, modelId !== null, (config, target) => {
+          const { fallbacks } = existingModelParts(target.entry.utilityModel);
+          stage(
+            config,
+            [...target.path, "utilityModel"],
+            fallbacks
+              ? { ...(modelId === null ? {} : { primary: modelId }), fallbacks }
+              : (modelId ?? undefined),
+          );
+        }),
       onModelFallbacksChange: (agentId: string, fallbacks: string[]) =>
         edit(agentId, true, (config, target) => {
           stage(

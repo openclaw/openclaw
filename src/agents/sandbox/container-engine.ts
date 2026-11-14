@@ -3,7 +3,9 @@
  */
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
+import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { isSandboxKeyringQuotaError, sandboxKeyringQuotaError } from "./container-keyring.js";
@@ -43,6 +45,41 @@ export const PODMAN_SANDBOX_ENGINE: SandboxContainerEngine = {
 
 export type ExecDockerRawResult = SandboxBackendCommandResult;
 
+export function buildSandboxContainerEngineArgv(engine: SandboxContainerEngine, args: string[]) {
+  const argv = [engine.command, ...(engine.globalArgs ?? []), ...args];
+  // Explicit native mode identifies a bound local Podman target; discovery and remote
+  // clients do not launch container processes on this host.
+  if (
+    engine.id !== "podman" ||
+    engine.globalArgs?.[0] !== "--remote=false" ||
+    process.platform !== "linux" ||
+    process.getuid?.() === 0
+  ) {
+    return argv;
+  }
+  try {
+    if (!resolveGatewayServiceCgroupDirectory()) {
+      return argv;
+    }
+  } catch {
+    // Ordinary CLI hosts and services without delegation keep native placement.
+    return argv;
+  }
+  // Podman's reused conmon scopes cannot migrate across delegated service trees.
+  // Scope mode execs in place, preserving supervision, streams, and literal argv.
+  return [
+    "systemd-run",
+    "--user",
+    "--scope",
+    "--quiet",
+    "--collect",
+    "--expand-environment=no",
+    "--description=OpenClaw-sandbox-runtime",
+    "--",
+    ...argv,
+  ];
+}
+
 function missingContainerEngineMessage(engine: SandboxContainerEngine): string {
   if (engine.id === "docker") {
     return 'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and check that "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
@@ -57,9 +94,11 @@ export async function execContainerRaw(
 ): Promise<ExecDockerRawResult> {
   let result;
   try {
+    const baseEnv = { ...(engine.baseEnv ?? process.env) };
+    stripGatewayAllocatorEnv(baseEnv);
     opts?.assertCurrent?.();
-    result = await spawnCommand([engine.command, ...(engine.globalArgs ?? []), ...args], {
-      baseEnv: engine.baseEnv,
+    result = await spawnCommand(buildSandboxContainerEngineArgv(engine, args), {
+      baseEnv,
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),

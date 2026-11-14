@@ -23,7 +23,6 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   captureWorkerTurnTranscriptSource as captureSource,
@@ -165,18 +164,16 @@ it("refuses a changed selected actor window without host SQL", async () => {
   });
 });
 
-it("preadmits cloud transcript guards and retains their handle through turn settlement", async () => {
+it("preadmits cloud transcript guards and retains their worker source through turn settlement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const storePath = agentDatabase.resolveOpenClawAgentSqlitePath(options);
     const target = transcriptTarget(storePath, "cloud-admission", "cloud-lifecycle");
-    const execution = captureOpenClawAgentDatabaseExecution(options);
     try {
       await seedTranscript(target);
       const database = agentDatabase.openOpenClawAgentDatabase(options);
       database.db.exec("CREATE TABLE cloud_admission_fixture(value TEXT)");
       closeCachedOpenClawAgentDatabase(database);
-      const nativeClaim = execution.captureGenerationClaim();
       const turn = turnFor(target);
       const authority = placementAuthority("Cloud turn ended");
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -197,12 +194,11 @@ it("preadmits cloud transcript guards and retains their handle through turn sett
       });
       const result = await withTranscript(turn, authority.controls, async (pinned) => {
         expect(resolveTarget({ ...turn, sessionTarget: pinned })).toEqual(target);
-        const held = agentDatabase.getOpenClawAgentDatabaseIfOpen(options);
-        expect(held?.db.isOpen).toBe(true);
+        const source = captureSource(pinned);
+        source();
         await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
-        expect(agentDatabase.getOpenClawAgentDatabaseIfOpen(options)).toBe(held);
+        source();
         expect(resolveTarget({ ...turn, sessionTarget: pinned }).sessionId).toBe(target.sessionId);
-        nativeClaim.assertCurrent();
         authority.revoke();
         return "settled";
       });
@@ -211,7 +207,6 @@ it("preadmits cloud transcript guards and retains their handle through turn sett
       expect([inspections, observer.queries.filter(isSessionEntryDataSql)]).toEqual([[], []]);
     } finally {
       vi.useRealTimers();
-      await execution.release();
     }
   });
 });
@@ -309,7 +304,7 @@ it("retains a logical-store worker transcript and refuses writer changes without
   });
 });
 
-it("retains logical turn admission while holding the worker's physical transcript database", async () => {
+it("retains logical turn admission with the worker's prepared transcript source", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = transcriptTarget(
       path.join(state.sessionsDir(), "sessions.json"),
@@ -322,10 +317,9 @@ it("retains logical turn admission while holding the worker's physical transcrip
         withSessionTurn({ ...pinned, replyOperation: operation }, async (borrowed) => {
           expect(borrowed).toBe(operation);
           captureSource(pinned)();
-          const options = { agentId: target.agentId, env: state.env };
-          const held = agentDatabase.getOpenClawAgentDatabaseIfOpen(options);
-          expect(held?.path).toBe(agentDatabase.resolveOpenClawAgentSqlitePath(options));
-          expect(held?.db.isOpen).toBe(true);
+          expect(resolveTarget({ ...turn, sessionTarget: pinned }).sessionId).toBe(
+            target.sessionId,
+          );
           return "executed";
         }),
       );
@@ -344,16 +338,15 @@ it("refuses cloud execution when placement authority is revoked during preparati
     await seedTranscript(target);
     const turn = turnFor(target);
     const authority = placementAuthority("Cloud run revoked");
-    const admit = agentDatabase.withOpenClawAgentDatabaseRuntime;
-    vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime").mockImplementationOnce(
-      async (...args) => {
-        authority.revoke();
-        return admit(...args);
-      },
-    );
+    const prepare = authority.controls.prepareAuthority;
+    vi.spyOn(authority.controls, "prepareAuthority").mockImplementationOnce(async () => {
+      const held = await prepare();
+      authority.revoke();
+      return held;
+    });
     const execute = vi.fn(async () => "executed");
     await expect(withTranscript(turn, authority.controls, execute)).rejects.toThrow(
-      /placement authority changed during preparation/,
+      /Cloud run revoked/,
     );
     expect(execute).not.toHaveBeenCalled();
   });

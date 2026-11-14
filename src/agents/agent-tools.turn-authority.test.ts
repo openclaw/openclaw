@@ -3,7 +3,7 @@ import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
 } from "./agent-tool-availability.js";
-import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -16,15 +16,11 @@ function tool(name: string): AnyAgentTool {
   };
 }
 
-const surfaceFor = (
-  turnTools: AnyAgentTool[],
-  sessionTools = turnTools,
-  schedulerSystemTurn = true,
-) =>
+const surfaceFor = (turnTools: AnyAgentTool[], sessionTools = turnTools, hostSystemTurn = true) =>
   resolveTurnToolSurface({
     turnTools,
     sessionTools,
-    schedulerSystemTurn,
+    hostSystemTurn,
     ownerOnlyDenied: new Set(["automations", "gateway"]),
   });
 
@@ -51,14 +47,11 @@ describe("resolveTurnToolSurface", () => {
 });
 
 describe("resolveTurnToolSurface on a system turn", () => {
-  const surface = (
-    schedulerSystemTurn: boolean,
-    prepareArguments?: AnyAgentTool["prepareArguments"],
-  ) =>
+  const surface = (hostSystemTurn: boolean, prepareArguments?: AnyAgentTool["prepareArguments"]) =>
     surfaceFor(
       [{ ...tool("automations"), prepareArguments }, tool("gateway")],
       undefined,
-      schedulerSystemTurn,
+      hostSystemTurn,
     );
   const run = (tools: AnyAgentTool[], name: string, args: object) => {
     return tools.find((entry) => entry.name === name)!.execute(`call-${name}`, args);
@@ -116,19 +109,21 @@ describe("resolveTurnToolSurface on a system turn", () => {
   });
 
   it.each([
+    // Every host-started event turn takes one rule, whatever its source label.
     ["event", "internal_system", "cron", true],
+    ["event", "internal_system", "cron_failure_repair", true],
+    ["event", "internal_system", "exec", true],
     // Scheduled runs can carry hook-mapped external content.
     ["cron", "internal_system", "cron", false],
     ["user", "internal_system", "cron", false],
     [undefined, "internal_system", "cron", false],
-    ["event", "internal_system", "exec", false],
     ["event", "inter_session", "cron", false],
   ] as const)(
-    "recognizes trigger=%s provenance=%s/%s as a scheduler turn: %s",
+    "recognizes trigger=%s provenance=%s/%s as a host system turn: %s",
     (trigger, kind, sourceTool, expected) => {
-      expect(isSchedulerSystemTurn({ trigger, inputProvenance: { kind, sourceTool } })).toBe(
-        expected,
-      );
+      // A full provenance record: its label must not change the rule.
+      const inputProvenance: { kind: string; sourceTool: string } = { kind, sourceTool };
+      expect(isHostSystemTurn({ trigger, inputProvenance })).toBe(expected);
     },
   );
 

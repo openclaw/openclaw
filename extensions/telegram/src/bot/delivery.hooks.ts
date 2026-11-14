@@ -35,6 +35,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
     channelId: "telegram",
     accountId: params.accountId,
     conversationId: params.chatId,
+    sessionKey: params.sessionKeyForInternalHooks,
     messageId: typeof params.messageId === "number" ? String(params.messageId) : undefined,
     isGroup: params.isGroup,
     groupId: params.groupId,

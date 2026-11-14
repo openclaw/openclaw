@@ -6,6 +6,7 @@ import { createControlUiE2eSuite } from "../e2e/control-ui-e2e-suite.test-suppor
 import { openChatPanels } from "./chat-layout-menu.ts";
 import { waitForConfirmModal, waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
 import {
+  controlUiE2eWaitTimeoutMs as timeout,
   defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
@@ -174,6 +175,23 @@ suite.define(() => {
     });
   });
 
+  it("lets navigation finish before a forever-delayed roster is released", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const key = "agent:main:method-delayed-roster";
+      const gateway = await installMockGateway(page, {
+        methodDelays: { "sessions.list": "forever" },
+        sessions: [{ key, label: "Method-delayed roster", kind: "direct", updatedAt: 1 }],
+      });
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.list");
+      expect(await row.count()).toBe(0);
+      await gateway.setMethodDelay("sessions.list", null);
+      await row.waitFor();
+      await waitForControlUiGatewayReady(page);
+    });
+  });
+
   it("navigates through a lazily loaded readiness hook after reload", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const key = "agent:main:lazy-readiness-navigation";
@@ -228,18 +246,17 @@ suite.define(() => {
         if (!offline) {
           await navigateToControlUiSession(page, key);
         }
-        await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
-        const snapshot = await page.evaluate(() => window.openclawControlUi?.snapshot());
-        expect(snapshot).toMatchObject({
-          booted: true,
-          gatewayPhase: offline ? "reconnecting" : "connected",
-          sessionKey: key,
-          terminalActivationReady: true,
-          route: { matches: [{ routeId: "chat" }] },
-        });
-        if (!offline) {
-          expect(snapshot).toMatchObject({ routeReady: true, rosterReady: true });
-        }
+        await expect
+          .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot()), { timeout })
+          .toMatchObject({
+            ready: true,
+            booted: true,
+            gatewayPhase: offline ? "reconnecting" : "connected",
+            sessionKey: key,
+            terminalActivationReady: true,
+            route: { matches: [{ routeId: "chat" }] },
+            ...(offline ? {} : { routeReady: true, rosterReady: true }),
+          });
         expect(requests).toHaveLength(1);
       });
     },

@@ -14,10 +14,21 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { listAdoptedSessionCatalogSessions } from "../../plugins/session-catalog.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -59,6 +70,7 @@ async function withCatalog(
     list: () => Promise<ReturnType<typeof vi.fn>>;
     setList: (list: SessionCatalogProvider["list"]) => void;
     projection: SessionRowProjection;
+    state: OpenClawTestState;
   }) => Promise<void>,
   options: { otherEntryCount?: number; agents?: OpenClawConfig["agents"] } = {},
 ) {
@@ -104,6 +116,7 @@ async function withCatalog(
     try {
       await run({
         projection,
+        state,
         setList: (list) => {
           provider.list = list;
         },
@@ -124,6 +137,70 @@ async function withCatalog(
     }
   });
 }
+
+it.each(["planning", "delivery"])(
+  "keeps healthy catalog entries when another configured agent is deleted before %s",
+  async (phase) => {
+    await withCatalog(
+      async ({ list, setList, projection, state }) => {
+        const retiringKey = "agent:retiring:adopted";
+        replaceSessionEntrySync(
+          { agentId: "retiring", sessionKey: retiringKey },
+          { ...original, sessionId: "retiring-instance" },
+        );
+        await list(); // Warm planning entries before deletion retires the agent.
+        const pending = createAgentDatabaseInspectionRefusal({
+          agentId: "retiring",
+          paths: [],
+          reason: "Synthetic startup inspection",
+          pending: true,
+        });
+        const retire = () => {
+          recordAgentDatabaseAdmissions([pending], { source: "startup" });
+          beginAgentDeletionJournal({
+            agentId: "retiring",
+            operationId: "retiring-catalog",
+            agentDir: state.agentDir("retiring"),
+            workspaceDir: state.statePath("workspace-retiring"),
+            sessionsDir: state.sessionsDir("retiring"),
+            deleteFiles: false,
+            phase: "draining",
+          });
+          expect(readAgentDatabaseAdmissionRefusal("retiring")?.reason).toContain(
+            "deleted during startup inspection",
+          );
+        };
+        setList(async ({ sessionEntries }) => {
+          if (phase === "delivery") {
+            expect(sessionEntries!.entriesForAgent("retiring")).toHaveLength(1);
+            retire();
+          } else {
+            expect(sessionEntries!.entriesForAgent("retiring")).toEqual([]);
+            expect(sessionEntries!.entriesForCatalog?.().map((entry) => entry.sessionKey)).toEqual([
+              key,
+            ]);
+          }
+          return hosts([
+            session(),
+            session({ threadId: "retiring-thread", sessionKey: retiringKey }),
+          ]);
+        });
+        if (phase === "planning") {
+          retire();
+        }
+        const response = await list();
+        const returned = firstHost(response).sessions;
+        expect(returned[0]).toMatchObject({ sessionKey: key, createdActor: original.createdActor });
+        expect(returned[1]).not.toHaveProperty("sessionKey");
+        expect(returned[1]).not.toHaveProperty("createdActor");
+        expect(() => prepareSessionRowSelection(projection, { agentId: "retiring" })).toThrow(
+          "deleted during startup inspection",
+        );
+      },
+      { agents: { ownership: "explicit", entries: { main: {}, retiring: {} } } },
+    );
+  },
+);
 
 it("reads clean local catalog entries from the resident owner without SQLite", () =>
   withCatalog(async ({ list, setList }) => {
@@ -172,38 +249,48 @@ it("reads clean local catalog entries from the resident owner without SQLite", (
     expect(originalHost.sessions[0]?.name).toBeUndefined();
   }));
 
-it("preserves catalog order after row replacement", () =>
-  withCatalog(
-    async ({ list, setList, projection }) => {
-      const snapshots: Array<readonly string[]> = [];
-      setList(async ({ sessionEntries }) => {
-        snapshots.push(sessionEntries!.entriesForAgent("main").map(({ sessionKey }) => sessionKey));
-        return hosts([session()]);
+it("keeps catalog order and adoption stable across unchanged notifications and entry replacement", () =>
+  withCatalog(async ({ list, setList, projection }) => {
+    const secondKey = "agent:main:second";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: secondKey },
+      { ...original, sessionId: "second-instance" },
+    );
+    const snapshots: unknown[] = [];
+    const orders: string[][] = [];
+    const runtime = createPluginRuntime();
+    setList(async ({ sessionEntries }) => {
+      snapshots.push(sessionEntries!.entriesForCatalog!());
+      orders.push(sessionEntries!.entriesForAgent("main").map(({ sessionKey }) => sessionKey));
+      const adopted = listAdoptedSessionCatalogSessions({
+        config: {},
+        runtime,
+        pluginId: "fixture",
+        sessionEntries,
+        sourceFromEntry: () => ({ hostId: "gateway:fixture", threadId: "native-thread" }),
       });
-      await list();
-      replace({ updatedAt: 2 });
-      await list();
-      const ordered = prepareSessionRowSelection(
-        projection,
-        { agentId: "main" },
-        { ordered: true },
-      );
-      expect(ordered.entries("all").map(([sessionKey]) => sessionKey)[0]).toBe(key);
-      const unrelated = ["agent:main:unrelated-0", "agent:main:unrelated-1"];
-      expect(snapshots).toEqual([
-        [key, ...unrelated],
-        [...unrelated, key],
-      ]);
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: unrelated[0]! },
-        { sessionId: "unrelated-0", updatedAt: 3, archivedAt: 3 },
-      );
-      await list();
-      expect(snapshots[2]).toEqual([unrelated[1], key, unrelated[0]]);
-      expect(snapshots[0]).toEqual([key, ...unrelated]);
-    },
-    { otherEntryCount: 2 },
-  ));
+      return hosts([session({ sessionKey: adopted.get("gateway:fixture\0native-thread") })]);
+    });
+    expect(firstHost(await list()).sessions[0].sessionKey).toBe(secondKey);
+    for (const scope of ["transcript", "automation", "runtime"] as const) {
+      sessionChanges.emit({
+        agentId: "main",
+        sessionKey: key,
+        scope,
+        facts: { kind: "unchanged" },
+      });
+      expect(firstHost(await list()).sessions[0].sessionKey).toBe(secondKey);
+      expect(orders.at(-1)).toEqual([key, secondKey]);
+      expect(snapshots.at(-1)).toBe(snapshots[0]);
+    }
+    replace({ updatedAt: 2, label: "Renamed" });
+    expect(firstHost(await list()).sessions[0].sessionKey).toBe(secondKey);
+    expect(orders.at(-1)).toEqual([key, secondKey]);
+    expect(snapshots.at(-1)).not.toBe(snapshots[0]);
+    expect(snapshots.at(-1)).toMatchObject([{ entry: { updatedAt: 2, label: "Renamed" } }, {}]);
+    const ordered = prepareSessionRowSelection(projection, { agentId: "main" }, { ordered: true });
+    expect(ordered.entries("all").map(([sessionKey]) => sessionKey)).toEqual([key, secondKey]);
+  }));
 
 it.each(["planning", "delivery"])(
   "serves catalog %s without draining unrelated display invalidations",

@@ -20,6 +20,7 @@ const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
 const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
+const canOfferGatewayService = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
@@ -28,6 +29,10 @@ vi.mock("./auth-choice-prompt.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+vi.mock("../wizard/setup.gateway-service-offer.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/setup.gateway-service-offer.js")>()),
+  canOfferGatewayServiceForOnboarding: canOfferGatewayService,
+}));
 vi.mock("../plugins/provider-setup-availability.js", () => ({
   detectAvailableSetupProviderIds,
 }));
@@ -301,6 +306,7 @@ export function setupGuidedCustodianTestSuite() {
       .mockReset()
       .mockImplementation(async (effect) => await effect(localOnboarding.persisted.config ?? {}));
     restoreTerminalState.mockClear();
+    canOfferGatewayService.mockReset().mockResolvedValue(true);
     promptAuthChoiceGrouped
       .mockReset()
       .mockImplementation(
@@ -332,6 +338,7 @@ export function setupGuidedCustodianTestSuite() {
 
   return {
     candidate,
+    canOfferGatewayService,
     detection,
     existingModelCandidate,
     ensureAuthProfileStore,

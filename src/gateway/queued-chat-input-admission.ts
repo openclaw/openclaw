@@ -3,7 +3,7 @@ import type { PreparedRequesterProfile } from "../auto-reply/requester-profile.j
 import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type QueuedChatInputTarget = {
+type QueuedChatInputTarget = {
   agentId: string;
   storePath: string;
   sessionKey: string;

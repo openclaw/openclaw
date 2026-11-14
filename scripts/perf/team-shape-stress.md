@@ -4,9 +4,18 @@ Run one fixed workload against two **already-built** revisions from this tooling
 checkout. All state, logs, profiles, and results go under a new output directory.
 The controller creates its own loopback listeners on free ports >=40000. It never
 connects to an existing Gateway, discovers credentials, or drives a real browser.
-Both builds must support the database schemas written by the tooling checkout's
-fixture generator. A schema mismatch is a setup failure; the harness never
-downstamps databases or bypasses Gateway schema admission.
+Each arm runs its built `doctor --fix --non-interactive` against its isolated
+fixture before Gateway readiness, warmup, and measurement. Service repair is
+disabled through the external-supervisor policy. Use a tooling checkout whose
+fixture schema both builds can read or migrate forward; newer fixture schemas
+cannot be downgraded. Doctor failures or subsequent schema admission failures
+are setup failures; the harness never downstamps databases or bypasses admission.
+The first synthetic `sessions.create` retries only the Gateway's retryable
+`UNAVAILABLE` / `startup-sidecars` response, honoring `retryAfterMs` within a
+120-second total request-and-wait budget. Every retry is logged. This happens
+before warmup and measurement; transport errors, other refusals, and measured RPC
+failures are not retried.
+
 The Gateway's instrumentation loader uses native Node type stripping and resolves
 source-only `.js` imports to TypeScript without applying tsconfig aliases.
 Already-built JavaScript stays byte-for-byte native: a transforming loader can
@@ -21,6 +30,46 @@ node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
   --output "$PWD/.local/team-stress-comparison" \
   --minutes 10 --pairs 2
 ```
+
+On an isolated Linux box, add `--exec-io-storm` to exercise agent-exec IO isolation.
+The mock model starts one persistent background writer per foreground runner through
+the real Code Mode exec tool. Each writer repeatedly writes buffered random data and
+calls `fdatasync`, retaining at most 128 MiB under the fresh arm's state directory.
+Writers record cgroup membership, `io.max`, `io.stat`, and bytes written every ten
+seconds in `agent-exec-io-<runner>.jsonl`; the harness requires progress during the
+measurement. Teardown requests graceful termination; writers then remove their data.
+An expiry bounds orphaned runs if teardown fails. Do not use this against Team or
+other production state.
+
+This mode also imports identical instrumentation into both Gateway revisions.
+`agent-exec-io-commits.json` records counts, failures, p50/p95/p99/max duration of
+main-thread `DatabaseSync.exec` explicit `COMMIT` attempts during the canonical
+measurement window, plus Gateway/agent-exec cgroup IO snapshots. It excludes worker
+transactions, implicit commits, and commits embedded in multi-statement SQL. No SQL
+or message content is retained. A separate `autocommitMutations` histogram measures
+successful native `exec`/`run`/`get`/`all` single-statement
+`INSERT`/`UPDATE`/`DELETE`/`REPLACE` calls outside explicit transactions. SQL comments
+are ignored; `WITH`/CTEs and statement batches are excluded.
+Those durations include statement execution and automatic commit; they are not
+isolated COMMIT timings and may include temporary-table mutations. Streaming
+iteration is excluded and counted. Coverage counters and prototype-wrapper checks
+distinguish absent main-thread writes from missing instrumentation. `result.json` includes these results and writer
+artifact paths. Use the existing telemetry's event-loop tails and `hostLoadAverage`
+for stalls and host context; zero commit samples cannot establish commit latency.
+Writer byte receipts have ten-second granularity, whereas commit timing follows the
+measurement start/stop messages. Allocation passes retain their usual traced scope.
+
+`workerCommits` pools actual native explicit COMMIT samples from the Gateway's Node
+workers, separately from the main-thread metrics. Shared histograms retain samples
+after workers retire and compute percentiles from pooled samples. A shared gate
+excludes setup and teardown; COMMIT calls entering within the window retain their
+full duration even if they finish after its end. Stop waits up to 45 seconds for
+these calls and rejects an incomplete capture. Coverage records instrumented worker
+counts plus thread and dynamically loaded backend basenames (including the session
+writer). Identities mark workers observed entering a measured COMMIT. Construction
+and preload counts are cumulative, including retired workers. CommonJS eval workers
+(which skip Node import preloads) are counted as excluded; subprocess-backed database
+owners are also outside this metric.
 
 Defaults are 10,800 deterministic sessions, 65 permanent operator WebSocket
 clients (plus brief reconnect probes), four concurrent mock-provider turns per
@@ -81,6 +130,51 @@ Four turns run concurrently once per minute by default. Faster turn cadence also
 increases the workload's history verification traffic, so calibrate the method
 mix as well as total RPC rate. `--list-weight 2 --round-ms 15000 --churn-ms 2000`
 selects a heavier turn/history workload with the same client and fixture counts.
+
+## Old-generation attribution workload
+
+`--oldgen-workload --agents 465 --runs 20 --worktree-tool-churn` adds an opt-in
+retention workload to the same campaign. It creates native databases with eight
+sessions for each non-main agent, closes them through the normal owner, and adds
+512 synthetic skills across three configured roots plus one workspace skill per
+agent. Main keeps the ordinary 10,800-session fixture. Public bundled skill text
+supplies synthetic bodies; no production state is read. `oldgen-fixture.json`
+records additional session/database counts and bytes separately from the ordinary
+fixture summary. The first project has 62,000 files of 18,432 bytes (1.06 GiB).
+`--transcript-mib` still controls logical transcript bytes before compression;
+measure the actual database size rather than calling this a 35 GiB database.
+
+Each foreground turn performs real `skills.search` and `catalog.search` calls in
+Code Mode and verifies their results before its existing file/exec work. Every
+fifth measured round patches the logging level through `config.get`/`config.patch`
+to exercise hot reload. Configured agents outside the main foreground cohort
+exercise startup/admission and sidebar inventory; this profile does not run a
+model turn on every configured agent.
+
+Only retention passes request full GC at the existing memory checkpoints. Timing
+passes remain free of explicit GC. The diagnostic preload reads admission counts
+through the measured build's existing exported owner operations; it does not
+replace source or import another source graph. `oldgen-admission-counts.jsonl`
+records process age and configured/readable/writable/pending counts, so equal-age
+heap comparisons can distinguish different admitted populations. The fixture is
+clean-closed; a sealed-first startup experiment additionally needs a separately
+recorded, real interrupted synthetic writer before launch. Doctor runs before each
+Gateway and may change clean-close state. No filesystem or schema state is forged.
+
+For a clean-close control, the broadcast driver accepts
+`--post-doctor-fixture-script scripts/perf/team-shape-fixture-verify.mjs` with
+`--team-stress`. After native Doctor finishes, it runs the script in a separate
+process with the fixture environment and measured build root as its first argument.
+The helper performs full integrity and foreign-key checks through that build's
+owners, then closes each agent database normally. Its log and proof record remain
+in the fixture; the driver records the script hash. Preparation must succeed before
+the Gateway process starts, keeping offline verification outside Gateway process
+age and measurement. This does not change schema or manufacture clean-close receipts.
+
+Use a path with secure temp ancestors. A writable non-sticky volume ancestor can
+be rejected by the normal runtime temp owner; keep fixture state under a private
+local directory rather than changing shared volume permissions. This macOS proof
+uses the host filesystem and does not establish btrfs behavior.
 
 ## Measurement protocol
 

@@ -5,10 +5,8 @@ import {
   isVisibleChatHistoryMessage,
   visibleChatHistoryMessages,
 } from "../../lib/chat/message-visibility.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
@@ -24,7 +22,6 @@ import {
   historySessionId,
   reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
-  clearHistoryCursor,
 } from "./chat-history-snapshot.ts";
 import {
   beginHistoryRequest,
@@ -33,7 +30,6 @@ import {
   acceptsHistoryResult,
   resetChatHistoryProjection,
   retireInitialChatSnapshot,
-  setChatError,
   setChatHistoryLoad,
   setChatHistoryRetrying,
 } from "./chat-history-state.ts";
@@ -177,14 +173,32 @@ export async function hydrateChatHistory(
     }
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
-    setChatError(state, null);
     let response = await request(readChatHistoryCursor(state));
     if (!isCurrent()) {
       return undefined;
     }
-    if (isHistoryCursor(response) && response.kind === "reset") {
-      clearHistoryCursor(state, sessionKey, requestAgentId);
+    const cursorReset = isHistoryCursor(response) && response.kind === "reset";
+    if (cursorReset) {
+      // Retain the rejected cursor until publication so a superseding read
+      // repeats the reset and fills any held prefix before adopting its tail.
       response = await request();
+      if (!isCurrent()) {
+        return undefined;
+      }
+    }
+    // Only a Stop-style cursor reset can cut a transcript this pane shows from
+    // its start; a window reset asks for a fresh window instead.
+    if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
+      const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
+      response = await fillHeldHistoryGap(
+        state,
+        client,
+        sessionKey,
+        requestAgentId,
+        response,
+        isCurrent,
+        read.signal,
+      );
       if (!isCurrent()) {
         return undefined;
       }
@@ -476,7 +490,7 @@ export async function hydrateChatHistory(
       requestAgentId,
       startup: method === "chat.startup",
       message: missingReadScope
-        ? formatMissingOperatorReadScopeMessage("existing chat history")
+        ? formatMissingOperatorReadScopeMessage("session history")
         : formatChatHistoryLoadError(err),
       retryable:
         isRetryableChatReadError(err, method) ||

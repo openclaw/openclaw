@@ -252,7 +252,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
         await page.keyboard.press("Escape");
         await model.click();
-        const contextWindow = pane.locator("[data-chat-context-window-toggle]");
+        const contextWindow = pane.locator(".chat-controls__context-trigger");
         await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
         await page.keyboard.press("Escape");
@@ -271,22 +271,31 @@ suite.define(() => {
         const send = requireRecord((await gateway.waitForRequest("chat.send")).params);
         expect(send).toMatchObject({ sessionKey: key, message: "Continue my work." });
         const runId = String(send.idempotencyKey);
-        const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
+        const stop = pane.getByRole("button", { name: "Stop", exact: true });
         await stop.waitFor();
         const researchListCount = (
           await gateway.getRequests("sessions.list", { agentId: "research" })
         ).length;
+        const stopDescribeCount = (await gateway.getRequests("sessions.describe", { key })).length;
         await gateway.setOnline(false);
         await expect.poll(() => stop.isEnabled()).toBe(true);
         await stop.click();
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         await navigate(otherAgentSession);
+        await gateway.deferNext("sessions.describe", { key });
         await gateway.setOnline(true);
         await gateway.waitForRequest("sessions.list", {
           after: researchListCount,
           match: { agentId: "research" },
         });
         await expect.poll(() => composer.isDisabled()).toBe(true);
+        const stopDescribe = await gateway.waitForRequest("sessions.describe", {
+          after: stopDescribeCount,
+          match: { key },
+        });
+        expect(requireRecord(stopDescribe.params)).toMatchObject({ key });
+        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.describe");
         expect(requireRecord((await gateway.waitForRequest("chat.abort")).params)).toMatchObject({
           sessionKey: key,
           runId,

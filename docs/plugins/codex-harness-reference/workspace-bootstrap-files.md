@@ -12,6 +12,24 @@ How `AGENTS.md`, persona, skills, and memory files reach a native Codex turn. Pa
 
 ## Workspace bootstrap files
 
+Ordinary threads replace Codex's model prompt with OpenClaw's own policy through
+`thread/start.baseInstructions`, the same execution, tool-call, care, control, and
+documentation sections the regular engine renders, plus a short Codex runtime
+section covering its channels, steering, compaction, and native tools. The text
+renders from thread-stable facts only, so turn, channel, workspace, and skill
+facts keep their existing carriers below. A changed base prompt reaches an
+existing thread on its next cold resume; restricted threads rotate instead, and
+incognito threads reject the change like any other generic policy change.
+Side-question forks carry the parent's current base, so they match a parent
+whose base changed on a cold resume. When Codex configuration sets
+`model_instructions_file` or `instructions` (for example in `~/.codex/config.toml`
+with `appServer.homeScope: "user"`), that operator policy stays the base and
+OpenClaw sends its policy at the start of the developer instructions instead.
+Ring-zero threads keep empty base instructions, and app-server tool declarations
+are unchanged. Supervised threads, including canonical forks, have no outer
+OpenClaw runtime plan, so their provider guidance resolves from the thread's
+native provider and model. Their authentication and routing stay native.
+
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child
 inheritance. Ordinary persistent cold or changed-configuration resumes require an
@@ -24,6 +42,15 @@ Local and remote transports use the same conversation ID through unsubscribe and
 resume. Merely sending `developerInstructions` on `thread/resume` does not
 refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
 a withdrawal, not a fallback to older instructions.
+
+A `systemPrompt` replacement, including an empty one, replaces the base instructions
+too, as the replacement replaces the whole prompt on the default engine. OpenClaw sends
+an empty base and does not move its policy into the developer instructions, so the
+replacement is the only OpenClaw-supplied policy. An existing thread keeps its ID and
+history: the changed base takes the cold-resume path, which settles and unloads the
+thread before `thread/resume` replaces its saved base in place. Every cold resume sends
+the intended base. When Codex configuration authors `model_instructions_file` or
+`instructions`, that operator base stays.
 
 Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
 policy is rejected without sending another native turn or discarding the live

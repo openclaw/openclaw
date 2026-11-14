@@ -5,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCoreGatewayMethodDescriptors } from "./methods/core-method-policy.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
@@ -34,7 +35,7 @@ function createReadHarness(
     getRuntimeConfig: () => config,
     getCommittedRuntimeConfig: () => config,
     broadcast,
-    logGateway: { warn: vi.fn() },
+    logGateway: createSubsystemLogger("test/shared-read-responses"),
     workerPlacementRunnerAvailabilityReader: {
       read: () => undefined,
       version: () => runnerRevision,

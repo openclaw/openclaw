@@ -47,7 +47,6 @@ export function resolveTemplateToolProfileSnapshot(
 
 export function materializeTemplateToolProfile(
   settings: TemplateOpenClawAgentSettings,
-  options: { allowLegacyDynamicProfile?: boolean } = {},
 ): TemplateOpenClawAgentSettings {
   const tools = settings.tools;
   if (!tools) {
@@ -76,16 +75,14 @@ export function materializeTemplateToolProfile(
   if (tools.allow && snapshot.allow.length === 0) {
     throw new Error("Template tool allowlist does not overlap the selected profile.");
   }
-  const allow = options.allowLegacyDynamicProfile
-    ? snapshot.allow.filter((grant) => grant !== "bundle-mcp")
-    : snapshot.allow;
+  const allow = snapshot.allow;
   if (allow.includes("bundle-mcp")) {
     throw new Error(
       "Template tool profiles containing bundle-mcp require an explicit bounded allowlist of concrete tool names.",
     );
   }
   if (allow.length === 0) {
-    throw new Error("Legacy Template tool profile has no bounded authority to preserve.");
+    throw new Error("Template tool profile has no bounded authority to preserve.");
   }
   return {
     ...settings,

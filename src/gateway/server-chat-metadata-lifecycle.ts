@@ -69,7 +69,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
     if (context) {
       invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
     }
-    // Auth and skill facts are subordinate to the prepared model owner. During replacement the
+    // Config, auth and skill facts follow the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
       if (availabilityOnly) {
@@ -231,6 +231,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
               commandsChanged: false,
             });
           }
+          refreshForSubordinateChange();
         }
       });
       publishSidecars({

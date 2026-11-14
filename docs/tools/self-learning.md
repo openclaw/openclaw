@@ -11,7 +11,7 @@ sidebarTitle: "Self-learning"
 
 Self-learning turns corrections and hard-won procedures into
 [learned skills](/tools/skill-workshop) that future sessions load. It is on by
-default (`skills.workshop.autonomous.mode: "auto"`).
+default (`plugins.entries.skill-workshop.config.autonomous.mode: "auto"`).
 
 Learning happens in four places:
 
@@ -67,7 +67,11 @@ starts them over.
 The review reads a recent excerpt through the finished turn, bounded to 64
 transcript events and 32 KiB. Large tool results can be replaced with explicit
 omission notices; missing outcomes must not be inferred. If a required context
-boundary cannot fit, the review stops without a model call.
+boundary cannot fit, the review stops without a model call. The initiating sender
+and model are looked up separately within 20,000 events and 8 MiB, omitting large
+tool-result bodies. If that window cannot retain the initiating input, the review
+reports that the input is outside its bounded context instead of guessing who
+requested the turn.
 
 It reuses the foreground provider, model, and auth profile, with a minimal
 prompt and only the `skill_workshop` tool. Workspace bootstrap files, the full
@@ -118,7 +122,7 @@ chip per changed skill, each opening that skill in the Skill Workshop, and an
 **Undo** button. Nothing appears when nothing changed.
 
 Channel messages are off by default. Set
-`skills.workshop.autonomous.channelNotices: true` to post the notice to the
+`plugins.entries.skill-workshop.config.autonomous.channelNotices: true` to post the notice to the
 conversation that triggered the review instead. That session's Control UI
 chat then shows the channel message as plain text, not the **Learned** row:
 
@@ -144,9 +148,9 @@ appear only in debug logs. Provider and storage failures still produce warnings.
 ## Turn it on or off
 
 ```bash
-openclaw config set skills.workshop.autonomous.mode off
-openclaw config set skills.workshop.autonomous.mode propose
-openclaw config set skills.workshop.autonomous.mode auto
+openclaw config set plugins.entries.skill-workshop.config.autonomous.mode off
+openclaw config set plugins.entries.skill-workshop.config.autonomous.mode propose
+openclaw config set plugins.entries.skill-workshop.config.autonomous.mode auto
 ```
 
 The Control UI **Plugins → Skill workshop** page has the same switch. `propose`
@@ -184,7 +188,7 @@ can watch, steer, or stop it. Starting one does not change the learning mode.
 
 ### Nothing is learned
 
-1. `skills.workshop.autonomous.mode` is `auto` in the active Gateway config.
+1. `plugins.entries.skill-workshop.config.autonomous.mode` is `auto` in the active Gateway config.
 2. The session did at least 10 model iterations since its last review, without
    provider or prompt errors.
 3. The session is an ordinary conversation, not cron, heartbeat, hook,
@@ -209,5 +213,5 @@ mode to `off`.
 
 - [Skill Workshop](/tools/skill-workshop) for the tool, storage, undo, and unused-skill cleanup
 - [Creating skills](/tools/creating-skills) for hand-written skills
-- [Skills config](/tools/skills-config#workshop-skills-workshop) for `skills.workshop`
+- [Skills config](/tools/skills-config#workshop-settings) for the Workshop settings
 - [Skills CLI](/cli/skills#skill-workshop) for `openclaw skills workshop`

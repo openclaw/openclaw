@@ -1,7 +1,13 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -10,13 +16,13 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Sidebar context breakdown" });
 const sessionKey = "agent:main:context-breakdown";
 const workspaceFile = (
-  path: string,
+  filePath: string,
   rootPath: string,
   kind: "agent-workspace" | "execution-project",
   chars: number,
 ) => ({
-  name: path.split("/").at(-1)!,
-  path,
+  name: filePath.split("/").at(-1)!,
+  path: filePath,
   origin: { kind, rootPath },
   missing: false,
   rawChars: chars,
@@ -63,6 +69,144 @@ const report: SessionSystemPromptReport = {
 };
 
 suite.define(() => {
+  it("compacts from the composer popover and shows the result without closing it", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 100000,
+        totalTokens: 95000,
+        totalTokensFresh: true,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 100000 },
+        ],
+        historyMessages: [{ role: "assistant", content: "Ready when you are." }],
+        methodResponses: {
+          "sessions.usage": {
+            sessions: [{ key: sessionKey, sessionId: "context-instance", contextWeight: report }],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      const draft = page
+        .locator(".agent-chat__composer-combobox > textarea")
+        .filter({ visible: true });
+      await draft.fill("Keep this unsent draft");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const compactButton = summary.locator(".context-usage__actions .chat-context__compact");
+      await summary.getByRole("button", { name: "Compact", exact: true }).waitFor();
+      expect(await compactButton.getAttribute("class")).not.toContain(
+        "chat-context__compact--high",
+      );
+
+      const beforeCompact = await gateway.deferNext("sessions.compact", { key: sessionKey });
+      await compactButton.click();
+      const compact = await gateway.waitForRequest("sessions.compact", {
+        after: beforeCompact,
+        match: { key: sessionKey },
+      });
+      expect(compact.params).toMatchObject({ key: sessionKey });
+      const compacting = summary.getByRole("button", { name: "Compacting", exact: true });
+      await compacting.waitFor();
+      expect(await compacting.isDisabled()).toBe(true);
+      expect(await draft.inputValue()).toBe("Keep this unsent draft");
+
+      // The Gateway's compacted row is what the popover reports once the request settles.
+      const compacted = { ...session, totalTokens: 21000, updatedAt: 2 };
+      await gateway.setSessionsListResponse({ sessions: [compacted] });
+      await gateway.resolveDeferred(
+        "sessions.compact",
+        { ok: true, compacted: true },
+        { match: { key: sessionKey } },
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...compacted,
+        sessionKey,
+        reason: "compact",
+      });
+      await expect
+        .poll(() => summary.locator(".context-usage__context-value").textContent())
+        .toContain("21%");
+      await summary.getByRole("button", { name: "Compact", exact: true }).waitFor();
+      expect(await summary.isVisible()).toBe(true);
+      expect(await draft.inputValue()).toBe("Keep this unsent draft");
+    });
+  });
+
+  it("separates the latest run's cost from the session's lifetime total", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      // A long cached session: each run is cheap, but the session has spent far more.
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 1000000,
+        totalTokens: 534677,
+        totalTokensFresh: true,
+        inputTokens: 4,
+        outputTokens: 9,
+        estimatedCostUsd: 0.116,
+      };
+      const usageRow = (totalCost: number, extra: object = {}) => ({
+        key: sessionKey,
+        sessionId: "context-instance",
+        contextWeight: report,
+        usage: { totalCost, missingCostEntries: 0 },
+        ...extra,
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 1000000 },
+        ],
+        historyMessages: [{ role: "assistant", content: "Ready when you are." }],
+        methodResponses: { "sessions.usage": { sessions: [usageRow(99.14)] } },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const total = summary.locator('[data-chat-session-cost="true"]');
+      await total.waitFor();
+      const latest = summary.locator(".context-usage__latest").first();
+      expect(await latest.textContent()).toMatch(/Latest run.*Cost\s*\$0\.116/);
+      expect(await total.textContent()).toMatch(/Session total\s*Cost\s*\$99\.14/);
+      const request = await gateway.waitForRequest("sessions.usage");
+      expect(request.params).toMatchObject({ key: sessionKey, range: "all", groupBy: "instance" });
+      expect(request.params).not.toHaveProperty("startDate");
+      await summary.screenshot({
+        path: path.join(createControlUiE2eArtifactDir("session-total-cost"), "popover.png"),
+      });
+
+      // The next run refreshes the lifetime total; a still-summarizing total is a lower bound.
+      await gateway.setMethodResponse("sessions.usage", {
+        sessions: [usageRow(99.31, { computing: true })],
+      });
+      const next = { ...session, totalTokens: 536000, estimatedCostUsd: 0.17, updatedAt: 2 };
+      await gateway.setSessionsListResponse({ sessions: [next] });
+      await gateway.emitGatewayEvent("sessions.changed", { ...next, sessionKey });
+      await expect.poll(() => total.textContent()).toMatch(/≥\s*\$99\.31/);
+      expect(await latest.textContent()).toContain("$0.17");
+    });
+  });
+
   it.each([
     { width: 1440, height: 1000, mode: "dark" as const },
     { width: 390, height: 844, mode: "light" as const },
@@ -78,6 +222,7 @@ suite.define(() => {
         }
       });
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
         sessionKey,
         sessions: [
           {
@@ -122,7 +267,14 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const details = await openChatDetails(page);
-      expect(breakdownRequests).toHaveLength(0);
+      // Idle warmup may load presentation code; context data still waits for demand.
+      expect(
+        await page
+          .locator(".context-usage__popover, openclaw-chat-context-panel")
+          .filter({ visible: true })
+          .count(),
+      ).toBe(0);
+      expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
       expect(
         await details
           .locator('[data-details-group="context"], [data-details-destination="context"]')
@@ -139,7 +291,8 @@ suite.define(() => {
       const summary = page.locator(".context-usage__popover").filter({ visible: true });
       await summary.locator('[data-context-category="files"]').waitFor();
       expect(await summary.locator("[data-context-category]").count()).toBe(5);
-      expect(await summary.getByRole("button", { name: /Refresh|Compact/ }).count()).toBe(0);
+      expect(await summary.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
+      expect(await summary.getByRole("button", { name: "Compact", exact: true }).count()).toBe(1);
       expect(await summary.locator("button[data-context-category]").count()).toBe(0);
       const summarySegments = await summary
         .locator(".chat-context__segment")
@@ -216,6 +369,7 @@ suite.define(() => {
       ).toBe(true);
       const finalSkill = context.getByText("project-skill-98", { exact: true });
       const header = context.locator(".chat-context-page__header");
+      await waitForControlUiFrameLayout([context]);
       const headerTop = (await header.boundingBox())!.y;
       await finalSkill.scrollIntoViewIfNeeded();
       expect((await header.boundingBox())!.y).toBeCloseTo(headerTop, 0);

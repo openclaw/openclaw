@@ -5,10 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
-import {
-  assertManagedHandoffTestConsumer,
-  createManagedHandoffTestBinding,
-} from "../../test/helpers/managed-handoff-isolation.js";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -33,6 +30,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { resolvePluginArtifactDeclaredSurface } from "../plugins/capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
@@ -56,6 +54,7 @@ import {
 } from "./server.plugin-reload-product-fixture.test-support.js";
 import { createSubagentModelConfig } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 
 const ROOT = "Create a child, then deliver the original continuation exactly once.";
 const CHILD = "Pause for the requester, then finish when the original continuation arrives.";
@@ -67,6 +66,13 @@ const WAKE =
 it.for(["resume", "followup", "failed-reload"] as const)(
   "settles the original %s after external reload without a model retry",
   async (scenario, { signal }) => {
+    // Direct stderr survives the child JSON reporter and an interrupted process.
+    const started = performance.now();
+    const stage = (name: string) =>
+      process.stderr.write(
+        `RELOAD_PRODUCT_STAGE ${scenario} ${name} ${Math.round(performance.now() - started)}ms\n`,
+      );
+    stage("setup");
     const failReload = scenario === "failed-reload";
     const mode = scenario === "followup" ? "followup" : "resume";
     const pauseInputs = new Map<string, { childRunId: string; input: SessionControllerInput }>();
@@ -124,7 +130,9 @@ it.for(["resume", "followup", "failed-reload"] as const)(
     );
     const pauseRetirements: Array<Record<string, unknown>> = [];
     const completionOwners = vi.spyOn(SessionFollowupCompletion, "bind");
-    const state = await createOpenClawTestState({ label: "plugin-reload-send-continuation" });
+    const state = await createOpenClawTestState(
+      kernelGatewayTestStateOptions("plugin-reload-send-continuation"),
+    );
     const inheritedHandoff = process.env.OPENCLAW_TEST_PRIVATE_HANDOFF_PATH;
     assert(inheritedHandoff, "Product entry must bind the handoff store before imports");
     const handoffBinding = createManagedHandoffTestBinding(path.dirname(inheritedHandoff));
@@ -213,6 +221,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
               });
             if (raw.includes(ROOT)) {
               if (!spawned) {
+                stage("spawn");
                 spawned = true;
                 writeToolCall(response, "sessions_spawn", {
                   task: CHILD,
@@ -251,6 +260,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
                 const replacement = createDeferred();
                 unwatch = watchPluginReplacement(held, () => replacement.resolve());
                 assert(gateway);
+                stage("reload-request");
                 reload = gateway.client
                   .request("plugins.reload", {
                     plugins: [{ pluginId: PLUGIN }],
@@ -270,6 +280,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
                   signal,
                 );
                 expect(held.replacementPending).toBe(true);
+                stage("replacement-reserved-send");
                 sent = true;
                 writeToolCall(response, "sessions_send", {
                   sessionKey: child.sessionKey,
@@ -312,6 +323,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
             }
             if (raw.includes(CHILD)) {
               if (raw.includes(MESSAGE)) {
+                stage("continuation-effect");
                 effects++;
                 referenceCountsAtEffect.push(held?.retentionSnapshot().total ?? -1);
                 reply(DONE);
@@ -369,6 +381,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
           ),
         },
       });
+      stage("gateway-start");
       gateway = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,
@@ -376,6 +389,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
         scopes: ["operator.admin"],
       });
       await withinTest(gateway.server.startupSettled, signal);
+      stage("startup-settled");
       await gateway.client.request("chat.send", {
         sessionKey,
         message: ROOT,
@@ -383,13 +397,16 @@ it.for(["resume", "followup", "failed-reload"] as const)(
         deliver: false,
       });
       const result = await withinTest(Promise.race([sendResult.promise, failure.promise]), signal);
+      stage("send-result");
       const callerSettlement = await withinTest(
         gateway.client.request("agent.wait", { runId: parentRunId, timeoutMs: 30_000 }),
         signal,
       );
       expect(callerSettlement).toMatchObject({ status: "ok" });
+      stage("caller-settled");
       assert(reload);
       const reloadResult = await withinTest(reload, signal);
+      stage("reload-settled");
       expect(reloadResult).toMatchObject(
         failReload ? { ok: false } : { ok: true, restartRequired: false, pluginIds: [PLUGIN] },
       );
@@ -436,7 +453,12 @@ it.for(["resume", "followup", "failed-reload"] as const)(
                 ["error", "forbidden", "uncertain", "not_delivered"].includes(
                   String(outcome.status),
                 ),
-                "Retained send replay must not fail before target execution",
+                "Retained send replay must not fail before target execution: " +
+                  JSON.stringify({
+                    status: outcome.status,
+                    reason: outcome.reason,
+                    error: outcome.error,
+                  }),
               ).toBe(false);
               return Promise.all([completed.promise, childAnnouncement.promise]);
             }),
@@ -446,6 +468,7 @@ it.for(["resume", "followup", "failed-reload"] as const)(
         );
       }
       // On the retained path, both expected inputs have reached the model before this snapshot.
+      stage("wake-and-announcement");
       const rootSettlements = await withinTest(
         Promise.all(
           [...rootRuns].map((runId) =>
@@ -542,7 +565,16 @@ it.for(["resume", "followup", "failed-reload"] as const)(
         .soft(effects, "Only a healthy reload permits the original continuation")
         .toBe(failReload ? 0 : 1);
       if (failReload) {
-        expect(target).toMatchObject({ runId: original.runId, pauseReason: "sessions_yield" });
+        expect(
+          target,
+          JSON.stringify({
+            runId: target?.runId,
+            requesterTurnRunId: target?.requesterTurnRunId,
+            endedReason: target?.endedReason,
+            pauseReason: target?.pauseReason,
+            outcome: target?.execution.outcome,
+          }),
+        ).toMatchObject({ runId: original.runId, pauseReason: "sessions_yield" });
       } else if (mode === "resume") {
         expect.soft(target).toMatchObject({
           taskRunId: original.taskRunId ?? original.runId,
@@ -608,12 +640,19 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       expect(
         hooks.filter((hook) => hook.event === "llm_output" && hook.runId === parentRunId),
       ).toHaveLength(1);
+    } catch (error) {
+      process.stderr.write(
+        `RELOAD_PRODUCT_FAILURE ${scenario} ${formatErrorMessageWithCode(error)}\n`,
+      );
+      throw error;
     } finally {
       unwatch();
       stopEvents();
       stopTaskWatch();
       // Close HTTP first to release any fixture request waiting on an aborted test.
+      stage("close-model");
       await model?.close();
+      stage("close-gateway");
       if (gateway) {
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close({ reason: "reload send continuation proof complete" });
@@ -624,24 +663,20 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       await resetSubagentRegistryForTests({ persist: false });
       vi.restoreAllMocks();
       await state.cleanup();
-      assertManagedHandoffTestConsumer(
-        handoffBinding,
-        process.pid,
-        path.join(process.cwd(), "src/infra"),
-      );
-      await fs.writeFile(
-        path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
-        JSON.stringify({
-          scenario,
-          pid: process.pid,
-          runtime: process.versions.bun ? "bun" : "node",
-          sendStarts,
-          effects,
-          wakes: wakes.length,
-          databasePath: handoffBinding.databasePath,
-          pauseRetirements,
-        }),
-      );
+      stage("cleanup-complete");
     }
+    await fs.writeFile(
+      path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
+      JSON.stringify({
+        scenario,
+        pid: process.pid,
+        runtime: process.versions.bun ? "bun" : "node",
+        sendStarts,
+        effects,
+        wakes: wakes.length,
+        databasePath: handoffBinding.databasePath,
+        pauseRetirements,
+      }),
+    );
   },
 );

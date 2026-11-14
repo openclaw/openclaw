@@ -1,5 +1,5 @@
 import type { ControlUiMockGateway } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createControlUiMockSessionRow } from "../../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiMockSessionRow } from "../../ui/src/test-helpers/control-ui-mock-session-row.ts";
 
 export const remainingPluginIds = [
   "x",
@@ -541,7 +541,7 @@ export function installRemainingPluginMock(fixture: RemainingFixture) {
                 index: { state: "ready", lag: false, snapshot: fixture.hash, message: "" },
               }),
         });
-      } else if (operation === "record") {
+      } else if (operation === "record_detail") {
         const record = fixture.pages.find((entry) => entry.id === input.id) ?? fixture.pages[0]!;
         const preview = input.maxChars === 5000;
         const initial =
@@ -573,6 +573,16 @@ export function installRemainingPluginMock(fixture: RemainingFixture) {
         });
       } else if (operation === "connections") {
         reply({ connections: [], total: 0, nextOffset: null, snapshot: fixture.hash });
+      } else if (operation === "timeline") {
+        reply({
+          items: [],
+          total: 0,
+          offset,
+          nextOffset: null,
+          snapshot: fixture.hash,
+          freshness: fixture.freshness,
+          coverage: { complete: true, message: "Fixture records have no dated sources." },
+        });
       } else if (operation === "history") {
         reply({
           git: { state: "idle", pending: 0, message: "" },

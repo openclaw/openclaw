@@ -94,7 +94,9 @@ suite.define(() => {
       await project.click();
       const folderChoice = page.locator('[data-value="device-folder"]');
       await expect.poll(() => folderChoice.isDisabled()).toBe(true);
-      await expect.poll(() => folderChoice.textContent()).toContain("worker-turn runtime");
+      await expect
+        .poll(() => folderChoice.textContent())
+        .toContain("Not available with this model");
       await page.keyboard.press("Escape");
       await selectModel("worker");
       await project.click();
@@ -111,17 +113,33 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await input.inputValue()).toBe(deviceFolder.path);
       const folder = page.locator(".new-session-page__device-folder");
-      await expect.poll(() => folder.textContent()).toContain("worker-turn runtime");
+      await expect.poll(() => folder.textContent()).toContain("This model can’t work");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await selectModel("worker");
       expect(await input.inputValue()).toBe(deviceFolder.path);
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await page.setViewportSize({ width: 390, height: 844 });
-      await expect
-        .poll(() => folder.evaluate((element) => element.scrollWidth <= element.clientWidth))
-        .toBe(true);
+      for (const viewport of [
+        { width: 1440, height: 900 },
+        { width: 844, height: 390 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await expect
+          .poll(() =>
+            folder.evaluate((element) => {
+              const field = element.getBoundingClientRect();
+              const row = element.parentElement!.getBoundingClientRect();
+              return (
+                field.top >= row.top &&
+                field.bottom <= row.bottom &&
+                element.scrollWidth <= element.clientWidth
+              );
+            }),
+          )
+          .toBe(true);
+      }
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ agentId: "main", message: "", deviceFolder });
@@ -175,7 +193,7 @@ suite.define(() => {
           ...launchResponses(sessionKey),
         },
       });
-      await page.getByRole("button", { name: "Browse folders on Paired runner" }).click();
+      await page.getByRole("button", { name: "Existing folder on Paired runner" }).click();
       expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({
         nodeId: "paired-runner",
       });
@@ -217,8 +235,10 @@ suite.define(() => {
           }),
         },
       });
-      await page.locator('[data-value="device-folder"]').waitFor();
-      expect(await page.locator('[data-value="browse-device"]').count()).toBe(0);
+      // Writers type the device path: the row selects it instead of opening a browser.
+      const folderChoice = page.locator('[data-value="device-folder"]');
+      await folderChoice.waitFor();
+      expect(await folderChoice.locator(".new-session-page__submenu-chevron").count()).toBe(0);
     }));
   it("restores a pending device-folder create without changing its device or path", () =>
     suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {

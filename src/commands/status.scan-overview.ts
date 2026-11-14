@@ -9,6 +9,7 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedStatusSessionStores } from "../status/session-stores.js";
 import type { StatusSummary } from "../status/summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
@@ -155,9 +156,9 @@ export async function collectStatusScanOverview(params: {
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
     : await (async () => {
-        const { hasConfiguredChannelsForReadOnlyScope } =
+        const { hasConfiguredChannelsForReadOnlyScopeAsync } =
           await import("../plugins/channel-plugin-ids.js");
-        return hasConfiguredChannelsForReadOnlyScope({
+        return await hasConfiguredChannelsForReadOnlyScopeAsync({
           config: cfg,
           activationSourceConfig: sourceConfig,
         });
@@ -214,6 +215,7 @@ export async function collectStatusScanOverview(params: {
   setProgressLabel("probingGateway");
   const gatewaySnapshot = await bootstrap.gatewayProbePromise;
   params.progress?.tick();
+  const signal = getAsyncWorkSignal();
   let runtimeDegradation: StatusScanOverviewResult["runtimeDegradation"] = null;
   if (gatewaySnapshot.gatewayReachable) {
     const status =
@@ -229,8 +231,14 @@ export async function collectStatusScanOverview(params: {
                   method: "status",
                   params: { includeChannelSummary: false, includeCliProjection: true },
                   timeoutMs: Math.min(5000, resolveStatusGatewayProbeTimeoutMs(params.opts)),
+                  signal,
                   ...gatewaySnapshot.gatewayCallOverrides,
-                }).catch(() => null),
+                }).catch(() => {
+                  // A Ctrl+C cancels the pending read; keep the canonical abort
+                  // outcome instead of reporting the scan as degraded.
+                  signal?.throwIfAborted();
+                  return null;
+                }),
               ),
             { config: cfg, env },
           )
@@ -294,8 +302,14 @@ export async function collectStatusScanOverview(params: {
               timeoutMs: Math.min(8000, timeoutMs),
             },
             timeoutMs,
+            signal,
             ...(useGatewayCallOverrides === true ? (gatewayCallOverrides ?? {}) : {}),
-          }).catch(() => null);
+          }).catch(() => {
+            // A Ctrl+C cancels the pending channel read; keep the canonical abort
+            // outcome instead of printing a degraded report late.
+            signal?.throwIfAborted();
+            return null;
+          });
         }
       }
     }
@@ -315,7 +329,9 @@ export async function collectStatusScanOverview(params: {
   }
 
   return {
-    recoveryCopies: (await import("./recovery-disk-usage.js")).collectRecoveryDiskUsage({
+    recoveryCopies: await (
+      await import("./recovery-disk-usage.js")
+    ).collectRecoveryDiskUsage({
       cfg,
       env,
     }),

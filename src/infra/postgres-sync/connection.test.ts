@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_thre
 import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
 import {
   runSqliteImmediateTransaction as prepared,
@@ -17,6 +18,7 @@ import {
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
+import * as bridgePrestart from "./bridge-prestart.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
@@ -52,10 +54,7 @@ function transportFixture(
   // Exercise the connection over real ports; live tests cover worker startup and admission.
   const db = harness.connection();
   Object.assign(db, {
-    port: port1,
-    control,
-    service,
-    requestId: 1,
+    bridge: { port: port1, control, service, requestId: 1 },
   });
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
@@ -95,25 +94,27 @@ function transportFixture(
     if (mode !== "missing" || !query) {
       const sql = query?.sql ?? "";
       const reply: BridgeReply =
-        queryError && query
-          ? { id, error: queryError }
-          : {
-              id: mode === "mismatched" && query ? id + 1 : id,
-              result: {
-                inTransaction: /^\s*BEGIN\b/i.test(sql)
-                  ? true
-                  : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
-                    ? false
-                    : db.isTransaction,
-                command,
-                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
-                  ? "scoped"
-                  : undefined,
-                rows: [{ value: 7 }],
-                rowCount: 1,
-                fields: [{ name: "value", dataTypeID: 23 }],
-              },
-            };
+        pending.operation === "release"
+          ? { id, reusable: !db.isTransaction }
+          : queryError && query
+            ? { id, error: queryError }
+            : {
+                id: mode === "mismatched" && query ? id + 1 : id,
+                result: {
+                  inTransaction: /^\s*BEGIN\b/i.test(sql)
+                    ? true
+                    : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
+                      ? false
+                      : db.isTransaction,
+                  command,
+                  mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
+                    ? "scoped"
+                    : undefined,
+                  rows: [{ value: 7 }],
+                  rowCount: 1,
+                  fields: [{ name: "value", dataTypeID: 23 }],
+                },
+              };
       port2.postMessage(reply);
     }
     Atomics.store(control, 0, id);
@@ -133,11 +134,85 @@ function transportFixture(
     db,
     sent,
     waits,
+    elapse: (ms: number) => (now += ms),
     normal: () => (mode = "normal"),
+    dropReplies: () => (mode = "missing"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
 }
+
+it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const fixture = transportFixture("normal");
+  const params = {
+    url: "postgresql://localhost/synthetic",
+    schema: "schema_a",
+    storeId: "store_a",
+  };
+  Object.assign(fixture.db, {
+    schema: params.schema,
+    reuseKey: bridgePrestart.postgresBridgeReuseKey(params),
+  });
+  const create = vi.spyOn(bridgePrestart, "createPostgresBridge").mockImplementation(() => {
+    throw new Error("Unexpected physical connection");
+  });
+  let next: PostgresSyncConnection | undefined;
+  try {
+    withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
+    fixture.sent.mockClear();
+    fixture.db.releaseIdleTransport();
+    fixture.elapse(idleMs);
+    const reader = withEngineStoreAdmission(
+      () =>
+        new PostgresSyncConnection(params.url, "schema_b", harness.nativeDatabase(), "store_b", {
+          reuse: true,
+        }),
+    );
+    next = reader;
+    expect(create).not.toHaveBeenCalled();
+    expect(fixture.sent).not.toHaveBeenCalled();
+    const read = () => withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get());
+    expect([read(), read()]).toEqual([{ value: 7 }, { value: 7 }]);
+    expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
+      {
+        operation: "query",
+        schema: "schema_b",
+        sql: "SELECT 7 AS value",
+        parameters: [],
+        reconnectIfIdle: true,
+        ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
+        id: 3,
+      },
+      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },
+    ]);
+  } finally {
+    next?.close();
+    vi.advanceTimersByTime(3 * 60_000);
+    vi.useRealTimers();
+  }
+});
+
+it("checks transport status after a query error instead of reusing an earlier idle reply", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const fixture = transportFixture("normal");
+  Object.assign(fixture.db, { reuseKey: "failed-query" });
+  try {
+    withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
+    fixture.rejectQuery({ name: "error", message: "duplicate", code: "23505" });
+    expect(() =>
+      withEngineStoreAdmission(() => fixture.db.exec("INSERT INTO entries VALUES (7)")),
+    ).toThrow("UNIQUE constraint failed");
+    fixture.sent.mockClear();
+    fixture.db.releaseIdleTransport();
+    expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
+      { operation: "release", id: 4 },
+    ]);
+  } finally {
+    vi.advanceTimersByTime(3 * 60_000);
+    vi.useRealTimers();
+  }
+});
 
 it("reports an invalid DSN promptly with connection repair guidance", () => {
   const anchor = harness.nativeDatabase();
@@ -334,6 +409,126 @@ it("runs the commit authority guard and rolls back when it refuses", () => {
   ).toThrow(refusal);
   expect(statements).toEqual([writeBegin, "ROLLBACK"]);
   expect(db.isTransaction).toBe(false);
+});
+
+it("invalidates staged authority after a lost COMMIT reply", () => {
+  const fixture = transportFixture("normal");
+  const phases: string[] = [];
+  expect(() =>
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, {
+        prepareCommit: () => phases.push("prepare"),
+        commit: () => phases.push("commit"),
+        rollback: () => phases.push("rollback"),
+        invalidate: () => phases.push("invalidate"),
+      });
+      fixture.dropReplies();
+    }),
+  ).toThrow(expect.objectContaining({ code: "outcome-unknown" }));
+  expect(phases).toEqual(["prepare", "invalidate"]);
+  expect(fixture.db.isOpen).toBe(false);
+});
+
+it.each(["throw", "promise"])(
+  "invalidates a committed write after its guard returns %s",
+  (mode) => {
+    const { db } = transactionFixture();
+    const invalidate = vi.fn();
+    const rollback = vi.fn();
+    expect(() =>
+      immediate(
+        db,
+        () => stageSqliteTransactionState(db, { commit: vi.fn(), invalidate, rollback }),
+        {
+          withCommit(commit) {
+            commit();
+            if (mode === "throw") {
+              throw new Error("guard failed after COMMIT");
+            }
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).toThrow(mode === "throw" ? "guard failed after COMMIT" : "synchronous");
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(db.isOpen).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "invalidates all staged state after failed rollback (nested=%s)",
+  (nested) => {
+    const { db } = transactionFixture();
+    const execute = db.exec.bind(db);
+    const failure = new Error("write refused");
+    const phases: string[] = [];
+    db.exec = (sql) => {
+      if (sql.startsWith("ROLLBACK")) {
+        throw new Error("rollback unavailable");
+      }
+      execute(sql);
+    };
+    const stage = (name: string) =>
+      stageSqliteTransactionState(db, {
+        commit: () => phases.push(`${name}:commit`),
+        rollback: () => phases.push(`${name}:rollback`),
+        invalidate: () => phases.push(`${name}:invalidate`),
+      });
+    expect(() =>
+      immediate(db, () => {
+        stage("outer");
+        const fail = () => {
+          stage("inner");
+          throw failure;
+        };
+        return nested ? immediate(db, fail) : fail();
+      }),
+    ).toThrow(failure);
+    expect(phases).toEqual(["inner:invalidate", "outer:invalidate"]);
+    expect(db.isOpen).toBe(false);
+  },
+);
+
+it("keeps a known rejected COMMIT distinct from an unknown outcome", () => {
+  const fixture = transportFixture("normal");
+  const rollback = vi.fn();
+  const invalidate = vi.fn();
+  expect(() =>
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, { commit: vi.fn(), rollback, invalidate });
+      fixture.command("ROLLBACK");
+    }),
+  ).toThrow("rolled back instead of committing");
+  expect(rollback).toHaveBeenCalledOnce();
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(fixture.db.isOpen).toBe(true);
+});
+
+it("retires the connection even when an unknown-outcome invalidator throws", () => {
+  const fixture = transportFixture("normal");
+  const cleanup = new Error("authority invalidation failed");
+  let failure: unknown;
+  try {
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, {
+        commit: vi.fn(),
+        invalidate() {
+          throw cleanup;
+        },
+      });
+      fixture.dropReplies();
+    });
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(failure).toMatchObject({
+    cause: expect.objectContaining({ code: "outcome-unknown" }),
+    errors: [expect.objectContaining({ code: "outcome-unknown" }), cleanup],
+  });
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+  expect(fixture.db.isOpen).toBe(false);
 });
 
 it("prepares before asynchronous admission and commits only inside its guard", async () => {

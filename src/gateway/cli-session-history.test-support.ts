@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
@@ -66,14 +66,6 @@ export function answer(
   return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
 }
 
-export function boundEntry(sessionId: string): SessionEntry {
-  return {
-    sessionId: "openclaw-session",
-    updatedAt: 1,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-  };
-}
-
 export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {
   return {
     version: 1,
@@ -111,11 +103,12 @@ export function createClaudeTextHistoryLines(
     .join("\n");
 }
 
-type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "homeDir">;
+type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "projectsDir">;
 
 export function withClaudeProjectsDir<T>(
   run: (params: {
     homeDir: string;
+    projectsDir: string;
     sessionId: string;
     filePath: string;
     readMessages: (options?: ClaudeHistoryReadOptions) => Promise<Record<string, unknown>[]>;
@@ -124,17 +117,18 @@ export function withClaudeProjectsDir<T>(
   return withTempDir("openclaw-claude-history-", async (root) => {
     const homeDir = path.join(root, "home");
     const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-    const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
-    await fs.mkdir(projectsDir, { recursive: true });
+    const projectsDir = path.join(homeDir, ".claude", "projects");
+    const filePath = path.join(projectsDir, "demo-workspace", `${sessionId}.jsonl`);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, createClaudeHistoryLines(), "utf-8");
     return withEnvAsync({ HOME: homeDir }, () =>
       run({
         homeDir,
+        projectsDir,
         sessionId,
         filePath,
         readMessages: (options) =>
-          readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir, ...options }),
+          readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, projectsDir, ...options }),
       }),
     );
   });

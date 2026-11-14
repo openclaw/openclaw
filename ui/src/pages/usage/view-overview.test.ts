@@ -4,9 +4,10 @@ import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { UsageMosaic } from "./metrics-view.tsx";
 import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
-import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
+import { CostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import {
@@ -56,8 +57,8 @@ describe("UsageInsights", () => {
     expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
     expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
-    expect(buttons).toHaveLength(9);
-    expect(tooltips).toHaveLength(9);
+    expect(buttons).toHaveLength(5);
+    expect(tooltips).toHaveLength(5);
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -93,11 +94,14 @@ describe("UsageInsights", () => {
       messages: { ...current.messages, total: 8 },
     }));
     flush();
-    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(container.querySelector("#usage-summary-hint-throughput")).toBe(button);
     expect(button.closest("openclaw-tooltip")).toBe(tooltip);
     expect(tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]")).toBe(popup);
     expect(document.activeElement).toBe(button);
-    expect(text(button.closest(".usage-summary-card"), ".usage-summary-value")).toBe("8");
+    const messagesCard = [...container.querySelectorAll(".usage-summary-card")].find(
+      (card) => card.querySelector(".usage-summary-title")?.textContent === "Messages",
+    );
+    expect(text(messagesCard ?? null, ".usage-summary-value")).toBe("8");
   });
   it("labels usage without a known price as unpriced, never free", () => {
     const unpriced = { ...totals, totalCost: 0, missingCostEntries: 3 };
@@ -144,6 +148,40 @@ describe("UsageInsights", () => {
   });
 });
 
+it("retains weekday rows while replacing the hour-selection callback", () => {
+  const first = vi.fn();
+  const replacement = vi.fn();
+  const [handlers, setHandlers] = createSignal({ onSelectHour: first });
+  const overview = createUsageOverview({
+    hasTimelineData: true,
+    hourTokens: Array.from({ length: 24 }, (_, hour) => (hour === 8 ? 120 : 0)),
+    weekdayTokens: [0, 120, 0, 0, 0, 0, 0],
+  });
+  const selectedHours = [8];
+  const { container } = mountSolid(() =>
+    UsageMosaic({
+      overview,
+      timeZone: "utc",
+      selectedHours,
+      get onSelectHour() {
+        return handlers().onSelectHour;
+      },
+    }),
+  );
+  flush();
+  const weekday = container.querySelector(".usage-weekday");
+  expect(weekday).not.toBeNull();
+
+  setHandlers({ onSelectHour: replacement });
+  flush();
+  expect(container.querySelector(".usage-weekday")).toBe(weekday);
+  container
+    .querySelectorAll<HTMLButtonElement>(".usage-hour-cell")[8]!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+  expect(replacement).toHaveBeenCalledExactlyOnceWith(8, true);
+  expect(first).not.toHaveBeenCalled();
+});
+
 it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
   const onClearDays = vi.fn();
   const onClearHours = vi.fn();
@@ -177,20 +215,35 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
-it("cost windows preserve sub-cent totals", () => {
+it("cost windows preserve sub-cent totals and day columns across refreshes", () => {
   const day = dailyEntry("2026-07-01", 300, 0.003);
+  const [daily, setDaily] = createSignal([day]);
   const { container } = mountView(() =>
-    renderCostWindowComparison([day], "2026-06-02", "2026-07-01", "local"),
+    CostWindowComparison({
+      get daily() {
+        return daily();
+      },
+      rangeStartDate: "2026-06-02",
+      rangeEndDate: "2026-07-01",
+      timeZone: "local",
+    }),
   );
 
   const range = container.querySelector(".cost-window--range");
   expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0030");
   expect(text(range, ".cost-window__meta")).toContain("$0.0001 / day");
-  range!
-    .querySelector(".usage-bars__bar:last-of-type")!
-    .dispatchEvent(new MouseEvent("pointerenter"));
+  const column = range!.querySelector(".usage-bars__bar--current")!;
+  column.dispatchEvent(new MouseEvent("pointerenter"));
   flush();
   expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0030");
+
+  setDaily([dailyEntry("2026-07-01", 600, 0.006)]);
+  flush();
+  expect(container.querySelector(".cost-window--range")).toBe(range);
+  expect(range!.querySelector(".usage-bars__bar--current")).toBe(column);
+  expect(text(range, ".cost-window__value")?.trim()).toBe("$0.0060");
+  expect(text(range, ".cost-window__meta")).toContain("$0.0002 / day");
+  expect(text(range, ".usage-bars__tip")).toBe("Jul 1 · $0.0060");
 });
 
 describe("SessionsCard", () => {
@@ -210,6 +263,9 @@ describe("SessionsCard", () => {
       SessionsCard({
         get sessions() {
           return sessions();
+        },
+        get selectedRows() {
+          return usage.data.overview?.selectedRows ?? [];
         },
         usage,
         totalSessions,
@@ -309,7 +365,7 @@ describe("SessionsCard", () => {
     try {
       await i18n.setLocale("en");
       const { container } = mountView(() =>
-        SessionsCard({ sessions: [entry], usage, overview, totalSessions: 1 }),
+        SessionsCard({ sessions: [entry], selectedRows: [], usage, overview, totalSessions: 1 }),
       );
       const row = container.querySelector(".session-bar-row");
       const value = () => text(row, ".session-bar-value");
@@ -328,11 +384,25 @@ describe("SessionsCard", () => {
       expect(value()).toBe(englishValue);
       setDisplay({ ...base.display, chartMode: "cost" });
       flush();
-      expect(value()).toBe("$0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       await i18n.setLocale("en");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
-      expect(value()).toBe("$0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       expect(average()).toBe("$0.00 avg");
     } finally {
       await restoreI18n();
@@ -354,7 +424,13 @@ describe("SessionsCard", () => {
       },
     );
     const { container } = mountView(() =>
-      SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
+      SessionsCard({
+        sessions: [session("B"), session("A")],
+        selectedRows: [],
+        usage,
+        overview,
+        totalSessions: 2,
+      }),
     );
     expect(texts(container, ".session-bar-title", false)).toEqual(["B", "A"]);
     expect(text(container, ".sessions-card-stats")).toContain("500 avg");

@@ -2,7 +2,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { planLegacyStateMigrationsReadOnly } from "../../infra/state-migrations.doctor.js";
 import { refuseLegacyStateMigrationPlan } from "../../infra/state-migrations.plan.js";
 import { defaultRuntime } from "../../runtime.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { resolveUpdateRoot } from "./shared.js";
 
 type UpdateMigrationPlanCommandOptions = {

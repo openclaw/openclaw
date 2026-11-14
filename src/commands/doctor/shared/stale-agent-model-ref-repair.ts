@@ -7,8 +7,12 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
+import { isCliRuntimeModelBackendForProvider } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelCatalogJson } from "../../../agents/model-catalog-json.js";
+import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import { isCliProvider } from "../../../agents/model-selection-cli.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -277,9 +281,27 @@ export function repairStaleAgentModelRefs(
       aggregation,
     );
   };
-  const makeStaleChecker = (available: ReadonlySet<string>) => (ref: string) => {
+  // Shared defaults must not pick up the compatibility agent's runtime overrides.
+  const defaultRuntimeConfig: OpenClawConfig = {
+    ...cfg,
+    agents: { defaults: asOptionalRecord(asOptionalRecord(cfg.agents)?.defaults) },
+  };
+  const makeStaleChecker = (available: ReadonlySet<string>, agentId?: string) => (ref: string) => {
     const provider = providerFromModelRef(ref);
-    return provider && !available.has(provider) ? provider : undefined;
+    if (!provider || available.has(provider)) {
+      return undefined;
+    }
+    const runtime = resolveModelRuntimePolicy({
+      config: agentId === undefined ? defaultRuntimeConfig : cfg,
+      provider,
+      modelId: splitTrailingAuthProfile(ref).model,
+      agentId,
+    }).policy?.id;
+    return runtime &&
+      isCliProvider(runtime, cfg, options.pluginMetadataSnapshot) &&
+      isCliRuntimeModelBackendForProvider({ provider, runtime, config: cfg })
+      ? undefined
+      : provider;
   };
 
   const defaults = asOptionalRecord(asOptionalRecord(config.agents)?.defaults);
@@ -292,9 +314,10 @@ export function repairStaleAgentModelRefs(
       return agent.id;
     }
     const agentAvailability = availabilityForAgent(agent.id);
-    const provider = providerFromModelRef(explicitPrimary);
     // This stale override will be removed or replaced later in the same repair.
-    return agentAvailability && provider && !agentAvailability.has(provider) ? agent.id : undefined;
+    return agentAvailability && makeStaleChecker(agentAvailability, agent.id)(explicitPrimary)
+      ? agent.id
+      : undefined;
   });
   const configuredDefaultPrimary = modelPrimaryRef(defaults?.model);
   let repairedDefaultPrimary =
@@ -434,7 +457,7 @@ export function repairStaleAgentModelRefs(
     if (!available) {
       continue;
     }
-    const isStale = makeStaleChecker(available);
+    const isStale = makeStaleChecker(available, entry.agentId);
     const agentPrimaryChanged = repairModel(agent, `${entry.path}.model`, isStale, entry.agentId);
     const effectiveAgentPrimary = modelPrimaryRef(agent.model) ?? repairedDefaultPrimary;
     repairModelMap({

@@ -23,6 +23,14 @@ import {
 
 export type HeartbeatConfig = LegacyHeartbeatConfig;
 
+export function resolveLegacyHeartbeatFileAgentIds(cfg: OpenClawConfig): string[] {
+  const enrolled = new Set(resolveLegacyHeartbeatAgents(cfg).map((agent) => agent.agentId));
+  // Explicit settings still own files when another agent's enrollment excludes them.
+  return listAgentIds(cfg).filter(
+    (agentId) => enrolled.has(agentId) || resolveLegacyHeartbeatConfig(cfg, agentId) !== undefined,
+  );
+}
+
 /** Resolves heartbeat alert delivery, applying account > channel > defaults precedence. */
 export function resolveLegacyHeartbeatAlertsEnabled(params: {
   cfg: OpenClawConfig;

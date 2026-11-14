@@ -5,7 +5,6 @@ import {
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
-import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -32,6 +31,7 @@ import {
   waitForChatAbortTerminalPersistence,
 } from "../chat-abort-lifecycle-internal.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
+import { createChatAbortSignalReason } from "../chat-abort.js";
 import { formatStopRequest } from "../control-plane-audit.js";
 import {
   resolveRequestedSessionAgentId,
@@ -45,9 +45,10 @@ import { resolveSessionStoreKey } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
+  captureChatAbortAuthority,
+  getChatRunAbortAuthority,
   resolveChatAbortTargetRejection,
   resolveChatAbortSessionRestriction,
-  resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import * as exactRun from "./chat-abort-exact-run.js";
 import {
@@ -66,7 +67,6 @@ import {
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -85,13 +85,13 @@ export async function handleChatAbortRequestWithLifecycle(
   options: GatewayRequestHandlerOptions,
   lifecycle: ChatAbortLifecycle = {},
 ): Promise<void> {
-  const { params, respond, context, client, sessionMutationAuthorization } = options;
-  const authority = readGatewayRequestMutationAuthority(options);
-  const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
+  const { params, respond, context, sessionMutationAuthorization } = options;
+  const { requester, assertRequesterCurrent, narrow } = captureChatAbortAuthority(options);
   const assertCurrent = () => {
-    authority.assertCurrent();
+    assertRequesterCurrent();
     sessionMutationAuthorization?.assertCurrent();
     requester.sessionAuthority?.assertCurrent();
+    requester.personalAuthority?.assertCurrent();
   };
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
@@ -147,9 +147,6 @@ export async function handleChatAbortRequestWithLifecycle(
     sessionKey: rawSessionKey,
     storeAgentId: abortAgentId,
   });
-  const narrow =
-    authority.sessionScope === "operator.sessions.write" ||
-    requester.sessionAuthority !== undefined;
   const restriction = resolveChatAbortSessionRestriction({
     requestedSessionId,
     runId,
@@ -192,12 +189,16 @@ export async function handleChatAbortRequestWithLifecycle(
         defaultAgentId: compatibilityDefaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
+        userInitiated: params.userInitiated,
         stopSource: "client-session",
         hookContext: stopHookContext,
         requester,
         assertCurrent,
         preserveSideRuns,
         cascadeDescendants: lifecycle.cascadeDescendants,
+        // Plain chat.abort is the user-facing Stop. Queued-input discard and maintenance
+        // aborts stay unmarked; the exact-run branch bridges its accepted Stop separately.
+        announceRunStopped: true,
         yieldedRequesterRunId: lifecycle.yieldedRequesterRunId,
       },
       prepareAbortSession,
@@ -255,7 +256,7 @@ export async function handleChatAbortRequestWithLifecycle(
     // descendants, workers, or command hooks selected by the caller's placeholder key.
     const stopped = cancelCapturedSessionControllerSource(
       captureSessionControllerStop({ inputs: [reservedCandidate] }),
-      { assertCurrent, reason: createAgentRunDirectAbortError() },
+      { assertCurrent, reason: createChatAbortSignalReason("rpc", params.userInitiated) },
     );
     const failure = stopped.failures[0];
     if (failure) {
@@ -357,10 +358,7 @@ export async function handleChatAbortRequestWithLifecycle(
   });
   let inputWithdrawn = false;
   if (discardPendingInput) {
-    if (
-      active &&
-      !authorizeRunTarget({ ...getRpcSourceIdentity(active), requester: active.adapter.requester })
-    ) {
+    if (active && !authorizeRunTarget(getChatRunAbortAuthority(active))) {
       return;
     }
     if (
@@ -481,7 +479,7 @@ export async function handleChatAbortRequestWithLifecycle(
         source: "client-run",
         capture: captureSessionControllerStop({ inputs: [reserved] }),
         assertCurrent: assertReserved,
-        reason: createAgentRunDirectAbortError(),
+        reason: createChatAbortSignalReason("rpc", params.userInitiated),
         hookContext: {
           ...stopHookContext,
           sessionKey: activeIdentity.sessionKey,
@@ -589,9 +587,7 @@ export async function handleChatAbortRequestWithLifecycle(
     await respondWithWorkerRuns([]);
     return;
   }
-  if (
-    !authorizeRunTarget({ ...getRpcSourceIdentity(active), requester: active.adapter.requester })
-  ) {
+  if (!authorizeRunTarget(getChatRunAbortAuthority(active))) {
     return;
   }
   const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(active);
@@ -607,6 +603,7 @@ export async function handleChatAbortRequestWithLifecycle(
     cfg: abortCfg,
     runId,
     active,
+    userInitiated: params.userInitiated,
     lifecycleRevision:
       selectedSession.ok && selectedSession.value.entry?.sessionId === sessionId
         ? selectedSession.value.entry.lifecycleRevision
@@ -614,6 +611,9 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent: assertActive,
     hookContext: stopHookContext,
     afterParent: cancelWorker,
+    // Control UI and native chat clients Stop ordinary local runs with an exact runId; that
+    // accepted Stop is announced exactly like a session Stop.
+    stoppedSession: { agentId: agentId ?? abortAgentId, sessionKey },
     onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;

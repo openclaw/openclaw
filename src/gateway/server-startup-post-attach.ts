@@ -35,7 +35,7 @@ import { startGatewaySidecars } from "./server-startup-sidecars.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker } from "./server/readiness.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 type Awaitable<T> = T | Promise<T>;
 
@@ -75,7 +75,7 @@ export async function startGatewayPostAttachRuntime(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  unlockStartupMethods: () => void;
+  unlockStartupMethods: () => Awaitable<void>;
   loadStartupPlugins?: () => Awaitable<{
     pluginRegistry: PluginRegistry;
     gatewayMethods: string[];
@@ -98,7 +98,7 @@ export async function startGatewayPostAttachRuntime(params: {
   trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
   onSidecarsReady?: () => void;
-  getReadiness: ReadinessChecker;
+  getReadiness: PreparedReadinessChecker;
   isClosing?: () => boolean;
   startupTrace?: GatewayStartupTrace;
   sidecarStartup?: GatewaySidecarStartupMode;
@@ -109,6 +109,39 @@ export async function startGatewayPostAttachRuntime(params: {
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
+  let durableRuntime: typeof import("../agents/bash-process-durable.js") | undefined;
+  let durableStartup: Promise<void> | undefined;
+  let durableStopped = false;
+  const startDurableProcesses =
+    !params.minimalTestGateway &&
+    !candidateCanary &&
+    (process.platform === "linux" || process.platform === "darwin")
+      ? (signal: AbortSignal) => {
+          durableStartup ??= (async () => {
+            const assertCurrent = () => {
+              signal.throwIfAborted();
+              if (durableStopped || params.isClosing?.()) {
+                throw new Error("Durable process observation is closing");
+              }
+            };
+            assertCurrent();
+            durableRuntime = await import("../agents/bash-process-durable.js");
+            assertCurrent();
+            await durableRuntime.initializeDurableProcesses({ assertCurrent });
+          })();
+          return durableStartup;
+        }
+      : undefined;
+  if (startDurableProcesses) {
+    params.onGatewayLifetimeSidecars({
+      name: "durable-processes",
+      stop: async () => {
+        durableStopped = true;
+        await durableStartup?.catch(() => {});
+        await durableRuntime?.disposeDurableProcesses();
+      },
+    });
+  }
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const controlUiAssetsSidecar =
     !params.minimalTestGateway && controlUiRootLifecycle
@@ -273,9 +306,15 @@ export async function startGatewayPostAttachRuntime(params: {
             ) {
               throw new Error("Candidate plugin registry reported an unattributed error");
             }
-            params.unlockStartupMethods();
+            await params.unlockStartupMethods();
+            if (params.isClosing?.()) {
+              return pluginRegistry;
+            }
             params.onSidecarsReady?.();
-            logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
+            await logGatewayReady(
+              params,
+              "candidate gateway ready; autonomous sidecars suppressed",
+            );
             return pluginRegistry;
           }
           const internalHookSelection = await resolveInternalHookSelection(
@@ -383,9 +422,10 @@ export async function startGatewayPostAttachRuntime(params: {
           );
           params.onGatewayLifetimeSidecars(...newGatewayLifetimeSidecars);
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
-          logGatewaySidecarsReady({
+          await logGatewaySidecarsReady({
             log: params.log,
             getReadiness: params.getReadiness,
+            isClosing: params.isClosing,
             startupTrace: params.startupTrace,
             loadedPluginCount: pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded")
               .length,
@@ -413,6 +453,9 @@ export async function startGatewayPostAttachRuntime(params: {
         registry: sidecarRegistry,
         signal,
         resolveGatewayContext: params.resolveGatewayContext,
+        startDurableProcesses: startDurableProcesses
+          ? () => startDurableProcesses(signal)
+          : undefined,
         loadSubagentRegistryActivation: async () =>
           (await import("../agents/subagents/registry/subagent-registry.js"))
             .activateSubagentRegistry,
@@ -426,7 +469,7 @@ export async function startGatewayPostAttachRuntime(params: {
         isClosing: params.isClosing,
         unlockStartupMethods: () => {
           params.onChannelsStarted?.();
-          params.unlockStartupMethods();
+          return params.unlockStartupMethods();
         },
         startupTrace: params.startupTrace,
         log: params.log,

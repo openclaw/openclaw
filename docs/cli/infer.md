@@ -78,7 +78,7 @@ shell-completion metadata.
 
 | Task                          | Command                                                                                       | Notes                                                 |
 | ----------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Local by default                                      |
+| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Local unless a Gateway is running                     |
 | Run a model prompt on images  | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple images                   |
 | Generate an image             | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
 | Describe an image file or URL | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
@@ -101,6 +101,11 @@ shell-completion metadata.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
+- `model run` without `--local` or `--gateway` runs locally only when no Gateway owns the state directory. When a local Gateway is running, the CLI runs it through that Gateway instead (`transport: "gateway"` in the JSON envelope), because the Gateway owns the shared credentials and their OAuth refresh. A local run beside it could refresh a token the Gateway would then keep reading in its stale form.
+- `model run --local` refuses while a Gateway owns the state directory, and makes no provider call. Omit `--local` to run it through the Gateway, or stop the Gateway first.
+- While a Gateway owns the state directory, a local command never refreshes or stores a shared sign-in. This covers `image *`, `audio *`, `video *`, `web *`, `embedding *`, and local `tts convert`. A sign-in that is still valid is used as is, and the Gateway refreshes it on its next turn. An expired sign-in is refused before any change: the error names the Gateway and says to run the work through the Gateway, retry after the Gateway's next turn refreshes the sign-in, or stop the Gateway. With no Gateway running, these commands refresh and run locally as before.
+- `model auth login` follows `openclaw models auth login`: with a Gateway running, the sign-in runs through that Gateway. `model auth logout` follows `openclaw models auth logout`: it refuses while a Gateway owns the state directory; stop the Gateway first.
+- A local `model run` holds the state directory for its duration, so concurrent local runs on one state directory fail instead of running side by side. Run them one at a time, or start the Gateway and let the runs go through it.
 - Provider inventory commands whose `configured` state can come from saved agent auth accept
   `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
@@ -110,7 +115,8 @@ shell-completion metadata.
   `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
-- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
+- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt cancels image generation or editing and discards late provider results before output writes begin. It also stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
+- Ctrl-C or SIGTERM cancels image description downloads and provider requests, and prevents later model fallback attempts.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -126,6 +132,8 @@ Text inference and model/provider inspection.
 
 ```bash
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
+openclaw infer model run --prompt-file ./prompts/judge.txt --json
+openclaw infer model run --prompt-stdin --json < ./prompts/judge.txt
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
@@ -133,7 +141,7 @@ openclaw infer model providers --agent <id> --json
 openclaw infer model inspect --model gpt-6-astra --json
 ```
 
-Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface:
+Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface (stop a running Gateway first):
 
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
@@ -156,13 +164,15 @@ Notes:
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local checks add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model check.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
-- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- Use exactly one of `model run --prompt <text>`, `--prompt-file <path>`, or `--prompt-stdin`. The file path must be relative to the current directory and remain inside it; symlinks and hardlinks are rejected. File and stdin input are read at invocation time as UTF-8 with a 1 MiB limit. Malformed UTF-8 files are rejected rather than silently replacing invalid bytes. Stdin is read only with `--prompt-stdin`; invalid UTF-8, read errors, and overflow fail before inference. Empty or whitespace-only prompts are rejected before any provider or Gateway call. File and stdin input keep prompt text out of process arguments and do not add it to command output or a chat transcript; the selected provider still receives the prompt.
 - Local `model run` exits non-zero for empty output or a failed/aborted response, even when partial text was received. These runs do not emit a successful JSON envelope.
 - `model run --gateway` also exits non-zero when the Gateway reports a failed, timed-out, or cancelled run, preserving its error detail instead of wrapping the reply in a successful JSON envelope.
 - When a completed response contains only reasoning and no final text, local `model run` reports that it returned reasoning but no text output, and notes when it stopped at the output token limit. Failed or aborted responses keep the generic no-text error with any provider error detail. Reasoning content is not printed as the answer.
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
+- An interrupt accepted during generation cancels the in-flight local request or Gateway call and stops waiting for it instead of letting the run finish, and publishes no output for the interrupted run.
+- For `model run --gateway`, interruption cancels the caller's RPC and does not change the lifetime of Gateway-owned generation.
 
 ## Image
 
@@ -187,6 +197,7 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --p
 Notes:
 
 - Use `image edit` when starting from existing input files; `--size`, `--aspect-ratio`, or `--resolution` add geometry hints on providers/models that support them.
+- `image edit --file` accepts regular files and symlinks to regular files. Special files such as FIFOs are refused before any provider request.
 - `image generate` and `image edit` accept positive numeric `W:H` aspect ratios, including `7:5` and `1.5:1`. Malformed values such as `16x9`, `16/9`, or `0:5` fail before a provider request or output file is created.
 - `--output-format png --background transparent` with `--model openai/gpt-image-1.5` gives transparent-background OpenAI PNG output; `--openai-background` is an OpenAI-specific alias for the same hint. Providers that do not declare background support report it as an ignored override (see `ignoredOverrides` in the [JSON envelope](#json-output)).
 - `--quality low|medium|high|auto` works for providers that support image-quality hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto`.
@@ -223,6 +234,16 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
+An accepted interrupt cancels the pending transcription request and suppresses
+late transcript output.
+
+The same cancellation behavior applies to `infer video describe`: interruption
+stops the pending provider request and suppresses late description output.
+
+For audio transcription and video description on POSIX systems, `--file` follows
+directory symlinks before resolving `..`, matching filesystem path resolution.
+Final-file symlinks remain subject to the existing media-directory checks.
+
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved
 executable path; explicit CLI entries retain their authored command value. This
@@ -236,6 +257,7 @@ Speech synthesis and TTS provider/persona state.
 openclaw infer tts convert --text "hello from openclaw" --output ./hello.mp3 --json
 openclaw infer tts convert --text "Your build is complete" --output ./build-complete.mp3 --json
 openclaw infer tts convert --provider xiaomi --text "Provider-only selection" --output ./xiaomi.mp3 --json
+openclaw infer tts convert --channel telegram --text "Voice-note format" --output ./voice.opus --json
 openclaw infer tts providers --json
 openclaw infer tts personas --json
 openclaw infer tts status --json
@@ -245,8 +267,13 @@ Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
+- If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
+- Interrupting `tts convert --gateway` cancels the caller's pending RPC and exits with status 130 without printing a late result. Gateway-owned speech synthesis keeps its existing lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
+- `--channel <id>` is an output-format hint, not a delivery request. Local conversion
+  uses bundled voice capabilities even without a loaded channel account; Telegram
+  requests voice-note audio (Opus with OpenAI) instead of the default MP3 audio file.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 
 ## Video
@@ -282,6 +309,9 @@ openclaw infer web providers --agent <id> --json
 
 `web providers` lists available, configured, and selected providers for search and fetch.
 
+Interrupting web search or fetch forwards cancellation to the request and suppresses
+late provider results and failures.
+
 ## Embedding
 
 Vector creation and embedding-provider inspection.
@@ -299,6 +329,9 @@ that prefix; model ids that contain a slash keep the provider prefix, for exampl
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.
+
+An accepted interrupt forwards cancellation to the embedding provider and suppresses
+output from the interrupted batch.
 
 ## JSON output
 

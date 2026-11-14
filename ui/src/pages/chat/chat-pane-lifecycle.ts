@@ -14,6 +14,7 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -22,11 +23,13 @@ import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import * as chatAvatars from "./chat-avatar.ts";
+import type { ChatCommandDispatchResult } from "./chat-commands.ts";
 import { exportCurrentChat } from "./chat-export.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import type { InlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import { disposeChatLiveEvents } from "./chat-live-events.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -47,7 +50,7 @@ import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
 import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
-import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
+import * as startupSubscriptions from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
@@ -56,7 +59,6 @@ import { createPageState } from "./chat-state-page.ts";
 import {
   applyChatAgentOwnerTransition,
   applySelectedChatAgent,
-  refreshPageChat,
   refreshChatModelAuthStatus,
   refreshChatMetadata,
   retireChatMetadataRequests,
@@ -80,6 +82,7 @@ import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-messa
 import { closeSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
+  protected abstract forkConversation(title?: string): Promise<ChatCommandDispatchResult>;
   private panelActions: { syncLaunch: () => void; flush: () => void } | undefined;
 
   protected flushPendingPanelToggles(): void {
@@ -119,6 +122,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               launch: this.mcpAppLaunch,
               replaceAttachments: this.chatState.attachmentInputProps(state).onAttachmentsChange,
               openFile: (path) => openSessionWorkspaceFile(state, { path }),
+              openAppPanel: () => this.navigateMobileHost({ area: "panels", slot: "detail" }),
             }
           : null;
       },
@@ -261,36 +265,39 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     );
   };
 
-  override start() {
+  override start(
+    inlineCommandPresentation?: InlineCommandPresentation,
+    inlineCommandPreparationError?: string,
+  ) {
     this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.start();
     const mountGatewayOwner = this.context.gateway.snapshot.client;
     this.stagedAttachmentGatewayOwner = mountGatewayOwner;
-    if (typeof ResizeObserver === "function") {
-      this.paneResizeObserver = new ResizeObserver((entries) => {
-        const width = entries.at(-1)?.contentRect.width;
-        // Hidden panes (narrow split view) report 0; keep the last real width.
-        if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
-          this.transcript.syncViewportGeometry();
-          this.paneWidth = width;
-        }
-      });
-      this.paneResizeObserver.observe(this.element);
-    }
+    this.paneResizeObserver = new ResizeObserver((entries) => {
+      const width = entries.at(-1)?.contentRect.width;
+      // Hidden panes (narrow split view) report 0; keep the last real width.
+      if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+        this.transcript.syncViewportGeometry();
+        this.paneWidth = width;
+      }
+    });
+    this.paneResizeObserver.observe(this.element);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
     chatState.addCleanup(listen(this.element, "pointerdown", this.handlePaneFocus));
     chatState.addCleanup(listen(this.element, "focusin", this.handlePaneFocus));
     chatState.addCleanup(listen(this.element, "input", this.handlePaneInput));
-    chatState.addCleanup(
-      listen(document, "keydown", { handleEvent: this.handleDocumentKeydown }, true),
-    );
+    chatState.addCleanup(listen(document, "keydown", this.handleDocumentKeydown, true));
     const pageState = createPageState(
       this.context,
       chatState.createRenderLifecycle(),
       {
+        inlineCommandPresentation,
+        inlineCommandPreparationError,
+        isCurrent: () => this.isConnected && this.state === pageState,
         sessionKey: this.sessionKey,
+        agentId: parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
         transcriptLoadingChanged: this.synchronizeForegroundTranscript,
       },
@@ -310,11 +317,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }
     };
     chatState.addCleanup(listen(document, "visibilitychange", refreshPresentedReads));
-    const paneAgentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId;
-    if (paneAgentId) {
-      pageState.assistantAgentId = paneAgentId;
-      pageState.agentsSelectedId = paneAgentId;
-    }
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
     pageState.isRouteSessionPending = () => this.routeResolutionPending;
@@ -327,15 +329,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.chatCancelScroll = () => this.transcript.cancelScroll();
     pageState.reviewQueuedMessageEdit = () => this.reviewQueuedMessageEdit(pageState);
     pageState.createChatSession = () => this.createSession();
+    pageState.forkChatSession = (title) => this.forkConversation(title);
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportCurrentChat(
         pageState,
         () => this.state === pageState && this.presented && this.isConnected,
       );
-    pageState.refreshCurrentChat = async () => {
-      await refreshPageChat(pageState);
-    };
     pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     pageState.openSessionCompanion = (question) => this.openSessionCompanion(pageState, question);
     pageState.retireSessionCompanion = (key, agentId) =>
@@ -372,9 +372,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
-    chatState.addCleanup(
-      this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
-    );
+    chatState.addCleanup(startupSubscriptions.subscribeChatPaneAgentFacts(this.context, pageState));
     const creationComposer = takeCreatedComposer(
       this.context,
       pageState.sessionKey,
@@ -415,15 +413,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeForegroundTranscript();
       }),
     );
-    // Chat actions read these synchronous owner settings before any render commits.
-    chatState.addCleanup(
-      this.context.theme.subscribe(() => {
-        pageState.settings = {
-          ...this.context.theme.settings,
-          token: this.context.gateway.connection.token,
-        };
-      }),
-    );
+    chatState.addCleanup(startupSubscriptions.subscribeChatPaneSettings(pageState, this.context));
     // Agent changes retire scoped owners and subscriptions before admitting another action.
     chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
@@ -450,6 +440,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        this.handleCatalogGatewayEvent(event.event);
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
           void refreshChatModelAuthStatus(state);
@@ -538,7 +529,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     chatState.addCleanup(
-      subscribeChatPaneSnapshotInvalidation(
+      startupSubscriptions.subscribeChatPaneSnapshotInvalidation(
         () => this.state,
         () => {
           const target = this.resolveChatReadTarget();
@@ -650,10 +641,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       );
     }
     if (focusComposerChanged && this.focusComposer) {
-      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
-      textarea?.focus({ preventScroll: true });
-      if (input && this.draft) {
-        this.showComposerPrefillAttention(input);
+      focusComposerInput(textarea, { preventScroll: true });
+      if (this.draft) {
+        this.showComposerPrefillAttention(textarea?.closest<HTMLElement>(".agent-chat__input"));
       }
     }
     this.retireArchivedPresentation();

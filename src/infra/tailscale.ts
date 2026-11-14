@@ -62,7 +62,7 @@ function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   throw new Error("Could not determine Tailscale DNS or IP");
 }
 
-export async function findTailscaleBinary(): Promise<string | null> {
+export async function findTailscaleBinary(platform = process.platform): Promise<string | null> {
   const checkBinary = async (filePath: string): Promise<boolean> => {
     if (!filePath || !existsSync(filePath)) {
       return false;
@@ -95,6 +95,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
     return macAppPath;
   }
 
+  if (platform !== "darwin") {
+    return null;
+  }
   try {
     const { stdout } = await runExec("locate", ["Tailscale.app"]);
     const candidates = stdout
@@ -156,7 +159,7 @@ async function getTailscaleBinary(): Promise<string> {
 }
 
 export type TailscaleRouteClaim = {
-  exited: Promise<void>;
+  exited: Promise<string>;
   isActive: () => boolean;
   stop: () => Promise<void>;
 };
@@ -176,20 +179,19 @@ function routeClaimError(
   mode: "serve" | "funnel",
   startupDeadlineExpired: boolean,
 ): Error {
+  const output = `${message.stderr}\n${message.stdout}`;
   if (
     mode === "serve" &&
     (message.code !== null || startupDeadlineExpired) &&
     // Serve can exit zero or wait for policy enablement until our deadline stops it.
     // Inspect its final output after retirement; additional diagnostics stay fatal.
     /^\s*Serve is not enabled on your tailnet\.(?:\s+(?:To enable, visit:\s+)?https:\/\/\S+)?\s*$/u.test(
-      `${message.stderr}\n${message.stdout}`,
+      output,
     )
   ) {
     return new TailscaleServeDisabledError();
   }
-  const conflict = /listener already exists for port (\d+)/i.exec(
-    `${message.stderr}\n${message.stdout}`,
-  );
+  const conflict = /listener already exists for port (\d+)/i.exec(output);
   if (conflict) {
     return new TailscaleRouteOwnershipConflictError(Number(conflict[1]), serveStatus);
   }
@@ -227,7 +229,9 @@ async function startTailscaleRouteOwner(
   let stopping = false;
   let failure: Error | undefined;
   let stopFailure: Error | undefined;
-  const { promise: exited, resolve: resolveExit } = createDeferredCore();
+  let cliCode: number | null | undefined;
+  let diagnosis: Promise<void> | undefined;
+  const { promise: exited, resolve: resolveExit } = createDeferredCore<string>();
 
   let startupDeadlineExpired = false;
   const startup = raceWithTimeout(
@@ -257,6 +261,7 @@ async function startTailscaleRouteOwner(
             ) {
               return;
             }
+            cliCode = event.code;
             failure = routeClaimError(
               {
                 code: event.code,
@@ -280,17 +285,28 @@ async function startTailscaleRouteOwner(
           }
         });
         worker.once("close", (code, exitSignal) => {
-          failure = runtimeFailure() ?? failure;
           active = false;
-          resolveExit();
-          if (!ready) {
-            reject(
-              failure ??
-                new Error(
-                  `Tailscale route owner exited before readiness (${exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`})`,
-                ),
-            );
-          }
+          const reason = exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`;
+          diagnosis = runtimeFailure()
+            .catch((error: unknown) =>
+              failure
+                ? new AggregateError([failure, error], "Tailscale runtime diagnosis failed", {
+                    cause: failure,
+                  })
+                : toErrorObject(error, "Tailscale runtime diagnosis failed"),
+            )
+            .then((runtimeError) => {
+              failure = runtimeError ?? failure;
+              if (!ready) {
+                reject(
+                  failure ?? new Error(`Tailscale route owner exited before readiness (${reason})`),
+                );
+              }
+            });
+          // Physical completion ends cleanup escalation even while diagnosis waits on I/O.
+          resolveExit(
+            `worker ${reason}${cliCode !== undefined ? `; CLI code ${cliCode ?? "unknown"}` : ""}`,
+          );
         });
       }),
     TAILSCALE_ROUTE_START_TIMEOUT_MS,
@@ -344,6 +360,7 @@ async function startTailscaleRouteOwner(
         { cause: cleanupError },
       );
     }
+    await diagnosis;
     signal?.throwIfAborted();
     throw failure ?? error;
   }
@@ -423,7 +440,13 @@ async function claimTailscaleRouteOwned(
         maxBuffer: 400_000,
         signal: params.signal,
       }).finally(() => params.signal?.throwIfAborted());
-    await waitForTailscaleBackendReady({ bin, prefix, info, signal: params.signal });
+    await waitForTailscaleBackendReady({
+      bin,
+      prefix,
+      info,
+      signal: params.signal,
+      managedMode: mode,
+    });
     assertCurrent();
     const { stdout } = await exec(["serve", "status", "--json"]);
     const routes =

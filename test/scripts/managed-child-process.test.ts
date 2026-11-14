@@ -21,6 +21,7 @@ import {
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
+import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
@@ -99,27 +100,6 @@ function runController(dir: string, source: string, bin = testNodeExecPath, forc
   });
   expect(result.error).toBeUndefined();
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-}
-
-function restoreEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
-}
-
-function withDefaultWindowsSystemRoot(run: () => void): void {
-  const originalSystemRoot = process.env.SystemRoot;
-  const originalWindir = process.env.WINDIR;
-  try {
-    process.env.SystemRoot = "C:\\Windows";
-    delete process.env.WINDIR;
-    run();
-  } finally {
-    restoreEnvValue("SystemRoot", originalSystemRoot);
-    restoreEnvValue("WINDIR", originalWindir);
-  }
 }
 
 function expectProcessPid(pid: number | undefined): number {
@@ -430,7 +410,7 @@ sendReceipt(process.argv[2], "ready");
   });
 
   it("signals Windows managed process trees with taskkill", () => {
-    withDefaultWindowsSystemRoot(() => {
+    withEnv({ SystemRoot: "C:\\Windows", WINDIR: undefined }, () => {
       const child = {
         kill: vi.fn(),
         pid: 12345,
@@ -486,7 +466,7 @@ sendReceipt(process.argv[2], "ready");
   );
 
   it.each([false, true])("escalates trusted Windows taskkill (stdio only: %s)", (stdioOnly) => {
-    withDefaultWindowsSystemRoot(() => {
+    withEnv({ SystemRoot: "C:\\Windows", WINDIR: undefined }, () => {
       const child = { kill: vi.fn(() => (stdioOnly ? true : undefined)), pid: process.pid };
       const runTaskkill = vi
         .fn()
@@ -1134,8 +1114,6 @@ setInterval(() => {}, 1_000);
     joinedTest(async ({ signal }) => {
       const root = createTempDir("managed-command-owner-");
       const owner = createVitestResourceOwner(root);
-      const originalSystemRoot = process.env.SystemRoot;
-      const originalWindir = process.env.WINDIR;
       let childPid = 0;
       let childClosed: Promise<unknown> | undefined;
       const runTaskkill = vi.fn(() => ({
@@ -1143,43 +1121,42 @@ setInterval(() => {}, 1_000);
         status: null,
       }));
       try {
-        process.env.SystemRoot = "C:\\Windows";
-        delete process.env.WINDIR;
-        await expect(
-          runNodeCommand({
-            args: ["-e", "setInterval(() => {}, 1_000)"],
-            onReady: (child) => {
-              childPid = expectProcessPid(child.pid);
-              childClosed = waitForClose(child);
-            },
-            platform: "win32",
-            runTaskkill,
-            env: fixtureEnv(root),
-            timeoutMs: 200,
-          }),
-        ).rejects.toMatchObject({
-          code: "EPROCESSGROUP_CLEANUP_FAILED",
-          manualRecoveryRequired: true,
-          processTreeState: "indeterminate",
-        });
+        // Restore Windows lookup inputs before fallback child recovery runs.
+        await withEnvAsync({ SystemRoot: "C:\\Windows", WINDIR: undefined }, async () => {
+          await expect(
+            runNodeCommand({
+              args: ["-e", "setInterval(() => {}, 1_000)"],
+              onReady: (child) => {
+                childPid = expectProcessPid(child.pid);
+                childClosed = waitForClose(child);
+              },
+              platform: "win32",
+              runTaskkill,
+              env: fixtureEnv(root),
+              timeoutMs: 200,
+            }),
+          ).rejects.toMatchObject({
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+            manualRecoveryRequired: true,
+            processTreeState: "indeterminate",
+          });
 
-        expect(runTaskkill).toHaveBeenCalledWith(
-          taskkillPath,
-          ["/PID", String(childPid), "/T", "/F"],
-          {
-            killSignal: "SIGKILL",
-            stdio: ["ignore", "pipe", "pipe"],
-            timeout: 10_000,
-          },
-        );
-        if (!childClosed) {
-          throw new Error("Expected managed child close observer");
-        }
-        await withinTest(childClosed, signal);
-        expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+          expect(runTaskkill).toHaveBeenCalledWith(
+            taskkillPath,
+            ["/PID", String(childPid), "/T", "/F"],
+            {
+              killSignal: "SIGKILL",
+              stdio: ["ignore", "pipe", "pipe"],
+              timeout: 10_000,
+            },
+          );
+          if (!childClosed) {
+            throw new Error("Expected managed child close observer");
+          }
+          await withinTest(childClosed, signal);
+          expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        });
       } finally {
-        restoreEnvValue("SystemRoot", originalSystemRoot);
-        restoreEnvValue("WINDIR", originalWindir);
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }

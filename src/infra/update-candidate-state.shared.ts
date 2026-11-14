@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
@@ -11,13 +13,74 @@ import { ignoreMissingPath } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { SCHEMA_DISCOVERY_OWNERSHIP_FILENAME } from "./sqlite-snapshot-retirement.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
+  StateDatabaseDiscoverySchema,
   queueStateDatabaseSpelling,
   resolveUpdateCandidateStateIdentity,
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
+
+const StateSchemaDiscoveryOwnershipSchema = z.record(
+  z.string(),
+  StateDatabaseDiscoverySchema.pick({ owners: true, registeredPaths: true }),
+);
+
+/** Released 2026.9.x drivers strip ownership from the plan but reuse this private directory. */
+export async function writeUpdateStateSchemaOwnership(
+  stagingRoot: string | undefined,
+  files: Iterable<readonly [string, StateDatabaseDiscovery]>,
+): Promise<void> {
+  if (!stagingRoot) {
+    return;
+  }
+  const ownership = Object.fromEntries(
+    [...files]
+      .filter(([, discovery]) => discovery.owners?.length || discovery.registeredPaths?.length)
+      .map(([identity, { owners, registeredPaths }]) => [identity, { owners, registeredPaths }]),
+  );
+  await fs
+    .writeFile(
+      path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME),
+      JSON.stringify(ownership),
+      { mode: 0o600 },
+    )
+    .catch(ignoreMissingPath);
+}
+
+export async function rehydrateUpdateStateSchemaOwnership<
+  T extends { files: ReadonlyArray<readonly [string, StateDatabaseDiscovery]> },
+>(input: { stateDir: string; stagingRoot?: string }, plan: T): Promise<T> {
+  const { stagingRoot } = input;
+  const record = stagingRoot
+    ? await fs
+        .readFile(path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME), "utf8")
+        .catch(ignoreMissingPath)
+    : undefined;
+  const ownership = record ? StateSchemaDiscoveryOwnershipSchema.parse(JSON.parse(record)) : {};
+  const sharedIdentity = resolveUpdateCandidateStateIdentity(
+    input.stateDir,
+    path.resolve(input.stateDir, "state", "openclaw.sqlite"),
+  );
+  return {
+    ...plan,
+    files: plan.files.map(([identity, discovery]): [string, StateDatabaseDiscovery] => {
+      if (discovery.owners?.length || discovery.registeredPaths?.length) {
+        return [identity, discovery];
+      }
+      if (ownership[identity]) {
+        return [identity, { ...discovery, ...ownership[identity] }];
+      }
+      return [
+        identity,
+        identity === sharedIdentity ? { ...discovery, owners: [{ role: "global" }] } : discovery,
+      ];
+    }),
+  };
+}
+
 export type StateInput = {
   stateDir: string;
   additionalPaths?: readonly string[];
@@ -98,15 +161,17 @@ export async function readUpdateStoreSchemaVersion(
   file: string,
   input: StateInput & { stagingRoot?: string; preserveSourceArtifacts?: boolean },
 ): Promise<{ userVersion: number }> {
-  const { inspectSqliteSchemaHeaderInProcess } = await import("./sqlite-readonly-location.js");
+  const { inspectSqliteSchemaHeaderInProcess } =
+    await import("./sqlite-schema-header-inspection.js");
   const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
     file,
     input.stagingRoot,
     undefined,
     input.preserveSourceArtifacts,
+    { cleanupFailure: "warn" },
   );
   if (userVersion === 0) {
-    const { readBackupEngine } = await import("../snapshot/database-backup.js");
+    const { readBackupEngine } = await import("./database-engine/physical-store.js");
     if (readBackupEngine(file).engine === "postgres") {
       const { readUpdatePostgresStoreVersion } =
         await import("./update-candidate-state.postgres.js");
@@ -120,14 +185,21 @@ export async function collectSupplementalStateDatabasePaths(
   input: StateInput,
   files: Map<string, StateDatabaseDiscovery>,
 ) {
-  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
   const knownRealpaths = new Set(
     await Promise.all([...files.keys()].map((file) => fs.realpath(file).catch(ignoreMissingPath))),
   );
-  // The private snapshot below owns registry reads, including legacy schemas.
+  // The caller owns registry reads, including legacy schemas.
   // Include declared retained plugin databases on either physical engine here.
-  for (const file of input.additionalPaths ??
-    (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
+  // Prepared lists, including [], already own discovery; workers must not reload its graph.
+  const additionalPaths =
+    input.additionalPaths ??
+    (await (
+      await import("./backup-sqlite-snapshot.js")
+    ).discoverBackupDatabasePaths({
+      ...input,
+      agentRegistry: [],
+    }));
+  for (const file of additionalPaths) {
     // Supplemental realpaths must not add aliases to the legacy versions inventory.
     // Registry discovery below still preserves every explicitly recorded spelling.
     if (files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {

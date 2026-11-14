@@ -311,6 +311,20 @@ describe("getStatusSummary", () => {
   });
   registerStatusSummaryWalCases((options) => getStatusSummary(options));
 
+  it("prepares session snapshots while channel summary is pending", async () => {
+    const channel = Promise.withResolvers<string[]>();
+    statusSummaryMocks.buildChannelSummary.mockReturnValueOnce(channel.promise);
+    const reading = getStatusSummary();
+    try {
+      await vi.waitFor(() => expect(statusSummaryMocks.buildChannelSummary).toHaveBeenCalled());
+      await vi.waitFor(() => expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalled());
+    } finally {
+      channel.resolve(["ok"]);
+      await reading;
+    }
+    expect((await reading).channelSummary).toEqual(["ok"]);
+  });
+
   it("summarizes every configured agent's global pending events without an ambient owner", async () => {
     const config = setExplicitAgents("global", "inbox");
     vi.mocked(peekSystemEvents).mockImplementation((key) => [`pending: ${key}`]);

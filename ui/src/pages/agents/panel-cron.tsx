@@ -12,13 +12,17 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
+  SettingsLoadingSkeleton,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
@@ -37,6 +41,7 @@ import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerCronEnglish);
 
 /** Only transient notices and controls live here; cached rows keep their DOM lifetime. */
 function CronReadBoundary(props: {
@@ -53,11 +58,11 @@ function CronReadBoundary(props: {
           <Errored
             fallback={(error) =>
               props.reportError ? (
-                <div class="callout danger" role={props.errorRole}>
+                <InlineAlert tone="danger" role={props.errorRole}>
                   {formatUiError(error())}
-                </div>
+                </InlineAlert>
               ) : (
-                props.children(false)
+                props.children(false, formatUiError(error()))
               )
             }
           >
@@ -71,6 +76,35 @@ function CronReadBoundary(props: {
         );
       }}
     </Show>
+  );
+}
+
+/** Initial reads explain missing values without replacing accepted sibling data. */
+function CronValue(props: { read: AgentCronRead | null; ready: boolean; value: JSX.Element }) {
+  return (
+    <CronReadBoundary read={props.read}>
+      {(pending, message) => (
+        <SettingsValue
+          value={
+            pending && !props.ready ? (
+              <span
+                class="skeleton skeleton-line"
+                style={{ display: "block", width: "72px" }}
+                role="status"
+                aria-busy="true"
+                aria-label={t("common.loading")}
+              />
+            ) : props.ready ? (
+              props.value
+            ) : message ? (
+              <span title={message}>{t("common.failed")}</span>
+            ) : (
+              t("common.na")
+            )
+          }
+        />
+      )}
+    </CronReadBoundary>
   );
 }
 
@@ -101,11 +135,13 @@ export function AgentCron(
         t("agents.context.schedulingSubtitle"),
         params.onSelectPanel,
       )}
-      <CronReadBoundary read={params.read().summary} reportError>
+      <CronReadBoundary read={params.read().status} reportError>
         {() => undefined}
       </CronReadBoundary>
       <CronReadBoundary read={params.read().command} reportError>
-        {(_pending, message) => (message ? <div class="callout danger">{message}</div> : undefined)}
+        {(_pending, message) =>
+          message ? <InlineAlert tone="danger">{message}</InlineAlert> : undefined
+        }
       </CronReadBoundary>
       <Show when={params.read().command && params.readState().cronNotice}>
         {(notice) => (
@@ -120,9 +156,9 @@ export function AgentCron(
         actions={
           <CronReadBoundary read={params.read().refresh}>
             {(pending) => (
-              <AgentPanelAction
-                label={pending ? t("common.refreshing") : t("common.refresh")}
-                disabled={pending}
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={pending}
                 onClick={params.onRefresh}
               />
             )}
@@ -134,15 +170,25 @@ export function AgentCron(
             [
               [
                 t("common.enabled"),
+                params.read().status,
+                params.readState().cronStatus !== null,
                 params.readState().cronStatus
                   ? params.readState().cronStatus?.enabled
                     ? t("common.yes")
                     : t("common.no")
                   : t("common.na"),
               ],
-              [t("agents.cronPanel.jobs"), params.readState().cronScopedTotal ?? t("common.na")],
+              [
+                t("agents.cronPanel.jobs"),
+                params.read().summary,
+                params.readState().cronScopedTotal !== null,
+                params.readState().cronScopedTotal,
+              ],
               [
                 t("agents.cronPanel.nextWake"),
+                params.read().summary,
+                params.readState().cronStatus?.enabled === false ||
+                  params.readState().cronScopedTotal !== null,
                 formatNextRun(
                   params.readState().cronStatus?.enabled === false
                     ? null
@@ -152,8 +198,11 @@ export function AgentCron(
             ] as const
           }
         >
-          {([title, value]) => (
-            <SettingsRow title={title} control={<SettingsValue value={value} />} />
+          {([title, read, ready, value]) => (
+            <SettingsRow
+              title={title}
+              control={<CronValue read={read} ready={ready} value={value} />}
+            />
           )}
         </For>
       </SettingsSection>
@@ -162,9 +211,16 @@ export function AgentCron(
         description={t("agents.cronPanel.agentJobsSubtitle")}
       >
         <CronReadBoundary read={params.read().jobs} reportError errorRole="alert">
-          {() => undefined}
+          {(pending) =>
+            pending && params.readState().cronJobsSnapshotRevision === null ? (
+              <SettingsLoadingSkeleton />
+            ) : undefined
+          }
         </CronReadBoundary>
-        {params.readState().cronJobs.length === 0 ? (
+        {!params.readState().cronLoading &&
+        !params.readState().cronJobsError &&
+        params.readState().cronJobs.length === 0 &&
+        params.readState().cronJobsSnapshotRevision !== null ? (
           <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
         ) : (
           <>
@@ -210,16 +266,18 @@ export function AgentCron(
               }}
             </For>
             <CronReadBoundary read={params.read().jobs}>
-              {(pending) => (
-                <CronJobsPagination
-                  jobsShown={params.readState().cronJobs.length}
-                  jobsTotal={params.readState().cronJobsTotal}
-                  hasMore={params.readState().cronJobsHasMore}
-                  loading={pending && !params.read().jobs?.append}
-                  loadingMore={pending && params.read().jobs?.append === true}
-                  onLoadMore={params.onLoadMore}
-                />
-              )}
+              {(pending) =>
+                params.readState().cronJobsSnapshotRevision === null ? undefined : (
+                  <CronJobsPagination
+                    jobsShown={params.readState().cronJobs.length}
+                    jobsTotal={params.readState().cronJobsTotal}
+                    hasMore={params.readState().cronJobsHasMore}
+                    loading={pending && !params.read().jobs?.append}
+                    loadingMore={pending && params.read().jobs?.append === true}
+                    onLoadMore={params.onLoadMore}
+                  />
+                )
+              }
             </CronReadBoundary>
           </>
         )}

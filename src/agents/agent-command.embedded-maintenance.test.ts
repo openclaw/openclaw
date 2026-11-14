@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
@@ -495,12 +496,11 @@ describe("agentCommand embedded maintenance", () => {
           event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
       ),
     ).toHaveLength(1);
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
-    );
+    expect(state.runMemoryFlushIfNeededMock.mock.calls).toMatchObject([
+      [{ sessionEntry: { totalTokens: lastCallUsage.total } }],
+    ]);
     expect(storedBeforeMaintenance).toMatchObject({
-      totalTokens: 904_869,
+      totalTokens: lastCallUsage.total,
       inputTokens: lastCallUsage.input,
       outputTokens: lastCallUsage.output,
       cacheRead: lastCallUsage.cacheRead,
@@ -518,9 +518,12 @@ describe("agentCommand embedded maintenance", () => {
           senderIsOwner: false,
           authProfileId: "openai:completed",
           authProfileIdSource: "user",
+          thinkingCatalog: [expect.objectContaining({ id: model, contextWindow: 1_050_000 })],
         },
       },
     });
+    const preflightRun = state.runSessionPreflightCompactionMock.mock.calls[0]?.[0].followupRun.run;
+    expect(preflightRun?.thinkingCatalog).toBe(maintenanceParams?.followupRun.run.thinkingCatalog);
     expect(maintenanceAuthorized).toBe(true);
     expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
@@ -612,7 +615,7 @@ describe("agentCommand embedded maintenance", () => {
             compactionCount: 7,
             totalTokens: 777,
             totalTokensFresh: true,
-            totalTokensVersion: 1,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           }));
         }
         const entry = loadSessionEntry(target);

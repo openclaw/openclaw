@@ -21,6 +21,7 @@ import {
   retainChatAbortSessionSnapshot,
   type ChatAbortSessionSnapshot,
 } from "./server-methods/chat-aborted-partial.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 import { formatForLog } from "./ws-log.js";
@@ -38,8 +39,6 @@ export async function retainGatewayOperatorRun(
   > & {
     context: OperatorRunCancellationContext;
     runId: string;
-    /** Canonical child relationship from the admitted session. */
-    spawnedBy?: string;
     entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
     /** Present only for a trusted host-originated input with no explicit human requester. */
@@ -50,14 +49,27 @@ export async function retainGatewayOperatorRun(
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
     : await captureGatewayOperatorRunAuthority({
         ...params,
-        // Every child owns its accepted work beyond the requester's recovery turn.
-        independentContinuation: params.spawnedBy ? true : undefined,
+        // An accepted turn owns its authority until it ends. A requester's recovery
+        // turn or scheduled occurrence ending must not revoke it; the retained
+        // continuation still checks device, profile, role and access grant.
+        independentContinuation: true,
       });
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {
+    if (
+      !params.systemTurn &&
+      captured &&
+      params.entry &&
+      isRpcSourceRegistered(params.entry) &&
+      resolveAuthenticatedPersonalGatewayProfileId(params.client) === captured.authority.profileId
+    ) {
+      // Retain human initiation across live queue handoffs. System-turn authority
+      // can come from the current session owner and must not mint this fact.
+      params.entry.adapter.initiatingPersonalOperator = captured.authority;
+    }
     partialSession =
       signal && params.entry
         ? retainChatAbortSessionSnapshot(

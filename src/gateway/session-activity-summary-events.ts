@@ -51,7 +51,11 @@ export async function broadcastSessionActivitySummary(
         agentId: target.agentId,
         dropIfSlow: true,
         ...(read && projection
-          ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+          ? {
+              prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                reuseEnvelope: true,
+              }),
+            }
           : {}),
       },
     );

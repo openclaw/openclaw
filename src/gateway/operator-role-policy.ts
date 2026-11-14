@@ -11,7 +11,12 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdTunnelRolePolicy,
+} from "./openclaw-id/tunnel-principal.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -19,7 +24,7 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const reportedUnknownAssignments = new Set<string>();
 type OperatorRolePolicyChange =
-  | { kind: "assignment"; profileId: string }
+  | { kind: "assignment"; profileId: string; roleOnly: boolean }
   | { kind: "config"; context: object };
 const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
 const configRevisions = new WeakMap<object, object>();
@@ -39,8 +44,14 @@ type GatewaySessionAgentAuthorization = {
   | { actor?: never; profileId?: never; client: GatewayClient | null | undefined }
 );
 
-/** Publishes a committed assignment change to retained authorization consumers. */
-export function invalidateOperatorRolePolicy(profileId: string): void {
+/**
+ * Publishes a committed assignment change to retained authorization consumers. `roleOnly`
+ * marks a change to the profile's named role alone, with the person behind it unchanged.
+ */
+export function invalidateOperatorRolePolicy(
+  profileId: string,
+  opts?: { roleOnly?: boolean },
+): void {
   assignmentRevision += 1;
   bumpGatewayAccessRevision();
   for (const reported of reportedUnknownAssignments) {
@@ -48,7 +59,11 @@ export function invalidateOperatorRolePolicy(profileId: string): void {
       reportedUnknownAssignments.delete(reported);
     }
   }
-  notifyListeners([...policyListeners], { kind: "assignment", profileId });
+  notifyListeners([...policyListeners], {
+    kind: "assignment",
+    profileId,
+    roleOnly: opts?.roleOnly === true,
+  });
 }
 
 export function onOperatorRolePolicyChanged(
@@ -82,20 +97,27 @@ export function resolveOperatorRoleSelection(
   githubLogin: string | null,
 ): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
   const roles = cfg.gateway?.roles;
-  if (!roles || !profileId || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    !roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    !profileId ||
+    profileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
     return { roleSource: "default" };
   }
   if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
     return { effectiveRole: assignedRole, roleSource: "assigned" };
   }
   const login = githubLogin?.toLowerCase();
-  if (login) {
-    for (const [configuredLogin, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+  const assignments = roles.assignments?.byGithubLogin;
+  if (login && assignments) {
+    for (const configuredLogin of Object.keys(assignments)) {
       if (
         configuredLogin.trim().toLowerCase() === login &&
-        Object.hasOwn(roles.definitions, role)
+        // SAFETY: Object.keys enumerates the validated string-valued assignment map.
+        Object.hasOwn(roles.definitions, assignments[configuredLogin]!)
       ) {
-        return { effectiveRole: role, roleSource: "githubLogin" };
+        return { effectiveRole: assignments[configuredLogin], roleSource: "githubLogin" };
       }
     }
   }
@@ -108,7 +130,7 @@ export function resolveOperatorRolePolicyForProfile(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   // The owner attributes the shared-secret system actor; roles govern identified people only.
-  if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   const profile = profileId
@@ -130,7 +152,11 @@ export function resolveOperatorRolePolicyForAssignment(
   githubLogin: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    !roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    profileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
     return undefined;
   }
   if (!profileId) {
@@ -192,6 +218,15 @@ export function resolveOperatorRolePolicy(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   const actor = resolveGatewayOperatorRoleActor(client);
+  // An OpenClaw ID member's membership role caps its connection, independently of named roles.
+  const principal = client?.internal?.openclawIdPrincipal;
+  if (principal) {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new Error("OpenClaw ID membership authority changed");
+    }
+    client?.internal?.operatorRunAuthority?.assertCurrent();
+    return openclawIdTunnelRolePolicy(principal);
+  }
   if (actor?.kind === "system") {
     return undefined;
   }
@@ -205,7 +240,21 @@ export function resolveOperatorRolePolicy(
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
     }
-    if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
+    // A linked owner device's run keeps the owner's authority under its person's profile.
+    if (authority.openclawIdPrincipal?.kind === "owner") {
+      if (!isOpenClawIdTunnelPrincipalCurrent(authority.openclawIdPrincipal)) {
+        throw new Error("OpenClaw ID membership authority changed");
+      }
+      authority.assertCurrent();
+      return undefined;
+    }
+    if (roleFacts?.policy) {
+      return roleFacts.policy;
+    }
+    if (
+      !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      authority.profileId === GATEWAY_OWNER_PROFILE_ID
+    ) {
       return undefined;
     }
     if (!roleFacts) {
@@ -331,7 +380,7 @@ export function assertOperatorCloudProfileDispatchAllowed(params: {
 }): void {
   const role = resolveOperatorRolePolicy(params.client ?? null, params.config);
   const administrator =
-    (!params.config.gateway?.roles && !params.client) ||
+    (!isNamedOperatorRoleEnforcementEnabled(params.config) && !params.client) ||
     (params.client?.connect?.scopes?.includes(ADMIN_SCOPE) === true &&
       (!role || role.scopes.includes(ADMIN_SCOPE)));
   if (administrator) {

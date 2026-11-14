@@ -64,7 +64,13 @@ async function mountFile(
   mounted.push(container);
   await panel.updateComplete;
   await expect
-    .poll(() => panel.querySelector(".cm-editor, .sidebar-markdown"), { timeout: 5_000 })
+    .poll(
+      () =>
+        panel.querySelector(
+          ".cm-editor, .sidebar-markdown, .sidebar-svg-file__view:not([hidden]) img",
+        ),
+      { timeout: 5_000 },
+    )
     .not.toBeNull();
   return panel;
 }
@@ -134,6 +140,74 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
+  it.each(["desktop", "mobile"] as const)(
+    "preserves generic-text SVG reading and editing in %s",
+    async (presentation) => {
+      await desktopViewport();
+      const source =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="red"/></svg>';
+      const saved = source.replace('fill="red"', 'fill="blue"');
+      const save = vi.fn(async () => ({ ok: true as const, hash: "saved-svg" }));
+      const content = editableFile(
+        source,
+        { save },
+        {
+          name: "diagram.svg",
+          path: "diagram.svg",
+          mimeType: "text/plain",
+          download: async () => ({ blob: new Blob([source]), filename: "diagram.svg" }),
+        },
+      );
+      const panel = await mountFile(content, presentation === "desktop" ? 720 : 360, presentation);
+      if (presentation === "mobile") {
+        expect(panel.querySelector(".sidebar-svg-file")).toBeNull();
+        expect(EditorView.findFromDOM(editorOf(panel))!.state.doc.toString()).toBe(source);
+        await beginEdit(panel, saved);
+        expect(readFileDraft(content)?.content).toBe(saved);
+        return;
+      }
+      const image = () =>
+        expectDefined(
+          panel.querySelector<HTMLImageElement>(".sidebar-svg-file img"),
+          "SVG preview",
+        );
+      await expect.poll(() => image().naturalWidth).toBe(32);
+      await expect.element(image()).toBeVisible();
+      Object.assign(panel, { fileNavigation: { line: 1 } });
+      await expect.poll(() => panel.querySelector(".cm-content")).not.toBeNull();
+      expect(EditorView.findFromDOM(editorOf(panel))!.state.doc.toString()).toBe(source);
+      expect(button(panel, "Enable word wrap").getAttribute("aria-pressed")).toBe("false");
+      await click(panel, "File actions");
+      await click(panel, "Search in file");
+      const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await userEvent.fill(search, "rect");
+      await expect.poll(() => panel.querySelector('[role="status"]')?.textContent).toBe("1/1");
+      search.dispatchEvent(new CompositionEvent("compositionend"));
+      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      search.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(false);
+      await click(panel, "Reading mode: Highlighted source");
+      await click(panel, "Preview");
+      expect(panel.querySelector('input[type="search"]')).toBeNull();
+      await expect.element(image()).toBeVisible();
+      await beginEdit(panel, saved);
+      expect(readFileDraft(content)?.content).toBe(saved);
+      unmountFile(panel);
+      const reopened = await mountFile(content, 720, "desktop");
+      expect(EditorView.findFromDOM(editorOf(reopened))!.state.doc.toString()).toBe(saved);
+      await saveFile(reopened, save, 1);
+      await expect.poll(() => readFileDraft(content)).toBeUndefined();
+      await click(reopened, "Discard");
+      const updated = expectDefined(
+        reopened.querySelector<HTMLImageElement>(".sidebar-svg-file img"),
+        "Saved SVG",
+      );
+      await expect.element(updated).toBeVisible();
+      expect(decodeURIComponent(updated.src.split(",", 2)[1]!)).toBe(saved);
+      expect(content.content).toBe(saved);
+    },
+  );
+
   it.each(["desktop", "mobile"] as const)(
     "renders a complete large Markdown file in %s preview without changing its source or safety",
     async (presentation) => {
@@ -306,17 +380,17 @@ describe.runIf(browserMode)("chat file editor", () => {
   });
 
   it.each([
-    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
+    { name: "mixed CRLF first", content: "first\r\nnéedle\rlast\r\nnéedle", matchLines: [1, 3] },
     {
       name: "editable mixed LF first",
-      content: "first\nneedle\rlast\r\nneedle",
+      content: "first\nnéedle\rlast\r\nnéedle",
       matchLines: [1, 3],
       editable: true,
     },
   ])("searches the displayed lines in $name files", async ({ content, matchLines, editable }) => {
     const panel = await mountFile(editable ? editableFile(content) : file(content));
     await click(panel, "Search in file");
-    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "needle");
+    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "e\u0301");
     const lineIndexes = (selector: string) => {
       const lines = Array.from(panel.querySelectorAll(".cm-line"));
       return Array.from(panel.querySelectorAll(selector), (line) => lines.indexOf(line));
@@ -329,8 +403,6 @@ describe.runIf(browserMode)("chat file editor", () => {
     await click(panel, "Previous match");
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
     expect(readFileDraft(panel.content)).toBeUndefined();
-    expect(canReloadControlUiDocument()).toBe(true);
-    panel.remove();
     expect(canReloadControlUiDocument()).toBe(true);
   });
 
@@ -363,6 +435,10 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(counter()).toBe("1/3");
       const focusTarget = control === "input" ? input : button(panel, control);
       if (control === "input") {
+        // WebKit can send the IME-confirming Enter after compositionend with its flags cleared.
+        input.dispatchEvent(new CompositionEvent("compositionend"));
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
         await userEvent.keyboard("{Enter}");
         expect(counter()).toBe("2/3");
         await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
@@ -412,10 +488,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.keyboard("{Enter}");
     await expectAccessibleEditor(editor, false);
     await userEvent.fill(editor, "after");
-    const saveButton = button(panel, "Save");
-    expect(saveButton.disabled).toBe(false);
-    await userEvent.click(saveButton);
-    await expect.poll(() => save.mock.calls.length).toBe(1);
+    await saveFile(panel, save, 1);
     expect(save).toHaveBeenCalledWith({ content: "after", expectedHash: "hash-1" });
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(editorOf(panel).textContent).toContain("after");
@@ -552,11 +625,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     "drops edit mode and its draft when a conflict reload returns %j",
     async (content) => {
       const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-      const fetchLatest = vi.fn().mockResolvedValue({
-        content,
-        hash: "hash-2",
-        editable: false,
-      });
+      const fetchLatest = vi.fn().mockResolvedValue({ content, hash: "hash-2", editable: false });
       const panel = await mountFile(editableFile("before", { save, fetchLatest }));
       await beginEdit(panel, "local");
       await click(panel, "Save");
@@ -566,8 +635,6 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(editorOf(panel).getAttribute("contenteditable")).toBe("false");
       expect(panel.querySelector('button[aria-label="Edit file"]')).toBeNull();
       expect(readFileDraft(panel.content)).toBeUndefined();
-      expect(canReloadControlUiDocument()).toBe(true);
-      panel.remove();
       expect(canReloadControlUiDocument()).toBe(true);
     },
   );

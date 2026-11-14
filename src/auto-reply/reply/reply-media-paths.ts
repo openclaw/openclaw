@@ -19,10 +19,6 @@ import {
   resolveSandboxedMediaSource,
 } from "../../agents/sandbox-paths.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import {
-  ensureSandboxWorkspaceForSession,
-  resolveSandboxContext,
-} from "../../agents/sandbox/context.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -31,6 +27,7 @@ import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { ImageOptimizationLimitError } from "../../media/image-optimization-error.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../../media/local-media-path.js";
@@ -39,6 +36,7 @@ import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedHostOutboundMediaAccess } from "../../media/read-capability.js";
 import { saveMediaFile } from "../../media/store.js";
+import { SaveMediaSourceError } from "../../media/store.shared.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import {
   appendReplyMediaFailures,
@@ -77,6 +75,13 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
   let current: unknown = error;
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
   for (let depth = 0; current instanceof Error && depth < 4; depth += 1) {
+    if (
+      ((current instanceof FsSafeError || current instanceof SaveMediaSourceError) &&
+        current.code === "too-large") ||
+      current instanceof ImageOptimizationLimitError
+    ) {
+      return "file-too-large";
+    }
     if (
       (current instanceof LocalMediaAccessError || current instanceof FsSafeError) &&
       current.code === "not-found"
@@ -195,23 +200,26 @@ export function createReplyMediaSourcePreparer(
   const persistedMediaBySource = new Map<string, Promise<{ path: string; contentType?: string }>>();
 
   const resolveSandboxWorkspace = async () => {
-    sandboxWorkspacePromise ??= ensureSandboxWorkspaceForSession(
-      {
-        config: params.cfg,
-        agentId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
+    sandboxWorkspacePromise ??= import("../../agents/sandbox/context.js").then(
+      async ({ ensureSandboxWorkspaceForSession }) => {
+        const sandbox = await ensureSandboxWorkspaceForSession(
+          {
+            config: params.cfg,
+            agentId,
+            sessionKey: params.sessionKey,
+            workspaceDir: params.workspaceDir,
+          },
+          readSource,
+        );
+        return sandbox
+          ? {
+              root: sandbox.workspaceDir,
+              containerWorkdir: sandbox.containerWorkdir,
+              // Fail closed when access metadata is absent: treat as unmounted.
+              workspaceAccess: sandbox.workspaceAccess ?? "none",
+            }
+          : undefined;
       },
-      readSource,
-    ).then((sandbox) =>
-      sandbox
-        ? {
-            root: sandbox.workspaceDir,
-            containerWorkdir: sandbox.containerWorkdir,
-            // Fail closed when access metadata is absent: treat as unmounted.
-            workspaceAccess: sandbox.workspaceAccess ?? "none",
-          }
-        : undefined,
     );
     return await sandboxWorkspacePromise;
   };
@@ -430,7 +438,11 @@ export function createReplyMediaSourcePreparer(
         prepared.push({ source, outcome: await normalize(source) });
       } catch (error) {
         const failure = createReplyMediaFailure(source, index, error);
-        if (params.workspaceMediaRoot && isLikelyLocalMediaSource(source)) {
+        if (
+          failure.code !== "file-too-large" &&
+          params.workspaceMediaRoot &&
+          isLikelyLocalMediaSource(source)
+        ) {
           failure.label = truncateUtf16Safe(
             `Remote file: ${failure.label}`,
             MAX_FAILURE_LABEL_LENGTH,
@@ -462,14 +474,18 @@ export function createReplyMediaSourcePreparer(
       async (preparedRuntimeStatus) => {
         let sandbox: SandboxContext | null = null;
         try {
-          sandbox = await resolveSandboxContext({
-            config: params.cfg,
-            agentId,
-            sessionKey: params.sessionKey,
-            workspaceDir: params.workspaceDir,
-            preparedRuntimeStatus,
-            assertCurrent,
-          });
+          if (preparedRuntimeStatus.sandboxed) {
+            const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
+            assertCurrent();
+            sandbox = await resolveSandboxContext({
+              config: params.cfg,
+              agentId,
+              sessionKey: params.sessionKey,
+              workspaceDir: params.workspaceDir,
+              preparedRuntimeStatus,
+              assertCurrent,
+            });
+          }
           if (sandbox && !sandbox.fsBridge) {
             throw new Error("SSH sandbox has no filesystem bridge for reply media");
           }

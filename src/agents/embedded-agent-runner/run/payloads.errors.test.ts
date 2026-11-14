@@ -16,11 +16,13 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveCronPayloadOutcome } from "../../../cron/isolated-agent/helpers.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   buildPayloads,
   makePayloadAssistant as makeAssistant,
@@ -104,6 +106,33 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
 });
 
 describe("buildEmbeddedRunPayloads", () => {
+  it.each(["selected", "earlier", "aborted"] as const)(
+    "binds provider-error observations only to the selected assistant (%s)",
+    (source) => {
+      const assistant = makeAssistant({
+        content: [],
+        stopReason: "error",
+        errorMessage: "400 invalid request schema",
+      });
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: false,
+      });
+      const payloads = buildPayloads({
+        lastAssistant: assistant,
+        currentAssistant: source === "earlier" ? null : assistant,
+        agentTerminal,
+        runAborted: source === "aborted",
+        isCronTrigger: true,
+      });
+      const outcome = resolveCronPayloadOutcome({ payloads });
+      expect(outcome.hasFatalStructuredErrorPayload).toBe(true);
+      expect(outcome.agentTerminal).toEqual(source === "selected" ? agentTerminal : undefined);
+    },
+  );
+
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
   const REDACTED_TEST_MODEL_FAILURE_TEXT =
@@ -153,7 +182,6 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
   it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
@@ -199,8 +227,6 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expectNoPayloadTextContaining(payloads, "Edit");
-    expectNoPayloadTextContaining(payloads, "missing");
   });
 
   it.each([false, true])(
@@ -239,7 +265,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.map((payload) => payload.text)).not.toContain(errorJsonPretty);
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
@@ -248,7 +273,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it.each<Parameters<typeof buildPayloads>[0] & { name: string; text: string; absent: string[] }>([

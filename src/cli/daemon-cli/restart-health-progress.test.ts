@@ -17,40 +17,110 @@ describe("restart startup progress", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
-  it("observes explicit startup phases before readiness at 90000 ms", async () => {
-    const readyAtMs = 90_000;
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000 }],
-      hints: [],
-    });
-    requestStartupProbe.mockImplementation(async () => ({
-      statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
-      body: JSON.stringify(
-        monotonicClock.nowMs < readyAtMs
-          ? { status: "starting", pendingReason: "plugin-convergence" }
-          : { status: "started" },
-      ),
-    }));
-    callGateway.mockImplementation(gatewayHealthResponse());
-    const onProgress = vi.fn();
-    const result = await waitForGatewayHealthyRestart({
-      service: makeGatewayService({ status: "running", pid: 8000 }),
-      port: 18789,
-      requirePluginHealth: false,
-      timeoutMs: 60_000,
-      onProgress,
-    });
-    expect(result).toMatchObject({
-      healthy: false,
-      waitOutcome: "still-starting",
+  it.each([
+    { name: "advancing startup", advances: true, expected: "healthy", elapsedMs: 90_000 },
+    { name: "stalled startup", expected: "still-starting", elapsedMs: 60_000 },
+    {
+      name: "replayed phases",
+      advances: true,
+      repeats: true,
+      readyAtMs: 180_000,
+      expected: "still-starting",
+      elapsedMs: 105_000,
+    },
+    {
+      name: "another process's phases",
+      advances: true,
+      replaced: true,
+      expected: "still-starting",
       elapsedMs: 60_000,
-      startupPhase: "plugin-convergence",
-    });
-    expect(onProgress).toHaveBeenCalledWith("plugin-convergence");
-    expect(callGateway).toHaveBeenCalledTimes(0);
-  });
+    },
+    {
+      name: "explicit deadline",
+      advances: true,
+      timeoutMs: 60_000,
+      expected: "still-starting",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "foreign listener phases",
+      advances: true,
+      listenerPid: 9000,
+      expected: "timeout",
+      elapsedMs: 60_000,
+    },
+    {
+      name: "dead replacement",
+      advances: true,
+      dies: true,
+      expected: "stopped-free",
+      elapsedMs: 47_500,
+    },
+  ])(
+    "observes $name without confusing progress with readiness",
+    async ({
+      advances,
+      repeats,
+      replaced,
+      readyAtMs = 90_000,
+      timeoutMs,
+      listenerPid,
+      dies,
+      expected,
+      elapsedMs,
+    }) => {
+      const runtimePid = () => (replaced && monotonicClock.nowMs >= 45_000 ? 8001 : 8000);
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.mocked(service.readRuntime).mockImplementation(async () =>
+        dies && monotonicClock.nowMs >= 45_000
+          ? { status: "stopped" }
+          : { status: "running", pid: runtimePid() },
+      );
+      inspectPortUsage.mockImplementation(async () => ({
+        port: 18789,
+        status: dies && monotonicClock.nowMs >= 45_000 ? "free" : "busy",
+        listeners:
+          dies && monotonicClock.nowMs >= 45_000 ? [] : [{ pid: listenerPid ?? runtimePid() }],
+        hints: [],
+      }));
+      requestStartupProbe.mockImplementation(async () => ({
+        statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
+        body: JSON.stringify(
+          monotonicClock.nowMs < readyAtMs
+            ? {
+                status: "starting",
+                pendingReason:
+                  advances &&
+                  monotonicClock.nowMs >= 45_000 &&
+                  !(repeats && monotonicClock.nowMs >= 75_000 && monotonicClock.nowMs < 105_000)
+                    ? "agent-database-inspection"
+                    : "startup-sidecars",
+              }
+            : { status: "started" },
+        ),
+      }));
+      callGateway.mockImplementation(gatewayHealthResponse());
+      const onProgress = vi.fn();
+      const result = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        requirePluginHealth: false,
+        timeoutMs,
+        onProgress,
+      });
+      expect(result).toMatchObject({
+        healthy: expected === "healthy",
+        waitOutcome: expected,
+        elapsedMs,
+      });
+      expect(onProgress).toHaveBeenCalledWith("startup-sidecars");
+      if (expected === "healthy") {
+        expect(callGateway).toHaveBeenCalledOnce();
+      } else {
+        expect(callGateway).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([{ statusCode: 503, body: '{"status":"draining","pendingReason":"shutdown"}' }])(
     "does not mistake another HTTP readiness outcome for startup: %j",

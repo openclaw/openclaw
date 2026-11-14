@@ -14,8 +14,8 @@ try {
     const before = fs.readFileSync(file, "utf8");
     let stamped = 0;
     const after = before.replace(
-      /^(\|[\t ]*\d+(?:-\d+)?[\t ]*\|[^\r\n]*\|[\t ]*)Unreleased([\t ]*\|[\t ]*\r?)$/gm,
-      (_row, prefix, suffix) => {
+      /^(\|[\t ]*\d+(?:-\d+)?[\t ]*\|[^\r\n]*\|[\t ]*)(`?)Unreleased\2([\t ]*\|[\t ]*\r?)$/gm,
+      (_row, prefix, _ticks, suffix) => {
         stamped++;
         return `${prefix}\`${tag}\`${suffix}`;
       },

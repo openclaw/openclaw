@@ -63,8 +63,15 @@ it.each([false, true])(
               name: "codex_apps",
               tools: Object.fromEntries(
                 tools.map((t) => [
-                  `calendar_${t.name}`,
-                  { title: `Calendar_${t.name}`, _meta: { connector_id: "calendar" } },
+                  `calendar.${t.name}`,
+                  {
+                    title: t.name,
+                    annotations: { readOnlyHint: t.isReadOnly },
+                    _meta: {
+                      connector_id: "calendar",
+                      _codex_apps: { resource_uri: `/calendar/link/${t.name}` },
+                    },
+                  },
                 ]),
               ),
             },
@@ -119,7 +126,7 @@ it.each([false, true])(
           default_tools_enabled: false,
           tools: Object.fromEntries(
             tools.map(({ name }) => [
-              `calendar_${name}`,
+              `calendar.${name}`,
               { enabled: name === "new_read" && !missingMetadata },
             ]),
           ),

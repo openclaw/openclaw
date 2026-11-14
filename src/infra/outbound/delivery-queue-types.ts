@@ -47,6 +47,11 @@ export type DurableDeliveryCompletion =
       sessionKey: string;
       storePath: string;
       sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
+    }
+  | {
+      /** A plugin's session notice; recovery replays it only while that plugin is loaded. */
+      kind: "plugin-notice";
+      pluginId: string;
     };
 
 export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {

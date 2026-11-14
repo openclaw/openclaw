@@ -51,10 +51,7 @@ it.each([
 });
 
 it.each([
-  {
-    result: { error: new Error("probe timeout"), stdout: "", status: null },
-    message: "probe timeout",
-  },
+  { result: { error: new Error("probe timeout"), status: null }, message: "probe timeout" },
   {
     result: {
       status: 1,
@@ -62,6 +59,7 @@ it.each([
     },
     message: "SQLite already loaded",
   },
+  { result: { status: null, signal: "SIGSEGV", stdout: "" }, message: "probe failed (SIGSEGV)" },
 ])("reports child failure and removes its program ($message)", ({ result, message }) => {
   const f = fixture();
   f.spawn.mockReturnValueOnce(result);

@@ -6,13 +6,13 @@ import type {
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-accounts.ts";
+import { registerModelAccountListEnglish } from "../../../i18n/locales/en-model-account-list.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 
-registerModelAccountsEnglish();
+registerModelAccountListEnglish();
 
 type AccountInventory = {
   model: string;
@@ -114,9 +114,12 @@ export function renderChatModelAccountControl(params: {
   const email = (profileId: string | undefined) =>
     profiles.find((profile) => profile.profileId === profileId)?.email;
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
-  const selectedLabel = selectedProfile?.displayName || selection.label;
+  const selectedLabel =
+    selection.kind === "automatic"
+      ? t("chat.modelAccounts.automatic")
+      : selectedProfile?.displayName || selection.label;
   const selectedIdentity = [
-    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
   ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??

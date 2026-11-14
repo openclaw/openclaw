@@ -41,7 +41,7 @@ import {
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   listProviderPolicyOwners,
-  loadProviderPolicyArtifacts,
+  loadProviderPolicyArtifactsAsync,
 } from "../plugins/provider-public-artifacts.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
@@ -434,7 +434,7 @@ async function inspectMemorySearchHealthForAgent(
       .filter(({ policyBlock }) => !policyBlock)
       .map(({ owner }) => owner);
     const policyArtifacts =
-      eligibleOwners.length > 0 ? loadProviderPolicyArtifacts(eligibleOwners) : null;
+      eligibleOwners.length > 0 ? await loadProviderPolicyArtifactsAsync(eligibleOwners) : null;
     const selectedPolicy = policyArtifacts
       ? { owner: policyArtifacts.owner, policyBlock: null }
       : ownerPolicies.find(({ policyBlock }) => policyBlock);

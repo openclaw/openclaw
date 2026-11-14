@@ -1,7 +1,7 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { beforeEach, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "./openai-provider.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
@@ -18,7 +18,7 @@ async function runCatalog(response: Response | undefined, options: CatalogOption
     return response;
   });
   try {
-    const result = await buildOpenAIProvider().catalog?.run({
+    const result = await discoveryProvider.catalog?.run({
       resolveProviderAuth: () => ({ mode: "api_key", apiKey, profileId, source: "profile" }),
       resolveProviderApiKey: () => ({ apiKey }),
       config: baseUrl
@@ -42,9 +42,21 @@ async function runCatalog(response: Response | undefined, options: CatalogOption
 }
 
 beforeEach(clearLiveCatalogCacheForTests);
+afterEach(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+});
 const modelRows = (ids: string[]) => ids.map((id) => ({ id, object: "model" }));
 
-it("shows every listed chat model that runs on Responses with conservative metadata", async () => {
+it("lists configured API-key models without loading profile auth runtimes", async () => {
+  // mock-isolation: Prepared credentials must not load either broad auth owner.
+  vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
+    throw new Error("Configured API-key catalogs must not load broad auth helpers");
+  });
+  // mock-isolation: Prepared credentials must not initialize profile auth runtimes.
+  vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => {
+    throw new Error("Configured API-key catalogs must not load profile auth runtime");
+  });
   const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-5.6-cyber", "gpt-6.2"];
   // Include pre-GPT-5, non-chat, subscription-only and experimental model families.
   const unadmittedIds = (
@@ -57,15 +69,22 @@ it("shows every listed chat model that runs on Responses with conservative metad
     "text-embedding-3-small omni-moderation-latest tts-1-hd whisper-1 sora-2"
   ).split(" ");
   const data = [
-    ...modelRows(["gpt-5.5", ...admittedIds, ...unadmittedIds]),
+    ...modelRows(["gpt-5.5", ...unadmittedIds]),
+    ...admittedIds.map((id) => ({ id, object: "model", capabilities: { chat: true } })),
     // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
     { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
   ];
   const { provider } = await runCatalog(Response.json({ data }));
 
-  expect(provider.models.map((model) => model.id).toSorted()).toEqual(
-    ["gpt-5.5", ...admittedIds].toSorted(),
-  );
+  expect(
+    provider.models
+      .filter((model) => model.inference?.chat !== false)
+      .map((model) => model.id)
+      .toSorted(),
+  ).toEqual(["gpt-5.5", ...admittedIds].toSorted());
+  expect(provider.models.find((model) => model.id === "tts-1-hd")?.inference).toEqual({
+    chat: false,
+  });
   for (const id of ["gpt-5.3-codex", "gpt-6.2"]) {
     expect(provider.models.find((model) => model.id === id)).toEqual({
       id,
@@ -91,12 +110,17 @@ it.each([
   ["an unauthorized key", 401, "sk-openai", "auth-rejected"],
   ["a forbidden key", 403, "sk-openai", "auth-rejected"],
   ["a temporary failure", 503, "sk-openai", "unavailable"],
+  ["a transport failure", undefined, "sk-openai", "unavailable"],
 ] as const)("scopes the selected profile for %s", async (_label, httpStatus, apiKey, status) => {
   const { provider, outcomes, requests } = await runCatalog(
-    Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
+    httpStatus === undefined
+      ? undefined
+      : Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
     { apiKey, profileId: "openai:api-key" },
   );
-  expect(provider.models.map((model) => model.id)).toEqual(
+  expect(
+    provider.models.filter((model) => model.inference?.chat !== false).map((model) => model.id),
+  ).toEqual(
     status === "unavailable"
       ? manifest.modelCatalog.providers.openai.models.map((model) => model.id)
       : [],

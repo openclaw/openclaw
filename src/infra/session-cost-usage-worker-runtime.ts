@@ -27,7 +27,6 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
@@ -243,10 +242,11 @@ export async function runUsageCostWorker(
       operation.kind === "refresh"
         ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
         : operation;
+    let resolver: Promise<UsageCostResolver> | undefined;
     return runSessionActorUsage(
       prepared.memory,
       request,
-      createUsageCostResolver(prepared, pricing),
+      () => (resolver ??= createUsageCostResolver(prepared, pricing)),
       waitForRefresh,
     );
   }
@@ -266,7 +266,6 @@ async function runPreparedUsageCostWorker(
       scope.assertCurrent();
       signal?.throwIfAborted();
     };
-    const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     const lock =
       capturedOperation.kind === "refresh"
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
@@ -290,14 +289,13 @@ async function runPreparedUsageCostWorker(
     }
     assertCurrent();
     let workerOperation: UsageCostWorkerOperation;
-    let resolveCost: UsageCostResolver;
+    let resolveCost: UsageCostResolver | undefined;
     if (capturedOperation.kind === "refresh") {
       const pricing = await prepareUsageCostPricing(prepared.config, prepared.agentDir);
       workerOperation = { ...capturedOperation, pricingFingerprint: pricing.fingerprint() };
-      resolveCost = createUsageCostResolver(prepared, pricing);
+      resolveCost = await createUsageCostResolver(prepared, pricing);
     } else {
       workerOperation = capturedOperation;
-      resolveCost = createUsageCostResolver(prepared);
     }
     const failures = openUsageCostRefreshFailures(location.env);
     const failureKey = (sessionFile: string) =>
@@ -346,20 +344,18 @@ async function runPreparedUsageCostWorker(
                   uncommittedSessionFiles.add(request.input.sessionFile);
                   break;
                 case "pricing":
+                  resolveCost ??= await createUsageCostResolver(prepared);
                   output = request.input.map(resolveCost);
                   break;
                 case "prune-rows":
-                  for (const row of request.input) {
-                    pruneRows.push({
+                  await requireLock("prune cache rows").pruneRows(
+                    request.input.map((row) => ({
                       key: row.key,
                       valueJson: row.value,
                       updatedAt: row.updatedAt,
-                    });
-                  }
-                  break;
-                case "prune":
-                  await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
-                  pruneRows.length = 0;
+                    })),
+                    context.signal,
+                  );
                   break;
                 case "write":
                   output = await requireLock("write cache rows").writeRollup(
