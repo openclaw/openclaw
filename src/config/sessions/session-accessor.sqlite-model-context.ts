@@ -1,6 +1,10 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
-import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
+import {
+  iterateSessionContextEntries,
+  iterateSessionContextMessages,
+  projectSessionContextMessage,
+} from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
@@ -78,6 +82,7 @@ export type TranscriptContextSnapshot = {
   entries: ContextEntry[];
   version: SessionTranscriptContextVersion;
   readEntry: (entry: ContextEntry) => SessionTreeEntry;
+  readMessages: () => Generator<AgentMessage>;
   readModelEntrySizes: (requests: readonly ModelContextRequest[]) => Map<ContextEntry, number>;
   readModelEntries: (
     requests: readonly ModelContextRequest[],
@@ -284,8 +289,8 @@ export function readSessionTranscriptContextMessages<T>(
     version?: SessionTranscriptContextVersion,
   ) => T,
 ): T {
-  const result = withTranscriptContextSnapshot(scope, ({ header, entries, readEntry, version }) => {
-    const messages = iterateSessionContextMessages(entries, readEntry);
+  const result = withTranscriptContextSnapshot(scope, ({ header, readMessages, version }) => {
+    const messages = readMessages();
     try {
       return read(messages, header, version);
     } finally {
@@ -582,14 +587,68 @@ export function prepareTranscriptContextSnapshot(
       request.omitCheckpoint,
       request.toolResultOmission,
     );
+  const readEntry = (entry: ContextEntry) =>
+    hydrateContextEntry(readPayload(entry).rows[0]!.event_json, entry);
   return {
     prepared,
     header: header ? JSON.parse(header.event_json) : undefined,
     entries,
     version,
-    readEntry: (entry) => {
-      const row = readPayload(entry).rows[0];
-      return hydrateContextEntry(row!.event_json, entry);
+    readEntry,
+    *readMessages() {
+      // PostgreSQL's synchronous adapter buffers a whole result, unlike SQLite's cursor.
+      if (isPostgresSqlConnection(database.db)) {
+        yield* iterateSessionContextMessages(entries, readEntry);
+        return;
+      }
+      const selected: Array<Parameters<typeof projectSessionContextMessage<ContextEntry>>[0]> = [];
+      let failure: { error: unknown } | undefined;
+      try {
+        for (const selection of iterateSessionContextEntries(entries)) {
+          if (selection.entry.type !== "reset") {
+            selected.push(selection);
+          }
+        }
+      } catch (error) {
+        // A short consumer must not observe a later malformed placement.
+        failure = { error };
+      }
+      for (let start = 0; start < selected.length;) {
+        let end = start + 1;
+        // Compaction and background placements can reorder rows. Split at each reversal
+        // so the primary-key cursor preserves context order without sorting payloads.
+        while (
+          end < selected.length &&
+          end - start < MODEL_CONTEXT_PAYLOAD_BATCH_SIZE &&
+          selected[end]!.entry.seq > selected[end - 1]!.entry.seq
+        ) {
+          end++;
+        }
+        const batch = selected.slice(start, end);
+        let index = 0;
+        for (const row of iterateSqliteQuerySync(
+          database.db,
+          base
+            .select(transcriptEventJsonSql(database.db).as("event_json"))
+            .where(
+              "seq",
+              "in",
+              batch.map(({ entry }) => entry.seq),
+            )
+            .orderBy("seq", "asc"),
+        )) {
+          const message = projectSessionContextMessage(batch[index++]!, (entry) =>
+            hydrateContextEntry(row.event_json, entry),
+          );
+          if (message) {
+            yield message;
+          }
+        }
+        start = end;
+      }
+      if (failure) {
+        throw failure.error;
+      }
     },
     readModelEntrySizes: (requests) => {
       const sizes = new Map<ContextEntry, number>();
