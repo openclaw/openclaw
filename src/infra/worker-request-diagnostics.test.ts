@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { onWorkerRequestMetrics, trackWorkerRequest } from "./worker-request-diagnostics.js";
 
 const { report } = vi.hoisted(() => ({ report: vi.fn() }));
+// mock-isolation: Capture the slow-delivery report without initializing process-wide logging.
 vi.mock("./worker-request-delivery-report.runtime.js", () => ({
   reportSlowWorkerDelivery: report,
 }));
