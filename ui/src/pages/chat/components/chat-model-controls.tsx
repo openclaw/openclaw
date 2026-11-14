@@ -529,15 +529,20 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const fastMode = props.modelSwitching
       ? { ...presentedFastMode, disabled: true }
       : presentedFastMode;
-    const catalogTriggerStatus = retired
-      ? resolveCatalogTriggerStatus(catalogState, 0)
-      : policy?.restricted && !currentOverride && !defaultModel
-        ? t(
-            modelOptions.length
-              ? "chat.modelControls.selectionRequired"
-              : "chat.modelControls.noPermittedModels",
-          )
-        : resolveCatalogTriggerStatus(catalogState, modelOptions.length);
+    const catalogTriggerStatus =
+      catalogState.status === "ready" &&
+      catalogState.pendingProviders?.length &&
+      modelOptions.length === 0
+        ? undefined
+        : retired
+          ? resolveCatalogTriggerStatus(catalogState, 0)
+          : policy?.restricted && !currentOverride && !defaultModel
+            ? t(
+                modelOptions.length
+                  ? "chat.modelControls.selectionRequired"
+                  : "chat.modelControls.noPermittedModels",
+              )
+            : resolveCatalogTriggerStatus(catalogState, modelOptions.length);
     const hasResolvableModel =
       catalogState.hasSnapshot &&
       (catalogState.status === "ready" ||

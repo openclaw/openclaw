@@ -9,6 +9,58 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it.each(
+    ["chat", "new"].flatMap((route) => [false, true].map((restricted) => ({ route, restricted }))),
+  )(
+    "does not declare a pending model catalog empty in /$route (restricted=$restricted)",
+    async ({ route, restricted }) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+        async ({ page }) => {
+          const model = {
+            id: "model-a",
+            name: "Example Model",
+            provider: "example",
+            contextWindow: 128_000,
+          };
+          const modelSelectionPolicy = restricted ? { restricted: true } : undefined;
+          const emptyLabel = restricted
+            ? "No models are permitted by your admin."
+            : "No models available";
+          const gateway = await installMockGateway(page, {
+            agentModel: "example/model-a",
+            models: [],
+            sessionInfo: { model: "model-a", modelProvider: "example" },
+            methodResponses: {
+              "models.list": { models: [], pendingProviders: ["example"], modelSelectionPolicy },
+            },
+          });
+          await page.goto(new URL(route, suite.server.baseUrl).href);
+          const trigger = page.locator("[data-chat-model-select]").first();
+          await trigger.waitFor();
+          await trigger.click();
+          const picker = page.locator(".chat-controls__model-picker[open]").first();
+          await picker.locator("[data-chat-model-search]").waitFor();
+          await page.screenshot({
+            path: suite.artifactDir + "/" + route + "-pending.png",
+            animations: "disabled",
+          });
+          const prematureLabel = await trigger.textContent();
+          await gateway.setMethodResponse("models.list", { models: [model], modelSelectionPolicy });
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          await picker.locator('[data-chat-model-option="example/model-a"]').waitFor();
+          await page.screenshot({
+            path: suite.artifactDir + "/" + route + "-ready.png",
+            animations: "disabled",
+          });
+          await gateway.setMethodResponse("models.list", { models: [], modelSelectionPolicy });
+          await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          await expect.poll(() => trigger.textContent()).toContain(emptyLabel);
+          expect(prematureLabel).not.toContain(emptyLabel);
+        },
+      );
+    },
+  );
   it("hides the routed-model suffix and standard-only speed controls without changing the route", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const id = "anthropic/claude-opus-5-5";
