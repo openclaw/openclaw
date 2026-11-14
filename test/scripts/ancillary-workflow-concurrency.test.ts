@@ -1,10 +1,9 @@
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { runBarnacleAutoResponse } from "../../scripts/github/barnacle-auto-response.mjs";
 import { evaluatePullRequestContext } from "../../scripts/github/real-behavior-proof-policy.mjs";
+import { readWorkflow as readWorkflowDocument } from "./ci-workflow.test-support.js";
 
 type ManualPolicy =
   | { mode: "absent" }
@@ -194,7 +193,7 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
   return workflow.concurrency;
 }
 
-const readWorkflow = (file: string) => parse(readFileSync(file, "utf8")) as Workflow;
+const readWorkflow = (file: string) => readWorkflowDocument(file) as Workflow;
 type Admission = Awaited<ReturnType<typeof admission>>;
 const groupsOf = (runs: Admission[]) => runs.map(({ group }) => group);
 const cancellations = (runs: Admission[]) => runs.map(({ cancel }) => cancel);
