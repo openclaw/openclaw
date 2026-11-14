@@ -43,6 +43,7 @@ export function createGatewayQuestionPanelProps(
       requestPosition: options.requestPosition,
     },
     onChange,
+    onInteraction: options.onInteraction,
     onOpenSession: options.onOpenSession,
     onSecretStoreAllowedHostsChange: (allowedHosts) => {
       prompt.secretStoreAllowedHostsDraft = allowedHosts;

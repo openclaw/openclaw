@@ -9,6 +9,7 @@ import {
   cancelQuestionPrompt,
   createQuestionPromptState,
   disposeQuestionPromptState,
+  engageQuestionPrompt,
   handleQuestionPromptEvent,
   isQuestionNotFoundError,
   listQuestionPrompts,
@@ -258,6 +259,7 @@ function QuestionPageContent(
     return prompt
       ? createGatewayQuestionPanelProps(prompt, {
           onChange: refreshQuestions,
+          onInteraction: () => void engageQuestionPrompt(questionState, prompt.id),
           onSubmit: (answers) => submitQuestionPrompt(questionState, prompt.id, answers),
           onSkip: () => cancelQuestionPrompt(questionState, prompt.id),
         })

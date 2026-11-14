@@ -72,6 +72,7 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "question.request",
   "question.waitAnswer",
   "question.resolve",
+  "question.engage",
   "question.get",
   "question.list",
   "chat.send",

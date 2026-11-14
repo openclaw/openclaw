@@ -756,4 +756,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["toolUsage.status", "tool-usage", "operator.admin", "2026.11"],
   ["toolUsage.import", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
+  ["question.engage", null, "operator.questions", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

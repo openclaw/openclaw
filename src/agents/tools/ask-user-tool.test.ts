@@ -438,6 +438,39 @@ describe("ask_user", () => {
     }
   });
 
+  it("keeps waiting for the original question after human interaction stops its expiry", async () => {
+    const waits = [
+      { status: "pending" },
+      { status: "answered", answers: { answers: { deploy_target: ["Production"] } } },
+    ];
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => waits.shift(),
+      "question.get": async (params) => ({
+        question: { id: params.id, status: "pending", expiryStoppedAtMs: 1 },
+      }),
+    });
+    const result = await createAskUserTool({ sessionKey: "agent:main:engaged" }).execute(
+      "call-engaged",
+      validArgs,
+    );
+    const questionId = requestedQuestionId(gateway.mock);
+
+    expect(result.details).toEqual({
+      status: "answered",
+      answers: { answers: { deploy_target: ["Production"] } },
+    });
+    expect(gateway.mock).toHaveBeenCalledWith(
+      "question.request",
+      {},
+      expect.objectContaining({ id: questionId, stopExpiryOnInteraction: true }),
+      undefined,
+    );
+    expect(
+      gateway.mock.mock.calls.filter(([method]) => method === "question.waitAnswer"),
+    ).toHaveLength(2);
+    expect(gateway.mock.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
+  });
+
   it("rejects a second pending question in the same session", async () => {
     const finishWait = createDeferred<unknown>();
     const gateway = registeredGateway({

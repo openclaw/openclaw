@@ -151,20 +151,35 @@ it("conceals foreign session questions for role-none readers while preserving gl
   });
 });
 
-it("requires membership to resolve a suggest-capped guest question", async () => {
+it("requires membership to resolve or keep open a suggest-capped guest question", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { owner, guest, cfg, client } = await sharingFixture("suggest");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    manager.request({ ...requestParams, id: "foreign-question" });
+    manager.request({ ...requestParams, id: "foreign-question", stopExpiryOnInteraction: true });
 
     expect((await call("question.get", { id: "foreign-question" }, { client, cfg }))[0]).toBe(true);
-    expect(
-      await call("question.resolve", { id: "foreign-question", cancel: true }, { client, cfg }),
-    ).toMatchObject([false, undefined, { details: { code: "SESSION_PARTICIPATION_REQUIRED" } }]);
+    for (const [method, params] of [
+      ["question.resolve", { id: "foreign-question", cancel: true }],
+      ["question.engage", { id: "foreign-question" }],
+    ] as const) {
+      expect(await call(method, params, { client, cfg })).toMatchObject([
+        false,
+        undefined,
+        { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
+      ]);
+    }
+    expect(manager.get("foreign-question")?.expiryStoppedAtMs).toBeUndefined();
     addSessionMember(
       { agentId: "main", sessionKey: requestParams.sessionKey },
       { identityId: guest.id, addedBy: owner.id, expectedSessionId: "question-session" },
     );
+    expect(
+      await call("question.engage", { id: "foreign-question" }, { client, cfg }),
+    ).toMatchObject([
+      true,
+      { question: { id: "foreign-question", status: "pending", expiryStoppedAtMs: 1_000 } },
+      undefined,
+    ]);
     expect(
       await call("question.resolve", { id: "foreign-question", cancel: true }, { client, cfg }),
     ).toEqual([true, { status: "cancelled" }, undefined]);

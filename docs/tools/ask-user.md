@@ -191,9 +191,17 @@ answers ambiguous, the summary shows the saved reply text without splitting it.
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
-30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
-run cancellation or the current model attempt's timeout. A pending question
-does not pause or extend that attempt's execution budget.
+30 through 3600 seconds. An untouched question waits at most this long, subject
+to earlier agent run cancellation or the current model attempt's timeout. A
+pending question does not pause or extend that attempt's execution budget.
+
+Once you click or tap into a question in the Control UI, move keyboard focus
+into it, choose an option, type, or paste, that question no longer times out.
+It stays answerable until you submit or skip it, or until the agent run is
+cancelled or otherwise ends. Moving focus elsewhere or switching between
+pending questions does not restart the timeout, and your draft is kept. Merely
+showing or hovering over a question does not stop its timeout. Secret-entry
+questions keep their original timeout.
 
 For an ordinary decision question, if it expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.

@@ -1,4 +1,8 @@
-import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import {
+  cancelQuestionPrompt,
+  engageQuestionPrompt,
+  submitQuestionPrompt,
+} from "../../app/question-prompt.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
 
@@ -18,6 +22,7 @@ export function createChatQuestionActions({
 }): Pick<
   ChatProps,
   | "onGatewayQuestionChange"
+  | "onGatewayQuestionInteraction"
   | "onGatewayQuestionSubmit"
   | "onGatewayQuestionSkip"
   | "onAsyncQuestionSubmit"
@@ -28,6 +33,7 @@ export function createChatQuestionActions({
     state.sessionKey === sessionKey && state.connectionEpoch === connectionEpoch && isCurrent();
   return {
     onGatewayQuestionChange: questionState.onChange,
+    onGatewayQuestionInteraction: (id) => void engageQuestionPrompt(questionState, id),
     onGatewayQuestionSubmit: (id, answers) => submitQuestionPrompt(questionState, id, answers),
     onGatewayQuestionSkip: (id) => cancelQuestionPrompt(questionState, id),
     onAsyncQuestionSubmit: canSend

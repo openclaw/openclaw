@@ -438,6 +438,10 @@ export const validateQuestionGetParams = createProtocolValidator(
   S.QuestionGetParamsSchema,
   Checks.isQuestionGetParams,
 );
+export const validateQuestionEngageParams = createProtocolValidator(
+  S.QuestionEngageParamsSchema,
+  Checks.isQuestionEngageParams,
+);
 export const validateQuestionListParams = createProtocolValidator(
   S.QuestionListParamsSchema,
   Checks.isQuestionListParams,

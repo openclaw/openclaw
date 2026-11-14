@@ -101,6 +101,9 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
                         ? () => props.onOpenSessionLink?.({ sessionKey, agentId })
                         : undefined,
                     onChange: props.onGatewayQuestionChange,
+                    onInteraction: props.onGatewayQuestionInteraction
+                      ? () => props.onGatewayQuestionInteraction?.(prompt.id)
+                      : undefined,
                     onSubmit: props.onGatewayQuestionSubmit
                       ? (answers) => props.onGatewayQuestionSubmit?.(prompt.id, answers)
                       : undefined,

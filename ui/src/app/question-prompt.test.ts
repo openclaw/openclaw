@@ -26,6 +26,7 @@ import {
 } from "./question-prompt.test-support.ts";
 import {
   cancelQuestionPrompt,
+  engageQuestionPrompt,
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
   submitQuestionPrompt,
@@ -342,6 +343,67 @@ describe("question RPC helpers", () => {
     expect(request).toHaveBeenCalledWith("question.resolve", expect.any(Object), {
       timeoutMs: 1_250,
     });
+  });
+});
+
+describe("question engagement", () => {
+  it("reports interaction once and keeps an engaged question past its original deadline", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>(async (method, params) =>
+      method === "question.engage"
+        ? { question: requestedPayload({ expiryStoppedAtMs: Date.now() }) }
+        : resolvedQuestion(params),
+    );
+    const { state } = createConnectedState(request);
+    state.prompts
+      .get("question-1")!
+      .drafts.set("format", { selected: new Set(), freeText: "Teal" });
+
+    await engageQuestionPrompt(state, "question-1");
+    await engageQuestionPrompt(state, "question-1");
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(request.mock.calls.filter(([method]) => method === "question.engage")).toEqual([
+      ["question.engage", { id: "question-1" }, defaultRequestDeadline],
+    ]);
+    expectPrompt(state, { status: "pending", locallyExpired: false });
+    expect(state.prompts.get("question-1")?.drafts.get("format")?.freeText).toBe("Teal");
+    await answerQuestion(state);
+    expect(request).toHaveBeenCalledWith(
+      "question.resolve",
+      expect.any(Object),
+      defaultRequestDeadline,
+    );
+  });
+
+  it("keeps the original deadline when the Gateway does not stop expiry", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "question.engage") {
+        return { question: requestedPayload() };
+      }
+      return { question: requestedPayload({ status: "expired" }) };
+    });
+    const { state } = createConnectedState(request);
+
+    await engageQuestionPrompt(state, "question-1");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expectPrompt(state, { status: "expired" });
+  });
+
+  it("restores a question that another view engaged when the local deadline passes", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>(async () => ({
+      question: requestedPayload({ expiryStoppedAtMs: Date.now() }),
+    }));
+    const { state } = createConnectedState(request);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expectQuestionGet(request);
+    expect(request).toHaveBeenCalledOnce();
+    expectPrompt(state, { status: "pending", locallyExpired: false });
   });
 });
 

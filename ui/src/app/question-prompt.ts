@@ -34,7 +34,7 @@ export type QuestionDraft = {
 
 export type QuestionPrompt = Pick<
   QuestionRecord,
-  "id" | "questions" | "createdAtMs" | "expiresAtMs"
+  "id" | "questions" | "createdAtMs" | "expiresAtMs" | "expiryStoppedAtMs"
 > & {
   agentId?: string;
   sessionKey?: string;
@@ -46,6 +46,8 @@ export type QuestionPrompt = Pick<
   localResolutionConfirmed: boolean;
   locallyExpired: boolean;
   submitting: boolean;
+  /** This client already reported human interaction for the pending question. */
+  engaged?: boolean;
   error: string | null;
   drafts: Map<string, QuestionDraft>;
   secretStoreAllowedHostsDraft?: string;
@@ -160,7 +162,7 @@ function scheduleExpiry(state: QuestionPromptState): void {
   clearQuestionPromptTimer(state, "expiryTimer");
   let nextExpiry = Infinity;
   for (const prompt of state.prompts.values()) {
-    if (prompt.status === "pending") {
+    if (prompt.status === "pending" && prompt.expiryStoppedAtMs === undefined) {
       nextExpiry = Math.min(nextExpiry, prompt.expiresAtMs);
     }
   }
@@ -172,11 +174,17 @@ function scheduleExpiry(state: QuestionPromptState): void {
       state.expiryTimer = null;
       const now = Date.now();
       let changed = false;
+      const expired: string[] = [];
       for (const prompt of state.prompts.values()) {
-        if (prompt.status === "pending" && prompt.expiresAtMs <= now) {
+        if (
+          prompt.status === "pending" &&
+          prompt.expiryStoppedAtMs === undefined &&
+          prompt.expiresAtMs <= now
+        ) {
           prompt.status = "expired";
           clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
           prompt.locallyExpired = true;
+          expired.push(prompt.id);
           prompt.submitting = false;
           prompt.error = null;
           prompt.revision = ++state.revision;
@@ -187,9 +195,37 @@ function scheduleExpiry(state: QuestionPromptState): void {
       if (changed) {
         state.onChange();
       }
+      for (const id of expired) {
+        void restoreEngagedQuestion(state, id);
+      }
     },
     resolveTimerTimeoutMs(nextExpiry - Date.now(), 0, 0),
   );
+}
+
+/** Interaction in another view can stop the Gateway's expiry; ask its owner once. */
+async function restoreEngagedQuestion(state: QuestionPromptState, id: string): Promise<void> {
+  const client = state.client;
+  if (!client) {
+    return;
+  }
+  try {
+    const result = await requestQuestionGateway(client, "question.get", { id });
+    const record = parseQuestionRecord(result.question);
+    const current = state.prompts.get(id);
+    if (
+      state.client === client &&
+      current?.locallyExpired &&
+      record?.status === "pending" &&
+      record.expiryStoppedAtMs !== undefined
+    ) {
+      storeQuestionRecord(state, id, record, current);
+      scheduleExpiry(state);
+      state.onChange();
+    }
+  } catch {
+    // The local expiry stands; reconnect refresh still reconciles the Gateway record.
+  }
 }
 
 function storeQuestionRecord(
@@ -210,6 +246,7 @@ function storeQuestionRecord(
       record.status === "answered" && !previous?.localResolutionConfirmed && !previous?.submitting,
     localResolutionConfirmed: previous?.localResolutionConfirmed ?? false,
     locallyExpired: false,
+    ...(previous?.engaged ? { engaged: true } : {}),
     submitting:
       record.status === "pending" ||
       (record.status === "answered" && !(previous?.localResolutionConfirmed ?? false))
@@ -556,7 +593,7 @@ async function resolveQuestionPrompt(
       client,
       "question.resolve",
       submission.requestParams,
-      prompt.expiresAtMs,
+      prompt.expiryStoppedAtMs === undefined ? prompt.expiresAtMs : undefined,
     );
     const resolved = parseQuestionSubmissionResult(result, parseQuestionAnswers);
     if (!resolved || resolved.status !== (submission.submittedAnswers ? "answered" : "cancelled")) {
@@ -600,6 +637,29 @@ export async function submitQuestionPrompt(
 
 export async function cancelQuestionPrompt(state: QuestionPromptState, id: string): Promise<void> {
   await resolveQuestionPrompt(state, id, { cancel: true });
+}
+
+/** Reports the first human interaction once; the Gateway decides whether expiry stops. */
+export async function engageQuestionPrompt(state: QuestionPromptState, id: string): Promise<void> {
+  const prompt = state.prompts.get(id);
+  const client = state.client;
+  if (!client || !prompt || prompt.status !== "pending" || prompt.engaged) {
+    return;
+  }
+  // A failed report keeps the original deadline rather than retrying on every keystroke.
+  prompt.engaged = true;
+  try {
+    const result = await requestQuestionGateway(client, "question.engage", { id });
+    const record = parseQuestionRecord(result.question);
+    const current = state.prompts.get(id);
+    if (state.client === client && record?.status === "pending" && current?.status === "pending") {
+      storeQuestionRecord(state, id, record, current);
+      scheduleExpiry(state);
+      state.onChange();
+    }
+  } catch {
+    // Terminal outcomes still arrive through question.resolved and refresh.
+  }
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {

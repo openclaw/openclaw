@@ -4,6 +4,7 @@ import {
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
 import type {
+  QuestionEngageParams,
   QuestionGetParams,
   QuestionGetResult,
   QuestionListParams,
@@ -111,13 +112,18 @@ export function requestQuestionGateway(
 ): Promise<QuestionGetResult>;
 export function requestQuestionGateway(
   client: QuestionClient,
+  method: "question.engage",
+  params: QuestionEngageParams,
+): Promise<QuestionGetResult>;
+export function requestQuestionGateway(
+  client: QuestionClient,
   method: "question.resolve",
   params: QuestionResolveParams,
   expiresAtMs?: number,
 ): Promise<QuestionResolveResult>;
 export function requestQuestionGateway(
   client: QuestionClient,
-  method: "question.list" | "question.get" | "question.resolve",
+  method: "question.list" | "question.get" | "question.engage" | "question.resolve",
   params: unknown,
   expiresAtMs?: number,
 ): Promise<unknown> {

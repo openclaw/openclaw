@@ -609,6 +609,7 @@ export function createAskUserTool(params: {
                 ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
                 ...(params.runId ? { runId: params.runId } : {}),
                 timeoutMs,
+                stopExpiryOnInteraction: true,
               },
               signal ? { signal } : undefined,
             ) as Promise<{ id?: unknown }>,
@@ -635,12 +636,37 @@ export function createAskUserTool(params: {
           cancelOnAbort();
           signal.throwIfAborted();
         }
-        const answerPromise = gatewayCall(
-          "question.waitAnswer",
-          { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
-          { id: questionId, timeoutMs, includeResolutionId: true },
-          signal ? { signal } : undefined,
-        ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
+        const waitForAnswer = async (): Promise<QuestionWaitAnswerResult> => {
+          for (;;) {
+            const result = (await gatewayCall(
+              "question.waitAnswer",
+              { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
+              { id: questionId, timeoutMs, includeResolutionId: true },
+              signal ? { signal } : undefined,
+            )) as QuestionWaitAnswerResult;
+            if (result.status !== "pending") {
+              return result;
+            }
+            // Human interaction stopped the Gateway's expiry; keep waiting for that answer.
+            // An unreadable record keeps the existing timeout cancellation.
+            const current = await Promise.resolve()
+              .then(() =>
+                gatewayCall(
+                  "question.get",
+                  { timeoutMs: QUESTION_RPC_GRACE_MS },
+                  { id: questionId },
+                ),
+              )
+              .then(
+                (value) => asNullableRecord(asNullableRecord(value)?.question),
+                () => undefined,
+              );
+            if (current?.status !== "pending" || current.expiryStoppedAtMs === undefined) {
+              return result;
+            }
+          }
+        };
+        const answerPromise = waitForAnswer().finally(prompt.close);
         state.claim.setAnswer(answerPromise);
         delivery.markReady();
         if (delivery.hasSubscriber) {

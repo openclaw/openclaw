@@ -17,6 +17,7 @@ import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/externa
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { focusProgrammatically } from "../../../lib/programmatic-focus.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
@@ -39,6 +40,39 @@ registerEnglishCatalog(registerChatSessionEnglish);
 type PanelBridgeProps = { props?: QuestionPanelProps };
 export type ChatQuestionPanel = SolidBridgeElement<PanelBridgeProps>;
 
+// Tab moves focus as its keydown's default action, before the next task runs.
+let tabFocusing = false;
+if (typeof window !== "undefined") {
+  listen(
+    window,
+    "keydown",
+    (event: KeyboardEvent) => {
+      if (event.key === "Tab" && event.isTrusted) {
+        tabFocusing = true;
+        setTimeout(() => (tabFocusing = false), 0);
+      }
+    },
+    { capture: true, passive: true },
+  );
+}
+
+/** Real input only; rendering, hover and programmatic focus never count. */
+function isHumanInteraction(event: Event): boolean {
+  if (!event.isTrusted) {
+    return false;
+  }
+  if (event instanceof KeyboardEvent) {
+    // Shortcuts and bare modifiers can fire while focus merely rests in the panel.
+    return (
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !["Alt", "AltGraph", "CapsLock", "Control", "Escape", "Meta", "Shift"].includes(event.key)
+    );
+  }
+  return event.type !== "focusin" || tabFocusing;
+}
+
 function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   // The keyed request retains its initial draft model until request replacement.
   const initialModel = untrack(() => props.panel.model);
@@ -58,6 +92,11 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       (option) => option.isConnected && Number(option.dataset.optionIndex) === index,
     );
   const model = () => props.panel.model;
+  const reportInteraction = (event: Event) => {
+    if (isHumanInteraction(event)) {
+      props.panel.onInteraction?.();
+    }
+  };
   const collapsed = () =>
     props.panel.onCollapsedChange ? model().collapsed : uncontrolledCollapsed();
   const question = () => model().questions[currentQuestionIndex()];
@@ -326,6 +365,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
             <section
               class="chat-question-panel chat-question-panel--collapsed"
               aria-label={model().title}
+              onPointerDown={reportInteraction}
+              onKeyDown={reportInteraction}
+              onFocusIn={reportInteraction}
             >
               <button
                 ref={(element) => (expandButton = element)}
@@ -362,7 +404,14 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               aria-label={model().title}
               tabindex={0}
               data-chat-autotype-shortcuts="active"
-              onKeyDown={(event) => handleKeyDown(event, item())}
+              onPointerDown={reportInteraction}
+              onFocusIn={reportInteraction}
+              onPaste={reportInteraction}
+              onInput={reportInteraction}
+              onKeyDown={(event) => {
+                reportInteraction(event);
+                handleKeyDown(event, item());
+              }}
             >
               <div class="chat-question-panel__header">
                 <div

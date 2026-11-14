@@ -57,6 +57,8 @@ type QuestionManagerRequest = {
   sessionKey?: string;
   runId?: string;
   timeoutMs: number;
+  /** The waiter re-waits while the record reports stopped expiry. */
+  stopExpiryOnInteraction?: boolean;
   onResolved?:
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
@@ -74,6 +76,7 @@ type Waiter = () => void;
 type QuestionEntry = {
   record: QuestionRecord;
   ordinary: boolean;
+  stopsExpiryOnInteraction: boolean;
   resolutionId?: string;
   job: GatewayScheduledJob;
   waiters: Set<Waiter>;
@@ -183,9 +186,13 @@ export class QuestionManager {
       expiresAtMs,
       status: "pending",
     };
+    const ordinary = !params.questions.some(
+      (question) => question.isSecret || question.secretStore,
+    );
     const entry: QuestionEntry = {
       record,
-      ordinary: !params.questions.some((question) => question.isSecret || question.secretStore),
+      ordinary,
+      stopsExpiryOnInteraction: ordinary && params.stopExpiryOnInteraction === true,
       job: this.scheduler.schedule({
         id: `${this.scheduleId}:${id}`,
         delayMs: timeoutMs,
@@ -221,11 +228,26 @@ export class QuestionManager {
     if (!entry) {
       return null;
     }
-    if (entry.record.status === "pending" && entry.record.expiresAtMs <= this.scheduler.now()) {
+    if (entry.record.status === "pending" && this.isPastDeadline(entry.record)) {
       this.expire(id);
     }
     this.refreshRequester(entry);
     return this.entries.get(id) === entry ? entry.record : null;
+  }
+
+  /** Human interaction stops an eligible question's expiry for the rest of its pending lifetime. */
+  engage(id: string): QuestionRecord {
+    const entry = this.requirePendingEntry(id);
+    if (entry.stopsExpiryOnInteraction && entry.record.expiryStoppedAtMs === undefined) {
+      entry.job.cancel();
+      // In place: the same pending record stays current for identity-bound observers.
+      entry.record.expiryStoppedAtMs = this.scheduler.now();
+    }
+    return entry.record;
+  }
+
+  private isPastDeadline(record: QuestionRecord): boolean {
+    return record.expiryStoppedAtMs === undefined && record.expiresAtMs <= this.scheduler.now();
   }
 
   /** Observation only: unlike get(), this cannot expire or cancel and recursively broadcast. */
@@ -310,7 +332,7 @@ export class QuestionManager {
       !entry?.admissionContinuation ||
       entry.record !== record ||
       entry.record.status !== "pending" ||
-      entry.record.expiresAtMs <= this.scheduler.now()
+      this.isPastDeadline(entry.record)
     ) {
       return null;
     }
@@ -390,7 +412,7 @@ export class QuestionManager {
         entry.retired ||
         this.entries.get(id) !== entry ||
         entry.record.status !== "pending" ||
-        entry.record.expiresAtMs <= this.scheduler.now() ||
+        this.isPastDeadline(entry.record) ||
         active === false
       ) {
         throw new QuestionManagerError(

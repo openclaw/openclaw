@@ -606,6 +606,54 @@ describe("QuestionManager", () => {
     }
   });
 
+  it("stops an opted-in question's expiry after engagement and keeps it answerable", async () => {
+    const record = manager.request({ questions, timeoutMs: 50, stopExpiryOnInteraction: true });
+    await clock.advanceBy(10);
+    expect(manager.engage(record.id)).toMatchObject({
+      status: "pending",
+      expiryStoppedAtMs: 1_010,
+    });
+    // A later interaction keeps the first stop time; blur or switching never restarts expiry.
+    expect(manager.engage(record.id).expiryStoppedAtMs).toBe(1_010);
+
+    await clock.advanceBy(60_000);
+    expect(manager.get(record.id)?.status).toBe("pending");
+    expect(manager.list().map((question) => question.id)).toEqual([record.id]);
+    expect(manager.resolve(record.id, answers)).toEqual({ status: "answered", answers });
+    await expect(manager.waitAnswer(record.id)).resolves.toEqual({ status: "answered", answers });
+  });
+
+  it("keeps the original deadline unless the requester opted in and the question is ordinary", async () => {
+    const plain = manager.request({ questions, timeoutMs: 50 });
+    const secret = manager.request({
+      questions: [{ ...questions[0]!, options: [], isSecret: true }],
+      timeoutMs: 50,
+      stopExpiryOnInteraction: true,
+    });
+    expect(manager.engage(plain.id).expiryStoppedAtMs).toBeUndefined();
+    expect(manager.engage(secret.id).expiryStoppedAtMs).toBeUndefined();
+
+    await clock.advanceBy(50);
+    expect(manager.get(plain.id)?.status).toBe("expired");
+    expect(manager.get(secret.id)?.status).toBe("expired");
+  });
+
+  it("never revives an expired or cancelled question through late engagement", async () => {
+    const expired = manager.request({ questions, timeoutMs: 50, stopExpiryOnInteraction: true });
+    const cancelled = manager.request({ questions, timeoutMs: 50, stopExpiryOnInteraction: true });
+    manager.engage(cancelled.id);
+    expect(manager.cancel(cancelled.id)).toEqual({ status: "cancelled" });
+    await clock.advanceBy(50);
+
+    for (const id of [expired.id, cancelled.id]) {
+      expect(() => manager.engage(id)).toThrowError(
+        expect.objectContaining({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL }),
+      );
+    }
+    expect(manager.get(expired.id)?.status).toBe("expired");
+    expect(manager.get(cancelled.id)?.status).toBe("cancelled");
+  });
+
   it("retains authority sweeping for legacy requesters without a run selector", () => {
     let active = true;
     const resolved = vi.fn();
