@@ -14,6 +14,7 @@ struct ConnectionSettingsView: View {
     @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showConnectionEditor = false
+    @State private var openClawID: OpenClawIDSettingsModel
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -23,14 +24,18 @@ struct ConnectionSettingsView: View {
         self.gatewayManager.environmentStatus
     }
 
-    init(state: AppState, isActive: Bool = true) {
+    init(state: AppState, isActive: Bool = true, openClawID: OpenClawIDSettingsModel = OpenClawIDSettingsModel()) {
         self.state = state
         self.isActive = isActive
+        _openClawID = State(initialValue: openClawID)
     }
 
     var body: some View {
         Form {
             self.statusSection
+            if let presentation = self.openClawID.presentation(state: self.state) {
+                OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
+            }
             self.gatewayModeSection
 
             // The Remote section owns this banner in remote mode; Local and Not configured

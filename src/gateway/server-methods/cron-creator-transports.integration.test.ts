@@ -36,6 +36,7 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -199,6 +200,17 @@ it.each([
       authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
     };
     if (ocid) {
+      config.gateway = {
+        ...config.gateway,
+        roles: {
+          ...config.gateway?.roles,
+          definitions: {
+            ...config.gateway?.roles?.definitions,
+            operator: structuredClone(MEMBER_ROLE_PRESETS.operator),
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
       setOpenClawIdTunnelPrincipalLookup(() => principal);
     }
     client.internal = {

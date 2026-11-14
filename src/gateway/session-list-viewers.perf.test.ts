@@ -389,6 +389,19 @@ test("shares concurrent list selection across row modes and refilters only publi
       expect(present).not.toHaveBeenCalled();
       stringify.mockRestore();
       present.mockRestore();
+      const people = () =>
+        listProjectedSessions({
+          projection,
+          client: alice,
+          acceptsSerializedJson: true,
+          opts: { limit: 2, includePeople: true },
+        });
+      const beforeUsage = await people();
+      owner.mockClear();
+      patchEntry(store, "agent:main:selection-0", { inputTokens: 123 });
+      await read("compact", bob);
+      expect((await people()).people).toEqual(beforeUsage.people);
+      expect(owner).not.toHaveBeenCalled();
       owner.mockClear();
       patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
       expectPage(await read("compact"), ["s0", "s127"], 128);

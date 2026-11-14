@@ -450,7 +450,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group--reply")).not.toBeNull();
   });
 
-  it("morphs one assistant turn from working status to its terminal recap", () => {
+  it("settles one assistant turn without a token recap", () => {
     const message = createAssistantMessage("First result is ready.", { timestamp: 1_000 });
 
     renderAssistantMessage(message, {
@@ -467,19 +467,11 @@ describe("grouped chat rendering", () => {
     // The footer row is reserved but empty until the turn settles.
     expect(element(".chat-group-footer")?.childElementCount).toBe(0);
 
-    renderAssistantMessage(message, {
-      turnRecap: { runtimeMs: 4 * 3_600_000 + 2 * 60_000, outputTokens: 1 },
-    });
+    renderAssistantMessage(message);
 
     expectCount(".chat-group.assistant", 1);
     expectAbsent(".chat-working-indicator");
-    // Run duration belongs to the Worked summary, so the recap carries usage only.
-    expect(
-      Array.from(element(".chat-turn-recap--continuation")!.children, (child) =>
-        child.textContent?.trim(),
-      ),
-    ).toEqual(["1 output token"]);
-    expectAbsent(".chat-turn-recap__claw");
+    expectAbsent(".chat-turn-recap");
     expectPresent(".chat-group-footer");
   });
 

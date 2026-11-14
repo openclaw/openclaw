@@ -154,6 +154,9 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page .agent-chat__welcome-name .agent-select--compact .agent-select__trigger {
+  /* Equal side tracks keep the name centered independently of the chevron. */
+  display: grid;
+  grid-template-columns: var(--chrome-icon-size) minmax(0, 1fr) var(--chrome-icon-size);
   max-width: 100%;
   height: auto;
   min-height: 44px;
@@ -163,6 +166,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page .agent-chat__welcome-name .agent-select__label {
+  grid-column: 2;
   max-width: none;
 }
 
@@ -272,33 +276,9 @@ span.new-session-page__select {
   max-width: 100%;
 }
 
-/* The bordered pair keeps the row's pill shape; its two triggers square off
-   the edge they share so the pair reads as one control. */
-.new-session-page__workspace--checkout {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-}
-
 .new-session-page__workspace > span.new-session-page__select {
   flex: 0 1 auto;
   min-width: 0;
-}
-
-/* Keep a short repository name readable even beside a very long branch. */
-.new-session-page__workspace--checkout > span.new-session-page__select:first-of-type {
-  flex-shrink: 0;
-  max-width: 65%;
-}
-
-.new-session-page__workspace--checkout #new-session-project-trigger {
-  border-start-end-radius: 0;
-  border-end-end-radius: 0;
-}
-
-.new-session-page__workspace--checkout #new-session-checkout-trigger {
-  border-inline-start: 1px solid var(--border);
-  border-start-start-radius: 0;
-  border-end-start-radius: 0;
 }
 
 .new-session-page__workspace .new-session-page__trigger {
@@ -406,10 +386,6 @@ span.new-session-page__select {
   margin-inline-start: 2px;
   color: var(--muted);
   opacity: 0.8;
-}
-
-.new-session-page__trigger-chevron--mobile {
-  display: none;
 }
 
 .new-session-page__trigger-chevron svg {
@@ -607,12 +583,6 @@ span.new-session-page__select {
   width: anchor-size(width);
 }
 
-.oc-popover.new-session-page__picker-popover
-  .new-session-page__picker-root
-  > .new-session-page__menu-title:not(:first-child) {
-  margin-top: var(--space-2);
-}
-
 .new-session-page__project-status,
 .new-session-page__project-error {
   padding: 5px 8px;
@@ -697,10 +667,10 @@ span.new-session-page__select {
   color: var(--muted);
 }
 
-/* Project browsing uses a wider shell for paths and remote result details. */
-.oc-popover.new-session-page__project-popover,
-.oc-popover.new-session-page__where-popover {
-  --oc-overlay-max-width: min(420px, calc(100vw - 24px));
+/* Compact menus share the native anchor, viewport budget, and surface. */
+.oc-popover.new-session-page__picker-popover {
+  --oc-overlay-distance: 6px;
+  --oc-overlay-max-width: min(300px, calc(100dvw - 24px));
   width: var(--oc-overlay-max-width);
   padding: 0;
   overflow: hidden;
@@ -728,9 +698,9 @@ span.new-session-page__select {
   overflow-y: auto;
 }
 
-/* Destination search and mode controls stay visible while the flat inventory scrolls. */
-.oc-popover.new-session-page__where-popover {
-  --oc-overlay-max-width: min(360px, calc(100vw - 24px));
+/* Project names and paths keep a little extra width. */
+.oc-popover.new-session-page__project-popover {
+  --oc-overlay-max-width: min(320px, calc(100dvw - 24px));
 }
 
 .new-session-page__environment-layout {
@@ -756,12 +726,6 @@ div.new-session-page__project-search {
   min-height: 0;
   max-height: min(360px, calc(var(--oc-overlay-available-height, 70vh) - 2px));
   overflow: hidden;
-}
-
-.new-session-page__connect-device svg {
-  display: block;
-  width: 14px;
-  height: 14px;
 }
 
 .new-session-page__environment-list {
@@ -798,17 +762,6 @@ div.new-session-page__project-search {
   color: var(--muted);
   text-align: center;
   font-size: var(--control-ui-text-sm);
-}
-
-.new-session-page__environment-skeletons {
-  display: grid;
-  gap: 8px;
-  padding: 6px 12px;
-}
-
-.new-session-page__environment-skeleton-row {
-  display: block;
-  height: 14px;
 }
 
 .new-session-page__menu-chevron {
@@ -969,8 +922,7 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__browser-entry:hover,
-.new-session-page__browser-entry--active,
-.new-session-page__connect-device:hover {
+.new-session-page__browser-entry--active {
   background: var(--bg-hover);
 }
 
@@ -1112,8 +1064,9 @@ div.new-session-page__project-search {
     order: 2;
   }
 
+  /* No taller floor here: the surface rests at its own one-line minimum, where
+     the touch row's clearance already reads as one empty line under the prompt. */
   .new-session-page__composer .new-session-page__message {
-    min-height: clamp(48px, 9svh, 80px);
     max-height: min(10lh, 34svh);
   }
 
@@ -1129,15 +1082,47 @@ div.new-session-page__project-search {
   }
 }
 
+/* Keep the keyboard's visible canvas separate from its panned layout extent. */
+:root[data-shell-keyboard] .new-session-page__scroll {
+  container: new-session / size;
+  max-height: var(--shell-visible-height);
+  margin-top: auto;
+}
+
 /* Safari keeps height media queries on the full layout viewport while the
    keyboard shrinks the shell. Use the page's actual available canvas instead. */
 @container new-session (max-width: 932px) and (max-height: 500px) {
   .new-session-page .agent-chat__welcome {
+    flex-shrink: 1;
+    min-height: 0;
     padding-block: 8px 0;
   }
 
   .new-session-page__draft {
+    flex-shrink: 1;
     margin-top: 8px;
+  }
+
+  /* A long draft yields to the tray and Send inside the available canvas. */
+  .new-session-page__composer {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-height: 0;
+  }
+
+  .new-session-page__context-tray {
+    flex-shrink: 0;
+  }
+
+  .new-session-page__composer > .agent-chat__input,
+  .new-session-page__composer .agent-chat__composer-input-row {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .new-session-page__composer .agent-chat__composer-combobox {
+    min-height: 0;
   }
 
   .new-session-page__composer .new-session-page__message {
@@ -1288,20 +1273,6 @@ div.new-session-page__project-search {
     height: 22px;
   }
 
-  .new-session-page__trigger-chevron--desktop {
-    display: none;
-  }
-
-  .new-session-page__trigger-chevron--mobile {
-    display: inline-flex;
-    margin-inline-start: 0;
-  }
-
-  .new-session-page__trigger-chevron--mobile svg {
-    width: 8px;
-    height: 8px;
-  }
-
   .new-session-page__incognito-notice {
     align-items: flex-start;
     width: calc(100% - 2 * var(--chat-mobile-edge-inset));
@@ -1423,22 +1394,6 @@ div.new-session-page__project-search {
   display: flex;
   flex: 0 0 14px;
   color: var(--muted);
-}
-
-.new-session-page__connect-device {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
-  margin-right: -3px;
-  padding: 2px;
-  border: 0;
-  border-radius: 50%;
-  color: inherit;
-  background: transparent;
-  opacity: 0.6;
 }
 
 .new-session-page__environment-detail-trigger {
@@ -1601,21 +1556,659 @@ div.new-session-page__project-search {
     flex: 1;
   }
 
-  .new-session-page .agent-chat__composer-controls .chat-controls__model-trigger {
-    width: 100%;
-    justify-content: flex-start;
+  /* The picker holds the whole track, so nothing moves when the catalog
+     arrives; the chip inside it hugs its label and chevron. */
+  .new-session-page .chat-controls__model-trigger {
+    width: fit-content;
+  }
+
+  /* Empty catalogs have no effort chip to fill the track. Keep that status by
+     the actions; loading and model selections retain their stable alignment. */
+  .new-session-page [data-chat-model-empty="true"] {
+    display: flex;
+    margin-inline-start: auto;
   }
 
   .new-session-page .chat-controls__trigger-provider-icon {
     display: none;
   }
 
-  .new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
-    width: 0;
-    flex: 1;
-  }
-
   .new-session-page .chat-controls__model-trigger--loading .chat-controls__inline-select-chevron {
     visibility: hidden;
+  }
+}
+
+/* The context tray tucks behind the composer; each picker anchors its own menu. */
+.new-session-page__context-tray {
+  --new-session-tray-radius: var(--composer-radius);
+  --new-session-tray-edge: 18px;
+  --new-session-tray-surface: color-mix(in oklab, var(--text) 3%, var(--bg));
+
+  position: relative;
+  z-index: 1;
+  margin-top: calc(-1 * var(--new-session-tray-radius));
+  padding-top: var(--new-session-tray-radius);
+  border-radius: 0 0 var(--new-session-tray-radius) var(--new-session-tray-radius);
+  background: var(--new-session-tray-surface);
+  box-shadow: var(--shadow-sm);
+  corner-shape: superellipse(1.5);
+}
+
+.new-session-page__composer > .agent-chat__input {
+  position: relative;
+  z-index: 2;
+}
+
+/* Keep the light outline inside the measured composer box, like the dark
+   border. An outside spread made the equal-width tray look inset by 1px. */
+:root[data-theme-mode="light"]
+  .new-session-page__composer
+  > .agent-chat__input:not([data-incognito="true"]) {
+  border-color: var(--chat-composer-light-outline);
+  box-shadow:
+    0 1px 2px -1px var(--chat-composer-light-outline),
+    0 2px 4px rgb(0 0 0 / 4%);
+}
+
+:root[data-theme-mode="light"]
+  .new-session-page__composer
+  > .agent-chat__input:not([data-incognito="true"]):has(
+    .agent-chat__composer-combobox > :is(textarea, input):focus
+  ) {
+  border-color: rgb(0 0 0 / 8%);
+  box-shadow:
+    0 1px 2px -1px rgb(0 0 0 / 8%),
+    0 2px 4px rgb(0 0 0 / 6%);
+}
+
+.new-session-page__context-tray .new-session-page__triggers {
+  position: relative;
+  top: -3px;
+  flex-wrap: nowrap;
+  gap: 2px;
+  width: 100%;
+  max-width: none;
+  height: 36px;
+  padding-block: 0;
+  padding-inline: calc(var(--new-session-tray-edge) - 10px);
+}
+
+/* The device path and its explanation need their own content-sized row. */
+.new-session-page__context-tray
+  .new-session-page__triggers:has(> .new-session-page__device-folder) {
+  flex-wrap: wrap;
+  height: auto;
+}
+
+.new-session-page__context-tray .new-session-page__workspace {
+  gap: 2px;
+  border: 0;
+}
+
+.new-session-page__context-tray span.new-session-page__select {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.new-session-page__context-tray .new-session-page__trigger {
+  min-width: 0;
+  max-width: 100%;
+  height: 26px;
+  min-height: 0;
+  padding: 0 10px;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: var(--control-ui-font-weight-normal);
+}
+
+@media (hover: hover) {
+  .new-session-page__context-tray .new-session-page__trigger:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+}
+
+.new-session-page__context-tray .new-session-page__trigger-label {
+  min-width: 0;
+  max-width: 300px;
+}
+
+.new-session-page__picker-chevron {
+  display: none;
+}
+
+.new-session-page__context-tray .new-session-page__target-icon {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__context-tray .new-session-page__target-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__context-tray .new-session-page__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.new-session-page__picker-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
+}
+
+.new-session-page__picker-panel > .new-session-page__environment-layout,
+.new-session-page__picker-popover .new-session-page__browser {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.new-session-page__picker-popover .new-session-page__browser-list {
+  min-height: 0;
+}
+
+.new-session-page__picker-popover .new-session-page__browser-entry {
+  min-height: 30px;
+  padding: 4px 6px;
+}
+
+.new-session-page__picker-popover .header-search {
+  position: relative;
+  gap: 8px;
+  height: 42px;
+  min-height: 42px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.new-session-page__picker-popover .header-search__icon {
+  display: none;
+}
+
+.new-session-page__context-tray .new-session-page__picker-popover input,
+.new-session-page__context-tray .new-session-page__picker-popover input:hover,
+.new-session-page__context-tray .new-session-page__picker-popover input:focus,
+.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+  height: 28px;
+  padding-inline: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--chat-composer-surface) 35%, var(--new-session-tray-surface));
+  color: var(--text);
+  outline: none;
+  box-shadow: none;
+}
+
+.new-session-page__context-tray .new-session-page__picker-popover input:focus,
+.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+  background: color-mix(in srgb, var(--chat-composer-surface) 60%, var(--new-session-tray-surface));
+}
+
+.new-session-page__context-tray .new-session-page__picker-popover input::placeholder {
+  color: var(--muted);
+}
+
+.new-session-page__picker-popover .new-session-page__picker-root,
+.new-session-page__picker-popover .new-session-page__environment-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 248px;
+  padding: 0 6px 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
+  scroll-padding-block: 28px 4px;
+}
+
+.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar,
+.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar {
+  width: 10px;
+  background: transparent;
+}
+
+.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-track,
+.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-thumb,
+.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 20%, transparent) padding-box;
+}
+
+.new-session-page__project-popover .new-session-page__picker-root {
+  /* Eight option rows plus the section heading. */
+  max-height: calc(8 * 30px + 24px);
+  padding-bottom: 0;
+}
+
+.new-session-page__project-popover
+  .new-session-page__picker-root:has(> .oc-menu-heading ~ .oc-menu-heading) {
+  max-height: calc(8 * 30px + 2 * 24px + 4px);
+}
+
+.new-session-page__picker-popover .new-session-page__environment-picker {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.new-session-page__picker-popover .oc-menu-heading {
+  min-height: 24px;
+  padding-inline: 6px;
+}
+
+.new-session-page__picker-popover .oc-menu-heading__action {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-inline-end: -4px;
+  padding: 0;
+}
+
+.new-session-page__picker-popover .oc-menu-heading__action svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.5px;
+}
+
+.new-session-page__picker-popover .oc-menu-heading:not(:first-child) {
+  margin-top: 4px;
+}
+
+.new-session-page__picker-popover .session-menu__item {
+  min-height: 30px;
+  padding: 4px 6px;
+  gap: 6px;
+  margin: 0;
+}
+
+.new-session-page__picker-popover .session-menu__item + .session-menu__item {
+  margin-block-start: 0;
+}
+
+.new-session-page__picker-popover .session-menu__icon,
+.new-session-page__picker-popover .session-menu__icon svg,
+.new-session-page__picker-popover .session-menu__check,
+.new-session-page__picker-popover .session-menu__check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__picker-popover .session-menu__icon svg {
+  stroke-width: 1.5px;
+}
+
+.new-session-page__picker-popover .session-menu__text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-page__picker-popover .session-menu__sub {
+  flex: 0 1 auto;
+  max-width: 45%;
+  margin-inline-start: 4px;
+}
+
+.new-session-page__picker-popover .session-menu__check,
+.new-session-page__picker-popover .new-session-page__menu-chevron {
+  margin-inline-start: auto;
+}
+
+.new-session-page__picker-popover .session-menu__item:focus-visible {
+  outline: none;
+  box-shadow: none;
+  background: var(--menu-hover);
+}
+
+.new-session-page__picker-popover .session-menu__item[aria-pressed="true"]:focus-visible {
+  background: var(--surface-selected-hover);
+}
+
+.new-session-page__picker-foot {
+  flex: none;
+  padding: 4px 6px;
+}
+
+.new-session-page__picker-foot::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 6px 4px;
+  background: var(--border);
+}
+
+.new-session-page__picker-foot .new-session-page__menu-chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
+.new-session-page__checkout-popover .new-session-page__picker-root {
+  padding: 6px;
+  max-height: min(420px, 60vh);
+}
+
+.new-session-page__checkout-popover .oc-menu-heading {
+  min-height: 26px;
+  padding: 4px 8px 6px;
+}
+
+.new-session-page__checkout-popover .oc-menu-heading__label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.new-session-page__checkout-popover .session-menu__item {
+  min-height: 30px;
+  padding: 4px 6px;
+  gap: 6px;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
+}
+
+.new-session-page__checkout-popover .session-menu__item + .session-menu__item {
+  margin-top: 2px;
+}
+
+.new-session-page__checkout-fields {
+  display: grid;
+  gap: 8px;
+  padding: 8px 6px 4px;
+}
+
+.new-session-page__checkout-popover .new-session-page__menu-field {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.new-session-page__checkout-popover
+  .new-session-page__checkout-fields
+  .new-session-page__menu-field
+  input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--surface-hover);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
+}
+
+.new-session-page__checkout-popover .new-session-page__menu-note {
+  padding: 4px 6px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.new-session-page__checkout-fields > .new-session-page__menu-note {
+  padding: 0 0 0 52px;
+}
+
+.new-session-page__skeletons {
+  display: flex;
+  flex-direction: column;
+}
+
+.new-session-page__skeleton-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding-inline: 8px;
+  animation: new-session-placeholder-pulse 1.4s ease-in-out infinite;
+}
+
+.new-session-page__skeleton-icon,
+.new-session-page__skeleton-bar {
+  flex: none;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+.new-session-page__skeleton-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.new-session-page__skeleton-bar {
+  height: 10px;
+}
+
+.new-session-page__skeletons--tray {
+  flex-direction: row;
+  gap: 2px;
+}
+
+.new-session-page__skeletons--tray .new-session-page__skeleton-row {
+  height: 26px;
+  padding-inline: 10px;
+}
+
+.new-session-page__picker-panel > .new-session-page__skeletons {
+  padding: 0 calc(var(--new-session-tray-edge) - 8px) 8px;
+}
+
+.new-session-page__picker-popover .new-session-page__empty,
+.new-session-page__picker-popover .new-session-page__environment-empty {
+  height: 32px;
+  padding: 0 8px 0 28px;
+  font-size: 13px;
+  line-height: 32px;
+  color: var(--muted);
+  text-align: start;
+  white-space: nowrap;
+}
+
+@keyframes new-session-placeholder-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 768px) {
+  .new-session-page__context-tray {
+    order: -1;
+    margin: 0 0 4px;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .new-session-page__context-tray .new-session-page__triggers {
+    top: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    height: auto;
+    padding: 0;
+  }
+
+  .new-session-page__context-tray .new-session-page__workspace {
+    display: contents;
+  }
+
+  .new-session-page__context-tray span.new-session-page__select {
+    flex: none;
+    width: 100%;
+    max-width: none;
+  }
+
+  .new-session-page__context-tray span.new-session-page__select > .new-session-page__trigger {
+    justify-content: flex-start;
+    width: 100%;
+    height: 36px;
+    padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
+  }
+
+  .new-session-page__context-tray .new-session-page__trigger-label {
+    max-width: none;
+  }
+
+  .new-session-page__context-tray .new-session-page__picker-chevron {
+    display: block;
+    flex: 0 0 14px;
+    width: 14px;
+    height: 14px;
+    color: var(--muted);
+    stroke-width: 1.5px;
+  }
+
+  .new-session-page__context-tray .new-session-page__trigger-summary {
+    display: block;
+    max-width: none;
+  }
+
+  .new-session-page__skeletons--tray {
+    flex-direction: column;
+  }
+
+  .new-session-page__skeletons--tray .new-session-page__skeleton-row {
+    height: 36px;
+    padding: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__skeleton-row {
+    animation: none;
+  }
+}
+
+.new-session-page__triggers:empty {
+  display: none;
+}
+
+.new-session-page__picker-scroll[data-fade-start] {
+  mask-image: linear-gradient(to bottom, transparent, rgb(0 0 0) 14px);
+}
+
+.new-session-page__picker-scroll[data-fade-end] {
+  mask-image: linear-gradient(to top, transparent, rgb(0 0 0) 14px);
+}
+
+.new-session-page__picker-scroll[data-fade-start][data-fade-end] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    rgb(0 0 0) 14px,
+    rgb(0 0 0) calc(100% - 14px),
+    transparent
+  );
+}
+
+@media (max-width: 768px) {
+  .new-session-page__project-popover .new-session-page__picker-scroll[data-fade-end] {
+    mask-image: linear-gradient(to top, transparent, rgb(0 0 0) 16px);
+  }
+
+  .new-session-page__project-popover
+    .new-session-page__picker-scroll[data-fade-start][data-fade-end] {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(0 0 0) 14px,
+      rgb(0 0 0) calc(100% - 16px),
+      transparent
+    );
+  }
+}
+
+.new-session-page__picker-popover .new-session-page__browser-empty {
+  display: flex;
+  align-items: center;
+  height: max(var(--menu-item-height), calc(1lh + 12px));
+  padding: 0 8px 0 30px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.new-session-page__browser-list > .new-session-page__skeletons .new-session-page__skeleton-row {
+  height: max(var(--menu-item-height), calc(1lh + 12px));
+  gap: 8px;
+  font-size: 13px;
+}
+
+.new-session-page__picker-popover .new-session-page__browser-head,
+.new-session-page__picker-popover .new-session-page__browser-actions {
+  flex: none;
+  padding: 6px 8px;
+  border: 0;
+}
+
+/* Pointer and keyboard navigation share one highlighted row. */
+.new-session-page__picker-navigation
+  .session-menu__item:not([data-highlighted]):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: transparent;
+}
+
+.new-session-page__picker-navigation
+  .session-menu__item[aria-pressed="true"]:not([data-highlighted]):hover:not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--menu-selected);
+}
+
+.new-session-page__picker-navigation .session-menu__item[data-highlighted] {
+  background: var(--bg-hover);
+}
+
+.new-session-page__picker-navigation .session-menu__item[aria-pressed][data-highlighted] {
+  background: var(--menu-hover);
+}
+
+.new-session-page__picker-navigation .session-menu__item[aria-pressed="true"][data-highlighted] {
+  background: var(--surface-selected-hover);
+}
+
+@media (pointer: coarse) {
+  .new-session-page__picker-popover .session-menu__item,
+  .new-session-page__picker-popover .new-session-page__browser-entry {
+    min-height: 44px;
+  }
+
+  .new-session-page__picker-popover .header-search {
+    height: auto;
+    min-height: 52px;
+  }
+
+  .new-session-page__context-tray .new-session-page__picker-popover input {
+    min-height: 40px;
   }
 }

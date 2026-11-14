@@ -4,12 +4,22 @@ import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import { withCronManagementCaller } from "../../agents/tools/cron-tool.management.test-support.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveCronRunAdmissionSource,
+  resolveCronSessionWorkspaceOwnershipError,
+} from "../../cron/run-authority.js";
 import { createCronStoreHarness } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
-import type { CronJob, CronJobCreate } from "../../cron/types.js";
+import type { CronJob, CronJobCreate, CronStoredJob } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -29,6 +39,7 @@ import {
   createCronJob,
   createCronTestContext,
   createCronTestInvoker,
+  requireRecord,
   setCronValidationTestRegistry,
 } from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
@@ -145,7 +156,10 @@ function expectAllowed(caller: Caller, shape: Partial<CronJob>): boolean {
   }
   // These jobs hold no app authority, so a manager's own-session cap needs no fresh capture
   // (app-authority jobs: cron.scheduled-policy-adoption.integration.test.ts).
-  return caller === "manager";
+  return (
+    caller === "manager" &&
+    !(shape.scheduledToolPolicy?.mode === "trusted" && !shape.owner?.sessionKey)
+  );
 }
 
 async function updateAs(
@@ -200,6 +214,106 @@ describe("cron ownership access matrix", () => {
     setCronValidationTestRegistry();
   });
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it("refuses an ownerless trusted job's what-runs edit from an unknown-origin owner chat", async () => {
+    const { storePath } = await makeStorePath();
+    await withCronManagementCaller("owner-chat-edit", async (identity) => {
+      const sessionKey = identity.sessionKey;
+      const seeded: CronStoredJob = {
+        ...createCronJob({
+          agentId: identity.agentId,
+          sessionKey,
+          sessionTarget: `session:${sessionKey}`,
+          ownerProfileId: "gateway-owner",
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+        }),
+        createdActor: { type: "human", source: "profile", id: "gateway-owner" },
+      };
+      await saveCronStore(storePath, { version: 1, jobs: [seeded] });
+      const cron = createReadService({
+        storePath,
+        cronEnabled: false,
+        defaultAgentId: identity.agentId,
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      onTestFinished(() => cron.stop());
+      const context = createCronTestContext(undefined, getRuntimeConfig);
+      context.validateAgentRuntimeApprovalAuthority = () => true;
+      context.cron.readJob.mockImplementation((id) => cron.readJob(id));
+      context.cron.getJob.mockImplementation((id) => cron.getJob(id));
+      context.cron.updateWithPrecondition.mockImplementation((...args) =>
+        cron.updateWithPrecondition(...args),
+      );
+      // Replace only the transport: the tool mints its real management grant and the
+      // Gateway handler commits through the real SQLite service, as a nested tool does.
+      using _ = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async (method, _opts, params) => {
+          const caller = getGatewayToolCallerIdentity()!;
+          const client: GatewayClient = {
+            connect: {} as GatewayClient["connect"],
+            internal: {
+              agentRuntimeIdentity: {
+                ...identity,
+                cronToolsAllowCapture: caller.cronToolsAllowCapture,
+                cronManagementGrant: caller.cronManagementGrant,
+              },
+            },
+          };
+          const { respond } = await invokeCron(method, requireRecord(params, "tool params"), {
+            context,
+            client,
+          });
+          const [ok, result, error] = respond.mock.calls[0]!;
+          if (!ok) {
+            throw new Error(error.message);
+          }
+          return result;
+        });
+      const tool = createCronTool({
+        runId: identity.operationalRunInstance.runId,
+        agentSessionKey: sessionKey,
+        creatorToolAllowlistCaptureRef: {
+          value: { version: 1, source: "final-executable-surface" },
+        },
+      });
+      await tool.execute("get", { action: "get", jobId: seeded.id });
+      const errors: string[] = [];
+      for (const message of ["edited prompt", "edited again"]) {
+        try {
+          await tool.execute("update", {
+            action: "update",
+            jobId: seeded.id,
+            job: { payload: { ...seeded.payload, message } },
+          });
+        } catch (error) {
+          errors.push(String(error));
+        }
+      }
+      const stored = (await loadCronStore(storePath)).jobs[0]!;
+      const admissionSource = resolveCronRunAdmissionSource(stored);
+      expect.soft(admissionSource).toBe("operator-schedule");
+      expect
+        .soft(
+          resolveCronSessionWorkspaceOwnershipError({
+            cfg: {},
+            agentId: identity.agentId,
+            sessionKey,
+            ownerSessionKey: stored.owner?.sessionKey,
+            hasWorkspaceBinding: true,
+            admissionSource,
+          }),
+        )
+        .toBeUndefined();
+      expect.soft(stored.toolsAllowProvenance).toBeUndefined();
+      expect.soft(definition(stored)).toEqual(definition(seeded));
+      expect(errors).toHaveLength(2);
+      expect(
+        errors.every((error) => error.includes("only pause, resume, reschedule or remove it")),
+      ).toBe(true);
+    });
+  });
 
   it("filters operator commands, foreign streams and foreign trusted jobs from caller-scoped cron.list", async () => {
     getRuntimeConfig.mockReturnValue({});

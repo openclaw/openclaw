@@ -192,12 +192,12 @@ describe("full release validation evidence", () => {
     ).toThrow("Release manifest contains failed selected job evidence");
   });
 
-  it.each([
-    { publishInputs: { stableSoakWaiver: "approved" } },
-    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
-  ])("rejects retired waiver inputs before accepting direct evidence: %j", (inputs) => {
-    expect(() => validate({}, inputs)).toThrow(/waivers|knownFlakyJobsJson/u);
-  });
+  it.each([{ validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } }])(
+    "rejects retired flaky-job inputs before accepting direct evidence: %j",
+    (inputs) => {
+      expect(() => validate({}, inputs)).toThrow(/knownFlakyJobsJson/u);
+    },
+  );
 
   it.each([
     "publish",
