@@ -17,7 +17,10 @@ import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import { registerForegroundFailureRecoveryTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
-import { packageTargetStatus } from "./update-cli/update-cli-package.test-support.js";
+import {
+  packageTargetStatus,
+  writeOpenClawPackageFixture,
+} from "./update-cli/update-cli-package.test-support.js";
 import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
@@ -27,9 +30,9 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
+    const root = f.createCaseDir("openclaw-git-downgrade");
+    await writeOpenClawPackageFixture(root, "2026.9.3-beta.1", { git: true });
+    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(root);
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });

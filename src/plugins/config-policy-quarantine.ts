@@ -26,6 +26,7 @@ export function projectPluginPolicyQuarantine(raw: unknown): {
   for (const [id, entry] of Object.entries(raw.plugins.entries)) {
     if (
       !isRecord(entry) ||
+      (entry.enabled !== undefined && typeof entry.enabled !== "boolean") ||
       !isRecord(entry.hooks) ||
       !hasConflictingPluginPromptPolicy(entry.hooks)
     ) {

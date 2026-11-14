@@ -117,6 +117,27 @@ it.each([false, true])(
   },
 );
 
+it("does not hide malformed plugin enablement behind a permission quarantine", async () => {
+  const context = fixture(
+    {
+      plugins: {
+        entries: {
+          optional: {
+            enabled: "yes",
+            hooks: { allowPromptInjection: false, allowPromptModification: true },
+          },
+        },
+      },
+    },
+    { pluginValidation: "core-only" },
+  );
+  const snapshot = await readSnapshot(context);
+  expect(snapshot.valid).toBe(false);
+  expect(snapshot.issues.some((issue) => issue.path === "plugins.entries.optional.enabled")).toBe(
+    true,
+  );
+});
+
 it("does not quarantine a core authentication error alongside an optional permission conflict", async () => {
   const context = fixture(
     {
