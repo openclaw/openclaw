@@ -82,6 +82,11 @@ suite.define(() => {
           await expect
             .poll(async () => (await reasoning.boundingBox())?.height ?? 0)
             .toBeGreaterThan(collapsed!.height * 3);
+          // The opened thought survives its rows remounting when Worked closes and reopens.
+          await worked.click();
+          await expect.poll(() => reasoning.isVisible()).toBe(false);
+          await worked.click();
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
         }
         expect(await answer.isVisible()).toBe(true);
       }

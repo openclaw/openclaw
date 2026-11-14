@@ -3,7 +3,6 @@ import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
-  createSignal,
   lazy,
   For,
   Match,
@@ -329,8 +328,11 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
 }
 
 /** A quiet one-line step that opens into the full thought, like a tool row. */
-function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
-  const [open, setOpen] = createSignal(false);
+function MessageReasoning(props: Pick<ContentProps, "state" | "options" | "messageKey">) {
+  // The transcript's per-message disclosure store keeps a thought open when its
+  // row remounts, as when Worked closes and reopens or the row scrolls away.
+  const disclosureId = () => `reasoning:${props.messageKey}`;
+  const open = () => props.options.isUserMessageExpanded?.(disclosureId()) ?? false;
   // Shimmer only while the thought itself is the live part of the reply.
   const thinking = () => Boolean(props.options.isStreaming && !props.state().bodyMarkdown);
   return (
@@ -340,7 +342,7 @@ function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
         type="button"
         aria-expanded={open() ? "true" : "false"}
         aria-label={t("chat.view.reasoning")}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
       >
         <span class="chat-reasoning__icon" aria-hidden="true">
           <Icon name="brain" />
@@ -406,7 +408,11 @@ function BubbleContents(props: ContentProps) {
         <AssistantViews {...props} />
       </Show>
       <Show when={props.state().reasoningMarkdown}>
-        <MessageReasoning state={props.state} options={props.options} />
+        <MessageReasoning
+          state={props.state}
+          options={props.options}
+          messageKey={props.messageKey}
+        />
       </Show>
       <Show
         when={
