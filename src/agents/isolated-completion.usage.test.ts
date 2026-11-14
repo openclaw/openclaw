@@ -9,6 +9,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runHostPreparedIsolatedCompletion } from "./host-prepared-isolated-completion.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import * as fixtures from "./isolated-completion.test-support.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 const mocks = fixtures.isolatedCompletionMocks;
 const completePrepared = vi.hoisted(() => vi.fn());
 // mock-isolation: Supply returned provider messages; keep the host result and authority fences real.
@@ -114,7 +115,7 @@ it.each([
     }
     if (["unavailable", "default-zero", "measured-zero"].includes(outcome)) {
       assistant.usage = {
-        ...assistant.usage,
+        ...(outcome === "default-zero" ? makeZeroUsageSnapshot() : assistant.usage),
         input: 0,
         output: 0,
         totalTokens: 0,
