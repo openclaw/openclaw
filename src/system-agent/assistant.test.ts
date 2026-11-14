@@ -66,6 +66,7 @@ it.each([
   ["I would edit config directly.", null],
   ["{}", null],
   ['{"reply":"just chatting"}', { reply: "just chatting" }],
+  ['{"reply":"just chatting","command":null}', { reply: "just chatting" }],
 ])("parses only the first valid object plan: %s", (input, expected) => {
   expect(parseSystemAgentAssistantPlanText(input)).toEqual(expected);
 });
