@@ -654,6 +654,94 @@ it.each([
   },
 );
 
+it("keeps the newest palette when an older catalog read resolves late", async () => {
+  const older = createDeferred<ThemesListResult>();
+  const newest = catalog(
+    createThemeDefinitionFixture({ dark: createThemePaletteFixture({ background: "#222222" }) }),
+  );
+  const { gateway, current } = createGatewayStoreTestStore();
+  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
+  gateway.start();
+  let lists = 0;
+  current().request.mockImplementation((method) => {
+    if (method === "themes.list") {
+      lists += 1;
+      return lists === 1 ? older.promise : Promise.resolve(newest);
+    }
+    return Promise.reject(new Error(`Unexpected request ${method}`));
+  });
+  current().testOptions.onHello?.({
+    ...GATEWAY_STORE_TEST_HELLO,
+    snapshot: { presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "profile" } }] },
+  });
+  try {
+    await vi.waitFor(() => expect(lists).toBe(1));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("users.prefs.changed", { profileId: "profile", keys: ["ui.theme"] }),
+    );
+    await vi.waitFor(() =>
+      expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
+        "--bg: #222222;",
+      ),
+    );
+
+    older.resolve(
+      catalog(
+        createThemeDefinitionFixture({
+          dark: createThemePaletteFixture({ background: "#111111" }),
+        }),
+      ),
+    );
+    await older.promise;
+    expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
+      "--bg: #222222;",
+    );
+  } finally {
+    applicationTheme.dispose();
+    gateway.stop();
+  }
+});
+
+it("discards a palette read when a plugin reload removes its theme", async () => {
+  const retired = createDeferred<ThemesGetResult>();
+  let response = builtinCatalog();
+  const { gateway, current } = createGatewayStoreTestStore();
+  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
+  gateway.start();
+  current().request.mockImplementation((method) => {
+    if (method === "themes.list") {
+      return Promise.resolve(response);
+    }
+    if (method === "themes.get") {
+      return retired.promise;
+    }
+    if (method === "plugins.uiDescriptors") {
+      return Promise.resolve({ ok: true, generation: 1, descriptors: [], methods: [] });
+    }
+    return Promise.reject(new Error(`Unexpected request ${method}`));
+  });
+  current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  try {
+    await vi.waitFor(() =>
+      expect(current().request).toHaveBeenCalledWith("themes.get", { id: descriptor.id }),
+    );
+    response = builtinCatalog([]);
+    response.current = { ...response.current, requestedId: descriptor.id };
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
+    await vi.waitFor(() => expect(applicationTheme.catalog?.unavailableId).toBe(descriptor.id));
+
+    retired.resolve({ current: catalog().current, theme: descriptor, definition });
+    await retired.promise;
+    expect(document.documentElement.dataset.themeId).toBe("claw");
+    expect(document.getElementById("openclaw-custom-theme")?.textContent ?? "").not.toContain(
+      "--bg: #111122;",
+    );
+  } finally {
+    applicationTheme.dispose();
+    gateway.stop();
+  }
+});
+
 it.each(["Appearance discovery", "profile selection"] as const)(
   "leaves built-in presentation quiet until %s needs the catalog",
   async (trigger) => {
