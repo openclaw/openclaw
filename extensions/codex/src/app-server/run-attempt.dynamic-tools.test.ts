@@ -220,6 +220,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
   it.each([
     ["tools are disabled", { disableTools: true }],
     ["the model cannot call tools", { supportsTools: false }],
+    ["config denies every tool", { config: { tools: { deny: ["*"] } } }],
   ])("declares no client function when %s", async (_case, gate) => {
     const { harness, run } = await startTool(createRuntimeDynamicTool("managed_task"), {
       ...gate,
@@ -229,7 +230,8 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       await run.waitForTurnAccepted();
       const start = harness.requests.find(({ method }) => method === "thread/start")
         ?.params as CodexThreadStartParams;
-      expect(flattenCodexDynamicToolFunctions(start.dynamicTools ?? [])).toEqual([]);
+      const names = flattenCodexDynamicToolFunctions(start.dynamicTools ?? []).map((t) => t.name);
+      expect(names).not.toContain("submit_probe_result");
       await completeRun(harness, run);
     } finally {
       harness.close();

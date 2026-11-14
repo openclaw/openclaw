@@ -343,7 +343,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     // under the same gates as the built-in runtime's client functions.
     const clientTools = createAgentHarnessClientTools({
       clientTools:
-        params.disableTools || params.trigger === "memory" || !supportsModelTools(params.model)
+        params.disableTools ||
+        params.trigger === "memory" ||
+        !supportsModelTools(params.model) ||
+        params.config?.tools?.deny?.some((name) => name.trim() === "*")
           ? undefined
           : params.clientTools,
       toolsAllow: params.toolsAllow,
