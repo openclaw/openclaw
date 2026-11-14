@@ -62,12 +62,21 @@ describe("People error copy", () => {
     expect(peopleError(refusal("not_an_owner"), "update", unchanged).message).toContain(
       "owner access was removed",
     );
-    expect(peopleError(refusal("limit_reached"), "update", unchanged).message).toContain(
-      "Remove one to add another",
-    );
     expect(peopleError(refusal("missing_capability"), "update", unchanged).message).toContain(
       "approved owner browser",
     );
+  });
+
+  it.each([
+    "a claw keeps at most 100 invites",
+    "an invite lasts at most 7 days",
+    "a claw has at most 256 nodes",
+  ])("does not prescribe removing people or devices for the limit: %s", (detail) => {
+    const result = peopleError(refusal("limit_reached", detail), "update", unchanged);
+    expect(result.message).toBe(
+      "This access request exceeds a limit. Review the error details before changing access.",
+    );
+    expect(result.diagnostic).toBe("limit_reached: " + detail);
   });
 
   it("separates load failures from uncertain updates even when retryable is true", () => {
