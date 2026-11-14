@@ -280,7 +280,7 @@ async function composeFavicon(
   context.save();
   if (shape !== "square") {
     context.beginPath();
-    context.roundRect(0, 0, 32, 32, 16);
+    context.roundRect(0, 0, 32, 32, shape === "circle" ? 16 : 8);
     context.clip();
   }
   const fit = shape === "square" ? Math.min : Math.max;
