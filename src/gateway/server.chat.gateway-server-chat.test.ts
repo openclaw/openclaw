@@ -97,6 +97,7 @@ describe("gateway server chat", () => {
       });
       expect(set.ok).toBe(true);
 
+      mockGetReplyFromConfigOnce(async () => ({ text: "Matched settings applied." }));
       const accepted = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "use the matched settings",
@@ -299,7 +300,7 @@ describe("gateway server chat", () => {
 
         releaseDispatch.resolve();
         await waitForAgentRunDrained(runId);
-        mockGetReplyFromConfigOnce(async () => undefined);
+        mockGetReplyFromConfigOnce(async () => ({ text: "Continued after finalization." }));
         await sendChatAndExpectStarted(`${runId}-successor`, "continue after finalization");
         await waitForAgentRunDrained(`${runId}-successor`);
         await settleGatewayFixture();
@@ -337,6 +338,7 @@ describe("gateway server chat", () => {
           },
         });
 
+        mockGetReplyFromConfigOnce(async () => ({ text: "Dashboard input received." }));
         const res = await rpcReq(ws, `sessions.${method}`, {
           key: sessionKey,
           message,
@@ -411,6 +413,7 @@ describe("gateway server chat", () => {
         const newRunId = `idem-${method}-interrupt-active`;
         const releasePredecessor = createDeferred();
         const predecessor = await startInterruptibleChatRun(oldRunId, releasePredecessor.promise);
+        mockGetReplyFromConfigOnce(async () => ({ text: "Replacement completed." }));
         try {
           await expect(
             rpcReq(ws, method, {
@@ -550,6 +553,7 @@ describe("gateway server chat", () => {
       });
 
       try {
+        mockGetReplyFromConfigOnce(async () => ({ text: "Reply completed." }));
         const res = await rpcReq(ws, "chat.send", {
           sessionKey: "main",
           message: "replace non-reply session work",
@@ -584,6 +588,7 @@ describe("gateway server chat", () => {
       await writeSessionStore({ entries: {} });
       await prepareGatewayReplyRuntimeForTest({ force: true });
 
+      mockGetReplyFromConfigOnce(async () => ({ text: "Hello from Orion." }));
       const res = await rpcReq(ws, "sessions.send", {
         key: "agent:orion:main",
         message: "hello orion",

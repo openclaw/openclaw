@@ -38,11 +38,7 @@ import {
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  GatewayDrainingError,
-  isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
@@ -60,6 +56,7 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import {
   discoverRestartSessionStores,
   prepareRestartStores,
@@ -387,7 +384,7 @@ function createPreparedRestartRecovery(
 
 /** Recover markers and unfinished predecessor runs without reviving older orphans. */
 export async function resumeMarkedSessions(
-  params: RestartResumeParams & { onPrepared?: () => void },
+  params: RestartResumeParams & { onPrepared?: () => void | Promise<void> },
 ): Promise<void> {
   const owner = params.context.agentDatabaseStartup;
   const recovery = getRestartRecovery(params.context);
@@ -429,14 +426,14 @@ export async function resumeMarkedSessions(
   });
   // Discovery installs per-session waits before reconnecting turns can reach admission.
   if (owner) {
-    params.onPrepared?.();
+    await params.onPrepared?.();
   }
   throwIfSettledRejected(
     await Promise.allSettled(pending.map((run) => run())),
     "Restart recovery failed",
   );
   if (!owner) {
-    params.onPrepared?.();
+    await params.onPrepared?.();
   }
   for (const agentId of byAgent.keys()) {
     await owner?.waitForAgentPreparation(agentId, { signal: params.signal, forInput: true });
@@ -451,12 +448,10 @@ async function resumeRestartStore(
   { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
 ): Promise<boolean> {
   let completed = true;
-  const assertRecoveryCurrent = () => {
-    signal.throwIfAborted();
-    if (isGatewayRestartDraining()) {
-      throw new GatewayDrainingError();
-    }
-  };
+  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
+    { context, signal, log },
+    { target, entries },
+  );
   const summary = createRestartResumeSummary("startup");
   const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
@@ -726,5 +721,7 @@ async function resumeRestartStore(
   } finally {
     summary.publish();
   }
+  // Admit restart inputs before recovered completion notices can start a turn.
+  resume();
   return completed;
 }

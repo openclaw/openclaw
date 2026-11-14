@@ -1,5 +1,6 @@
 import { on } from "node:events";
 import fs from "node:fs";
+import { constants, setPriority } from "node:os";
 import { performance } from "node:perf_hooks";
 import { deserialize, serialize } from "node:v8";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
@@ -46,6 +47,9 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
   try {
+    if (input.background) {
+      setPriority(0, constants.priority.PRIORITY_LOW);
+    }
     await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     database = openNodeSqliteDatabase(input.pathname, {

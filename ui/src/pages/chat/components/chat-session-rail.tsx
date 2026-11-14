@@ -33,7 +33,7 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
-import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-panel-host.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 

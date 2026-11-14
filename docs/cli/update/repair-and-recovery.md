@@ -467,9 +467,11 @@ checkout before settling that recovery. A changed link or occupied path keeps
 recovery intact; this path does not reclaim cancelled update custody through
 the link.
 
-For private retained package trees, recovery ignores widened group/other permission
-bits while verifying the package, then restores owner-only access and reports one
-warning. This includes POSIX ACL access masks introduced by recursive `setfacl`.
+For retained package contents, recovery ignores group/other permission drift
+while verifying the package. It clears group/other write access, including
+POSIX ACL write masks, but preserves read/execute access so a non-root service
+can still run a root-owned global npm installation after rollback. Private
+activation anchors, controls, helpers, and journals remain owner-only.
 File contents, ownership, identity, owner permissions, and symlink targets must
 still match. If the filesystem prevents tightening permissions, recovery warns
 and continues with the verified package. Older fingerprints that included public
@@ -1105,6 +1107,15 @@ not bypass state ownership. Gateway-owned restart completion performs the same
 retirement after it records success. A failed update that never reached repair or
 activation attempts the same retirement after its failure is recorded, including
 its own capture.
+
+External supervisors using `update migrate` and `update finish` attempt the same
+cleanup when they finish an accepted update, after retiring their rollback journal.
+The recorded migration start time keeps that update's own migration originals
+protected until a later accepted update supersedes them. This includes verified
+originals produced by standalone Doctor or startup migration. `update finish`
+returns the cleanup summary in `diagnostics` and any cleanup warning without
+changing the accepted update's outcome. Receipts without a migration start time
+cannot establish this ordering and do not trigger automatic cleanup.
 
 Once the update's Gateway health verification is recorded (service running, version
 match, readiness, settled channels, and no plugin errors), that update retires its

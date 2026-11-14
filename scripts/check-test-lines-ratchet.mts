@@ -4,15 +4,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { releaseBranchForChecks } from "./lib/check-limits.mts";
 import {
-  loadRatchetReference,
-  loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
   parseRatchetScalar,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-const BASELINE = "config/test-lines-baseline.txt";
+// Covers the regression tests a fix needs; larger growth needs a reviewed record.
+const ALLOWANCE = 400;
 const ALLOCATIONS = "config/test-lines-allocations";
 const PATTERNS = [
   "*.test.ts",
@@ -68,17 +67,6 @@ function countFiles(root: string, files: string[], ref: string | null) {
   return total;
 }
 
-function countTestLines(root: string, staged: boolean) {
-  const files = execFileSync("git", ["ls-files", "-z", "--", ...PATTERNS], {
-    cwd: root,
-    maxBuffer: 256 * 1024 * 1024,
-  })
-    .toString("utf8")
-    .split("\0")
-    .filter(Boolean);
-  return countFiles(root, files, staged ? "" : null);
-}
-
 function countTestLineDelta(root: string, base: string, staged: boolean) {
   const entries = execFileSync(
     "git",
@@ -108,8 +96,7 @@ function countTestLineDelta(root: string, base: string, staged: boolean) {
       after.push(file);
     }
   }
-  // Git numstat counts unterminated lines; the ceiling counts literal LF bytes.
-  // Read only changed sources so both measurements use the same unit.
+  // Count literal LF bytes, like wc -l; git numstat also counts unterminated lines.
   return countFiles(root, after, staged ? "" : null) - countFiles(root, before, base);
 }
 
@@ -154,86 +141,35 @@ function loadAllocations(root: string, staged: boolean, ref?: string) {
   return allocations;
 }
 
-function effectiveCeiling(baseline: number, allocations: Map<string, number>) {
-  const ceiling = baseline + [...allocations.values()].reduce((sum, value) => sum + value, 0);
-  if (!Number.isSafeInteger(ceiling)) {
-    throw new Error("Test line ceiling exceeds a safe integer");
-  }
-  return ceiling;
-}
-
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
-    if (args.staged && args.prune) {
-      throw new Error("--prune cannot be combined with --staged");
+    if (args.prune) {
+      throw new Error("The test-line budget has no baseline to prune.");
     }
-    if (!args.prune && releaseBranchForChecks(root)) {
+    if (releaseBranchForChecks(root)) {
       console.log("Test-line budget skipped for release branch.");
       return 0;
     }
-    const parse = (source: string) => parseCount(source, BASELINE);
-    const baseline = loadRatchetSnapshot(root, BASELINE, args.staged, parse);
-    const allocations = loadAllocations(root, args.staged);
-    const ceiling = effectiveCeiling(baseline, allocations);
     const base = resolveRatchetBase(root, args);
-    const previous = base ? loadRatchetReference(root, base, BASELINE, parse) : null;
-    const previousAllocations = base
-      ? loadAllocations(root, false, base)
-      : new Map<string, number>();
-    const previousCeiling =
-      previous === null ? null : effectiveCeiling(previous, previousAllocations);
-    const total = countTestLines(root, args.staged);
-    const delta = base ? countTestLineDelta(root, base, args.staged) : null;
-    if (
-      allocations.size !== previousAllocations.size ||
-      [...allocations].some(([file, value]) => previousAllocations.get(file) !== value)
-    ) {
-      if (previousCeiling === null || delta === null) {
-        throw new Error("Test line allocation changes require a comparison base with a baseline");
-      }
-      // A prune folds allocations into the scalar. Compare effective ceilings
-      // so an older branch cannot count that folded credit a second time.
-      const credit = Math.max(0, ceiling - previousCeiling);
-      // Exact grants can reconcile base debt without creating new headroom.
-      const inheritedDebt = Math.max(0, total - delta - previousCeiling);
-      const allowedGrowth = Math.max(0, delta + inheritedDebt);
-      if (credit > allowedGrowth) {
-        throw new Error(
-          `Test line allocation credit ${credit} exceeds allowed ceiling growth ${allowedGrowth}.`,
-        );
-      }
+    if (!base) {
+      throw new Error("The test-line budget needs a comparison base; pass --base <ref>.");
     }
-    if (
-      previous !== null &&
-      previousCeiling !== null &&
-      baseline > previous &&
-      ceiling > previousCeiling
-    ) {
-      console.warn(
-        `Test line ceiling raised manually: ${previousCeiling} -> ${ceiling}; justify this in the PR.`,
-      );
+    const delta = countTestLineDelta(root, base, args.staged);
+    // Only records this change adds or raises cover its growth; merged records stay inert.
+    const previous = loadAllocations(root, false, base);
+    let credit = 0;
+    for (const [file, value] of loadAllocations(root, args.staged)) {
+      credit += Math.max(0, value - (previous.get(file) ?? 0));
     }
-    if (total > ceiling) {
-      const details = `Test lines: ${total}; ceiling: ${ceiling}; over by: ${total - ceiling}; net delta: ${delta !== null && delta > 0 ? "+" : ""}${delta ?? "unavailable"}.`;
-      if (!args.prune && delta !== null && delta <= 0) {
-        console.log(`${details} Tree is over the ceiling; this change does not add test lines.`);
-        return 0;
-      }
+    const details = `Net test lines: ${delta > 0 ? "+" : ""}${delta}; allowance: ${ALLOWANCE}; allocation credit: ${credit}.`;
+    if (delta > ALLOWANCE + credit) {
       console.error(
-        `${details}\nOffset the added lines by deleting or consolidating tests elsewhere, or add a justified allocation in ${ALLOCATIONS}/<change>.txt.`,
+        `${details}\nDelete or consolidate tests to remove ${delta - ALLOWANCE - credit} lines, or add a justified ${ALLOCATIONS}/<change>.txt record of ${delta - ALLOWANCE} and state the reason in the PR.`,
       );
       return 1;
     }
-    if (args.prune && (total < ceiling || allocations.size > 0)) {
-      fs.writeFileSync(path.join(root, BASELINE), `${total}\n`);
-      for (const file of allocations.keys()) {
-        fs.unlinkSync(path.join(root, file));
-      }
-      console.log(`Pruned ${BASELINE}: ${ceiling} -> ${total}.`);
-    } else {
-      console.log(`Test lines OK: ${total}; ceiling: ${ceiling}; slack: ${ceiling - total}.`);
-    }
+    console.log(`Test lines OK. ${details}`);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

@@ -422,6 +422,35 @@ export const iconData = {
   loaderCircle: strokePathData("M21 12a9 9 0 1 1-6.219-8.56"),
   square: strokeIconData([["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]]),
   play: strokeIconData([["polygon", { points: "6 3 20 12 6 21 6 3" }]]),
+  playRounded: strokePathData(
+    "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+  ),
+  pauseFilled: strokeIconData([
+    [
+      "rect",
+      {
+        x: "4.5",
+        y: "3",
+        width: "5",
+        height: "18",
+        rx: "1.5",
+        fill: "currentColor",
+        stroke: "none",
+      },
+    ],
+    [
+      "rect",
+      {
+        x: "14.5",
+        y: "3",
+        width: "5",
+        height: "18",
+        rx: "1.5",
+        fill: "currentColor",
+        stroke: "none",
+      },
+    ],
+  ]),
   pause: strokeIconData([
     ["rect", { x: "14", y: "4", width: "4", height: "16", rx: "1" }],
     ["rect", { x: "6", y: "4", width: "4", height: "16", rx: "1" }],

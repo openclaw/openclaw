@@ -7,18 +7,26 @@ import { authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { resolveOAuthMirrorDecision } from "./oauth-identity.js";
 import { buildOAuthApiKey } from "./oauth-provider-operations.js";
-import { appendOAuthRefreshCleanupErrors } from "./oauth-refresh-failure.js";
+import {
+  appendOAuthRefreshCleanupErrors,
+  OAuthRefreshOwnerError,
+} from "./oauth-refresh-failure.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import { createFailedOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { beginOAuthRefreshObservation } from "./oauth-refresh-observation.js";
-import { rollbackOAuthRefreshPeerClaims } from "./oauth-refresh-peers.js";
+import {
+  rollbackOAuthRefreshPeerClaims,
+  settleOAuthRefreshPeerClaims,
+} from "./oauth-refresh-peers.js";
 import type { OAuthRefreshPeerClaim } from "./oauth-refresh-peers.js";
 import {
   hasMatchingOAuthIdentity,
   isSafeOAuthPostClaimSettlement,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "./oauth-shared.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import type { PersonalAuthProfileStore } from "./personal-store.js";
+import { getScopedAuthProfileEnv } from "./runtime-scope.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
@@ -110,7 +118,7 @@ export async function adoptNewerMainOAuthCredential(params: {
 }
 
 /** Validate and mirror the current shared credential before peer settlement. */
-export async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params: {
+async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params: {
   profileId: string;
   candidate: OAuthCredential;
   validateCredential?: (credential: OAuthCredential) => void;
@@ -362,6 +370,65 @@ export async function buildValidatedOAuthAccess(
       )
     : credential;
   return { apiKey, credential: accepted };
+}
+
+export async function settleOAuthRefreshPeerClaimsUnderLock(params: {
+  claim: Extract<OAuthRefreshClaim, { kind: "claimed" }>;
+  claims: readonly OAuthRefreshPeerClaim[];
+  replacement: OAuthCredential;
+  validateCredential?: (credential: OAuthCredential) => void;
+}): Promise<void> {
+  validateSettlementCredential(params.validateCredential, params.replacement);
+  if (params.claim.personalStore) {
+    return;
+  }
+  const authoritativeSharedCredential =
+    params.claim.authPath === resolveSharedAuthStorePath()
+      ? params.replacement
+      : await resolveAuthoritativeSharedOAuthCredentialUnderLock({
+          profileId: params.claim.profileId,
+          candidate: params.replacement,
+          validateCredential: params.validateCredential,
+        });
+  await settleOAuthRefreshPeerClaims({
+    profileId: params.claim.profileId,
+    fence: params.claim.fence,
+    claims: params.claims,
+    authoritativeSharedCredential,
+    replacement: params.replacement,
+  });
+}
+
+/**
+ * A running Gateway owns shared credentials and their refresh. Another process uses a still-valid
+ * token as is and refuses before any write; it never refreshes beside the owner.
+ */
+export async function resolveOAuthAccessBesideStateOwner(
+  credential: OAuthCredential,
+  params: Parameters<typeof buildValidatedOAuthAccess>[1] & {
+    profileId: string;
+    forceRefresh?: boolean;
+  },
+): Promise<ResolvedOAuthAccess | undefined> {
+  const { readActiveGatewayLockIdentity } = await import("../../infra/gateway-lock.js");
+  // An exec run can redirect its own state while it retains the original credential scope.
+  const env = getScopedAuthProfileEnv() ?? process.env;
+  const owner = await readActiveGatewayLockIdentity({ env, includeEmbedded: true });
+  if (!owner || owner.pid === process.pid) {
+    return undefined;
+  }
+  if (!params.forceRefresh && hasUsableOAuthCredential(credential, { refreshMarginMs: 0 })) {
+    return await buildValidatedOAuthAccess(credential, params);
+  }
+  const holder = owner.port
+    ? `the Gateway (pid ${owner.pid}, port ${owner.port})`
+    : `OpenClaw process ${owner.pid}`;
+  throw new OAuthRefreshOwnerError({
+    provider: credential.provider,
+    profileId: params.profileId,
+    reason: null,
+    message: `The ${credential.provider} sign-in "${params.profileId}" needs a refresh, but ${holder} owns the shared credentials and only it may refresh them. No credential was changed. Run this through the Gateway, retry after its next turn refreshes the sign-in, or stop the Gateway through its service owner and rerun this command.`,
+  });
 }
 
 /** Restore completed transient work; observer timeouts never enter this rollback. */

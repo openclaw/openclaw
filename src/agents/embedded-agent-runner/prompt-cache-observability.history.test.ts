@@ -30,6 +30,15 @@ import { beginOpenAIObservation } from "./prompt-cache-observability.test-suppor
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import type { PromptPreparationResult, PromptPreparationTask } from "./provider-prompt-state.js";
 
+// These tests change the prefix on purpose to exercise the production drop diagnostics and
+// warnings; the suite-wide prefix assertion stays on only where a test opts in.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 // mock-isolation: Preserve native hashing while observing history work in this process.
 vi.mock("node:crypto", { spy: true });
 

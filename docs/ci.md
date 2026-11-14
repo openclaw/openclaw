@@ -18,6 +18,18 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The protected dependency publisher rebuilds a new hosted Linux pnpm store before
+saving it, preserving authenticated bootstrap archives and the full dependency
+inventory. Blacksmith, macOS, and independent code warming keep their current
+behavior. This prevents old packages from accumulating
+through prefix restores. Hosted Linux exact keys carry a `-fresh` suffix so the
+publisher replaces the old generation without waiting for a lockfile change.
+The unchanged restore prefix keeps old entries available during rollout and
+includes compact generations in later fallback restores. A five-pair hosted
+compute replay reduced the archive from 2.24 GB to
+957 MB and median extraction plus offline installation from 31.5 to 12.2 seconds.
+This does not measure WAN transfer, PR completion time, or billed savings.
+
 Gateway server tests use the same 16-file process bound in local full-suite runs
 and CI config/include selections. This retires the shared worker before retained
 module graphs exhaust a 16 GB runner on Bun. The CI shard keeps its original file
@@ -212,11 +224,12 @@ changed Node plan defers its boundary coverage to that producer. This opt-in doe
 not enable unrelated proof-tier checks.
 
 Full and runtime-only compiled workers reserve separate live/cache slots, so
-runtime checks cannot replace a retained full generation. The protected warmer
-also supplies runtime workers to current-target Control UI E2E rows. Worker-cache
-identity ignores the compiler's heap ceiling while preserving other Node options;
-the warmer and test job keep their own memory limits. Frozen targets and browser
-extension rows retain their existing preparation.
+runtime checks cannot replace a retained full generation. Control UI E2E rows
+compile workers locally: bundled Settings preparation can change their installed
+namespace after the source-only seed was captured. Do not restore that seed
+until reuse is qualified against the prepared UI topology. Worker-cache identity
+ignores the compiler's heap ceiling while preserving other Node options; the
+warmer and test job keep their own memory limits.
 
 The protected warmer keeps its prebuild full seed for source-only Node shards and publishes the full
 generation already prepared by postbuild collection separately. Only selected
@@ -389,6 +402,8 @@ Changed compiler planning queries each config's complete file membership with `-
 
 When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
 
+Central lint also skips the SDK cache when the check planner assigns it no extension work. A retained extension tail, missing planner metadata, or a frozen or compatibility target keeps the existing restore path.
+
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile
@@ -434,7 +449,7 @@ Android native resource preparation uses the Mermaid renderer's filtered depende
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Upstream Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and other repositories retain two. All test and lint tasks remain selected.
 
-macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Ordinary native phases retain
+macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Full-validation release compilation shares the independent package matrix so it can overlap Linux build verification; app tests retain the exact Linux runtime artifact dependency. Ordinary native phases retain
 a 30-minute budget; full nonpublishing app-host recovery proof has 75 minutes to build
 and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch.
 
@@ -472,7 +487,7 @@ Browser extension CI launches the installed, patched Chrome MCP dependency direc
 
 When an ordinary PR, push, or scheduled run already selects the public artifact build, current-target Control UI locale checks share that job's checkout and dependency setup. Source verification and locale parity run before generators, with their result settled after the existing build diagnostics. Source failures remain blocking; generated-locale drift retains its strict or advisory policy. Standalone selections, dispatches, frozen targets, and compatibility targets keep the separate locale job.
 
-When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
+When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Full-release repo E2E shards also reuse their restored production UI for deployment fixtures, without narrowing the complete UI inventory or replacing the separately owned mock/native-plugin bundle. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports. Scheduled and push warming use ordinary CI's Bun policy, retaining the runtime owner's Node-only exceptions; explicit workflow dispatches prime both runtimes for full validation. Optional full Node runs may start colder between manual dual-runtime warmings. Both Linux cache backends retain the same seven Control UI seed files on Node and the pinned Bun fork, and hosted tooling and contract seeds keep their existing runtime owners. Ordinary CI remains restore-only.
 

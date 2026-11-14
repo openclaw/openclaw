@@ -7,8 +7,9 @@ read_when:
 title: "Media playback"
 ---
 
-OpenClaw chat clients play assistant audio and video attachments inline. The
-Gateway keeps those attachments behind session-scoped access, serves seekable
+OpenClaw chat clients play audio clips inline, including incoming recordings
+that do not carry a voice-note flag. Assistant video attachments also play inline.
+The Gateway keeps those attachments behind session-scoped access, serves seekable
 byte ranges, and can prepare a portable playback rendition for recognized
 formats that are not safe across every client.
 
@@ -31,6 +32,24 @@ refused before upload.
 | Android         | Media3 ExoPlayer                                    | The app streams video through the authenticated Gateway HTTP client, requests Android audio focus, and coordinates attachment playback with Talk/TTS. Cached transcript media rows remain visible offline, but playback needs a connection to obtain a fresh media ticket.              |
 | Linux companion | Control UI inside the companion WebView             | Codec availability comes from GStreamer. Released packages include or declare the expected codec plugins; see [Linux media codecs](/platforms/linux#media-codecs).                                                                                                                      |
 
+## Audio previews and loading
+
+Audio clips show playback controls in the conversation instead of requiring an
+**Open** action. Transcripts remain in the message, separate from the player.
+
+- The Control UI loads playback metadata for the preview. It fetches and decodes
+  a waveform only after playback starts, within the existing size and duration
+  limits. A waveform becoming ready does not interrupt current playback.
+- iOS and macOS show a preview before downloading audio. Press **Play** to load
+  the clip and start playback. Leaving the attachment stops playback.
+- Android loads audio on demand. Playback controls use touch-sized targets, and
+  long filenames truncate within the available space.
+
+These players handle recorded attachments. They do not listen to a clip while
+another person is still recording it. Continuous live listening uses
+[Talk mode](/nodes/talk); external chat apps control their own recording and
+playback interfaces.
+
 ## Portable formats
 
 The Gateway classifies these formats as the portable native set shared by the
@@ -51,8 +70,9 @@ Both Gateway byte routes accept `?playback=1`: the managed attachment route
 under `/api/chat/media/outgoing/.../full` and the Control UI assistant-media
 route. Attachment metadata can report `playback: "native"` or
 `playback: "transcode"` so a client can choose the rendition deliberately.
-Apple clients also request the playback route when this metadata is absent,
-so attachments published while the inspector was busy can recover on playback.
+Apple clients and the Control UI also request the playback route for managed
+audio and video when this metadata is absent, so attachments published while the
+inspector was busy can recover on playback.
 Explicit native playback and image/document downloads keep their original-byte routes.
 
 Playback conversion is lazy:

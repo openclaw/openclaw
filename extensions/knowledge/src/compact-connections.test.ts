@@ -20,6 +20,7 @@ const rec = (id: string, extra: Partial<Envelope> = {}): LoadedRecord => ({
   metadata: { lifecycle: "active", ...extra } as Envelope,
 });
 const fixture = (count = 1): ScanResult => ({
+  recall: new Map(),
   records: [
     rec("node-aaa"),
     rec("node-bbb"),

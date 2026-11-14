@@ -134,7 +134,8 @@ export function closeStateDatabaseHandle(
   const priorCheckpointError = database.walMaintenance?.health?.state === "error";
   let checkpointed = false;
   try {
-    if (database.db.isOpen) {
+    if (database.db.isOpen && !delegated) {
+      // Only host checkpoints need this policy; delegated retirement owns its worker connection.
       // Retiring handles leave pinned WAL to its remaining owners instead of waiting for readers.
       setSqliteBusyTimeout(database.db, 0);
     }

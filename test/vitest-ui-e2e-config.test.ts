@@ -34,11 +34,13 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `browser-pair-code chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter plugin-inline-view session-management.new-nested`
+  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
+    .concat("required-human-action")
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
+  "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
@@ -98,6 +100,7 @@ type OwnershipProbe = {
     nativePluginBuilds?: PreparedNativeControlUiPluginBuild[];
     bridge: boolean;
     productionRoot?: string;
+    deploymentRoot?: string;
   }>;
   leases: Array<{ outDir: string; closed: boolean; removed: boolean }>;
   shards: string[][];
@@ -121,6 +124,7 @@ function probeOwnership(
   options: {
     prebuilt?: boolean;
     productionArtifact?: boolean;
+    reuseProductionArtifact?: boolean;
     skipProductionArtifact?: boolean;
     filters?: string[];
     cli?: string[];
@@ -288,6 +292,7 @@ function probeOwnership(
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
           nativePluginBuilds: project.getProvidedContext().controlUiE2eNativePluginBuilds,
           productionRoot: project.getProvidedContext().controlUiE2ePrebuiltAssets?.root,
+          deploymentRoot: project.getProvidedContext().controlUiE2eDeploymentAssets?.root,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
         passWithNoTests: ctx.config.passWithNoTests,
@@ -316,6 +321,9 @@ function probeOwnership(
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
         OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: options.skipProductionArtifact ? "1" : "",
         OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: options.productionArtifact ? canonicalRoot : "",
+        OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT: options.reuseProductionArtifact
+          ? canonicalRoot
+          : "",
       },
     },
   );
@@ -394,9 +402,28 @@ describe("Control UI E2E resource ownership", () => {
     );
     const result = probeOwnership();
     const inventory = fs
-      .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
+      .globSync(
+        [
+          "ui/src/**/*.e2e.test.{ts,tsx}",
+          "extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+          ...qaLabFiles,
+        ],
+        { cwd: repoRoot },
+      )
       .toSorted();
     expectInventory(result, inventory);
+    const reused = probeOwnership({ reuseProductionArtifact: true });
+    expect(reused.files).toEqual(result.files);
+    expect(reused.shards).toEqual(result.shards);
+    expect(reused.contexts.every((context) => context.productionRoot === undefined)).toBe(true);
+    expect(
+      reused.contexts.every((context) => context.deploymentRoot?.endsWith("/canonical-ui")),
+    ).toBe(true);
+    expect(reused.leases).toEqual(lease(true));
+    expect(reused.canonicalAssetsIntact).toBe(true);
+    expect(reused.contexts.map((context) => context.nativePluginBuilds)).toEqual(
+      result.contexts.map((context) => context.nativePluginBuilds),
+    );
     expect(result.setupError).toBeUndefined();
     for (const entry of result.files) {
       const serial = uiE2eSerialTestFiles.includes(entry.file);

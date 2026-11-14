@@ -11,6 +11,7 @@ import {
   type CronToolsAllowCaptureRef,
 } from "../../agents/tools/cron-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
@@ -206,6 +207,7 @@ async function runOccurrence(
 ) {
   let operatorAdmitted = false;
   let memoryParent: ReturnType<typeof readScheduledMemoryParent>;
+  let runRowParent: unknown;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
     const admitted = await expectDefined(params.preparedRunAdmission, "scheduled admission").admit(
       "gateway",
@@ -213,6 +215,10 @@ async function runOccurrence(
     );
     operatorAdmitted = readAdmittedRunOperatorAuthority(admitted) !== undefined;
     memoryParent = readScheduledMemoryParent(admitted.operationalRunInstance);
+    // Sessions the run spawns walk to its row, so the receipt must be stored before the agent runs.
+    const sessionKey = expectDefined(params.sessionKey, "run session key");
+    runRowParent = (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))
+      ?.scheduledMemoryParent;
     return { payloads: [{ text: "Deploy checked" }], meta: { agentMeta: {} } };
   });
   const clock = createGatewaySchedulerClock(Date.now());
@@ -234,7 +240,7 @@ async function runOccurrence(
     await execution.waitForIdle();
     const after = expectDefined(execution.getJob(job.id), "settled job");
     expect(after.state.lastRunStatus, after.state.lastError).toBe(expectedStatus);
-    return { operatorAdmitted, memoryParent, lastError: after.state.lastError };
+    return { operatorAdmitted, memoryParent, runRowParent, lastError: after.state.lastError };
   } finally {
     execution.stop();
     await execution.waitForIdle();
@@ -359,6 +365,7 @@ it.each([
     return;
   }
   const occurrence = await runOccurrence(config, job, context as never);
+  expect(occurrence.runRowParent).toEqual(occurrence.memoryParent);
   if (scenario === "unbound") {
     // Unbound jobs keep the run-session decisions: no parent memory, no operator source.
     expect(occurrence.memoryParent).toBeUndefined();

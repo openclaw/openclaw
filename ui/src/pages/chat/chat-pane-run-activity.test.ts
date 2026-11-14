@@ -90,17 +90,24 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     pane.render();
 
     const container = createApplicationContextProvider(context);
+    // Exercise the cold transcript's task yield without depending on machine load.
+    let renderTime = performance.now();
+    const renderClock = vi.spyOn(performance, "now").mockImplementation(() => (renderTime += 20));
     renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
+    renderClock.mockRestore();
 
-    await waitForSolid(() => expect(container.querySelector(".chat-thread-inner")).not.toBeNull());
-    expect(pane.chatProps?.canAbort).toBe(true);
-    expect(
-      container.querySelector(
-        ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
-      ) !== null,
-    ).toBe(expectWorking);
-    expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-thread-inner")).not.toBeNull();
+      expect(container.querySelector(".chat-conversation-loading")).toBeNull();
+      expect(pane.chatProps?.canAbort).toBe(true);
+      expect(
+        container.querySelector(
+          ".chat-working-indicator:not(.chat-working-indicator--subagents) .chat-reading-indicator",
+        ) !== null,
+      ).toBe(expectWorking);
+      expect(container.querySelector(".chat-working-indicator--subagents")).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+    });
   });
 });
 

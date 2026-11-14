@@ -12,7 +12,7 @@ import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
-import "../../styles/templates-trust-warning.css";
+import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 

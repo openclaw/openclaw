@@ -151,7 +151,6 @@ packages/markdown-core/src/ir.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
-src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
@@ -265,7 +264,6 @@ src/gateway/client.test.ts
 src/gateway/config-reload.test.ts
 src/gateway/config-reload.ts
 src/gateway/control-ui.http.test.ts
-src/gateway/control-ui.ts
 src/gateway/gateway-acp-bind.live.test.ts
 src/gateway/gateway-codex-harness.live.test.ts
 src/gateway/gateway-models.profiles.live.test.ts

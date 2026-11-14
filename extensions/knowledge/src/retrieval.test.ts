@@ -20,7 +20,7 @@ import {
   operatorContext,
 } from "./test-support.js";
 import { COMPACT_SNIPPET_CHARS } from "./tool-result-contract.js";
-import { AGENT_HIT_LIMIT, leanToolResults } from "./tool-results.js";
+import { leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -383,7 +383,7 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
   await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
-  for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
+  for (let n = 0; n <= 10; n++) {
     await f.put(`haystack_${n}`, "Other", "haystack");
   }
   const first = await f.service.grep({ query: "needle", limit: 1 }, f.owner);
@@ -397,8 +397,8 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
   expect(next.freshness.indexedAt).toBe(first.freshness.indexedAt);
   // Agent calls that omit limit get the agent page size, not the storage default.
   const agentPage = await f.agent.grep({ query: "haystack" }, f.owner);
-  expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
-  expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
+  expect(agentPage.hits.length).toBe(10);
+  expect(agentPage.nextOffset).toBe(10);
   await f.put("outside_record", "Needle", "needle ".repeat(100));
   const storage = new KnowledgeStorage(f.config, f.store);
   const data = await storage.run(plainAccess(), (vault) => vault.scan());

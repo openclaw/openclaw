@@ -458,9 +458,6 @@ export function filterSessionEntries(
       continue;
     }
     const target = expectDefined(params.getTarget(key), "selection row owner");
-    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
-      continue;
-    }
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (
@@ -474,13 +471,13 @@ export function filterSessionEntries(
     ) {
       continue;
     }
-    if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = normalizeAgentId(target.agentId);
-      if (ownerAgentId !== agentFilter) {
-        continue;
-      }
+    if (agentFilter && storeKey !== "global" && target.agentId !== agentFilter) {
+      continue;
     }
     if (selection.isPhantom) {
+      continue;
+    }
+    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
       continue;
     }
     if (spawnedBy) {

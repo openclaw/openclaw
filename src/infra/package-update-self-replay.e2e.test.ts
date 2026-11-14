@@ -139,7 +139,7 @@ it.each(["success", "doctor failure", "unchanged", "legacy", "late recovery refu
           setup(bundle) {
             bundle.onLoad({ filter: /./ }, ({ path: modulePath }) => {
               // This is a one-shot build, not a watched esbuild context.
-              const result = schemas.load.call({ addWatchFile() {} }, modulePath);
+              const result = schemas.load.handler.call({ addWatchFile() {} }, modulePath);
               return result ? { contents: result.code, loader: result.moduleType } : undefined;
             });
           },

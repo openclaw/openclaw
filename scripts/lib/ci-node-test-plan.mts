@@ -5,10 +5,8 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
-import {
-  databaseWorkerCoreTestFiles,
-  isDatabaseWorkerCoreTestFile,
-} from "../../test/vitest/vitest.database-worker-core-paths.mjs";
+import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
@@ -358,6 +356,9 @@ const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
   ["agentic-control-plane-agent-chat", 30],
   ["agentic-gateway-methods", 96],
+  // Run 43604797931 spent 21 and 29 minutes in 235- and 305-file groups.
+  ["agentic-agents-support", 64],
+  ["core-runtime-config", 64],
 ]);
 const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
 // Trusted forks can use the GitHub profile on Blacksmith. Every compact
@@ -2052,7 +2053,11 @@ function resolveInfraShardName(file: string): string {
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
   const groups = groupBy(
-    listTrackedTestFiles("src/infra").filter((file) => !isDatabaseWorkerCoreTestFile(file)),
+    listScopedOwnerTestFiles({
+      root: "src/infra",
+      include: ["src/infra/**/*.test.ts"],
+      exclude: [...databaseWorkerCoreTestFiles, ...boundaryTestFiles, ...cliProcessTestFiles],
+    }),
     resolveInfraShardName,
   );
   groups.set("core-runtime-infra-storage-state", [
@@ -4885,7 +4890,8 @@ function createCompactNodeTestShardBundles(
             hostedToolingTailDonation,
             collectTailDonation,
             selectedToolingFiles,
-            compactMode === "push" && options.runnerBackend === "github",
+            options.runnerBackend === "github" &&
+              (compactMode === "push" || options.mainValidation === true),
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const reducedToolingTier =

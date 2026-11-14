@@ -452,9 +452,7 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
   });
   expect(commitFetches).toBe(fetchesBeforePendingRetry);
   await expect(
-    withLocalWorkspaceProjection(owner, async (state) =>
-      state.prepareArchive(await git("rev-parse", "HEAD")),
-    ),
+    withLocalWorkspaceProjection(owner, (state) => state.prepareArchive()),
   ).rejects.toThrow("before archiving");
   await expect(f.coordinator.requestForSessionV2(f.request("unresolved", f.guest))).rejects.toThrow(
     "refresh_base",

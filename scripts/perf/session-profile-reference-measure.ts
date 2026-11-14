@@ -80,12 +80,15 @@ async function writeJson(filename: string, value: unknown) {
 try {
   const subagents = registry.createSubagentSessionListReadView({ env: process.env });
   await subagents.prepare();
-  owner = contexts.createSessionRowProjectionContext(subagents);
+  const cfg = { agents: { entries: { main: {}, ...(values.ordinary ? { secondary: {} } : {}) } } };
+  owner = contexts.createSessionRowProjectionContext(subagents, {
+    state: () => ({ cfg, epoch: 0, disposed: false }),
+    prepareRegistry: () => undefined,
+  });
   // Existing-only admission gives retained identities a real, empty durable fallback.
   catalog = await profiles.prepareUserProfileCatalog();
   const sqlitePath = path.join(stateDir, "state", "openclaw.sqlite");
   assert.equal(existsSync(sqlitePath), false, "preparation must not create profile storage");
-  const cfg = { agents: { entries: { main: {}, ...(values.ordinary ? { secondary: {} } : {}) } } };
   const context = owner.current;
   const identities = context.userProfileIdentityById;
   const identityId = (index: number) =>

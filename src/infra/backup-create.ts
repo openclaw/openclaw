@@ -51,6 +51,7 @@ import {
   removePreparedBackupArchive,
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
+import type { ReportBackupProgress } from "./backup-progress.js";
 import {
   createBackupScratchDirectory,
   finishBackupScratch,
@@ -98,6 +99,7 @@ export type BackupCreateOptions = {
   log?: (message: string) => void;
   /** Internal consumers bind later effects to the canonical images actually captured. */
   onSqliteSnapshots?: (facts: readonly BackupSqliteSnapshotFact[]) => void;
+  onProgress?: ReportBackupProgress;
 };
 
 type BackupManifestAgentRoot = Pick<BackupAgentRoot, "agentId" | "sourcePath">;
@@ -246,6 +248,7 @@ async function createConsistentStateSnapshotPlan(params: {
   onlyConfig: boolean;
   preserveSourceArtifacts?: boolean;
   localCompanion?: boolean;
+  onProgress?: ReportBackupProgress;
 }): Promise<BackupStateSnapshotPlan> {
   const captureSqlite = (tempDir: string) =>
     createBackupSqliteSnapshotPlan({
@@ -254,6 +257,7 @@ async function createConsistentStateSnapshotPlan(params: {
       legacyAuditSnapshots: [],
       preserveSourceArtifacts: params.preserveSourceArtifacts,
       localCompanion: params.localCompanion,
+      onProgress: params.onProgress,
     });
   if (params.onlyConfig || !params.stateDir) {
     return {
@@ -285,6 +289,7 @@ async function createConsistentStateSnapshotPlan(params: {
     stateDir,
     tempDir: params.tempDir,
     preserveSourceArtifacts: params.preserveSourceArtifacts,
+    onProgress: params.onProgress,
   });
 }
 
@@ -308,6 +313,7 @@ async function createBackupArchiveInScope(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  opts.onProgress?.({ stage: "plan", phase: "start" });
   const plan =
     preparedPlan ??
     (await resolveBackupPlanFromDisk({
@@ -318,6 +324,7 @@ async function createBackupArchiveInScope(
       onlyConfig,
       nowMs,
     }));
+  opts.onProgress?.({ stage: "plan", phase: "done" });
   const selection = plan.databaseSelection;
   if (!preparedPlan && opts.localCompanion) {
     if (
@@ -437,6 +444,7 @@ async function createBackupArchiveInScope(
       onlyConfig,
       preserveSourceArtifacts: opts.preserveSourceArtifacts,
       localCompanion: opts.localCompanion,
+      onProgress: opts.onProgress,
     });
     const inventory = stateSqliteBackup.inventory;
     snapshotFacts = describeCapturedBackupSqliteSnapshots(
@@ -458,10 +466,13 @@ async function createBackupArchiveInScope(
     }
     const clientDirectories = new Set(
       inventory.coreDatabases
-        .filter((database) => database.role === "client" && database.identity)
+        .filter(
+          (database) =>
+            (database.role === "client" || database.role === "services") && database.identity,
+        )
         .map((database) => path.dirname(database.sourcePath)),
     );
-    // Emit private client directories before snapshots create implicit tar parents.
+    // Emit private store directories before snapshots create implicit tar parents.
     const requiredSourcePaths = new Set([
       ...clientDirectories,
       ...sourcePathRemaps.keys(),
@@ -545,6 +556,7 @@ async function createBackupArchiveInScope(
         opaqueSqliteSourcePaths.clear();
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
+          onProgress: opts.onProgress,
           createArchiveStream: (reportProgress, signal) =>
             appendBackupManifest(
               walkBackupTar({

@@ -3,9 +3,10 @@ import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../a
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import {
-  estimateAggregateUsageCost,
+  estimateAggregateUsageCostAsync,
   formatTokenCount,
   formatUsd,
+  type CapturedModelCostPricing,
 } from "../../utils/usage-format.js";
 import {
   copyReplyPayloadMetadata,
@@ -111,11 +112,11 @@ function buildUsageContract(state: PluginHookReplyUsageState, surface?: string):
   };
 }
 
-const formatResponseUsageLine = (
-  params: Parameters<typeof estimateAggregateUsageCost>[0] & {
-    showCost: boolean;
-  },
-): string | null => {
+const formatResponseUsageLine = (params: {
+  usage?: NormalizedUsage;
+  showCost: boolean;
+  costUsd?: number;
+}): string | null => {
   const usage = params.usage;
   if (!usage) {
     return null;
@@ -131,9 +132,7 @@ const formatResponseUsageLine = (
       : undefined;
   const cacheRead = usage.cacheRead;
   const cacheWrite = usage.cacheWrite;
-  const canPriceUsage = usage.cost !== undefined || (input !== undefined && output !== undefined);
-  const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
-  const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const costLabel = params.showCost ? formatUsd(params.costUsd) : undefined;
   const cacheSuffix =
     (cacheRead ?? 0) > 0 || (cacheWrite ?? 0) > 0
       ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
@@ -145,9 +144,9 @@ const formatResponseUsageLine = (
   return `Usage: ${totalLabel ?? `${inputLabel} in / ${outputLabel} out`}${cacheSuffix}${suffix}`;
 };
 
-export const resolveResponseUsageLine = (params: {
+export const resolveResponseUsageLine = async (params: {
   config: OpenClawConfig;
-  agentDir: string;
+  preparePricing: () => Promise<CapturedModelCostPricing>;
   sessionRaw?: string | null;
   channel?: string;
   usage?: NormalizedUsage;
@@ -155,7 +154,7 @@ export const resolveResponseUsageLine = (params: {
   model?: string;
   preserveUserFacingSessionState?: boolean;
   replyUsageState?: PluginHookReplyUsageState;
-}): string | undefined => {
+}): Promise<string | undefined> => {
   const responseUsageMode = resolveEffectiveResponseUsage(
     params.sessionRaw,
     params.config.messages?.responseUsage,
@@ -167,15 +166,18 @@ export const resolveResponseUsageLine = (params: {
     return undefined;
   }
 
-  const formatted = formatResponseUsageLine({
-    usage: params.usage,
-    showCost,
-    provider: params.provider,
-    model: params.model,
-    config: params.config,
-    agentDir: params.agentDir,
-    allowPluginNormalization: false,
-  });
+  const usage = params.usage;
+  const canPriceUsage =
+    usage?.cost !== undefined || (usage?.input !== undefined && usage.output !== undefined);
+  const costUsd =
+    showCost && canPriceUsage
+      ? await estimateAggregateUsageCostAsync({
+          usage,
+          prepareCost: async () =>
+            (await params.preparePricing()).resolve(params.provider, params.model, false),
+        })
+      : undefined;
+  const formatted = formatResponseUsageLine({ usage, showCost, costUsd });
   const usageTemplate =
     responseUsageMode === "full" && params.replyUsageState
       ? loadUsageBarTemplate(params.config.messages?.usageTemplate)

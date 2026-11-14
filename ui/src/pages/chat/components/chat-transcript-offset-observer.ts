@@ -1,6 +1,6 @@
 import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { listen } from "../../../lib/reactive/listener.ts";
-import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
+import { isTranscriptScrollKey, isTranscriptScrollWheel } from "../chat-scroll-input.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX, type ChatScrollToEndOptions } from "../scroll.ts";
 import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
@@ -470,7 +470,7 @@ export function observeTranscriptOffset(
     ) {
       return;
     }
-    if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event)) {
+    if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event, element)) {
       return;
     }
     if (event instanceof PointerEvent && event.target !== element) {
@@ -521,12 +521,18 @@ export function observeTranscriptOffset(
       owner.onRequestEnd();
       return;
     }
+    // Directional input owns policy before native movement, including a wheel
+    // departure while the composer remains focused. Contact alone has no direction.
     const towardEnd =
-      (event instanceof WheelEvent && event.deltaY > 0) ||
-      (event instanceof KeyboardEvent &&
-        (["ArrowDown", "PageDown", "End"].includes(event.key) ||
-          (event.key === " " && !event.shiftKey)));
-    publishReaderIntent(towardEnd ? true : event instanceof KeyboardEvent ? false : undefined);
+      event instanceof WheelEvent
+        ? isTranscriptScrollWheel(event, element)
+          ? event.deltaY > 0
+          : undefined
+        : event instanceof KeyboardEvent
+          ? ["ArrowDown", "PageDown", "End"].includes(event.key) ||
+            (event.key === " " && !event.shiftKey)
+          : undefined;
+    publishReaderIntent(towardEnd);
     if (wheelDelta) {
       // Native travel can precede this listener. It is not a wheel receipt;
       // reduce speculation by same-direction travel without claiming a causal match.

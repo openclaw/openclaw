@@ -54,7 +54,8 @@ struct ChatReasoningVisibilityTests {
         let request = viewModel.beginHistoryRequest()
         viewModel.invalidateRunSnapshots()
         #expect(try viewModel.applyHistoryPayload(
-            self.history("on"), for: request, preservingOptimisticLocalMessages: false))
+            self.history("on"), for: request, preservingOptimisticLocalMessages: false,
+            decodedMessages: []))
         #expect(viewModel.currentSessionReasoningVisible)
         #expect(viewModel.currentSessionEntry()?.reasoningLevel == "on")
 
@@ -62,16 +63,19 @@ struct ChatReasoningVisibilityTests {
         #expect(try viewModel.applyHistoryPayload(
             self.history("off"),
             for: viewModel.beginHistoryRequest(),
-            preservingOptimisticLocalMessages: false))
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: []))
         #expect(!viewModel.currentSessionReasoningVisible)
         #expect(try viewModel.applyHistoryPayload(
             self.history("on"),
             for: viewModel.beginHistoryRequest(),
-            preservingOptimisticLocalMessages: false))
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: []))
         #expect(try viewModel.applyHistoryPayload(
             self.history(nil),
             for: viewModel.beginHistoryRequest(),
-            preservingOptimisticLocalMessages: false))
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: []))
         #expect(viewModel.currentSessionReasoningVisible)
     }
 
@@ -196,7 +200,8 @@ struct ChatReasoningVisibilityTests {
         viewModel.switchSession(to: "other")
         #expect(!viewModel.currentSessionReasoningVisible)
         #expect(try !viewModel.applyHistoryPayload(
-            self.history("on"), for: request, preservingOptimisticLocalMessages: false))
+            self.history("on"), for: request, preservingOptimisticLocalMessages: false,
+            decodedMessages: []))
         #expect(!viewModel.currentSessionReasoningVisible)
     }
 

@@ -230,7 +230,7 @@ struct ChatCompletedWorkTests {
         #expect(unanchored.map(\.id) == [question.id, spoken.id, typed.id, reply.id])
     }
 
-    @Test @MainActor func `gateway split projections keep work and stable display IDs`() throws {
+    @Test @MainActor func `gateway split projections keep work and stable display IDs`() async throws {
         // Real history projects text and tools with the same canonical ID, then
         // delivers the parent's final answer on a requester-settle run.
         let text = try Self.decode(#"""
@@ -247,10 +247,10 @@ struct ChatCompletedWorkTests {
         let final = Self.message("assistant", "Use consistent padding", at: 5000, run: "announce:requester-settle")
         let original = [text, tool, result, final]
         let raw = try original.map { try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode($0)) }
-        let decoded = OpenClawChatViewModel.decodeMessages(raw)
+        let decoded = await OpenClawChatViewModel.decodeMessages(raw)
         #expect(decoded.count == 4)
         let refreshed = OpenClawChatViewModel.reconcileMessageIDs(
-            previous: decoded, incoming: OpenClawChatViewModel.decodeMessages(raw))
+            previous: decoded, incoming: await OpenClawChatViewModel.decodeMessages(raw))
         #expect(refreshed.map(\.id) == decoded.map(\.id))
         #expect(Set(refreshed.map(\.id)).count == 4)
         #expect(Self.work(in: Self.collapse(refreshed)).first?.messages.count == 2)

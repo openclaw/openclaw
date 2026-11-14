@@ -1,4 +1,5 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 /** Process-local fixed-window quota; distributed limits require caller-owned persistence. */
 export function createFixedWindowBudget(params: {
@@ -8,15 +9,15 @@ export function createFixedWindowBudget(params: {
 }) {
   const maxRequests = resolveIntegerOption(params.maxRequests, 1, { min: 1 });
   const windowMs = resolveIntegerOption(params.windowMs, 1, { min: 1 });
-  const now = params.now ?? Date.now;
+  const now = params.now ?? monotonicNow;
 
   let count = 0;
-  let windowStartMs = 0;
+  let windowStartMs: number | undefined;
 
   return {
     consume() {
       const nowMs = now();
-      if (nowMs - windowStartMs >= windowMs) {
+      if (windowStartMs === undefined || nowMs - windowStartMs >= windowMs) {
         windowStartMs = nowMs;
         count = 0;
       }

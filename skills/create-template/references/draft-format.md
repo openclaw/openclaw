@@ -18,7 +18,7 @@ Write only the request-specific JSON draft at `.openclaw/template-drafts/<draftI
 }
 ```
 
-The manifest is the complete `CLAW.md` text. The UI's review service appends the four scope fields and builds the archive using OpenClaw's existing Template project builder. The `name` is a lowercase unscoped package slug; `version` is exact semver. The person can change the name and description during review.
+The manifest is the complete `CLAW.md` text. The UI's review service appends the four scope fields and builds the archive using OpenClaw's existing Template project builder. The `name` is a lowercase unscoped package slug; `version` is exact semver. Review is read-only. For requested changes, revise this request's private proposal and call `screen(action="template_review", draftId="<this request's draftId>")` again to show a fresh review before publication.
 
 For each portable workspace file, add its newly authored contents to `files`, for example `{ "path": "workspace/AGENTS.md", "content": "..." }`, and map it in manifest frontmatter:
 

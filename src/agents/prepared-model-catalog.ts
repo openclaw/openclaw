@@ -27,7 +27,6 @@ import {
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
-import { isPreparedModelRuntimeGatewayLifecycleActive } from "./prepared-model-runtime-gateway-lifecycle.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -51,6 +50,7 @@ import {
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
+import { resolveInventoryInput } from "./prepared-model-runtime.owner.js";
 import { prepareScopedReadOnlyModelCatalog } from "./prepared-model-runtime.scoped-catalog.js";
 import {
   normalizeThinkingCatalogProviders,
@@ -202,17 +202,10 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     activationWorkspaceDir && activationWorkspaceDir !== full.workspaceDir
       ? { ...full, workspaceDir: activationWorkspaceDir }
       : full;
-  // Gateway inventory belongs to the configured agent; a session cwd only controls execution.
-  // Without a workspace, lookup resolves that configured owner, as turn admission does.
-  // Standalone hosts keep workspace-scoped discovery.
-  const inventory =
-    full.workspaceDir === undefined || !isPreparedModelRuntimeGatewayLifecycleActive()
-      ? full
-      : { ...full, workspaceDir: undefined };
   return {
     exact,
     full,
-    inventory,
+    inventory: resolveInventoryInput(full),
     activationFull,
     activationExact:
       activationFull === full
