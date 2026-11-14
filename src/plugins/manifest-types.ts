@@ -4,6 +4,7 @@ import type { ManifestModelIdNormalizationProvider } from "@openclaw/model-catal
 import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { MediaUnderstandingProviderMetadata } from "../../packages/media-understanding-common/src/types.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
+import type { ChannelMessageActionName } from "../channels/plugins/message-action-names.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
@@ -90,6 +91,11 @@ export type PluginManifestChannelConfig = {
   description?: string;
   preferOver?: string[];
   commands?: PluginManifestChannelCommandDefaults;
+  /**
+   * Message actions the runtime plugin's `resolveExecutionMode` sends to the Gateway.
+   * Lets callers route them without loading channel code when the plugin is not loaded.
+   */
+  gatewayMessageActions?: ChannelMessageActionName[];
 };
 
 export type PluginManifestChannelCommandDefaults = {
