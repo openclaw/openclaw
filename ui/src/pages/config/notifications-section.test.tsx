@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { WebPushNotificationPreferences } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
@@ -33,7 +34,7 @@ function renderSection(props: Partial<NotificationProps>) {
 
 function webPush(
   loading = false,
-  user = userPreferences,
+  user: WebPushNotificationPreferences = userPreferences,
   device: { enabled: boolean; label: string; agentIds?: string[] } = {
     enabled: true,
     label: "phone",
@@ -304,22 +305,6 @@ function renderPreferences(
   return { ...mounted, setTimeZone };
 }
 
-it("describes each agent filter without sharing its description ID", () => {
-  const { container } = renderPreferences();
-  const inputs = [
-    ...container.querySelectorAll<HTMLInputElement>('input[aria-label="Only these agents"]'),
-  ];
-  expect(inputs).toHaveLength(2);
-  const descriptions = inputs.map((input) => input.getAttribute("aria-describedby"));
-  expect(new Set(descriptions).size).toBe(2);
-  for (const id of descriptions) {
-    expect(id).toBeTruthy();
-    expect(container.querySelector(`[id="${id}"]`)?.textContent).toBe(
-      "Enter agent IDs separated by commas. Leave blank for all agents.",
-    );
-  }
-});
-
 it("preserves a saved timezone alias and saves a native selection", () => {
   const onUser = vi.fn();
   const { container, setTimeZone } = renderPreferences({ onUser, timeZone: "US/Pacific" });
@@ -357,4 +342,176 @@ it("patches device preferences from the toggle row and select row", () => {
   const detail = select(deviceGroup, "Lock-screen detail");
   change(detail, "detailed");
   expect(onDevice).toHaveBeenLastCalledWith(expect.objectContaining({ detailLevel: "detailed" }));
+});
+
+const catalog = {
+  agentsList: {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender" as const,
+    agents: [
+      { id: "main", name: "Assistant" },
+      { id: "research", name: "Research" },
+      { id: "support-eu", name: "Support" },
+      { id: "support-us", name: "Support" },
+    ],
+  },
+  agentsLoading: false,
+  agentsError: null,
+};
+
+it("chooses agent names, saves stable IDs, and reopens without changing other preferences", async () => {
+  const [current, setCurrent] = createSignal(webPush());
+  const save = vi.fn(
+    async (user: WebPushNotificationPreferences) => void setCurrent(webPush(false, user)),
+  );
+  const view = renderSection({
+    get webPush() {
+      return current();
+    },
+    notificationAgents: catalog,
+    onWebPushSetUserPreferences: save,
+  });
+  expect(view.container.querySelector('input[aria-label="Only these agents"]')).toBeNull();
+  view.getAllByRole("button", { name: "Choose notification agents" })[0]!.click();
+  flush();
+  change(select(view.container, "Notify for"), "specific");
+  flush();
+  const research = view.getByRole("checkbox", { name: "Research research" });
+  research.click();
+  flush();
+  view.getByRole("button", { name: "Save" }).click();
+  await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
+  expect(save).toHaveBeenCalledExactlyOnceWith({ ...userPreferences, agentIds: ["research"] });
+  expect(
+    view.getAllByRole("button", { name: "Choose notification agents" })[0]!.textContent,
+  ).toContain("Research");
+  view.getAllByRole("button", { name: "Choose notification agents" })[0]!.click();
+  flush();
+  expect(view.getByRole("checkbox", { name: "Research research" }).getAttribute("type")).toBe(
+    "checkbox",
+  );
+  expect(
+    (view.getByRole("checkbox", { name: "Research research" }) as HTMLInputElement).checked,
+  ).toBe(true);
+  view.getByRole("checkbox", { name: "Support support-eu" }).click();
+  flush();
+  view.getByRole("button", { name: "Cancel" }).click();
+  flush();
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(current().preferences?.user.agentIds).toEqual(["research"]);
+});
+
+it("keeps inheritance, all agents, and a nonempty specific selection distinct", async () => {
+  const [current, setCurrent] = createSignal(
+    webPush(false, { ...userPreferences, agentIds: ["research"] }),
+  );
+  const save = vi.fn(
+    async (device: { enabled: boolean; label: string; agentIds?: string[] }) =>
+      void setCurrent(webPush(false, { ...userPreferences, agentIds: ["research"] }, device)),
+  );
+  const view = renderSection({
+    get webPush() {
+      return current();
+    },
+    notificationAgents: catalog,
+    onWebPushSetDevicePreferences: save,
+  });
+  const open = () => {
+    view.getAllByRole("button", { name: "Choose notification agents" })[1]!.click();
+    flush();
+  };
+  open();
+  expect(select(view.container, "Notify for").value).toBe("inherit");
+  change(select(view.container, "Notify for"), "specific");
+  flush();
+  expect((view.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  view.getByRole("checkbox", { name: "Research research" }).click();
+  flush();
+  view.getByRole("checkbox", { name: "Research research" }).click();
+  flush();
+  expect(save).not.toHaveBeenCalled();
+  expect((view.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  change(select(view.container, "Notify for"), "all");
+  flush();
+  view.getByRole("button", { name: "Save" }).click();
+  await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
+  expect(save).toHaveBeenLastCalledWith({ enabled: true, label: "phone", agentIds: [] });
+  open();
+  change(select(view.container, "Notify for"), "inherit");
+  flush();
+  view.getByRole("button", { name: "Save" }).click();
+  await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
+  expect(save).toHaveBeenLastCalledWith({ enabled: true, label: "phone", agentIds: undefined });
+  expect(
+    view.getAllByRole("button", { name: "Choose notification agents" })[1]!.textContent,
+  ).toContain("Account default: Research");
+});
+
+it("retains unresolved saved agents and a draft through catalog refresh and a rejected save", async () => {
+  const completion = createDeferred();
+  const [available, setAvailable] = createSignal<
+    NonNullable<NotificationProps["notificationAgents"]>
+  >({
+    ...catalog,
+    agentsLoading: true,
+    agentsList: { ...catalog.agentsList, agents: [] },
+  });
+  const save = vi.fn().mockReturnValueOnce(completion.promise).mockResolvedValue(undefined);
+  const view = renderSection({
+    webPush: webPush(false, { ...userPreferences, agentIds: ["unlisted"] }),
+    get notificationAgents() {
+      return available();
+    },
+    onWebPushSetUserPreferences: save,
+  });
+  view.getAllByRole("button", { name: "Choose notification agents" })[0]!.click();
+  flush();
+  expect(view.getByRole("checkbox", { name: /unlisted/ })).toBeTruthy();
+  setAvailable({ agentsList: null, agentsLoading: false, agentsError: "Example catalog failure" });
+  flush();
+  expect(view.getByRole("dialog").textContent).toContain("Couldn’t load available agents");
+  expect(view.getByRole("checkbox", { name: /unlisted/ })).toHaveProperty("checked", true);
+  setAvailable(catalog);
+  flush();
+  view.getByRole("checkbox", { name: "Research research" }).click();
+  flush();
+  view.getByRole("button", { name: "Save" }).click();
+  await waitForSolid(() =>
+    expect((view.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    ),
+  );
+  completion.reject(new Error("Example save failed"));
+  await waitForSolid(() =>
+    expect(view.getByRole("dialog").textContent).toContain("Example save failed"),
+  );
+  expect((view.getByRole("checkbox", { name: /unlisted/ }) as HTMLInputElement).checked).toBe(true);
+  expect(
+    (view.getByRole("checkbox", { name: "Research research" }) as HTMLInputElement).checked,
+  ).toBe(true);
+  view.getByRole("button", { name: "Save" }).click();
+  await waitForSolid(() => expect(view.queryByRole("dialog")).toBeNull());
+  expect(save).toHaveBeenLastCalledWith({ ...userPreferences, agentIds: ["unlisted", "research"] });
+});
+
+it("retires an unsaved selection with its page and connection lifetime", () => {
+  const [scope, setScope] = createSignal({ retired: new Promise<void>(() => {}) });
+  const save = vi.fn();
+  const view = renderSection({
+    webPush: webPush(),
+    notificationAgents: catalog,
+    presentationRetired: () => scope().retired,
+    onWebPushSetUserPreferences: save,
+  });
+  view.getAllByRole("button", { name: "Choose notification agents" })[0]!.click();
+  flush();
+  change(select(view.container, "Notify for"), "specific");
+  flush();
+  view.getByRole("checkbox", { name: "Research research" }).click();
+  flush();
+  setScope({ retired: new Promise<void>(() => {}) });
+  flush();
+  expect(view.queryByRole("dialog")).toBeNull();
+  expect(save).not.toHaveBeenCalled();
 });

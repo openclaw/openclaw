@@ -651,6 +651,8 @@ export function createConfigPage(
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
       // Downstream equality checks need a new value for the mutable owner snapshot.
       webPush: { ...webPush.read() },
+      notificationAgents: { ...agents.read() },
+      onNotificationAgentsLoad: () => void context.agents.ensureList(),
       onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
       onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
       onWebPushTest: () => context.webPush.run({ kind: "test" }),
