@@ -252,6 +252,16 @@ export function registerCronSimpleCommands(cron: Command) {
         const signal = opts.wait ? getAsyncWorkSignal() : undefined;
         try {
           const id = requireCronJobId(idArg);
+          if (!opts.wait) {
+            for (const [option, flag] of [
+              ["waitTimeout", "--wait-timeout"],
+              ["pollInterval", "--poll-interval"],
+            ] as const) {
+              if (command.getOptionValueSource(option) === "cli") {
+                throw new CronCliError(`${flag} requires --wait`);
+              }
+            }
+          }
           let waitTimeoutMs = 0;
           let pollIntervalMs = 0;
           if (opts.wait) {
