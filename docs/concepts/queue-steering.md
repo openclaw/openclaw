@@ -27,6 +27,11 @@ Ordinary steering does not interrupt a tool call that is already running. An ass
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+Input accepted during continuation preparation or background-result placement is
+checked before model dispatch, including after a failed Code Mode cell. It does not wait for an
+extra model response. One-at-a-time steering still delivers one queued input per
+request.
+
 In the Control UI, a waiting steer has a small **Send now** link below its normal
 user bubble. A session writer can use it to interrupt supported running tools
 without aborting the run. Each interrupted tool records that the user interrupted
@@ -51,6 +56,16 @@ In the built-in runtime, each steered user input gets its own delivered answer i
 Recording a steering receipt while another input is being persisted keeps the active turn running. Accepted inputs remain in order and reach the next available model boundary.
 
 If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
+
+Rejection logs preserve the owner’s `reason` and, when known, a closed
+`runtimeReason`. `tool_boundary_timeout` means a tool was still active at the
+transcript deadline; `transcript_commit_timeout` means the receipt was missing
+without an active tool. Other codes distinguish turn end, handoff, closed
+steering, source cancellation, unavailable compaction state, unsupported
+compaction steering, a non-steerable turn, and a missing injection capability.
+A non-interruptible tool still has a steering boundary after completion, so it
+does not trigger immediate followup fallback. Provider token-stream state alone
+does not determine whether the local steering queue can accept input.
 
 After that fallback, **Send now** stays below the waiting message while the
 original run still has supported, interruptible tools running. Clicking it stops

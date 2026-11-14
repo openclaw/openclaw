@@ -495,6 +495,7 @@ describe("worker GitHub launch binding", () => {
       mocks.repository.mockImplementation(async () => {
         if (replaced === "identity") {
           config = { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } };
+          setRuntimeConfigSnapshot(config);
         } else {
           mocks.worktree.mockReturnValue({ ...worktree, repoFingerprint: "replacement" });
         }

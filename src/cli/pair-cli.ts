@@ -10,11 +10,13 @@ import {
   formatBrowserPairCode,
   formatBrowserPairDeviceId,
   normalizeBrowserPairCode,
+  splitBrowserPairCodeProfile,
 } from "../shared/browser-pair.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
 import { addGatewayClientOptions, callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
+import { normalizeProfileName } from "./profile-utils.js";
 import { promptYesNo } from "./prompt.js";
 
 type PairOpts = GatewayRpcOpts & { yes?: boolean; json?: boolean };
@@ -48,7 +50,9 @@ function formatMinutesAgo(atMs: number): string {
 }
 
 function logRequest(request: DevicePairCodeResult): void {
+  // The early profile parser already routed a `work:` code here; this names the target it chose.
   const rows: [string, string | undefined][] = [
+    ["Gateway profile", normalizeProfileName(process.env.OPENCLAW_PROFILE) ?? "default"],
     ["Code", formatBrowserPairCode(request.code)],
     ["Browser (reported)", request.userAgent],
     ["Address", request.remoteIp],
@@ -64,19 +68,17 @@ function logRequest(request: DevicePairCodeResult): void {
     }
   }
   defaultRuntime.log("");
-  defaultRuntime.log(
-    "Approve only if you opened this page yourself and it shows this code and Browser ID.",
-  );
+  defaultRuntime.log("Approve only if you opened this page yourself and it shows this code.");
   defaultRuntime.log(
     "If someone sent you this code or command, answer no: approving gives their browser administrator control of this Gateway.",
   );
 }
 
 export async function runPairCommand(rawCode: string, opts: PairOpts): Promise<void> {
-  const code = normalizeBrowserPairCode(rawCode);
+  const code = normalizeBrowserPairCode(splitBrowserPairCodeProfile(rawCode).code);
   if (!code) {
     throwExpectedCliError(
-      "That is not a pairing code. Copy the code shown in the browser, for example ABCD-EFGH.",
+      "That is not a pairing code. Copy the code shown in the browser, for example work:ABCD-EFGH or ABCD-EFGH.",
     );
   }
   const request = await callPairCode(opts, { code });
@@ -109,7 +111,7 @@ export function registerPairCli(program: Command) {
   const pair = program
     .command("pair")
     .description("Approve a browser showing a pairing code")
-    .argument("<code>", "Code shown in the browser, for example ABCD-EFGH")
+    .argument("<code>", "Code shown in the browser, for example work:ABCD-EFGH or ABCD-EFGH")
     .option("--yes", "Approve without asking; details are still printed", false)
     .option("--json", "Output JSON (requires --yes)", false)
     .addHelpText("after", () => formatDocsHelp("/cli/pair"))

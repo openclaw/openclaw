@@ -152,10 +152,8 @@ prepare_baseline_successor() (
 prepare_baseline_refresh() { prepare_baseline_materialize initial "$@"; }
 prepare_baseline_signing_request() { prepare_baseline_materialize request "$@"; }
 
-revalidate_baseline_publication() (
-  local pr="$1" observation="$2" source="$3" artifacts="${4:-.local}"
-  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
-  source "$artifacts/prep-context.env" || return 1
+resolve_baseline_publication_target() {
+  local pr="$1" source="$2" artifacts="${3:-.local}"
   resolve_prep_publication_target "$pr" "$source" "$artifacts" || return 1
   verify_prep_head_extends_hosted_head "$PREP_PUBLICATION_LEASE_SHA" "$source" || return 1
   if [ "$PREP_PUBLICATION_LEASE_SHA" != "$PR_HEAD_SHA_BEFORE" ]; then
@@ -173,6 +171,13 @@ revalidate_baseline_publication() (
       return 1
     fi
   fi
+}
+
+revalidate_baseline_publication() (
+  local pr="$1" observation="$2" source="$3" artifacts="${4:-.local}"
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+  source "$artifacts/prep-context.env" || return 1
+  resolve_baseline_publication_target "$pr" "$source" "$artifacts" || return 1
   # Only a native receipt can advance hosted authority beyond the incoming head.
   # The local candidate alone does not prove that this workflow published it.
   revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" \
@@ -278,8 +283,8 @@ prepare_baseline_materialize() (
       --signer) [ "$admission" = request ] && [ -z "$signer" ] || return 2; signer="$2" ;;
       --expected-tree) [ -z "$expected_tree" ] || return 2; expected_tree="$2" ;;
       --expected-review) [ -z "$expected_review" ] || return 2; expected_review="$2" ;;
-      --predecessor-head) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
-      --predecessor-binding) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
+      --predecessor-head) [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
+      --predecessor-binding) [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
       *) return 2 ;;
     esac
     shift 2
@@ -294,12 +299,17 @@ prepare_baseline_materialize() (
       [[ "$option" =~ ^[0-9a-f]{40}$ ]] || return 2
     done
   fi
-  local continuation=null
+  local continuation=null predecessor=null
   helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
   if [ "$proof" = true ]; then
     # Snapshot caller-relative metadata before checkout, evidence retirement or admission.
     if [ -n "$coauthors_path" ]; then coauthors=$(node "$helper" coauthors "$coauthors_path") || return 1; fi
-    [ "$admission" = initial ] && [ "$successor" = false ] && [ -z "$signer$predecessor_head$predecessor_binding" ] || return 2
+    [ "$admission" = initial ] && [ "$successor" = false ] && [ -z "$signer" ] || return 2
+    if [ -n "$predecessor_head$predecessor_binding" ]; then
+      [[ "$predecessor_head" =~ ^[0-9a-f]{40}$ ]] && [[ "$predecessor_binding" =~ ^[0-9a-f]{40}$ ]] || return 2
+      [ -z "$incoming_head$incoming_review$receipt$receipt_oid" ] || return 2
+      predecessor=$(jq -cn --arg head "$predecessor_head" --arg binding "$predecessor_binding" '{head:$head,binding:$binding}') || return 1
+    fi
     [[ "$expected_tree" =~ ^[0-9a-f]{40}$ ]] && [[ "$expected_review" =~ ^[0-9a-f]{40}$ ]] || return 2
     [ -n "$source_review" ] || source_review=.local/correction-review.json
     if [ -n "$incoming_head$incoming_review$receipt$receipt_oid" ]; then
@@ -310,9 +320,10 @@ prepare_baseline_materialize() (
     enter_worktree "$pr" false true || return 1
     [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
     if [ -e .local/review-transition.json ] || [ -L .local/review-transition.json ]; then
-      jq -e --arg source "$expected" --arg baseline "$baseline" --arg review "$expected_review" --arg tree "$expected_tree" --argjson continuation "$continuation" --argjson coauthors "$coauthors" '
+      jq -e --arg source "$expected" --arg baseline "$baseline" --arg review "$expected_review" --arg tree "$expected_tree" --argjson continuation "$continuation" --argjson predecessor "$predecessor" --argjson coauthors "$coauthors" '
         .mode == "prep" and .source == $source and (.binding | @base64d | fromjson |
         .version == 2 and .purpose == "proof" and .baselineHead == $baseline and .proofSource.sourceReviewOid == $review and .proofSource.sourceTree == $tree and (.coauthors // []) == $coauthors and
+        (if $predecessor == null then .sourceAdmission == null else .sourceAdmission.predecessorHead == $predecessor.head and .sourceAdmission.predecessorBinding == $predecessor.binding end) and
         (if $continuation == null then .proofSource.continuation == null else .proofSource.continuation.incoming == $continuation.incoming and .proofSource.continuation.review == $continuation.review and .proofSource.continuation.receipt == $continuation.receipt and .proofSource.continuation.receiptOid == $continuation.receiptOid end))' .local/review-transition.json >/dev/null || { echo "Proof baseline operation or co-author attribution changed." >&2; return 1; }
       recover_review_transition "$pr" || return 1
       run_prepared_correction_review "$pr" init || return 1
@@ -321,6 +332,7 @@ prepare_baseline_materialize() (
     fi
   else
     [ -z "$source_review$incoming_head$incoming_review$receipt$receipt_oid$coauthors_path" ] || return 2
+    if [ "$successor" = false ]; then [ -z "$predecessor_head$predecessor_binding" ] || return 2; fi
     if [ "$successor" = false ] && [ "$admission" != request ]; then [ -z "$expected_tree$expected_review" ] || return 2; fi
     enter_worktree "$pr" false || return 1
   fi
@@ -337,7 +349,7 @@ prepare_baseline_materialize() (
   node "$helper" check-signing-source "$expected" || return 1
 
   if [ "$proof" = true ] && [ "$(pr_git rev-parse HEAD)" != "$expected" ]; then
-    snapshot=$(node "$helper" completed-proof "$pr" "$expected" "$baseline" "$expected_tree" "$expected_review" "$continuation" "$PR_MAIN_SHA" "$coauthors") || return 1
+    snapshot=$(node "$helper" completed-proof "$pr" "$expected" "$baseline" "$expected_tree" "$expected_review" "$continuation" "$PR_MAIN_SHA" "$coauthors" "$predecessor") || return 1
     observation=$(cat .local/pr-meta.json) || return 1
     local completed_head
     completed_head=$(pr_git rev-parse HEAD) || return 1
@@ -357,7 +369,7 @@ prepare_baseline_materialize() (
     # continuation owner derives the new context but installs nothing yet.
     mark_pr_operation_side_effects_started
     retire_prep_evidence retain proof || return 1
-    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$source_review" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation") || return 1
+    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$source_review" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation" "$predecessor") || return 1
     snapshot=$(printf '%s' "$proof_prepared" | jq -er .snapshot) || return 1
     proof_source=$(printf '%s' "$proof_prepared" | jq -ce .proofSource) || return 1
   elif [ "$successor" = false ] && [ "$expected" = "$PR_HEAD_SHA_BEFORE" ]; then
@@ -395,7 +407,7 @@ prepare_baseline_materialize() (
   set -- "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$snapshot" "$resolutions"
   if [ "$proof" = true ]; then
     create_command=create-proof
-    set -- "$@" "$proof_source" "$coauthors"
+    set -- "$@" "$proof_source" "$coauthors" "$predecessor"
   elif [ "$successor" = true ]; then
     create_command=create-successor
     set -- "$@" "$predecessor_head" "$predecessor_binding" "$expected_review" "$expected_tree"

@@ -392,6 +392,7 @@ export class BoardWidgetSandboxHost {
       frame: options.frame,
       sandboxOrigin: options.sandboxOrigin,
       sandboxUrl: options.sandboxUrl,
+      sandboxShellHtml: options.widget.sandboxShellHtml,
       documentKey: this.documentKey(),
       loadDocument: (signal) => this.fetchDocument(options, signal),
       retryDocument: retryableDocumentError,

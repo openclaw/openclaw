@@ -18,7 +18,6 @@ import {
   resolvePreparedDirectoryInstallTarget,
   runInstallSourceScan,
   sourceFamilyForInstallPolicyKind,
-  validateOpenClawPackageInstallCompatibility,
   type PreparedInstallTarget,
 } from "./install-shared.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
@@ -30,6 +29,7 @@ import {
   type PackageManifest,
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
+import { validateOpenClawPackageInstallCompatibility } from "./package-compat.js";
 
 const PLUGIN_ARCHIVE_ROOT_MARKERS = [
   "package.json",
@@ -112,7 +112,7 @@ async function installBundleFromSourceDir(
     ? runtime.getPackageManifestMetadata(packageManifestResult.manifest)
     : undefined;
   const compatibilityError = validateOpenClawPackageInstallCompatibility({
-    runtime,
+    currentHostVersion: runtime.resolveCompatibilityHostVersion(),
     pluginId,
     packageMetadata,
   });

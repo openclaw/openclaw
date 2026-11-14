@@ -630,8 +630,12 @@ export async function buildTemplateAddPlan(params: {
     agentId: finalId,
   });
 
-  // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.automations) {
+  // Templates keep one conversation per agent: Add schedules every declared automation
+  // in the agent's main session and drops its delivery, since a Template can only
+  // announce to the last channel, which the scheduler rejects on multi-channel hosts.
+  // The owner can change either later in the automation's settings.
+  for (const { delivery: _ignoredDelivery, ...declared } of params.manifest.automations) {
+    const job = { ...declared, session: "main" as const };
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -641,9 +645,6 @@ export async function buildTemplateAddPlan(params: {
         ...job,
         agentId: finalId,
         expectedState: "absent",
-        ...(job.delivery?.channel === "last"
-          ? { deliveryResolution: "local-channel-state:last" }
-          : {}),
       },
       blocked: false,
     });

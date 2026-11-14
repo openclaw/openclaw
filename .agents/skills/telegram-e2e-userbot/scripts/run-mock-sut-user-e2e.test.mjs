@@ -210,6 +210,30 @@ test("gateway and recorder readiness budgets reject invalid values before acquir
   }
 });
 
+test("value-taking options reject a missing value before acquiring credentials", async () => {
+  for (const flag of [
+    "--text",
+    "--photo",
+    "--caption",
+    "--expect",
+    "--timeout-ms",
+    "--gateway-port",
+    "--mock-port",
+    "--output",
+    "--record",
+    "--chat",
+    "--pre-send",
+    "--scenario",
+  ]) {
+    const result = await nodeCommand(
+      [new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname, flag],
+      { env: {} },
+    );
+    assert.equal(result.status, 1);
+    assert.ok(result.stderr.includes(`Missing value for ${flag}.`), result.stderr);
+  }
+});
+
 test("config patches restart before releasing their scenario barrier", async (context) => {
   const temp = temporary(context, "telegram-config-patch-");
   const configPath = path.join(temp, "openclaw.json");

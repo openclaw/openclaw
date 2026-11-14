@@ -14457,20 +14457,20 @@ struct ChatStreamPresentationTests {
             _ = vm.hasStreamingAssistantText
             _ = vm.timelineRevision
         } onChange: { transcript.count += 1 }
-        withObservationTracking { _ = vm.liveAssistantDisplayText } onChange: { bubble.count += 1 }
+        withObservationTracking { _ = vm.displayedStreamingAssistantText } onChange: { bubble.count += 1 }
         vm.updateStreamingAssistantText("First second")
         vm.updateStreamingAssistantText("First second third")
         #expect(vm.streamingAssistantText == "First second third")
-        #expect(vm.liveAssistantDisplayText == "First")
+        #expect(vm.displayedStreamingAssistantText == "First")
         #expect(bubble.count == 0)
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
-        #expect(vm.liveAssistantDisplayText == "First second third")
+        #expect(vm.displayedStreamingAssistantText == "First second third")
         #expect(bubble.count == 1)
         #expect(transcript.count == 0)
         #expect(vm.timelineRevision == before)
         vm.updateStreamingAssistantText(nil)
         #expect(transcript.count == 1)
-        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.displayedStreamingAssistantText == nil)
     }
 
     @Test @MainActor func `retired callback cannot publish old or new session text`() throws {
@@ -14484,10 +14484,10 @@ struct ChatStreamPresentationTests {
         vm.updateStreamingAssistantText("New queued")
         let current = try #require(vm.streamPacing.scheduledID)
         vm.flushStreamingAssistantDisplay(scheduledID: retired)
-        #expect(vm.liveAssistantDisplayText == "New first")
+        #expect(vm.displayedStreamingAssistantText == "New first")
         #expect(vm.streamPacing.scheduledID == current)
         vm.flushStreamingAssistantDisplay(scheduledID: current)
-        #expect(vm.liveAssistantDisplayText == "New queued")
+        #expect(vm.displayedStreamingAssistantText == "New queued")
     }
 
     @Test @MainActor func `visibility changes invalidate shape and durable history suppresses live duplicates`() throws {
@@ -14502,13 +14502,12 @@ struct ChatStreamPresentationTests {
         #expect(transcript.count == 1)
         vm.replaceMessages([OpenClawChatMessage(
             role: "assistant", content: [.init(type: "text", text: "Ready")], timestamp: 1)])
-        #expect(vm.liveAssistantDisplayText == nil)
         #expect(vm.liveAssistantTextShape == nil)
         let restored = Fired()
         withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { restored.count += 1 }
         vm.updateStreamingAssistantText("Ready now")
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
-        #expect(vm.liveAssistantDisplayText == "Ready now")
+        #expect(vm.displayedStreamingAssistantText == "Ready now")
         #expect(restored.count == 1)
     }
 }

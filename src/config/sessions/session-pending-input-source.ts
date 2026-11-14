@@ -11,7 +11,7 @@ import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-ru
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-export async function readPendingInputSource(
+async function readPendingInputSource(
   scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,

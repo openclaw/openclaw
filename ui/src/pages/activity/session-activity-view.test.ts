@@ -175,7 +175,7 @@ describe("session activity semantics", () => {
         const warning = "People and counts describe visible recorded session associations";
         expect(note?.textContent).toContain(warning);
         expect(all(".activity-pulse__stats > span")[1]?.getAttribute("title")).toBe(
-          warning + "; retained history and this people list may be incomplete.",
+          "Counts cover recorded sessions you can access. Older history and people may be missing.",
         );
         expect(find(".activity-feed__people-panel")?.lastElementChild).toBe(note);
         expect(text(".activity-feed__main")).not.toContain(warning);

@@ -122,7 +122,7 @@ extension ChatSessionSidebar {
             } header: {
                 Text(verbatim: title)
                     .font(OpenClawChatTypography.caption)
-                    .help(section.id.hasPrefix("project:") ? String(section.id.dropFirst(8)) : title)
+                    .help(section.id.hasPrefix("project:") ? String(section.id.dropFirst(8)) : "")
                     .modifier(ChatSidebarSectionInteraction(sidebar: self, section: section.id))
             }
         } else {

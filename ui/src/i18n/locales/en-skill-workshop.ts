@@ -27,10 +27,9 @@ const enSkillWorkshop = {
       propose: "Propose",
       auto: "Auto",
       offTitle: "The agent does not save or update skills on its own.",
-      proposeTitle:
-        "The agent saves skill changes it would make as drafts. Review them together with /learn drafts.",
+      proposeTitle: "Saves proposed skill changes as drafts. Review with /learn drafts.",
       autoTitle:
-        "The agent saves and improves skills as it works, announces each change, and every change can be undone.",
+        "Saves and improves skills while working. Every change is announced and can be undone.",
       updateError: "Couldn’t update the learning mode. Try again.",
     },
     skills: {
@@ -78,7 +77,7 @@ const enSkillWorkshop = {
     },
     unused: {
       badge: "Unused {days}d",
-      title: "Unused-skill cleanup can archive learned skills after {days} idle days.",
+      title: "May be archived after {days} days without use.",
       notice:
         "Unused for {days} days. Unused-skill cleanup can archive learned skills after {limit} idle days on agents where it runs; using the skill resets the clock.",
     },
@@ -94,7 +93,7 @@ const enSkillWorkshop = {
       undoTitle: "Restore {name} as it was before this change",
       restoreBefore: "Restore before",
       compare: "Compare",
-      compareTitle: "Show how the skill read before this change",
+      compareTitle: "Compare with previous",
       view: "View",
       savedBefore: "Saved before it was {action}",
       actors: {

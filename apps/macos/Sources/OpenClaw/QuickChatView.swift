@@ -258,7 +258,7 @@ struct QuickChatView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .disabled(!self.model.canCaptureWindow)
-        .help("Continue a recent conversation")
+        .help("Recent conversations")
         .accessibilityLabel("Continue a recent conversation")
     }
 
@@ -308,7 +308,6 @@ struct QuickChatView: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.model.canSend)
-        .help("Send message")
         .accessibilityLabel("Send message")
         .accessibilityIdentifier("quick-chat-send")
     }
