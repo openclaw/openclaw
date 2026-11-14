@@ -9,6 +9,7 @@ import { createSandbox } from "../../agents/sandbox/fs-bridge.test-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "../../agents/sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { buildIdentityMarkdownOrRespondUnsafe } from "./agents-files.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
 
@@ -23,9 +24,9 @@ const hasGnuShell =
 
 function registerFileTests(storage: "local" | "remote") {
   const memory = "MEMORY.md";
-  const original = "# Memory\n";
+  const original = "\uFEFF# Memory: café \uFFFD\n";
   const edited = "# Memory\n- operator note\n";
-  const learned = "# Memory\n- agent learned a birthday\n";
+  const learned = `${original}- agent learned a birthday\n`;
   const drafts = ["# Memory\n- first operator\n", "# Memory\n- second operator\n"] as const;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let workspace: string;
@@ -89,6 +90,47 @@ function registerFileTests(storage: "local" | "remote") {
   function writeFile(content: string, name = memory) {
     fs.writeFileSync(path.join(storageDir, name), content);
   }
+
+  it("preserves malformed source bytes for editor reads and checked saves", async () => {
+    const filename = path.join(storageDir, memory);
+    const bytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+    fs.writeFileSync(filename, bytes);
+    const refusal = {
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `Agent document "${memory}" must be valid UTF-8. The original file was preserved. Convert it to UTF-8 before retrying.`,
+      },
+    };
+    expect(await invokeFiles("agents.files.get", { agentId: "main", name: memory })).toMatchObject(
+      refusal,
+    );
+    expect(await setFile(edited, { expectedHash: hashContent("stale") })).toMatchObject({
+      ok: false,
+      error: { details: { type: "agent_file_conflict" } },
+    });
+    expect(
+      await setFile(edited, { expectedHash: createHash("sha256").update(bytes).digest("hex") }),
+    ).toMatchObject(refusal);
+    expect(fs.readFileSync(filename)).toEqual(bytes);
+    const identityPath = path.join(storageDir, "IDENTITY.md");
+    fs.writeFileSync(identityPath, bytes);
+    const respond = vi.fn();
+    expect(
+      await buildIdentityMarkdownOrRespondUnsafe({
+        respond,
+        workspaceDir: workspace,
+        identity: { name: "After" },
+      }),
+    ).toBeNull();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+      ...refusal.error,
+      message: refusal.error.message.replace(memory, "IDENTITY.md"),
+    });
+    expect(fs.readFileSync(identityPath)).toEqual(bytes);
+    expect(await setFile(edited)).toMatchObject({ ok: true });
+    expect(readFile()).toBe(edited);
+  });
 
   it.each(["x", "é"])("bounds UTF-8 bytes (%s)", async (character) => {
     const name = "AGENTS.md";
