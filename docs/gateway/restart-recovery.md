@@ -16,6 +16,9 @@ state and continue. Recorded yield waits stay parked when their wake source
 survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
+Channel starts and automatic channel restarts stop once this one-way drain begins,
+before resource close. Already running channels retain their normal cleanup and
+accepted-reply settlement.
 
 If the interrupted turn left a managed workspace pending, its recovery input waits
 for the workspace owner to finish preparation before starting the turn. Setup
