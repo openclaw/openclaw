@@ -345,10 +345,7 @@ export function UsageInsights(props: {
   totals: UsageTotals | null;
   aggregates: UsageAggregates;
   stats: UsageInsightStats;
-  showCostHint: boolean;
   errorHours: InsightItem[];
-  sessionCount: number;
-  totalSessions: number;
 }) {
   const providerDisplayLabel = useProviderDisplayLabel();
   const state = createMemo(() => {
@@ -363,7 +360,6 @@ export function UsageInsights(props: {
     const avgTokens = aggregates.messages.total
       ? Math.round(totals.totalTokens / aggregates.messages.total)
       : 0;
-    const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
     const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
     const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
@@ -485,7 +481,6 @@ export function UsageInsights(props: {
       throughputLabel,
       throughputCostLabel,
       avgTokensLabel: formatUsageTokens(avgTokens),
-      avgCostLabel: formatAnalysisCost(avgCost),
       cacheHitLabel,
       totals,
       cacheBase,
@@ -560,32 +555,6 @@ export function UsageInsights(props: {
                         ? "warn"
                         : "good"
                   }
-                />
-                <SummaryStat
-                  hintId="average-cost"
-                  metric="avgCost"
-                  hint={t(
-                    props.showCostHint
-                      ? "usage.overview.avgCostHintMissing"
-                      : "usage.overview.avgCostHint",
-                  )}
-                  value={insights().avgCostLabel}
-                  sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
-                />
-                <SummaryStat
-                  hintId="sessions"
-                  hint={false}
-                  metric="sessions"
-                  value={props.sessionCount}
-                  sub={t("usage.overview.sessionsInRange", {
-                    count: props.totalSessions.toLocaleString(),
-                  })}
-                />
-                <SummaryStat
-                  hintId="errors"
-                  metric="errors"
-                  value={insights().aggregates.messages.errors}
-                  sub={`${insights().aggregates.messages.toolResults.toLocaleString()} ${t("usage.overview.toolResults")}`}
                 />
               </div>
               <div class="usage-insights-grid">
