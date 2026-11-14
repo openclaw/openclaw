@@ -7,6 +7,10 @@ import {
 } from "../agents/admitted-run-context.js";
 import { runWithModelFallback } from "../agents/model-fallback-runner.js";
 import { resolveReplyOperatorAuthorityKey } from "../auto-reply/reply/reply-tool-authority.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -29,6 +33,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   openclawIdTunnelRolePolicy,
@@ -653,12 +658,26 @@ it("keeps OpenClaw ID membership policy independent of named-role enforcement", 
         internal: { openclawIdPrincipal: principal },
       };
       for (const cfg of [{}, roleConfig(false), roleConfig()]) {
+        setRuntimeConfigSnapshot({
+          ...cfg,
+          gateway: {
+            ...cfg.gateway,
+            roles: {
+              ...cfg.gateway?.roles,
+              definitions: {
+                ...cfg.gateway?.roles?.definitions,
+                ...MEMBER_ROLE_PRESETS,
+              },
+            },
+          },
+        });
         expect(resolveOperatorRolePolicy(client, cfg)).toEqual(
           openclawIdTunnelRolePolicy(principal),
         );
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      clearRuntimeConfigSnapshot();
     }
   }
 });

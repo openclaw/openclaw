@@ -234,6 +234,8 @@ it("shows actionable connecting guidance in a visible status region", () => {
 });
 
 it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
+  // Load the lazy dictation phase view first, as a browser that already fetched its chunk.
+  await import("./components/composer-dictation-status.tsx");
   vi.useFakeTimers();
   openMicrophoneMock.mockReturnValue(new Promise(() => {}));
   const dismissRecovery = vi.fn();
