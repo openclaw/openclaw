@@ -797,11 +797,20 @@ WSL policy fixture; it does not claim live Windows or WSL network coverage.
 ### Managed proxy CA fixture cleanup
 
 At `9cb3c14855e5a5216148a1c125f9240c5da1f6de`, the supplied-env TLS proxy
-case creates its CA directory before protected setup and removes it only after
-successful dispatcher teardown. The candidate moves directory ownership to the
-shared Vitest cleanup tracker and reuses the existing dispatcher closer, keeping
-the real HTTP/SOCKS/TLS assertions. Baseline and injected setup/teardown failure
-qualification are pending; no production behavior change is proposed.
+case leaked its CA directory when setup or dispatcher teardown failed. The
+existing auto-cleanup tracker now owns the directory, and the existing dispatcher
+helper owns shutdown. All 17 declarations / 27 cases remain, including the real
+HTTP/SOCKS/TLS payload and routing assertions. Independent preservation review
+found no lost contracts.
+
+The baseline passed 27/27. Temporary probes injected a real certificate-write
+failure and a failure after dispatcher shutdown. Both left the directory present
+at an `afterAll` observation, before runner namespace cleanup. With the repair,
+both directories were absent at the same observation and both original errors
+still failed the test. The probes were removed and the file restored byte for
+byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
+changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
+took 17.87 seconds, so these timings do not establish a speed improvement.
 
 ## Pending qualification and proof repairs
 
