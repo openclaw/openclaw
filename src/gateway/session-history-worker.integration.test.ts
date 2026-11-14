@@ -216,10 +216,11 @@ it.each(["rpc", "message-by-id"] as const)(
         fixture
           .database()
           .exec("UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1");
-        await replaceSessionEntry(
-          { ...fixture.scope, sessionId: currentId },
-          { sessionId: currentId, updatedAt: 1, visibility: "shared" },
-        );
+        await replaceSessionEntry(fixture.scope, {
+          sessionId: currentId,
+          updatedAt: 1,
+          visibility: "shared",
+        });
         setRuntimeConfigSnapshot({ session: { store: fixture.scope.storePath } });
       }
       const rpc = transport === "rpc" ? await createHistoryReadContext() : undefined;

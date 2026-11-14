@@ -512,7 +512,7 @@ describe("scripts/test-group-report", () => {
       .filter(Boolean);
   const groupedReport = (
     files: Record<string, [durationMs: number, tests: Record<string, number>]>,
-    runs: ReturnType<typeof buildGroupedTestReport>["runs"] = [],
+    runs: NonNullable<Parameters<typeof buildGroupedTestComparison>[0]["before"]["runs"]> = [],
   ) => ({
     ...buildGroupedTestReport({
       groupBy: "area",
