@@ -433,7 +433,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   text-decoration: none;
 }
 
-.session-link:hover {
+/* Models agent links take the color and plain text from the global link rule. */
+.session-link:hover,
+.model-providers__agent-link:hover {
   text-decoration: underline;
 }
 
@@ -1356,7 +1358,8 @@ select.settings-select:not([multiple]) {
 }
 
 /* At the end of a row, the glyph's ink lines up with the edge of the card below. */
-openclaw-tooltip:last-child > .refresh-button {
+openclaw-tooltip:last-child > .refresh-button,
+:not(openclaw-tooltip) > .refresh-button:last-child {
   margin-inline-end: -10px;
 }
 
@@ -1373,20 +1376,23 @@ openclaw-tooltip:last-child > .refresh-button {
   }
 
   /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
-  openclaw-tooltip:last-child > .refresh-button {
+  openclaw-tooltip:last-child > .refresh-button,
+  :not(openclaw-tooltip) > .refresh-button:last-child {
     justify-items: end;
     margin-inline-end: 0;
   }
 
   /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
      touch box keeps the glyph at its desktop distance. */
-  * + openclaw-tooltip:last-child > .refresh-button {
+  * + openclaw-tooltip:last-child > .refresh-button,
+  * + .refresh-button:last-child {
     justify-items: start;
     margin-inline: -8px -4px;
     padding-inline-start: 15px;
   }
 
-  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button {
+  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button,
+  .settings-section__actions > * + .refresh-button:last-child {
     margin-inline-end: -12px;
   }
 }
@@ -2597,6 +2603,50 @@ select.data-table-pagination__size {
 .confirm-dialog .oc-dialog__body > .exec-approval-command,
 .confirm-dialog .oc-dialog__body > .exec-approval-skip {
   margin-top: 0;
+}
+
+.confirm-dialog--compact {
+  --openclaw-modal-width: 320px;
+  --openclaw-modal-backdrop-color: rgb(0 0 0 / 25%);
+  --openclaw-modal-backdrop-filter: none;
+  --overlay-modal-radius: 17px;
+  --overlay-modal-title-size: 14px;
+}
+
+.confirm-dialog--compact .oc-dialog__header {
+  gap: 8px;
+  padding: 16px 16px 0;
+}
+
+.confirm-dialog--compact .oc-dialog__title {
+  min-height: 0;
+}
+
+.confirm-dialog--compact .oc-dialog__description {
+  padding: 0;
+  font-size: 12px;
+}
+
+.confirm-dialog--compact .oc-dialog__body {
+  padding: 10px 16px 0;
+}
+
+.confirm-dialog--compact .exec-approval-skip {
+  font-size: 12px;
+}
+
+.confirm-dialog--compact .oc-modal-dialog .oc-dialog__footer {
+  gap: 6px;
+  padding: 14px 16px 16px;
+}
+
+.confirm-dialog--compact .oc-dialog__footer .btn {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* The confirm opt-out is a control, not a continuation of the message copy, so it

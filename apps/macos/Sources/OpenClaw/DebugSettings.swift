@@ -264,13 +264,10 @@ struct DebugSettings: View {
                         }
                         .pickerStyle(.menu)
                         .labelsHidden()
-                        .help("Controls the macOS app log verbosity.")
 
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.checkbox)
-                            .help(
-                                "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. " +
-                                    "Enable only while actively debugging.")
+                            .help("Local rotating log: ~/Library/Logs/OpenClaw/. Enable only for debugging.")
 
                         HStack(spacing: 8) {
                             Button("Open folder") {
@@ -593,7 +590,7 @@ struct DebugSettings: View {
                 GridRow {
                     self.gridLabel("Chat")
                     Toggle("Use native conversation view", isOn: self.$useNativeConversation)
-                        .help("Use the Swift conversation view in newly opened chat windows.")
+                        .help("Applies to newly opened chat windows.")
                 }
             }
         }

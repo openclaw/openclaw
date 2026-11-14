@@ -293,6 +293,8 @@ describe("happy path prompt snapshots", () => {
         "### Developer: OpenClaw Runtime Instructions",
         "### Developer: Codex Collaboration Mode Instructions",
       );
+      expect(shared).toContain("<collaboration_mode>");
+      expect(shared).toContain("silence is not an answer or approval");
       expect(shared).toContain("```text\n<thread_policy>\n");
       expect(shared).toContain("\n</thread_policy>\n```");
       const collaboration = renderedPromptSection(

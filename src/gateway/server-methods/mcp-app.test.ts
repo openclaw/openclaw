@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildSandboxHostDocument } from "../../agents/sandbox-host.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 
 const mocks = vi.hoisted(() => ({
   scopedRead: vi.fn(),
@@ -103,6 +105,7 @@ async function invoke(
   scopes: string[] = ["operator.write"],
   profileId?: string,
   remoteControlUiIngress?: RemoteControlUiIngressContext,
+  openclawIdTunnel = false,
 ) {
   const respond = vi.fn();
   const cfg = {
@@ -118,6 +121,7 @@ async function invoke(
     client: {
       connect: { scopes },
       remoteControlUiIngress,
+      browserOrigin: { openclawIdTunnel },
       ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
     },
     context: {
@@ -540,6 +544,35 @@ describe("MCP App gateway bridge", () => {
       sandboxUrl: "mcp-app-sandbox",
       sandboxOrigin: "https://apps.example.com",
     });
+  });
+
+  it("bootstraps only linked tunnel MCP views without changing other connections", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const direct = (await invoke("mcp.app.view", params)).mock.calls[0]![1];
+    const tunnelView = async () =>
+      (
+        await invoke(
+          "mcp.app.view",
+          params,
+          true,
+          {},
+          ["operator.write"],
+          undefined,
+          undefined,
+          true,
+        )
+      ).mock.calls[0]![1];
+    expect(await tunnelView()).toEqual(direct);
+    setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+    onTestFinished(() => setOpenClawIdClawOriginResolver(undefined));
+    expect(await tunnelView()).toEqual({
+      ...direct,
+      sandboxUrl:
+        "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz/mcp-app-sandbox?claw=studio-k7x2q&cspv=1",
+      sandboxOrigin: "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz",
+      sandboxShellHtml: buildSandboxHostDocument().html,
+    });
+    expect((await invoke("mcp.app.view", params)).mock.calls[0]![1]).toEqual(direct);
   });
 
   it("does not reuse a live bare-key view owned by another agent", async () => {

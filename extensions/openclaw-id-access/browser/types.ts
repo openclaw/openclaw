@@ -55,6 +55,8 @@ export type Invite = {
     decideBy: number;
     /** Reported by OpenClaw ID; display only. */
     reported: { email: string | null; displayName: string | null; locationHint: string | null };
+    /** The requesting app's device name and platform, when it reports them. */
+    device?: { label: string; platform: string };
   };
 };
 
@@ -98,7 +100,10 @@ export type NodeRecord = {
   description: NodeDescription;
   addedBy: string;
   lastSeen: number;
-  inviteId: string;
+  /** Set when an invitation added the node; absent for a node bound to an owner device. */
+  inviteId?: string;
+  /** Fingerprint of the owner device whose approval carried this node key. */
+  ownerDevice?: string;
 };
 export type NodeInvite = {
   inviteId: string;

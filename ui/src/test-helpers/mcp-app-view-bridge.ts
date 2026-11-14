@@ -122,6 +122,7 @@ export function createMcpBridgeFixture(bridgeMocks: {
       new MessageEvent("message", {
         data: { method: "ui/notifications/sandbox-proxy-ready" },
         source: frame.contentWindow,
+        origin: new URL(frame.src).origin,
       }),
     );
     await gatewayEventsReady.promise;
