@@ -1,4 +1,5 @@
 import { en } from "./locales/en.js";
+import { pt_PT } from "./locales/pt-PT.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
 import type {
@@ -16,6 +17,7 @@ export type SetupTranslator = (key: string, params?: WizardI18nParams) => string
 
 const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
   en,
+  "pt-PT": pt_PT,
   "zh-CN": zh_CN,
   "zh-TW": zh_TW,
 };
@@ -35,6 +37,9 @@ export function resolveWizardLocale(value: string | undefined): WizardLocale {
   }
 
   const lower = normalized.toLowerCase();
+  if (lower === "pt-pt") {
+    return "pt-PT";
+  }
   if (lower === "en" || lower.startsWith("en-")) {
     return "en";
   }
