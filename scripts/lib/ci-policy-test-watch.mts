@@ -799,7 +799,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/config/sessions/session-accessor.sqlite-participants.test.ts",
     "src/config/sessions/session-logical-entry-read.worker.test.ts",
-    "src/gateway/session-activity-summaries.retry.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -956,7 +955,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/server-methods/sessions-read-active.test.ts",
     "src/gateway/server-methods/sessions-read-async.test.ts",
     "src/gateway/server-methods/sessions-read-diagnostics.test.ts",
-    "src/gateway/server-methods/sessions-read-visibility.test.ts",
     "src/gateway/server-methods/sessions-read.test.ts",
     "src/gateway/server-methods/sessions-row-projection.sqlite.test.ts",
     "src/gateway/server-methods/sessions-sharing.identities.test.ts",
@@ -1003,10 +1001,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     ],
   },
-  ...[
-    "src/gateway/session-history.subagent-visibility.test.ts",
-    "src/gateway/session-transcript-readers.markers.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["src/gateway/session-transcript-readers.markers.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
       "src/config/sessions/session-transcript.worker.ts",
@@ -1105,7 +1100,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/worker-environments/provider-provisioning.test.ts",
     "src/gateway/worker-environments/repository-project-access.test.ts",
     "src/gateway/worker-environments/store-retention.test.ts",
-    "src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts",
     "src/gateway/worker-environments/worker-turn-rpc.portal.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

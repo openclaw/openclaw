@@ -2220,7 +2220,6 @@
     "src/gateway/gateway-wizard.e2e.test.ts": 6,
     "src/gateway/gateway.compaction-hot-reload.e2e.test.ts": 4,
     "src/gateway/gateway.test.ts": 29,
-    "src/gateway/managed-image-actions.e2e.test.ts": 3,
     "src/gateway/node-plugin-tool-invoke-deadline.e2e.test.ts": 30,
     "src/gateway/operator-approvals-client.e2e.test.ts": 4,
     "src/gateway/server-methods/plugin-approval-turn-source-routing.e2e.test.ts": 1,
@@ -2560,7 +2559,6 @@
         "includePatterns": [
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
           "src/gateway/gateway-ssh-upload-signal.test.ts",
-          "src/gateway/github-publication-requester-aliases.test.ts",
           "src/gateway/github-publication-requester.test.ts",
           "src/gateway/server-methods/models-list.freshness.integration.test.ts",
           "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
