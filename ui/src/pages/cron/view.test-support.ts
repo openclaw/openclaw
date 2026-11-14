@@ -94,6 +94,8 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     deliveryToSuggestions: [],
     failureAlertToSuggestions: [],
     accountSuggestions: [],
+    accountCatalog: { accounts: undefined, loading: false, error: null },
+    onRetryAccountCatalog: () => undefined,
     onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,
     onFormChange: () => undefined,
