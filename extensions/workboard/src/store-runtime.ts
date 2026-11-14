@@ -66,14 +66,16 @@ export class WorkboardStoreRuntime {
     return current;
   }
 
-  async runOperation<T>(run: () => T | Promise<T>): Promise<T> {
+  async runOperation<T>(run: () => T | Promise<T>, assertCurrent?: () => void): Promise<T> {
     if (this.sealed && !this.operationScope.getStore()?.active) {
       throw new Error("workboard store is closed.");
     }
     const context = { active: true };
     const operation = this.operationScope.run(context, async () => {
       await this.initialization;
-      return await run();
+      // Owner-routed calls may wait in nested mutation queues. Carry their
+      // authority to SQLite admission so expired callers cannot commit a write.
+      return await this.withMutationAuthority(async () => await run(), assertCurrent);
     });
     this.operations.add(operation);
     try {

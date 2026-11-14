@@ -159,6 +159,9 @@ const cardsListFilterSchema = z.object({
 const CLI_OWNER_METHODS = new Set([
   "workboard.cards.list",
   "workboard.cards.create",
+  "workboard.cards.update",
+  "workboard.cards.comment",
+  "workboard.cards.proof",
   "workboard.cards.move",
   "workboard.cards.dispatch",
   "workboard.cards.dispatchWithOptions",
@@ -326,7 +329,7 @@ export function registerWorkboardGatewayMethods(params: {
             assertUploadsAllowed(request.client);
           }
           request.respond(true, await handler(request));
-        });
+        }, assertOwnerCurrent);
       } catch (error) {
         respondError(request.respond, error);
       }
