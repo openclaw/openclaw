@@ -35,7 +35,9 @@ export function ChatModelAccountSectionView(
                 : (props.options.find((option) => option.value === props.currentValue)?.label ??
                   props.selectedIdentity)}
             </span>
-            <Icon name="chevronDown" />
+            <Show when={!props.disabled}>
+              <Icon name="chevronDown" />
+            </Show>
           </>
         }
       >
