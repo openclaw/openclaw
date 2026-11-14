@@ -1444,9 +1444,7 @@ extension GatewayConnection {
             return
         }
         // Only overflow mutates diagnostics; ordinary delivery does no logging work.
-        if subscriber.droppedCount < Int.max {
-            self.subscribers[id]?.droppedCount += 1
-        }
+        if subscriber.droppedCount < Int.max { self.subscribers[id]?.droppedCount += 1 }
         if subscriber.droppedCount == 0 {
             gatewayConnectionLogger.warning("push subscriber buffer overflow; further drops counted until termination")
         }

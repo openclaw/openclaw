@@ -354,7 +354,7 @@ private func assertConfigLookupCannotRecreateRoute(
             .event(EventFrame(type: "event", event: "target")), socketGeneration: 1)
         #expect(replacementCounts == [0])
         var replacementIterator = replacement.makeAsyncIterator()
-        #expect(gatewayGenerationSnapshotVersion(await replacementIterator.next()) == "replacement")
+        #expect(await gatewayGenerationSnapshotVersion(replacementIterator.next()) == "replacement")
         let consumer = Task {
             var iterator = replacement.makeAsyncIterator()
             _ = await iterator.next()
