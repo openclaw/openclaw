@@ -489,7 +489,12 @@ export function mutateSqliteSessionAtMessageInTransaction(
   }
   const nextSessionId = plan.result.entry.sessionId;
   const targetScope = { ...resolved, sessionId: nextSessionId, sessionKey: params.targetKey };
-  appendTranscriptEventsInTransaction(database, targetScope, source!.hydrate(plan.events), projection);
+  appendTranscriptEventsInTransaction(
+    database,
+    targetScope,
+    source!.hydrate(plan.events),
+    projection,
+  );
   writeSessionEntry(database, params.targetKey, plan.result.entry);
   return plan.result;
 }

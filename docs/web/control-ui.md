@@ -112,9 +112,11 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions. Large local histories are copied incrementally.
+Rewinding does not undo external actions. Rewinding and switching branches keep
+the existing conversation and only move its active branch, so their cost does not
+depend on history size. Forking a conversation copies its history incrementally.
 If an individual event or the history navigation metadata exceeds the safe memory
-budget, the request fails without changing the conversation; other sessions remain
+budget, the fork fails without changing the conversation; other sessions remain
 available. Export the transcript to inspect it.
 
 ## Command palette file attachments

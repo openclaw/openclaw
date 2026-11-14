@@ -415,8 +415,14 @@ it("refuses an oversized history row without changing the session or losing the 
     data: "x".repeat(8 * 1024 * 1024),
   });
   const before = readEntry(scope);
-  await expect(rewind(params)).rejects.toBeInstanceOf(SqliteJsonlReadBudgetExceededError);
+  // Fork is the only cut that still copies history, so the read budget guards it.
+  await expect(
+    fork({ ...params, targetKey: "agent:main:dashboard:message-cut-oversized" }),
+  ).rejects.toBeInstanceOf(SqliteJsonlReadBudgetExceededError);
   expect(readEntry(scope)).toEqual(before);
   await updateEntry(scope, (entry) => ({ ...entry, label: "still writable" }));
   expect(readEntry(scope)?.label).toBe("still writable");
+  // An in-place rewind never reads the oversized row, so no budget applies.
+  const rewound = await rewind(params);
+  expect(rewound.status).toBe("created");
 });
