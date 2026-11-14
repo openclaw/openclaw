@@ -135,6 +135,7 @@ export type {
 } from "../config/types.models.js";
 export {
   bindsClaudeThinkingPrefix,
+  isReleasedAdaptiveClaudeGeneration,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,

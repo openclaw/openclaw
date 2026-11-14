@@ -1242,10 +1242,10 @@ describe("Anthropic provider", () => {
       expect(payload).not.toHaveProperty(key);
     }
   });
-  it("does not infer adaptive thinking from forward-compatible effort maps", async () => {
+  it("uses mandatory adaptive thinking for an unknown Claude model", async () => {
     const { payload } = await captureSimpleAnthropicPayload(
       {
-        id: "claude-future",
+        id: "claude-zzz-9-9",
         name: "Future Claude",
         provider: "github-copilot",
         reasoning: true,
@@ -1253,8 +1253,10 @@ describe("Anthropic provider", () => {
       },
       { apiKey: "copilot-token", reasoning: "max", stopBeforeNetwork: true },
     );
-    expect(payload).toMatchObject({ thinking: { type: "enabled" } });
-    expect(payload).not.toHaveProperty("output_config");
+    expect(payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+    });
   });
 
   it.each([{ budgetTokens: 512, maxTokens: 8192 }])(

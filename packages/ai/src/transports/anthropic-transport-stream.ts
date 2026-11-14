@@ -12,6 +12,8 @@ import {
 import {
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
+  raiseClaudeCodeVersionFloor,
+  readRequiredClaudeCodeVersion,
   supportsClaudeAdaptiveThinking,
   usesClaudeStreamingRefusalContract,
 } from "../providers/anthropic-model-contract.js";
@@ -382,42 +384,67 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
         const requestContext = prepareClaudeNoPrefillRequestContext(model, context);
-        const { request, isOAuthToken, directApiKeyBetaHeader, claudeCodeVersion } =
-          createAnthropicTransportClient({
+        const send = async (
+          canRetry: boolean,
+        ): Promise<
+          Awaited<ReturnType<ReturnType<typeof createAnthropicTransportClient>["request"]>> & {
+            isOAuthToken: boolean;
+            builtParams: Awaited<ReturnType<typeof buildAnthropicRequest>>;
+          }
+        > => {
+          const { request, isOAuthToken, directApiKeyBetaHeader, claudeCodeVersion } =
+            createAnthropicTransportClient({
+              model,
+              context: requestContext,
+              apiKey,
+              options: transportOptions,
+            });
+          const builtParams = await buildAnthropicRequest(
             model,
-            context: requestContext,
-            apiKey,
-            options: transportOptions,
-          });
-        const builtParams = await buildAnthropicRequest(
-          model,
-          requestContext,
-          transportOptions,
-          "transport",
-          isOAuthToken,
-          !isOAuthToken && supportsAnthropicServerSideFallback(model),
-          claudeCodeVersion,
-        );
-        replayedCompaction = builtParams.replayedCompaction;
-        const { params, headers } = await prepareAnthropicRequest(
-          builtParams.params,
-          model,
-          transportOptions,
-          directApiKeyBetaHeader,
-        );
-        const { response, stream: anthropicStream } = await request(
-          { ...params, stream: true },
-          { signal: transportOptions.signal, headers },
-        );
-        await notifyProviderHttpResponse({ options: transportOptions, response, model });
-        if (!response.ok) {
-          const errorBody = await readAnthropicMessagesErrorBody(response);
-          throw Object.assign(new Error(`${response.status} status code (no body)`), {
-            status: response.status,
-            headers: response.headers,
-            errorBody,
-          });
-        }
+            requestContext,
+            transportOptions,
+            "transport",
+            isOAuthToken,
+            !isOAuthToken && supportsAnthropicServerSideFallback(model),
+            claudeCodeVersion,
+          );
+          replayedCompaction = builtParams.replayedCompaction;
+          const { params, headers } = await prepareAnthropicRequest(
+            builtParams.params,
+            model,
+            transportOptions,
+            directApiKeyBetaHeader,
+          );
+          try {
+            const result = await request(
+              { ...params, stream: true },
+              { signal: transportOptions.signal, headers },
+            );
+            const { response } = result;
+            await notifyProviderHttpResponse({ options: transportOptions, response, model });
+            if (!response.ok) {
+              const errorBody = await readAnthropicMessagesErrorBody(response);
+              throw Object.assign(new Error(`${response.status} status code (no body)`), {
+                status: response.status,
+                headers: response.headers,
+                errorBody,
+              });
+            }
+            return { ...result, isOAuthToken, builtParams };
+          } catch (error) {
+            const required = isOAuthToken ? readRequiredClaudeCodeVersion(error) : undefined;
+            if (canRetry && required && raiseClaudeCodeVersionFloor(required)) {
+              try {
+                transportOptions.onClaudeCodeVersionRequired?.(required);
+              } catch {
+                // Persistence is best effort; the process already uses the learned floor.
+              }
+              return send(false);
+            }
+            throw error;
+          }
+        };
+        const { stream: anthropicStream, isOAuthToken, builtParams } = await send(true);
         await consumeAnthropicStream({
           events: anthropicStream,
           model,

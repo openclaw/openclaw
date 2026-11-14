@@ -47,6 +47,8 @@ import {
 import {
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
+  raiseClaudeCodeVersionFloor,
+  readRequiredClaudeCodeVersion,
   supportsClaudeAdaptiveThinking,
   usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
@@ -135,39 +137,62 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     let replayedCompaction: AnthropicCompactionBlock | undefined;
 
     try {
-      const {
-        client,
-        isOAuthToken,
-        serverSideFallback,
-        directApiKeyBetaHeader,
-        claudeCodeVersion,
-      } = createClient(model, requestContext, requestOptions);
-      const builtParams = await buildAnthropicRequest(
-        model,
-        requestContext,
-        requestOptions,
-        "provider",
-        isOAuthToken,
-        serverSideFallback,
-        claudeCodeVersion,
-      );
-      replayedCompaction = builtParams.replayedCompaction;
-      const { params, headers } = await prepareAnthropicRequest(
-        builtParams.params,
-        model,
-        requestOptions,
-        directApiKeyBetaHeader,
-      );
-      const sdkRequestOptions = {
-        ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
-        ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        maxRetries: 0,
-        headers,
+      const send = async (
+        canRetry: boolean,
+      ): Promise<{
+        response: Response;
+        isOAuthToken: boolean;
+        builtParams: Awaited<ReturnType<typeof buildAnthropicRequest>>;
+      }> => {
+        const {
+          client,
+          isOAuthToken,
+          serverSideFallback,
+          directApiKeyBetaHeader,
+          claudeCodeVersion,
+        } = createClient(model, requestContext, requestOptions);
+        const builtParams = await buildAnthropicRequest(
+          model,
+          requestContext,
+          requestOptions,
+          "provider",
+          isOAuthToken,
+          serverSideFallback,
+          claudeCodeVersion,
+        );
+        replayedCompaction = builtParams.replayedCompaction;
+        const { params, headers } = await prepareAnthropicRequest(
+          builtParams.params,
+          model,
+          requestOptions,
+          directApiKeyBetaHeader,
+        );
+        const sdkRequestOptions = {
+          ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
+          ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
+          maxRetries: 0,
+          headers,
+        };
+        try {
+          const response = await client.messages
+            .create({ ...params, stream: true }, sdkRequestOptions)
+            .asResponse();
+          await notifyProviderHttpResponse({ options: requestOptions, response, model });
+          return { response, isOAuthToken, builtParams };
+        } catch (error) {
+          const required = isOAuthToken ? readRequiredClaudeCodeVersion(error) : undefined;
+          if (canRetry && required && raiseClaudeCodeVersionFloor(required)) {
+            try {
+              requestOptions?.onClaudeCodeVersionRequired?.(required);
+            } catch {
+              // Persistence is best effort; the process already uses the learned floor.
+            }
+            return send(false);
+          }
+          throw error;
+        }
       };
-      const response = await client.messages
-        .create({ ...params, stream: true }, sdkRequestOptions)
-        .asResponse();
-      await notifyProviderHttpResponse({ options: requestOptions, response, model });
+      const { response, isOAuthToken, builtParams } = await send(true);
 
       await consumeAnthropicStream({
         events: iterateAnthropicEvents(response, requestOptions?.signal),
@@ -226,6 +251,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
     authProfileId?: string;
     toolChoice?: AnthropicCompactionOptions["toolChoice"];
     thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
+    onClaudeCodeVersionRequired?: AnthropicOptions["onClaudeCodeVersionRequired"];
   };
 
 export const streamSimpleAnthropic: StreamFunction<
@@ -240,6 +266,7 @@ export const streamSimpleAnthropic: StreamFunction<
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
     onCompactionRejected: options?.onCompactionRejected,
+    onClaudeCodeVersionRequired: options?.onClaudeCodeVersionRequired,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,

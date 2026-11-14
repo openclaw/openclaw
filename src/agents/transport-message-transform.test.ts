@@ -154,8 +154,14 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     {
       source: { provider: "anthropic", model: "claude-sonnet-4-6" },
       target: { provider: "anthropic", model: "claude-fable-5" },
+      keepThinking: true,
     },
-  ])("drops model-bound thinking for Fable/Mythos switches", ({ source, target }) => {
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-2" },
+      target: { provider: "anthropic", model: "claude-zzz-9-9" },
+      keepThinking: false,
+    },
+  ])("applies prefix binding for Claude switches", ({ source, target, keepThinking }) => {
     const result = transformTransportMessages(
       [
         {
@@ -180,7 +186,18 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
 
     expect(result[0]).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
+      content: [
+        ...(keepThinking
+          ? [
+              {
+                type: "thinking",
+                thinking: "model-bound thought",
+                thinkingSignature: "sig_model_bound",
+              },
+            ]
+          : []),
+        { type: "text", text: "visible answer" },
+      ],
     });
   });
 

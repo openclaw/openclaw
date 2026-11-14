@@ -104,7 +104,7 @@ export function registerParityHostLifecycle() {
   });
 }
 
-export async function captureAnthropicRequest(
+export async function captureAnthropicExchange(
   implementation: "provider" | "transport",
   options: {
     model?: Partial<Model<"anthropic-messages">>;
@@ -123,6 +123,9 @@ export async function captureAnthropicRequest(
     anthropicServerCompaction?: boolean;
     anthropicCompactThreshold?: number;
     contextManagement?: unknown;
+    /** Responses for the first requests, in order, before the scripted success. */
+    leadingResponses?: readonly (() => Response)[];
+    onClaudeCodeVersionRequired?: (version: string) => void;
   } = {},
 ) {
   const requests: Array<{ payload: Record<string, unknown>; headers: Headers }> = [];
@@ -137,11 +140,9 @@ export async function captureAnthropicRequest(
     if (!isRecord(payload)) {
       throw new Error("Expected an Anthropic request object");
     }
-    requests.push({
-      payload,
-      headers: new Headers(init?.headers),
-    });
-    return createAnthropicResponse(options.events ?? anthropicEvents);
+    requests.push({ payload, headers: new Headers(init?.headers) });
+    const leading = options.leadingResponses?.[requests.length - 1];
+    return leading ? leading() : createAnthropicResponse(options.events ?? anthropicEvents);
   };
   configureAiTransportHost({
     ...getAiTransportHost(),
@@ -168,6 +169,7 @@ export async function captureAnthropicRequest(
     cacheTtlPruning: options.cacheTtlPruning,
     anthropicServerCompaction: options.anthropicServerCompaction,
     anthropicCompactThreshold: options.anthropicCompactThreshold,
+    onClaudeCodeVersionRequired: options.onClaudeCodeVersionRequired,
     onPayload: (payload: unknown) => {
       if (!isRecord(payload)) {
         throw new Error("Expected an Anthropic request object");
@@ -196,8 +198,19 @@ export async function captureAnthropicRequest(
             streamOptions,
           ),
         );
-  const result = await stream.result();
-  expect(result.stopReason).toBe("stop");
+  const terminal = await stream.result();
+  return { requests, terminal, warnings, info };
+}
+
+export async function captureAnthropicRequest(
+  implementation: "provider" | "transport",
+  options: Parameters<typeof captureAnthropicExchange>[1] = {},
+) {
+  const { requests, terminal, warnings, info } = await captureAnthropicExchange(
+    implementation,
+    options,
+  );
+  expect(terminal.stopReason).toBe("stop");
   expect(requests).toHaveLength(1);
   const [request] = requests;
   if (!request) {
