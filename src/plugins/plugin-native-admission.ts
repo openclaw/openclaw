@@ -376,6 +376,10 @@ export function createPluginNativeAdmission(
       retainNativePath(state, path.join(fact.namespace, "content"));
     }
     const used = new Set([...files.values()].map((fact) => fact.namespace));
+    // A newer receipt may have pruned a namespace this admission still publishes.
+    for (const id of used) {
+      state.namespaces.set(id, namespaceById(id)!);
+    }
     const next = structuredClone({
       ...finalReceipt,
       nativeArtifacts: Object.fromEntries(files),
