@@ -15,6 +15,79 @@ import {
 } from "./cli-json-stdout-contract.test-support.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
+it("runs oversized timeout work through an external plugin CLI command", async () => {
+  await withCliHome(async (tempHome) => {
+    const pluginDir = path.join(tempHome, "timeout-proof-plugin");
+    const configPath = path.join(tempHome, "openclaw.json");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "timeout-proof",
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "index.js"),
+      [
+        'import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";',
+        "export default {",
+        '  id: "timeout-proof",',
+        "  register(api) {",
+        "    api.registerCli(({ program }) => {",
+        '      program.command("timeout-proof").action(async () => {',
+        "        const warnings = [];",
+        "        const onWarning = (warning) => warnings.push(warning);",
+        '        process.on("warning", onWarning);',
+        "        try {",
+        "          const outcomes = [];",
+        "          for (const timeoutMs of [Infinity, Number.MAX_SAFE_INTEGER]) {",
+        '            outcomes.push(await raceWithTimeout(new Promise((resolve) => setTimeout(() => resolve("done"), 20)), timeoutMs, () => "expired"));',
+        "          }",
+        "          await new Promise((resolve) => setImmediate(resolve));",
+        '          console.log(JSON.stringify({ outcomes, overflowWarnings: warnings.filter((warning) => warning.name === "TimeoutOverflowWarning").length }));',
+        "          process.exit(0);",
+        "        } finally {",
+        '          process.off("warning", onWarning);',
+        "        }",
+        "      });",
+        '    }, { descriptors: [{ name: "timeout-proof", description: "Run timeout proof" }] });',
+        "  },",
+        "};",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        plugins: {
+          load: { paths: [pluginDir] },
+          entries: { "timeout-proof": { enabled: true } },
+        },
+        logging: { level: "silent", consoleLevel: "silent" },
+      }),
+    );
+
+    const result = runBuiltCli(
+      tempHome,
+      ["timeout-proof"],
+      {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        NO_COLOR: "1",
+      },
+      { inheritEnvironment: false },
+    );
+
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result, result.stderr).toMatchObject({ signal: null, status: 0 });
+    expect(JSON.parse(result.stdout)).toEqual({
+      outcomes: ["done", "done"],
+      overflowWarnings: 0,
+    });
+  });
+});
+
 it.each([
   { name: "an ownerless explicit fleet", ownerSelected: false },
   { name: "an explicit system owner", ownerSelected: true },
