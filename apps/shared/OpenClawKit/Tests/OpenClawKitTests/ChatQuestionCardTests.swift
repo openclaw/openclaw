@@ -308,4 +308,12 @@ struct ChatQuestionCardTests {
         model.failSubmission("Disconnected")
         #expect(model.otherText.isEmpty)
     }
+
+    @Test func `option accessibility label includes its description`() {
+        #expect(OpenClawQuestionCard.optionAccessibilityLabel(
+            QuestionOption(label: "Pizza", description: "Fast")) == "Pizza, Fast")
+        #expect(OpenClawQuestionCard.optionAccessibilityLabel(QuestionOption(label: "Tacos")) == "Tacos")
+        #expect(OpenClawQuestionCard.optionAccessibilityLabel(
+            QuestionOption(label: "Soup", description: "  ")) == "Soup")
+    }
 }

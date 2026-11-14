@@ -534,8 +534,16 @@ struct OpenClawQuestionCard: View {
         }
         .buttonStyle(.plain)
         .disabled(self.model.status(at: now) != .pending)
-        .accessibilityLabel(option.label)
+        .accessibilityLabel(Self.optionAccessibilityLabel(option))
         .accessibilityValue(selected ? "Selected" : "Not selected")
+    }
+
+    /// The visible description often explains the choice, so VoiceOver reads it with the label.
+    static func optionAccessibilityLabel(_ option: QuestionOption) -> String {
+        guard let description = option.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !description.isEmpty
+        else { return option.label }
+        return "\(option.label), \(description)"
     }
 
     @ViewBuilder
