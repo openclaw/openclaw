@@ -118,9 +118,7 @@ suite.define(() => {
     await expectLabel(checkoutTrigger, "main");
     await checkoutTrigger.click();
     await expectAttribute(checkoutTrigger, "aria-expanded", "true");
-    await pollLocatorText(checkoutSelect.locator(".new-session-page__menu-title").first()).toBe(
-      "Checkout",
-    );
+    await expectAttribute(checkoutSelect, "aria-label", "Checkout: main");
     await button(checkoutSelect, "New worktree", true).click();
     await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
     const afterPointerHide = checkoutSelect.evaluate(
@@ -220,7 +218,7 @@ suite.define(() => {
     await expectAttribute(trigger, "data-worktree", "true");
     const current = checkout.locator('[data-value="checkout"]');
     expect(await current.isDisabled()).toBe(true);
-    expect(await current.textContent()).toContain(
+    expect(await current.getAttribute("title")).toBe(
       "Use an isolated worktree for this project and agent",
     );
     await page.keyboard.press("Escape");

@@ -12,6 +12,7 @@ import {
   normalizeArchiveRoot,
   buildBackupArchivePath,
 } from "../infra/backup-archive-path-policy.js";
+import { createBackupProgressLogger, type ReportBackupProgress } from "../infra/backup-progress.js";
 import { readEngineAnchor } from "../infra/database-engine/open.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
@@ -304,6 +305,7 @@ async function verifySqliteSnapshots(params: {
   postgresAnchors: ReadonlySet<string>;
   companionAnchors: ReadonlySet<string>;
   spool: BackupArchiveSpool;
+  onProgress?: ReportBackupProgress;
 }): Promise<SqliteSnapshotOwner[]> {
   const verifiedOwners: SqliteSnapshotOwner[] = [];
   const stateDir =
@@ -378,7 +380,13 @@ async function verifySqliteSnapshots(params: {
         }
         configureSqliteReadOnlyPragmas(database);
         await loadSqliteVecExtension({ db: database });
+        params.onProgress?.({
+          stage: "verify-sqlite-integrity",
+          phase: "start",
+          sourceBytes: entry.size,
+        });
         assertSqliteIntegrity(database, entry.normalized);
+        params.onProgress?.({ stage: "verify-sqlite-integrity", phase: "done", bytes: entry.size });
         if (entry.role === "agent") {
           assertOpenClawAgentDatabaseOwner(database, {
             agentId: entry.agentId,
@@ -444,6 +452,7 @@ async function verifySqliteSnapshots(params: {
 async function verifyResolvedBackupArchive(
   archivePath: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[],
+  onProgress?: ReportBackupProgress,
 ) {
   let archiveStat;
   try {
@@ -466,7 +475,9 @@ async function verifyResolvedBackupArchive(
     );
   }
 
-  await using spool = new BackupArchiveSpool();
+  onProgress?.({ stage: "verify-archive-read", phase: "start", totalBytes: archiveStat.size });
+  onProgress?.({ stage: "verify-spool", phase: "start" });
+  await using spool = new BackupArchiveSpool(onProgress);
   const listing = await listBackupArchiveEntries(archivePath, (entry, normalized) =>
     spool.capture(entry, normalized),
   ).catch((error: unknown) => {
@@ -474,6 +485,8 @@ async function verifyResolvedBackupArchive(
       `Archive could not be read or parsed. ${formatErrorMessage(error)} Check the file permissions and archive integrity, then try again.`,
     );
   });
+  onProgress?.({ stage: "verify-archive-read", phase: "done", bytes: archiveStat.size });
+  onProgress?.({ stage: "verify-spool", phase: "done" });
   if (listing.invalidReason) {
     throw new Error(
       `Archive is not a valid OpenClaw backup. ${listing.invalidReason.replace(/[.!?]*$/u, ".")} Choose another archive or create a new one with \`openclaw backup create\`.`,
@@ -627,6 +640,7 @@ async function verifyResolvedBackupArchive(
     entries,
     manifest,
     spool,
+    onProgress,
     postgresAnchors: new Set(databaseRestoreCandidates.map(({ anchorPath }) => anchorPath)),
     companionAnchors: new Set(
       (manifest.postgresAnchors ?? []).map(({ sourcePath }) =>
@@ -674,6 +688,7 @@ async function verifyResolvedBackupArchive(
 export async function prepareBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
+  onProgress?: ReportBackupProgress,
 ) {
   let archivePath = resolveBackupArchivePath(archive, "<archive>");
   if (process.platform !== "win32") {
@@ -683,7 +698,7 @@ export async function prepareBackupArchive(
       archivePath = path.isAbsolute(input) ? input : `${process.cwd()}/${input}`;
     }
   }
-  return await verifyResolvedBackupArchive(archivePath, requiredSnapshots).catch(
+  return await verifyResolvedBackupArchive(archivePath, requiredSnapshots, onProgress).catch(
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : formatErrorMessage(error);
       throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
@@ -695,8 +710,9 @@ export async function prepareBackupArchive(
 export async function verifyBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
+  onProgress?: ReportBackupProgress,
 ) {
-  return (await prepareBackupArchive(archive, requiredSnapshots)).result;
+  return (await prepareBackupArchive(archive, requiredSnapshots, onProgress)).result;
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */
@@ -704,7 +720,15 @@ export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: { archive: string; json?: boolean },
 ): Promise<BackupVerifyResult> {
-  const result = await verifyBackupArchive(opts.archive);
+  const onProgress = createBackupProgressLogger((message) =>
+    opts.json ? runtime.error(message) : runtime.log(message),
+  );
+  let result: BackupVerifyResult;
+  try {
+    result = await verifyBackupArchive(opts.archive, [], onProgress);
+  } finally {
+    onProgress.finish();
+  }
 
   if (opts.json) {
     writeRuntimeJson(runtime, result);

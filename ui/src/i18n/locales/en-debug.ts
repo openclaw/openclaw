@@ -22,7 +22,7 @@ const enDebug = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw Gateway method with JSON params.",
-    callFailed: "Couldn’t call this method. Check the parameters and try again.",
+    callFailed: "Call error. Review the details below before retrying.",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",

@@ -80,6 +80,7 @@ function prepareEnvelopeSerialization(
     }
   }
   const suffix = prefix + flush();
+  const sharedEnvelope = segments.length === 0 ? Buffer.from(suffix) : undefined;
   return (
     recipient: Record<string, unknown>,
     serializeSession: () => Buffer,
@@ -91,9 +92,10 @@ function prepareEnvelopeSerialization(
       encoded += segment.prefix + (field ? `${field},` : "");
     }
     encoded += suffix;
+    const envelope = sharedEnvelope ?? Buffer.from(encoded);
     return serializeMessage
-      ? [Buffer.from(encoded), serializeMessage(), serializeSession()]
-      : [Buffer.from(encoded), serializeSession()];
+      ? [envelope, serializeMessage(), serializeSession()]
+      : [envelope, serializeSession()];
   };
 }
 
@@ -191,6 +193,7 @@ export function prepareSessionEventProjection(
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
         ancestorInvalidations: Map<object, object> | undefined;
         deliveries: [WeakMap<object, PublicationDelivery>, WeakMap<object, PublicationDelivery>];
+        sessionEncodings: Map<string, Buffer>;
       }
     >();
     const diff = createSessionRowDeltaDiffer();
@@ -258,6 +261,7 @@ export function prepareSessionEventProjection(
           hiddenAncestors,
           ancestorInvalidations: ancestorRows ? undefined : new Map(),
           deliveries: [new WeakMap(), new WeakMap()],
+          sessionEncodings: new Map(),
         };
         if (contentKey !== undefined) {
           audiences.set(contentKey, audience);
@@ -339,7 +343,12 @@ export function prepareSessionEventProjection(
                   ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
                   : encoded;
               }
-              sessionBytes = Buffer.from(`"session":${sessionJSON}}`);
+              // Different roster histories can deliver identical bytes in this audience.
+              sessionBytes = audience.sessionEncodings.get(sessionJSON);
+              if (!sessionBytes) {
+                sessionBytes = Buffer.from(`"session":${sessionJSON}}`);
+                audience.sessionEncodings.set(sessionJSON, sessionBytes);
+              }
             }
             return sessionBytes;
           },

@@ -44,22 +44,25 @@ Behavior:
 - Remote `host=node` execution ignores `background`/`yieldMs`. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. The call returns output without a process `sessionId`.
 - If the `process` tool is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
-- For long-running work that starts now: start it once. Automatic completion wake (when enabled) can happen after the command exits. New output while it is still running does not start another turn. Ending the turn does not stop the command; use `process kill` when it is no longer needed. Completion and the configured timeout still apply; background exec is not a saved, restartable automation.
+- For long-running work that starts now: start it once. Automatic completion wake (when enabled) happens after the command exits, including a success with no output. New output while it is still running does not start another turn. Ending the turn does not stop the command; use `process kill` when it is no longer needed. Completion and the configured timeout still apply; background exec is not a saved, restartable automation.
+- To wait inside the current conversation for a condition or a time, run one background command that loops until it holds, exits non-zero on failure states and prints the result. When automatic completion wake is available, end the turn. The completion wake includes the exit code, the duration and the last 2,000 characters of output.
 
 - A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn. A silent completion turn is valid in every conversation, including Control UI chats; subagent runs still require a final result.
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
+- While an idle conversation waits on such a command, the Control UI shows a **Waiting on …** card above the composer that opens the command's output ([Chat](/web/control-ui/chat)). `sessions.processes.list` marks these running rows with `wakesSession: true`.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
+- Completions that arrive while an earlier completion turn in the same conversation is still queued or running wait for it, plus about one second for close stragglers, then share one turn: the agent gets every waiting result (each with its process ID, status, exit code, duration and output tail) in one message instead of one turn per command. One shared turn carries at most about 8,000 characters of results; later results start the next turn. Only completions of commands started by the same request and the same agent run share a turn: a request Stop retires the whole shared turn, and the turn's input provenance names one launching run. A completion with no earlier completion turn in flight starts at once, as before. A waiting completion can start after a human message queued in `followup` or `collect` mode.
 - Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes use the owning session principal's current authority as described below.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
-- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. Check saved output and side effects before repeating work whose outcome is unknown.
+- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. After a graceful restart, the conversation that started them receives one [resume input](/gateway/restart-recovery#automatic-resume) saying they were stopped, so the agent can rerun what it still needs. After a crash, no such input is sent. Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. A surviving durable process is not reported as stopped. Check saved output and side effects before repeating work whose outcome is unknown.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
-- If automatic completion wake is unavailable, or you need quiet-success confirmation where empty successes do not wake (`tools.exec.notifyOnExitEmptySuccess`), poll with `process`.
+- If automatic completion wake is unavailable, or `tools.exec.notifyOnExitEmptySuccess=false` keeps silent successes quiet, poll with `process`.
 - Background exec does not automatically wake hidden subagent sessions; visible spawned sessions are woken like other sessions. A hidden subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
 - A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
-- Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
+- Don't emulate saved reminders, recurring work or cross-session follow-ups with `sleep` loops or repeated polling; use cron for those. A one-time wait in the current conversation is one background command.
 
 ### Env overrides
 
@@ -73,13 +76,13 @@ Behavior:
 
 ### Config (preferred over env overrides)
 
-| Key                                   | Default | Effect                                                                                                              |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                                                                   |
-| `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                                                           |
-| `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                                                                 |
-| `tools.exec.notifyOnExit`             | true    | Continue backgrounded host exec through an ordinary turn in its originating session on exit.                        |
-| `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. Defaults to true for chat channels. |
+| Key                                   | Default | Effect                                                                                                           |
+| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                                                                |
+| `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                                                        |
+| `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                                                              |
+| `tools.exec.notifyOnExit`             | true    | Continue backgrounded host exec through an ordinary turn in its originating session on exit.                     |
+| `tools.exec.notifyOnExitEmptySuccess` | true    | Also wake the session when a backgrounded run succeeds with no output. Set false to keep silent successes quiet. |
 
 ### Disable automatic completion turns
 
@@ -199,7 +202,10 @@ session under that session principal's current authority. OpenClaw does not
 restore the original requester or operator continuation. Reset or archived
 sessions, incognito sessions, subagents, ended cron runs, and disabled completion
 notifications receive no restart wake. Empty successful outcomes follow the
-captured `notifyOnExitEmptySuccess` policy. Before restart, ordinary live-requester
+captured `notifyOnExitEmptySuccess` policy. The registry checks these conditions
+when it adopts the process and again when it exits. A still-running adopted
+process whose exit will wake its session says so in `process poll`, and the
+Control UI shows its **Waiting on …** card above the composer. Before restart, ordinary live-requester
 completion behavior stays unchanged. Completed durable records and their logs
 expire under the captured completion-relative retention setting and normal
 registry limits; restarting does not renew retention.

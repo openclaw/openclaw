@@ -327,7 +327,13 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message) && !normalizeOptionalString(params.caption)) {
+    // Successful cards speak for themselves. Keep lookup failures visible, and
+    // preserve any explicit message or media caption supplied by the caller.
+    if (
+      recommendations.cards.length === 0 &&
+      !normalizeOptionalString(params.message) &&
+      !normalizeOptionalString(params.caption)
+    ) {
       params.message = recommendations.text;
     }
   }
@@ -368,17 +374,15 @@ async function handleInternalSourceReplySendAction(
     actionParams: params,
     input,
     agentId,
+    // Only verified Gateway-authored cards may satisfy a card-only send.
+    resolvedChannelData: recommendations?.cards.length
+      ? {
+          ...asOptionalRecord(params.channelData),
+          [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
+        }
+      : undefined,
   });
   let sourceReplyPayload = sourceReply.payload;
-  if (recommendations) {
-    sourceReplyPayload = {
-      ...sourceReplyPayload,
-      channelData: {
-        ...sourceReplyPayload.channelData,
-        [CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]: recommendations.cards,
-      },
-    };
-  }
   const requestedMediaCount =
     resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length;
   if (!dryRun && requestedMediaCount > 0) {

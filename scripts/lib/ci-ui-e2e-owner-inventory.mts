@@ -12,7 +12,6 @@ const pageStyles = {
   ],
   activity: [
     "ui/src/pages/activity/run-inspector.css",
-    "ui/src/pages/activity/session-activity-media.css",
     "ui/src/styles/activity.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
@@ -213,7 +212,6 @@ function pageWatch(
 }
 
 const ownerWatches: readonly UiE2eOwnerWatch[] = [
-  pageWatch("ui/src/e2e/activity-answer-candidates.e2e.test.ts", ["activity", "chat"]),
   pageWatch("ui/src/e2e/activity-current-work.e2e.test.ts", ["activity", "chat"]),
   pageWatch(
     "ui/src/e2e/activity-polish.e2e.test.ts",
@@ -243,11 +241,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/activity-session-subagents.e2e.test.ts",
     ["activity"],
-    ["ui/src/pages/activity/activity-page.tsx"],
-  ),
-  pageWatch(
-    "ui/src/e2e/activity-summaries.e2e.test.ts",
-    ["activity", "config"],
     ["ui/src/pages/activity/activity-page.tsx"],
   ),
   pageWatch("ui/src/e2e/agent-channel-runtime-status.e2e.test.ts", [

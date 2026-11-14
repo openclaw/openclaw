@@ -163,7 +163,7 @@ describe("CommandPalette pending searches", () => {
       expect(findPaletteOption(palette, "Plugins")).toBeDefined();
       expect(query('[aria-busy="true"]')).toBeNull();
       await searchPalette(palette, "zzcatalog");
-      expect(palette.textContent).toContain("Searching commands");
+      expect(palette.textContent.includes("Searching commands")).toBe(source === "plugins");
       expect(palette.textContent).not.toMatch(/Searching sessions|No results/);
       setInputValue(paletteInput(palette), "z");
       await palette.updateComplete;
@@ -181,9 +181,9 @@ describe("CommandPalette pending searches", () => {
       expect(paletteInput(palette).value).toBe("plugins");
       expect(findPaletteOption(palette, "Plugins")).toBeDefined();
       expect(findPaletteOption(palette, "New session", true)).toBeUndefined();
-      expect(palette.textContent).toContain("Searching commands");
+      expect(palette.textContent.includes("Searching commands")).toBe(source === "plugins");
       expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe(
-        "true",
+        source === "plugins" ? "true" : "false",
       );
       setInputValue(paletteInput(palette), "zzcatalog");
       catalog.resolve(loaded);

@@ -257,7 +257,11 @@ it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", asyn
     };
     const prime = async (selected: typeof peers, label: string) => {
       const previousSends = selected.map((peer) => peer.send.mock.calls.length);
-      await publish(selected.map((peer) => peer.client.connId));
+      // Separate publications leave equal wire baselines with distinct history tokens.
+      for (const copy of [0, 1]) {
+        const ids = selected.filter((peer) => peer.copy === copy).map((peer) => peer.client.connId);
+        await publish(ids);
+      }
       for (const [index, peer] of selected.entries()) {
         expect(peer.send).toHaveBeenCalledTimes(previousSends[index]! + 1);
         expect(decodeLast(peer)).toMatchObject({
@@ -453,15 +457,11 @@ it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", asyn
       expect(stagedFieldIndexTuples).toBe(0);
       // Row changes retain connection keys; only four unprimed legacy sockets need encoding.
       expect(sharingKeyEncodings).toBe(4);
-      // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
-      // Capability variants of one delivery must reuse its session UTF-8 bytes.
-      expect(sessionEncodings.length).toBeGreaterThan(0);
-      // Two authorities, each with two delta histories and one legacy delivery.
+      // Two authorities, each with stale/current deltas and one legacy representation.
       expect(sessionEncodings).toHaveLength(6);
-      // Empty ancestor fields are constant across divergent connection histories.
       expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();

@@ -2392,11 +2392,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }));
       const options = compactOptions(profile, "push");
       const unmeasured = bundleTests(options);
-      const initialGroup = unmeasured
+      const supportGroups = unmeasured
         .flatMap(jobGroups)
-        .find((group) => group.shard_name === shardName);
+        .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+      const initialGroup = supportGroups.find((group) => group.shard_name === shardName);
       expect(initialGroup?.timing_key).toMatch(
-        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+        new RegExp(
+          `^agentic-agents-support#selector-.+#generation-.+#part-2-of-${supportGroups.length}#include-.+$`,
+          "u",
+        ),
       );
       const timingKey = initialGroup!.timing_key!;
       directTimings = { [timingKey]: 1 };

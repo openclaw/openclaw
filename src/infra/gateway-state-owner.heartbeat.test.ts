@@ -5,8 +5,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { MessageChannel, receiveMessageOnPort, type Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS } from "../../gateway-shutdown-budget.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { findOpenFixtureFiles } from "../state/openclaw-state-ownership.test-support.js";
 import {
   classifyGatewayLockProcessNamespace,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
@@ -710,4 +712,72 @@ it("keeps renewing the root when a projection disappears during its heartbeat", 
       error: `${projectionPath}: owner lock was removed or replaced`,
     },
   ]);
+});
+
+it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "closes deleted heartbeat locks before stop completes",
+  async () => {
+    const { root, locks } = lockFixture("openclaw-owner-close-", true);
+    const heartbeat = startGatewayStateOwnerHeartbeat(
+      new Set(Object.keys(locks).map((lockPath) => ({ lockPath, verifyStillHeld: () => true }))),
+      (error) => {
+        throw error;
+      },
+    );
+    try {
+      await once(heartbeat.worker, "message");
+      for (const lockPath of Object.keys(locks)) {
+        fs.unlinkSync(lockPath);
+      }
+      await heartbeat.stop();
+      expect(findOpenFixtureFiles(new Set([root]))).toEqual([]);
+    } finally {
+      await heartbeat.stop();
+    }
+  },
+);
+
+it("bounds an unresponsive heartbeat close and warns before forced termination", async () => {
+  const { rootPath } = lockFixture("openclaw-owner-close-timeout-");
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((_url, options) =>
+    createWorker(
+      new URL(
+        `data:text/javascript,${encodeURIComponent(`
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", () => {});
+        parentPort.postMessage(null);
+      `)}`,
+      ),
+      options,
+    ),
+  );
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const heartbeat = startGatewayStateOwnerHeartbeat(
+    new Set([{ lockPath: rootPath, verifyStillHeld: () => true }]),
+    (error) => {
+      throw error;
+    },
+  );
+  try {
+    await once(heartbeat.worker, "message");
+    const stopped = heartbeat.stop();
+    await vi.advanceTimersByTimeAsync(RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS - 1);
+    expect(heartbeat.worker.threadId).not.toBe(-1);
+    expect(warning).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await stopped;
+    await heartbeat.stop();
+    expect(heartbeat.worker.threadId).toBe(-1);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("forcing termination"),
+      {
+        code: "GATEWAY_STATE_HEARTBEAT_CLOSE_TIMEOUT",
+      },
+    );
+  } finally {
+    await heartbeat.worker.terminate();
+    await heartbeat.stop();
+  }
 });

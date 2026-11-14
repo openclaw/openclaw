@@ -219,7 +219,7 @@ vi.mock("../config/paths.js", async (importOriginal) => {
 vi.mock("web-push", () => ({
   default: {
     generateVAPIDKeys: vi.fn(() => generatedVapidKeys),
-    setVapidDetails: vi.fn(),
+    getVapidHeaders: vi.fn(() => ({ Authorization: "vapid synthetic" })),
     sendNotification: vi.fn().mockResolvedValue({ statusCode: 201 }),
   },
 }));
@@ -715,7 +715,7 @@ describe("approval delivery target persistence", () => {
 });
 
 describe("sending", () => {
-  it("configures VAPID once and broadcasts to registered subscriptions", async () => {
+  it("broadcasts to registered subscriptions", async () => {
     for (const suffix of ["a", "b"]) {
       const endpoint = pushUrl(suffix);
       const binding = deviceBinding(suffix);
@@ -744,12 +744,11 @@ describe("sending", () => {
       expect(await broadcastTitle("Broadcast")).toEqual(
         subscriptions.map(({ subscriptionId }) => ({ ok: true, subscriptionId, statusCode: 201 })),
       );
-      expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
       expect(sendNotification.mock.calls).toEqual(
         subscriptions.map(({ endpoint, keys: subscriptionKeys }) => [
           { endpoint, keys: subscriptionKeys },
           JSON.stringify({ title: "Broadcast" }),
-          undefined,
+          { headers: { Authorization: "vapid synthetic" } },
         ]),
       );
       expect(reads.counts.subscriptions).toBe(0);
@@ -772,7 +771,7 @@ describe("sending", () => {
     expect(sendNotification).toHaveBeenCalledWith(
       { endpoint: selected.endpoint, keys: selected.keys },
       JSON.stringify(payload),
-      deliveryOptions,
+      { ...deliveryOptions, headers: { Authorization: "vapid synthetic" } },
     );
   });
 

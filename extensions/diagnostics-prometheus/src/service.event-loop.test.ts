@@ -246,7 +246,15 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
       : worker;
     const sample = memorySample({
       workerCount: retired ? 0 : 1,
-      workerTaskMetrics: [current],
+      workerTaskMetrics: [
+        current,
+        {
+          workerClass: "writer",
+          script: "sqlite-store.worker.js",
+          heapUsedHighWaterBytes: 6000,
+          gc: [{ kind: "mark_sweep_compact", count: 2, durationMs: 40, reclaimedBytes: 8000 }],
+        },
+      ],
       sqliteReaderMetrics: [
         {
           operation: "sessions.usage.refresh",
@@ -310,6 +318,12 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
     }
     const labels = 'script="provider-prompt-state.worker.js",worker_class="compute"';
     const rendered = metrics.render();
+    const sqliteLabels = 'script="sqlite-store.worker.js",worker_class="writer"';
+    expect(rendered).not.toContain(`openclaw_worker_tasks_completed_total{${sqliteLabels}}`);
+    expectMetrics(rendered)(`openclaw_worker_heap_used_high_water_bytes{${sqliteLabels}} 6000
+openclaw_worker_gc_collections_total{kind="mark_sweep_compact",${sqliteLabels}} 2
+openclaw_worker_gc_duration_seconds_total{kind="mark_sweep_compact",${sqliteLabels}} 0.04
+openclaw_worker_gc_reclaimed_bytes_total{kind="mark_sweep_compact",${sqliteLabels}} 8000`);
     expectMetrics(
       rendered,
     )(`openclaw_worker_tasks_completed_total{${labels}} ${current.tasksCompleted}

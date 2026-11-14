@@ -21,7 +21,7 @@ Settings for individual built-in tools. Whether a run may call them at all is de
       cleanupMs: 1800000,
       approvalRunningNoticeMs: 10000,
       notifyOnExit: true,
-      notifyOnExitEmptySuccess: false,
+      notifyOnExitEmptySuccess: true,
       commandHighlighting: false,
       applyPatch: {
         enabled: true,

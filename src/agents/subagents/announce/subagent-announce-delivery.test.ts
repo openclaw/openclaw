@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InternalAgentTurnDispatchOptions } from "../../../gateway/agent-turn/internal-facade.types.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import { parseMessageWithAttachments } from "../../../gateway/chat-attachments.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
@@ -16,6 +18,7 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
+import { saveMediaBuffer } from "../../../media/store.js";
 import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -32,6 +35,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
+import { detectAndLoadPromptImages } from "../../embedded-agent-runner/run/images.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -45,6 +49,7 @@ import {
   musicCompletionEvents,
   taskCompletionEvents,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { buildSavedMediaAttachment } from "../../tools/media-generate-result-shared.js";
 import {
   testing,
   deliverSubagentAnnouncement,
@@ -68,6 +73,7 @@ const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   scheduleSessionDelivery: vi.fn(async () => true),
 }));
 
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureQueueContext: OpenClawStateWorkerContext;
 
 beforeEach(() => {
@@ -1108,6 +1114,60 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       resolveGatewayContext,
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it("admits only the delivered generation as image input without widening workspace discovery", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", mediaTempDirs.make("openclaw-generated-inspection-"));
+    try {
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const generated = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+      const unrelated = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+      sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockReturnValueOnce({
+        id: "session-delivery-media",
+        claimed: false,
+        status: "completed",
+      });
+      const { callGateway, sendMessage } = await runDelivery("discord", {
+        sourceTool: "image_generate",
+        inputAttachments: [
+          { type: "image", mimeType: "image/png", content: png.toString("base64") },
+        ],
+        internalEvents: imageCompletionEvents({
+          mediaUrls: [generated.path],
+          attachments: [buildSavedMediaAttachment("image", generated)],
+        }),
+      });
+      const request = mockCallArg(callGateway);
+      const input = request.params;
+      if (!input || typeof input !== "object") {
+        throw new Error("Expected completion agent input");
+      }
+      const attachments = Reflect.get(input, "attachments");
+      expect(attachments).toEqual([
+        expect.objectContaining({ mimeType: "image/png", content: png.toString("base64") }),
+      ]);
+      const parsed = await parseMessageWithAttachments("Review the generated image", attachments);
+      const prepared = await detectAndLoadPromptImages({
+        prompt: `Inspect ${unrelated.path}`,
+        workspaceDir: mediaTempDirs.make("openclaw-inspection-workspace-"),
+        workspaceOnly: true,
+        model: { input: ["text", "image"] },
+        existingImages: parsed.images,
+        media: parsed.media,
+        imageOrder: parsed.imageOrder,
+      });
+      expect(prepared.images).toHaveLength(1);
+      expect(prepared.skippedCount).toBe(1);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(input).toMatchObject({
+        internalEvents: [{ mediaUrls: undefined, attachments: undefined }],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   registerDescendantWakeCurrencyTests({

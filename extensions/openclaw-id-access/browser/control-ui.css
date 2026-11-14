@@ -99,8 +99,21 @@
   gap: var(--space-2);
 }
 
+.ocid-access__form,
 .ocid-access__actions {
   flex-wrap: wrap;
+}
+
+.ocid-access__profile-select {
+  display: grid;
+  gap: var(--space-2);
+  flex: 1 0 100%;
+  min-width: 0;
+  margin-bottom: var(--space-2);
+}
+
+.ocid-access__form .ocid-access__profile-select .settings-input {
+  width: 100%;
 }
 
 .ocid-access__invite-card,

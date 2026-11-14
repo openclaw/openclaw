@@ -301,6 +301,7 @@ export async function runMediaGenerationTask(params: {
   inputProvenance?: InputProvenance;
   prompt: string;
   requestKey: string;
+  deliveryMode?: "review";
   providerId?: string;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   onFailure: (message: string, meta?: Record<string, unknown>) => void;
@@ -347,8 +348,13 @@ export async function runMediaGenerationTask(params: {
       inputProvenance: params.inputProvenance ?? { kind: "external_user" },
       prompt: params.prompt,
       providerId: params.providerId,
+      deliveryMode: params.deliveryMode,
       assertCurrent: assertAdmissionCurrent,
     });
+    if (params.deliveryMode === "review" && (!handle?.detach || !handle.deliveryQueueContext)) {
+      lifecycle.failTaskRun({ handle });
+      throw new ToolInputError("Review-before-delivery requires a durable chat session.");
+    }
     const admitExecution = async <T>(start: () => T): Promise<{ execution: T }> => {
       try {
         return await runWithAgentToolSourceExecutionScope(assertAdmissionCurrent, async () => {
@@ -382,7 +388,12 @@ export async function runMediaGenerationTask(params: {
           {
             type: "text" as const,
             text: [
-              `Background task started for ${generationLabel} generation (${handle.taskId}). Do not call ${toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); the completion arrives as a later turn and sends the finished ${generationLabel} here.`,
+              ...(params.deliveryMode === "review"
+                ? [
+                    "Review-before-delivery is enabled. Produced candidates remain private until an exact-task delivery decision; do not send them automatically.",
+                  ]
+                : []),
+              `Background task started for ${generationLabel} generation (${handle.taskId}). Do not call ${toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); ${params.deliveryMode === "review" ? "a later review turn inspects the saved candidate before an explicit delivery decision." : `the completion arrives as a later turn and sends the finished ${generationLabel} here.`}`,
               ...(params.messages ?? []),
             ]
               .filter((entry): entry is string => Boolean(entry))

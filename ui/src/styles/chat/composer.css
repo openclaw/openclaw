@@ -66,7 +66,6 @@
 .chat-assistant-attachment-card--checking,
 .chat-assistant-attachment-card--video.chat-assistant-attachment-card--loading
   .chat-assistant-attachment-card__header,
-.chat-controls__model-trigger-skeleton,
 .mention-menu__loading {
   --skeleton-base: var(--skeleton-base-raised);
 }
@@ -678,7 +677,6 @@
   font-size: 12px;
 }
 
-.agent-chat__dictation-phase,
 .chat-controls__account-selection {
   min-width: 0;
   overflow: hidden;
@@ -687,10 +685,9 @@
   white-space: nowrap;
 }
 
-/* The startup label can become the microphone permission hint; keep that recovery text whole. */
-.agent-chat__dictation-phase--starting {
-  overflow: visible;
-  white-space: normal;
+/* Phase labels wrap: the startup label can become the microphone permission hint. */
+.agent-chat__dictation-phase {
+  color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -825,7 +822,6 @@
    step, with a plain muted fallback for the composer-replacement banner, which
    renders these controls outside the composer surface. */
 .chat-talk-input-picker__trigger,
-.chat-controls__model-refresh-details,
 .chat-controls__provider-settings {
   display: inline-flex;
   align-items: center;
@@ -2208,24 +2204,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   transform: rotate(0deg);
 }
 
-.chat-controls__model-trigger-skeleton {
-  display: block;
-  width: 100%;
-  height: 0.78em;
-  border-radius: var(--radius-full);
-}
-
-/* The loading label occupies the same explicit text metric as the skeleton.
-   The trigger's symmetric outer padding and fixed label track keep the chevron
-   from moving when the model name replaces it. */
-.chat-controls__model-trigger--loading .chat-controls__inline-select-label {
-  display: flex;
-  width: 8.5em;
-  height: 1.35em;
-  flex: 0 0 8.5em;
-  align-items: center;
-}
-
 .chat-controls__inline-select-option {
   justify-content: space-between;
   border: 0;
@@ -2493,25 +2471,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__model-search-wrap svg {
   color: var(--muted);
   flex: 0 0 auto;
-}
-
-.chat-controls__model-refresh {
-  display: inline-flex;
-  align-items: center;
-  color: var(--muted);
-}
-
-.chat-controls__model-refresh-details {
-  gap: 6px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-}
-
-.chat-controls__model-refresh-details > span:last-child {
-  display: none;
 }
 
 .chat-controls__model-search {
@@ -4795,14 +4754,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-weight: 400;
 }
 
-.chat-controls__account-trigger > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-controls__account-trigger:is(:hover, [aria-expanded="true"]) {
   background: var(--menu-selected);
+}
+
+/* A locked account is a label, not a control; this follows the hover rule to win. */
+.chat-controls__account-trigger:disabled {
+  min-width: 0;
+  padding: 0;
+  background: none;
 }
 
 .chat-controls__account-popover {
@@ -4980,97 +4940,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   white-space: nowrap;
 }
 
-.chat-controls__model-catalog-state--skeleton {
-  display: block;
-  flex: 1;
-  min-height: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.chat-controls__catalog-skeleton {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 10px;
-}
-
-.chat-controls__catalog-skeleton span {
-  display: block;
-  flex: none;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--text) 9%, transparent);
-  animation: chat-catalog-pulse 1.4s ease-in-out infinite;
-  animation-delay: var(--skeleton-delay, 0ms);
-}
-
-.chat-controls__catalog-skeleton-rail {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.chat-controls__catalog-skeleton-tile {
-  display: grid;
-  flex: 0 0 36px;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-}
-
-.chat-controls__catalog-skeleton-tile span {
-  width: 16px;
-  height: 16px;
-  border-radius: 5px;
-}
-
-.chat-controls__catalog-skeleton-heading {
-  display: flex;
-  align-items: center;
-  height: 42px;
-  padding: 0 6px 6px 10px;
-  gap: 8px;
-}
-
-.chat-controls__catalog-skeleton-heading span:first-child {
-  width: 64px;
-  height: 12px;
-}
-
-.chat-controls__catalog-skeleton-heading span:last-child {
-  width: 46px;
-  height: 18px;
-  border-radius: 9px;
-  animation-delay: 90ms;
-}
-
-.chat-controls__catalog-skeleton-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 36px;
-  padding: 0 12px 0 10px;
-}
-
-.chat-controls__catalog-skeleton-row span:first-child {
-  height: 11px;
-}
-
-.chat-controls__catalog-skeleton-row span:last-child {
-  height: 9px;
-}
-
 .chat-controls__runtime-details-header {
   display: none;
-}
-
-@keyframes chat-catalog-pulse {
-  0%,
-  100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 1;
-  }
 }
 
 @media (max-width: 640px) {
@@ -5126,22 +4997,17 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     background: color-mix(in srgb, var(--text) 18%, transparent);
   }
 
-  .chat-controls__model-browser,
-  .chat-controls__catalog-skeleton {
+  .chat-controls__model-browser {
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
 
-  .chat-controls__provider-rail,
-  .chat-controls__catalog-skeleton-rail {
+  .chat-controls__provider-rail {
     flex-direction: row;
     flex-shrink: 0;
     overflow: auto hidden;
     scrollbar-width: none;
-  }
-
-  .chat-controls__provider-rail {
     gap: 4px;
   }
 
@@ -5284,12 +5150,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
         opacity: 0;
       }
     }
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-controls__catalog-skeleton span {
-    animation: none;
   }
 }
 

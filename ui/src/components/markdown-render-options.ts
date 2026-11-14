@@ -24,6 +24,8 @@ export type MarkdownRenderOptions = {
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
   streamingOpenFence?: boolean;
+  /** Completed stream fragments are not the end of the whole message. */
+  streamingPrefix?: boolean;
   humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };
 

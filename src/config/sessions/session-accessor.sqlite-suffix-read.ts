@@ -1,8 +1,11 @@
 import { sql } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -12,7 +15,10 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
+import {
+  selectActiveTranscriptEventRows,
+  selectActiveTranscriptIdentityRows,
+} from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -140,6 +146,39 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
   );
 }
 
+// Compilation belongs to the connection; each snapshot binds fresh selection parameters.
+const previousIndexedEventReader = createSqliteQueryCache((db: EngineConnection) =>
+  prepareSqliteQueryTakeFirstSync<
+    { sessionId: string; beforeSeq: number },
+    { event_json: string; seq: number }
+  >(db, (parameter) =>
+    selectActiveTranscriptEventRows({ db })
+      .select([transcriptEventJsonSql(db, "event").as("event_json"), "event.seq"])
+      .where(
+        "active.session_id",
+        "=",
+        parameter((params) => params.sessionId),
+      )
+      // Resolve the position using metadata before touching the one winning payload.
+      .where(
+        "active.active_position",
+        "=",
+        selectActiveTranscriptIdentityRows({ db })
+          .select((eb) => eb.fn.max<number>("active.active_position").as("position"))
+          .where(
+            "identity.session_id",
+            "=",
+            parameter((params) => params.sessionId),
+          )
+          .where(
+            "identity.seq",
+            "<",
+            parameter((params) => params.beforeSeq),
+          ),
+      ),
+  ),
+);
+
 /** Reads the nearest active indexed event before a raw transcript sequence. */
 export function readPreviousIndexedTranscriptEventSync(
   scope: SessionTranscriptReadScope,
@@ -149,23 +188,10 @@ export function readPreviousIndexedTranscriptEventSync(
   return withCurrentProjectionSnapshot(
     scope,
     (projection) => {
-      const row = executeSqliteQueryTakeFirstSync(
-        projection.database.db,
-        selectActiveTranscriptIdentityRows(projection.database)
-          .innerJoin("transcript_events as event", (join) =>
-            join
-              .onRef("event.session_id", "=", "identity.session_id")
-              .onRef("event.seq", "=", "identity.seq"),
-          )
-          .select([
-            transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
-            "identity.seq",
-          ])
-          .where("identity.session_id", "=", projection.resolved.sessionId)
-          .where("identity.seq", "<", beforeSeq)
-          .orderBy("active.active_position", "desc")
-          .limit(1),
-      );
+      const row = previousIndexedEventReader(projection.database.db)({
+        sessionId: projection.resolved.sessionId,
+        beforeSeq,
+      });
       return row
         ? {
             // SAFETY: Indexed transcript rows contain the persisted transcript event union.

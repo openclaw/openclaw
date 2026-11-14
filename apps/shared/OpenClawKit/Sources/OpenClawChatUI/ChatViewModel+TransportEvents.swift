@@ -27,13 +27,7 @@ extension OpenClawChatViewModel {
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
             if reconnected {
-                self.refreshSourceContext()
-                self.refreshAgentsIfRequested()
-                let session = self.currentSessionSnapshot()
-                Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
-                self.scheduleProgressCardFetch()
-                Task { [weak self] in await self?.refreshQuestions() }
-                Task { [weak self] in await self?.refreshSwarmCapability() }
+                self.refreshAfterHealthRecovery()
             } else if !ok {
                 self.sourcePreviewState.invalidate()
                 self.invalidateAgentCatalog()
@@ -79,9 +73,8 @@ extension OpenClawChatViewModel {
             self.syncSessionReactions(refreshMetadata: true)
             self.cancelHistoryInvalidationRefresh()
             self.invalidateModelChoices()
-            self.refreshSourceContext()
+            self.sourcePreviewState.invalidate()
             self.invalidateAgentCatalog(clear: true)
-            self.refreshAgentsIfRequested()
             switch evt {
             case .routeChanged, .reconnected:
                 self.questionAttentionOwnerID = UUID()
@@ -94,29 +87,66 @@ extension OpenClawChatViewModel {
             self.progressCardStoreAvailable = nil
             self.invalidateProgressCardTarget()
             self.modelAvailabilityIsSessionScoped = false
-            let session = self.currentSessionSnapshot()
-            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
             self.invalidateComposerCapabilities()
-            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             self.errorText = nil
             self.swarmEnabled = false
             self.resetSwarmProgress()
-            Task { [weak self] in await self?.refreshSwarmCapability() }
             self.invalidateHistoryAfterTransportEvent(evt)
             self.invalidateRunSnapshots()
             self.clearPendingRuns()
             self.invalidateIncompleteLiveRunUsage()
             self.clearStreamingActivity()
             let context = self.beginHistoryRequest()
-            // Question refresh is best-effort and must not delay transcript
-            // recovery behind a slow gateway round trip.
-            Task { await self.refreshQuestions() }
+            let recoveryID = UUID()
+            self.pendingTransportRecoveryID = recoveryID
             return Task {
-                await self.refreshHistoryAfterRun(historyRequest: context)
-                await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
+                let history = await self.refreshHistoryAfterRun(historyRequest: context)
+                await self.finishTransportRecovery(recoveryID, session: context.session, history: history)
             }
         }
         return nil
+    }
+
+    /// Transcript recovery gets the first round trip. A newer reconnect replaces
+    /// this pass, so a flapping route does not stack catalog bursts.
+    private func finishTransportRecovery(
+        _ recoveryID: UUID,
+        session: SessionSnapshot,
+        history: RunHistoryRefreshResult) async
+    {
+        // iOS may also own a bootstrap history read on the replacement route.
+        await self.bootstrapTask?.value
+        guard self.pendingTransportRecoveryID == recoveryID, !self.isTransportDetached else { return }
+        defer {
+            if self.pendingTransportRecoveryID == recoveryID { self.pendingTransportRecoveryID = nil }
+        }
+        guard self.isCurrentSession(session) else { return }
+        // Applied history schedules the progress card itself. A failed read must still
+        // refetch it, since this pass also stands in for health recovery's fetch.
+        if !history.applied { self.scheduleProgressCardFetch(for: session) }
+        async let catalogs: Void = self.refreshCatalogsAfterRecovery(session: session)
+        async let composer: Void = self.loadComposerCapabilities(force: true)
+        await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
+        _ = await (catalogs, composer)
+    }
+
+    private func refreshAfterHealthRecovery() {
+        // A pending reconnect pass refreshes these and the progress card once its
+        // transcript read settles, whether or not the read succeeds.
+        guard self.pendingTransportRecoveryID == nil else { return }
+        let session = self.currentSessionSnapshot()
+        self.scheduleProgressCardFetch()
+        Task { [weak self] in await self?.refreshCatalogsAfterRecovery(session: session) }
+    }
+
+    /// Repopulates catalogs whose stale values the recovery already cleared.
+    private func refreshCatalogsAfterRecovery(session: SessionSnapshot) async {
+        self.refreshSourceContext()
+        self.refreshAgentsIfRequested()
+        async let models: Void = self.fetchModels(sessionSnapshot: session)
+        async let questions: Void = self.refreshQuestions()
+        async let swarm: Void = self.refreshSwarmCapability()
+        _ = await (models, questions, swarm)
     }
 
     func applySessionChangeProjection(
@@ -598,11 +628,10 @@ extension OpenClawChatViewModel {
         default: nil
         }
         self.retirePendingRun(terminalRunID, hapticEvent: hapticEvent)
-        self.clearStreamingActivity()
         self.appendFinalChatMessageIfPresent(chat)
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
-        return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
+        return self.clearStreamingActivityAfterHistory(context)
     }
 
     private func appendFinalChatMessageIfPresent(_ chat: OpenClawChatEventPayload) {
@@ -899,10 +928,26 @@ extension OpenClawChatViewModel {
         if isFailure || aborted {
             self.errorText = Self.agentLifecycleErrorMessage(evt, aborted: aborted)
         }
-        self.clearStreamingActivity()
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
-        return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
+        return self.clearStreamingActivityAfterHistory(context)
+    }
+
+    /// Words the transcript already records leave with the run. Otherwise a finished run keeps its
+    /// live words until the history read after it, whose durable row replaces them in one update
+    /// (`liveText` hides recorded words). Clearing them at a terminal event that carried no reply
+    /// left the turn with neither for that round trip; the transcript collapsed and lost its
+    /// scroll position.
+    private func clearStreamingActivityAfterHistory(_ context: HistoryRequest) -> Task<Void, Never> {
+        if self.liveText(self.streamingAssistantText) == nil {
+            self.clearStreamingActivity()
+        }
+        return Task {
+            _ = await self.refreshHistoryAfterRun(historyRequest: context)
+            // A run started meanwhile owns the live text now.
+            guard self.isCurrentSession(context.session), !self.hasBlockingRunActivity else { return }
+            self.clearStreamingActivity()
+        }
     }
 
     private static func lowercasedAgentEventString(_ value: AnyCodable?) -> String? {
@@ -1183,9 +1228,10 @@ extension OpenClawChatViewModel {
                             let payload = try await routeLease.requestHistory(
                                 sessionKey: target.deliverySessionKey,
                                 agentID: target.agentID)
-                            let incoming = Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                            let incoming = await Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                            try Task.checkCancellation()
                             await self.confirmOutboxCommandsNow(in: incoming)
-                            return payload
+                            return (payload, incoming)
                         })
                     if result.cancelled {
                         self.applyTransportHealth(false)
@@ -1195,7 +1241,8 @@ extension OpenClawChatViewModel {
                     let payload = try await routeLease.requestHistory(
                         sessionKey: target.deliverySessionKey,
                         agentID: target.agentID)
-                    let incoming = Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                    let incoming = await Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                    try Task.checkCancellation()
                     await confirmOutboxCommandsNow(in: incoming)
                 }
             } catch is CancellationError {

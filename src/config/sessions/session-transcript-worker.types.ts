@@ -4,6 +4,7 @@ import type { BoardReadOperations } from "../../boards/sqlite-board-operations.j
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
+import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -65,6 +66,12 @@ import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type {
+  SessionCompactionPlanRequest,
+  SessionCompactionSourceRequest,
+  SessionCompactionSourceConsumer,
+  SessionCompactionSourceReply,
+} from "./session-compaction-source.types.js";
 import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
@@ -280,6 +287,7 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | SessionCompactionSourceRequest
   | AgentToolUsageReadInput
   | AgentToolUsageImportReadInput
   | SessionRetirementReadWorkerInput
@@ -368,11 +376,24 @@ export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
+export type SessionHistoryWorkerRequestRunner = <
+  Request extends SessionHistoryWorkerPreparedInput,
+  TResult,
+>(
+  prepare: () => Request,
+  inputBytes: number,
+  receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
+  signal?: AbortSignal,
+  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+  timeoutMs?: number,
+) => Promise<TResult>;
+
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "compaction-source": { kind: "compaction-source"; reply: SessionCompactionSourceReply };
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -552,6 +573,12 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    withCompactionSource: (
+      input: Omit<SessionCompactionPlanRequest, "kind" | "database" | "phase">,
+      consume: SessionCompactionSourceConsumer,
+      signal?: AbortSignal,
+      timeoutMs?: number,
+    ) => Promise<string | undefined>;
     readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
     readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;

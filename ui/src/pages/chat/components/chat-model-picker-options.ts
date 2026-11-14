@@ -146,7 +146,8 @@ export function prepareChatModelPickerPanel(
   },
   favorites?: {
     keys: readonly string[];
-    opening: { keys: readonly string[]; selected: string };
+    /** A remembered Favorites tab opens only while it holds the selected model. */
+    opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
   },
 ) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
@@ -187,11 +188,7 @@ export function prepareChatModelPickerPanel(
       group.more = group.lead.splice(9);
     }
   }
-  const byModel = new Map(
-    params.modelOptions
-      .filter((option) => !option.isDefault)
-      .map((option) => [option.value, option]),
-  );
+  const byModel = new Map(params.modelOptions.map((option) => [option.value, option]));
   const favoriteOptions = (favorites?.keys ?? [])
     .map((key) => byModel.get(key))
     .filter((option) => option !== undefined);
@@ -213,9 +210,18 @@ export function prepareChatModelPickerPanel(
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
   const activeProvider = activeModelOption && groupProvider(activeModelOption);
+  let openingProvider = activeProvider;
 
   if (favoriteOptions.length && orderedProviderGroups.length > 1) {
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
+    // Opening keys keep the tab steady while stars change; an emptied group falls back.
+    if (
+      favorites?.opening.favoritesTab &&
+      activeModelOption &&
+      openingFavorites.includes(activeModelOption)
+    ) {
+      openingProvider = FAVORITES_GROUP;
+    }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
   const optionIndex = new Map(
@@ -232,6 +238,7 @@ export function prepareChatModelPickerPanel(
   return {
     orderedProviderGroups,
     activeProvider: activeProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    openingProvider: openingProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
     orderedOptions,
     optionIndex,
     targetGroups,

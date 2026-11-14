@@ -44,7 +44,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
-import { buildCompactionFailureResult } from "./compact-reasons.js";
+import { buildCompactionFailureResult, describeCompactionFailure } from "./compact-reasons.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
@@ -617,8 +617,18 @@ export async function compactEmbeddedAgentSessionDirect(
         }),
       );
     } catch (err) {
+      // Keep the failed route's provider facts; recovery retries only transient failures.
+      const failure = describeCompactionFailure(err);
       return buildCompactionFailureResult(
         isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
+        failure.reason
+          ? {
+              reason: failure.reason,
+              status: failure.status,
+              code: failure.code,
+              rawError: failure.rawError ?? failure.message,
+            }
+          : undefined,
       );
     }
   }, requestedParams.abortSignal);

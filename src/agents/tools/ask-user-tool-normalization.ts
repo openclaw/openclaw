@@ -145,13 +145,14 @@ export const AskUserToolSchema = Type.Object(
           reason: Type.String({
             minLength: 1,
             maxLength: 500,
-            description: "Specific observed blocker, not an assumed policy denial.",
+            description:
+              "Observed external blocker, not an assumed policy denial or inactive Goal status.",
           }),
           instructions: Type.String({
             minLength: 1,
             maxLength: 2000,
             description:
-              "Supported human-only step in the already selected surface. Not a request to approve existing task authority.",
+              "External human-only step that can finish while this run waits. Never Goal Resume, an idle-session control, or approval of already authorized work.",
           }),
           url: Type.Optional({
             ...QuestionRequestQuestionSchema.properties.url,

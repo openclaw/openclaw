@@ -219,7 +219,7 @@ export function SearchPage() {
     invalidateTest();
     loadingActive = true;
     const selected = selection(modelValue);
-    let requestedConfigRevision = configRevision;
+    const requestedConfigRevision = configRevision;
     const current = () =>
       active() &&
       gateway.isCurrent(scope) &&
@@ -232,22 +232,21 @@ export function SearchPage() {
         .then(() => runtime.ensureSchemaLoaded())
         .catch(() => undefined);
     }
+    // Model choices are supplementary; they must not hold the settings page open.
+    void loadModelCatalog(scope.client, { agentId: selected.agentId })
+      .then((catalog) => {
+        if (active() && gateway.isCurrent(scope) && selected.agentId === selection().agentId) {
+          setModels(catalog?.models ?? []);
+        }
+      })
+      .catch(() => undefined);
     const request = (async () => {
       try {
-        const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
-          () => null,
-        );
-        // Search config scopes the status request, not the agent's catalog read.
-        requestedConfigRevision = configRevision;
-        if (!current()) {
-          return;
-        }
         const status = await scope.client.request("webSearch.status", selected);
         if (current()) {
           if (!isSearchStatus(status)) {
             throw new UserFacingError(t("searchPage.statusNotReady"));
           }
-          setModels(catalog?.models ?? []);
           setResult(status);
           if (!setupDecided) {
             setupDecided = true;

@@ -195,9 +195,7 @@ export function openclawIdTunnelUser(principal: OpenClawIdTunnelPrincipal): stri
 }
 
 /** Member admission and policy reads share the committed runtime role catalog. */
-export function openclawIdMemberRoleDefinition(
-  name: string,
-): GatewayOperatorRoleDefinition | undefined {
+function openclawIdMemberRoleDefinition(name: string): GatewayOperatorRoleDefinition | undefined {
   const definitions = getRuntimeConfigSnapshot()?.gateway?.roles?.definitions;
   return definitions && Object.hasOwn(definitions, name) ? definitions[name] : undefined;
 }

@@ -198,7 +198,6 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
       }
       throw new Error(`Invalid bounded compiler lookup result: ${receipt}`);
     });
-    const inputs = info.inputs.map(normalizedPath);
     const keys = lookups.map(({ kind, path: file }) => `${kind}\0${file}`);
     const reads = lookups
       .filter((lookup) => lookup.kind === "readFile" && lookup.result)
@@ -207,11 +206,11 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     if (
       new Set(keys).size !== keys.length ||
       JSON.stringify(keys) !== JSON.stringify(keys.toSorted()) ||
-      JSON.stringify(inputs) !== JSON.stringify(reads)
+      JSON.stringify(info.inputs) !== JSON.stringify(reads)
     ) {
       throw new Error(`Incomplete or ambiguous bounded compiler input receipt: ${receipt}`);
     }
-    return { inputs, lookups };
+    return { inputs: reads, lookups };
   }
 
   private resolutionFingerprint(

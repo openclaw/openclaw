@@ -164,11 +164,13 @@ struct ChatProTab: View {
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
-                    isCaptureInFlight: self.appModel.talkMode.isEnabled) ? self.talkControl : nil,
+                    isCaptureInFlight: self.appModel.talkMode.isEnabled)
+                    ? Self.talkControl(appModel: self.appModel)
+                    : nil,
                 dictationControl: Self.shouldExposeCaptureControl(
                     isAttachmentOwnerPinned: viewModel.isAttachmentOwnerPinned,
                     isCaptureInFlight: self.appModel.isChatDictationPending || self.appModel.isChatDictationActive)
-                    ? self.dictationControl
+                    ? Self.dictationControl(appModel: self.appModel)
                     : nil,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech,
@@ -197,12 +199,7 @@ struct ChatProTab: View {
     /// Voice activity owns the contour while gateway state stays a compact,
     /// stable dot on the avatar instead of competing with it in the toolbar.
     private var headerIdentityBadge: some View {
-        TalkAvatarWaveformView(
-            phase: self.voiceAvatarPhase,
-            palette: .openClawBrand,
-            diameter: 38,
-            avatarDiameter: 28)
-        {
+        ChatVoiceAvatar(talkMode: self.appModel.talkMode) {
             Group {
                 if let image = self.agentAvatarImage {
                     Image(uiImage: image).resizable().scaledToFill()
@@ -352,19 +349,6 @@ struct ChatProTab: View {
             : String(localized: "Shows the full gateway status label")
     }
 
-    private var voiceAvatarPhase: TalkWaveformPhase {
-        guard self.appModel.talkMode.isEnabled else { return .idle }
-        if self.appModel.talkMode.isSpeaking {
-            return .speaking(level: self.appModel.talkMode.playbackLevel)
-        }
-        if self.appModel.talkMode.isListening {
-            return .listening(
-                level: self.appModel.talkMode.micLevel,
-                speechActive: self.appModel.talkMode.isUserSpeechDetected)
-        }
-        return .idle
-    }
-
     private var voiceAvatarAccessibilityLabel: String {
         let state = self.appModel.talkMode.isEnabled
             ? self.appModel.talkMode.statusText
@@ -372,74 +356,73 @@ struct ChatProTab: View {
         return "\(self.agentDisplayName), \(state)"
     }
 
-    private var talkControl: OpenClawChatTalkControl {
+    static func talkControl(appModel: NodeAppModel) -> OpenClawChatTalkControl {
         OpenClawChatTalkControl(
-            isEnabled: self.appModel.talkMode.isEnabled,
-            isListening: self.appModel.talkMode.isListening,
-            isSpeaking: self.appModel.talkMode.isSpeaking,
-            isGatewayConnected: self.appModel.talkMode.isGatewayConnected,
-            statusText: self.appModel.talkMode.statusText,
-            providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
-            level: self.talkLevel,
-            isMicrophoneMuted: self.appModel.talkMode.isMicrophoneMuted,
+            isEnabled: appModel.talkMode.isEnabled,
+            isListening: appModel.talkMode.isListening,
+            isSpeaking: appModel.talkMode.isSpeaking,
+            isGatewayConnected: appModel.talkMode.isGatewayConnected,
+            statusText: appModel.talkMode.statusText,
+            providerLabel: appModel.talkMode.gatewayTalkProviderLabel,
+            levelProvider: {
+                if appModel.talkMode.isSpeaking {
+                    return appModel.talkMode.playbackLevel ?? 0
+                }
+                if appModel.talkMode.isListening {
+                    return appModel.talkMode.micLevel
+                }
+                return 0
+            },
+            isMicrophoneMuted: appModel.talkMode.isMicrophoneMuted,
             toggleMicrophone: {
                 Task {
-                    await self.appModel.talkMode.setMicrophoneMuted(!self.appModel.talkMode.isMicrophoneMuted)
+                    await appModel.talkMode.setMicrophoneMuted(!appModel.talkMode.isMicrophoneMuted)
                 }
             },
             inputDevices: self.talkInputDevices,
-            selectedInputDeviceID: self.selectedTalkInputDeviceID,
+            selectedInputDeviceID: self.selectedTalkInputDeviceID(appModel: appModel),
             selectInputDevice: { deviceID in
-                self.appModel.talkMode.selectInputDevice(deviceID)
+                appModel.talkMode.selectInputDevice(deviceID)
             },
-            cameraFacing: self.appModel.preferredCameraFacing == .front ? .front : .back,
+            cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
             flipCamera: {
-                self.appModel.flipPreferredCameraFacing()
+                appModel.flipPreferredCameraFacing()
             },
             toggle: { sessionKey in
-                self.appModel.focusChatSession(sessionKey)
-                self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
+                appModel.focusChatSession(sessionKey)
+                appModel.setTalkEnabled(!appModel.talkMode.isEnabled)
             })
     }
 
-    private var talkInputDevices: [OpenClawChatAudioInputDevice] {
+    private static var talkInputDevices: [OpenClawChatAudioInputDevice] {
         (AVAudioSession.sharedInstance().availableInputs ?? []).map { input in
             OpenClawChatAudioInputDevice(id: input.uid, name: input.portName)
         }
     }
 
-    private var selectedTalkInputDeviceID: String? {
-        guard let preferredID = self.appModel.talkMode.preferredInputDeviceID,
+    private static func selectedTalkInputDeviceID(appModel: NodeAppModel) -> String? {
+        guard let preferredID = appModel.talkMode.preferredInputDeviceID,
               self.talkInputDevices.contains(where: { $0.id == preferredID })
         else { return nil }
         return preferredID
     }
 
-    private var dictationControl: OpenClawChatDictationControl {
+    static func dictationControl(appModel: NodeAppModel) -> OpenClawChatDictationControl {
         OpenClawChatDictationControl(
-            phase: self.appModel.chatDictationPhase,
-            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.chatDictationPhase != .idle,
-            partialTranscript: self.appModel.chatDictationPartialTranscript,
-            level: self.appModel.chatDictationLevel,
+            phase: appModel.chatDictationPhase,
+            isAvailable: !appModel.isTalkCaptureActive || appModel.chatDictationPhase != .idle,
+            partialTranscript: appModel.chatDictationPartialTranscript,
+            level: 0,
+            levelProvider: { appModel.chatDictationLevel },
             start: {
-                try await self.appModel.transcribeChatDraft()
+                try await appModel.transcribeChatDraft()
             },
             finish: {
-                self.appModel.finishChatDictation()
+                appModel.finishChatDictation()
             },
             cancel: {
-                self.appModel.cancelChatDictation()
+                appModel.cancelChatDictation()
             })
-    }
-
-    private var talkLevel: Double {
-        if self.appModel.talkMode.isSpeaking {
-            return self.appModel.talkMode.playbackLevel ?? 0
-        }
-        if self.appModel.talkMode.isListening {
-            return self.appModel.talkMode.micLevel
-        }
-        return 0
     }
 
     private var voiceNoteControl: OpenClawChatVoiceNoteControl {
@@ -763,6 +746,41 @@ struct ChatProTab: View {
             title: String(localized: "Help me start voice chat"),
             prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
+}
+
+/// Keep live metering inside the avatar rather than observing it while building the chat surface.
+struct ChatVoiceAvatar<Avatar: View>: View {
+    let talkMode: TalkModeManager
+    private let avatar: Avatar
+
+    init(talkMode: TalkModeManager, @ViewBuilder avatar: () -> Avatar) {
+        self.talkMode = talkMode
+        self.avatar = avatar()
+    }
+
+    var body: TalkAvatarWaveformView<Avatar> {
+        TalkAvatarWaveformView(
+            phase: self.phase,
+            palette: .openClawBrand,
+            diameter: 38,
+            avatarDiameter: 28)
+        {
+            self.avatar
+        }
+    }
+
+    private var phase: TalkWaveformPhase {
+        guard self.talkMode.isEnabled else { return .idle }
+        if self.talkMode.isSpeaking {
+            return .speaking(level: self.talkMode.playbackLevel)
+        }
+        if self.talkMode.isListening {
+            return .listening(
+                level: self.talkMode.micLevel,
+                speechActive: self.talkMode.isUserSpeechDetected)
+        }
+        return .idle
+    }
 }
 
 @available(iOS 27.1, *)

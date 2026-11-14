@@ -62,6 +62,19 @@ describe("motion", () => {
       maxDriftPt: 42,
     });
   });
+
+  it("ignores a row that stays above the screen while an earlier height changes", () => {
+    // The final row is 764 pt shorter than the live bubble; with the end anchored, the sent
+    // message far above the fold moves down by that much and the reader sees nothing.
+    const frames: ProbeFrame[] = [
+      { t: 0, f: { "user/a": [-5847, -5787], live: [-5763, 349], composer: [428, 540] } },
+      { t: 16, f: { "user/a": [-5074, -5013], "assistant/b": [-4989, 359], composer: [428, 540] } },
+    ];
+    expect(motion(frames, { aliases: { "assistant/b": "live" } })).toMatchObject({
+      teleports: 0,
+      backwardPt: 10,
+    });
+  });
 });
 
 describe("window", () => {

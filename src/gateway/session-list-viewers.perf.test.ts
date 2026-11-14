@@ -1,8 +1,19 @@
 import { expect, test, vi } from "vitest";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "../agents/tools/embedded-gateway-stub.js";
+import { createSessionsSearchTool } from "../agents/tools/sessions-search-tool.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -317,7 +328,7 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
   });
 });
 
-test("shares concurrent list selection across row modes and refilters only published partitions", async () => {
+test.each([true, false])("shares unchanged list selection (wire=%s)", async (wire) => {
   await withStateDirEnv("openclaw-list-selection-repeat-", async () => {
     const cfg = initialize();
     const alice = viewer("alice");
@@ -344,7 +355,7 @@ test("shares concurrent list selection across row modes and refilters only publi
       listProjectedSessions({
         projection,
         client,
-        acceptsSerializedJson: true,
+        acceptsSerializedJson: wire,
         opts: { limit, activeMinutes: 1, rowMode },
       });
     try {
@@ -373,9 +384,11 @@ test("shares concurrent list selection across row modes and refilters only publi
           const encodings = stringify.mock.calls.length;
           expect(result.totalCount).toBe(128);
           // Fixed request preparation may encode facts; additional warm rows must not.
-          expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
-            smallPageEncodings,
-          );
+          if (wire) {
+            expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
+              smallPageEncodings,
+            );
+          }
           const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
           expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
           expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
@@ -422,6 +435,110 @@ test("shares concurrent list selection across row modes and refilters only publi
     } finally {
       projection.dispose();
       release();
+    }
+  });
+});
+
+test("search discovery preserves visibility through retained selections", async () => {
+  await withStateDirEnv("openclaw-search-selection-", async () => {
+    const cfg = initialize({ agents: { entries: { main: {}, work: {} } } });
+    const requester = "agent:main:dashboard:requester";
+    const archived = "agent:main:dashboard:archived";
+    const child = "agent:main:subagent:child";
+    const foreign = "agent:work:dashboard:foreign";
+    const foreignChild = "agent:work:subagent:child";
+    writeResidentEntries({
+      [requester]: { sessionId: "requester", updatedAt: 6 },
+      [archived]: { sessionId: "archived", updatedAt: 5, archivedAt: 10 },
+      [child]: { sessionId: "child", updatedAt: 4, spawnedBy: requester },
+      [foreign]: { sessionId: "foreign", updatedAt: 3 },
+      [foreignChild]: { sessionId: "foreign-child", updatedAt: 2, spawnedBy: requester },
+    });
+    for (const agentId of ["main", "work"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          archivedAt: 10,
+        },
+      );
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:dashboard:incognito-hidden" },
+      { sessionId: "private", updatedAt: 7, incognito: true, archivedAt: 10 },
+    );
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
+    const gateway = createEmbeddedCallGateway();
+    const own = [requester, archived, child, "global"];
+    try {
+      for (const scope of ["all", "self", "tree", "agent", "all"] as const) {
+        for (const enabled of [true, false]) {
+          for (const sandboxed of [false, true]) {
+            let uncached: string | undefined;
+            for (const live of [true, false]) {
+              const keys: string[] = [];
+              const tool = createSessionsSearchTool({
+                config: {
+                  ...cfg,
+                  tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
+                  agents: {
+                    ...cfg.agents,
+                    defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+                  },
+                },
+                agentId: "main",
+                agentSessionKey: requester,
+                sandboxed,
+                callGateway: async <T>(request: Parameters<typeof gateway>[0]): Promise<T> => {
+                  // Whitespace is an empty filter but takes the uncached selection path on main.
+                  if (live && request.method === "sessions.list") {
+                    return gateway<T>({
+                      ...request,
+                      params: { ...(request.params as SessionsListParams), search: " " },
+                    });
+                  }
+                  if (request.method !== "sessions.search") {
+                    return gateway<T>(request);
+                  }
+                  const params = request.params as { agentId: string; sessionKeys: string[] };
+                  keys.push(...params.sessionKeys.map((key) => `${params.agentId}/${key}`));
+                  return { results: [] } as T;
+                },
+              });
+              await tool.execute("visibility", { query: "synthetic" });
+              const expected = sandboxed
+                ? [requester, child, foreignChild]
+                : scope === "self"
+                  ? [requester]
+                  : scope === "tree"
+                    ? [requester, child, foreignChild]
+                    : scope === "agent"
+                      ? own
+                      : [...own, foreignChild, ...(enabled ? [foreign] : [])];
+              expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
+                expected
+                  .map((key) => `${key.startsWith("agent:work:") ? "work" : "main"}/${key}`)
+                  .toSorted(),
+              );
+              expect(keys.some((key) => key.startsWith("work/global"))).toBe(false);
+              const bytes = JSON.stringify(keys.toSorted());
+              if (live) {
+                uncached = bytes;
+              } else {
+                expect(bytes).toBe(uncached);
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      unbind();
+      projection.dispose();
+      release();
+      memorySessionActorOwners.reset();
     }
   });
 });

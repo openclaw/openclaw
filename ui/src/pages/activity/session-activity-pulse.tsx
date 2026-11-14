@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 import type { SessionActivityPulse } from "../../../../src/shared/session-types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
+import { formatNumber } from "../../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { activityPulseBucketStart } from "./activity-pulse-window.ts";
 import { TIME_LABELS, type ActivityTimeFilter } from "./session-activity.ts";
@@ -28,7 +29,8 @@ export function renderSessionActivityPulse(props: {
     const labels = pulse.buckets.length > 12 ? 4 : 2;
     return {
       label: (index: number) => period.format(activityPulseBucketStart(time, pulse.since, index)),
-      windowLabel: t(TIME_LABELS[time]),
+      windowLabel: time === "all" ? t("activity.pulse.lastYear") : t(TIME_LABELS[time]),
+      sessions: pulse.buckets.reduce((sum, count) => sum + count, 0),
       peak: Math.max(...pulse.buckets),
       axis: new Set(
         Array.from({ length: labels + 1 }, (_, index) =>
@@ -42,7 +44,8 @@ export function renderSessionActivityPulse(props: {
       <div class="activity-pulse__header">
         <div class="activity-pulse__heading">
           <Icon name="activity" />
-          <strong>{chart().windowLabel}</strong>
+          <strong>{t("activity.pulse.title")}</strong>
+          <span>{chart().windowLabel}</span>
         </div>
         <div class="activity-pulse__stats">
           <For each={["sessions", "started", "people", "running"] as const}>
@@ -80,12 +83,14 @@ export function renderSessionActivityPulse(props: {
         class="activity-pulse__bars"
         role="img"
         aria-label={t(
-          props.pulse.sessions === 1
-            ? "activity.pulse.descriptionOne"
-            : "activity.pulse.description",
+          chart().sessions === 0
+            ? "activity.pulse.descriptionEmpty"
+            : chart().sessions === 1
+              ? "activity.pulse.descriptionOne"
+              : "activity.pulse.description",
           {
             window: chart().windowLabel,
-            count: String(props.pulse.sessions),
+            count: String(chart().sessions),
             period: chart().label(props.pulse.buckets.indexOf(chart().peak)),
           },
         )}
@@ -96,15 +101,24 @@ export function renderSessionActivityPulse(props: {
               class="activity-pulse__bar"
               data-bucket={index === props.pulse.buckets.length - 1 ? "current" : "past"}
               style={{
-                height: `max(2px, ${chart().peak > 0 ? (count() / chart().peak) * 100 : 0}%)`,
+                height: count() > 0 ? "max(3px, " + (count() / chart().peak) * 100 + "%)" : "0",
               }}
               title={t(count() === 1 ? "activity.pulse.bucketOne" : "activity.pulse.bucket", {
                 period: chart().label(index),
                 count: String(count()),
               })}
-            />
+            >
+              <Show when={count() > 0 && count() === chart().peak}>
+                <span class="activity-pulse__count">
+                  {formatNumber(count(), { notation: "compact", maximumFractionDigits: 1 })}
+                </span>
+              </Show>
+            </span>
           )}
         </For>
+        <Show when={chart().sessions === 0}>
+          <span class="activity-pulse__empty">{t("activity.pulse.empty")}</span>
+        </Show>
       </div>
       <div class="activity-pulse__axis" aria-hidden="true">
         <For each={props.pulse.buckets} keyed={false}>

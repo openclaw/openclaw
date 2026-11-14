@@ -16,9 +16,9 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("shows the recorded cost hint through ordinary Usage filters", async () => {
-    const normalHint = "Average cost per message when providers report costs.";
+    const normalHint = "Known cost, including estimates, divided by all user and agent messages.";
     const missingHint =
-      "Average cost per message with reported pricing. Some sessions have no cost data.";
+      "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data.";
     const updatedAt = Date.now();
     const fixture = createRecordedCostUsage(updatedAt);
     const responses = {

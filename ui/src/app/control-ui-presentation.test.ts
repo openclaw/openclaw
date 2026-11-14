@@ -5,7 +5,11 @@ import * as themeColors from "../lib/theme-color.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
-import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import {
+  applyControlUiAccent,
+  applyControlUiOperatorSeamColor,
+  syncControlUiSystemChrome,
+} from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
@@ -19,6 +23,22 @@ afterEach(() => {
 });
 
 describe("Control UI accent presentation", () => {
+  it("leaves initial theme projection to the theme owner when no operator seam is configured", () => {
+    applyControlUiOperatorSeamColor(undefined);
+    const nextDocument = document.implementation.createHTMLDocument();
+    nextDocument.documentElement.style.setProperty("--accent", "#123456");
+    vi.stubGlobal("document", nextDocument);
+    const reads = vi.spyOn(globalThis, "getComputedStyle");
+    try {
+      applyControlUiOperatorSeamColor(undefined);
+      expect(reads).not.toHaveBeenCalled();
+      expect(nextDocument.documentElement.style.getPropertyValue("--accent")).toBe("#123456");
+    } finally {
+      reads.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reuses palette colors across breakpoint changes", () => {
     const root = document.documentElement;
     // Shared jsdom workers can retain a previous file's theme attributes.

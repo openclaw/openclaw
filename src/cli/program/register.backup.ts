@@ -51,6 +51,11 @@ export function registerBackupCommand(program: Command) {
       "Omit registered regenerable worktree templates, not live checkouts",
       false,
     )
+    .option(
+      "--exclude-migration-backups",
+      "Omit Doctor's retained pre-migration database originals",
+      false,
+    )
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
     .addHelpText(

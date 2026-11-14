@@ -460,7 +460,15 @@ Plugin authors must not mutate values after handing them to the host, including
 nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
-invocation.
+invocation. Post-turn `subagent_ended` and `subagent_delivery_target` dispatches
+acquire fresh admission for the registered plugin instance, independent of the
+finished turn. Removed or replaced instances
+and callbacks explicitly bound to a closed turn remain unavailable.
+
+Gateway access-policy authorization, resumption, and retained grant checks also
+acquire bounded admission on their original plugin instance, independently of the
+caller's turn. Quiesced or retired instances still refuse evaluation; a policy
+evaluation error means unavailable access and never grants permission.
 
 Tool factories and provider schema normalizers keep the same tool-object API.
 The host separates their definition data from executable callbacks: schemas and

@@ -56,6 +56,11 @@ configuration separately. Binding controls keep their own loading and error
 state until configuration is available; a slow configuration read does not
 hold the inventory page open.
 
+Device and command-approval panels build their contents when first opened, then
+keep them mounted when closed so drafts survive reopening. Summary rows continue
+to update while closed. Browser find-in-page searches panel contents only after
+you have opened that panel.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -107,7 +112,10 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions.
+Rewinding does not undo external actions. Large local histories are copied incrementally.
+If an individual event or the history navigation metadata exceeds the safe memory
+budget, the request fails without changing the conversation; other sessions remain
+available. Export the transcript to inspect it.
 
 ## Command palette file attachments
 
@@ -116,8 +124,11 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette in the same
-app window returns to the mode you last chose, not to an automatic switch.
+Search again keeps it for the current draft. Reopening the palette returns to the
+mode you last chose, not to an automatic switch. That choice is remembered in this
+browser, including after a reload, when browser storage is available.
+**Cmd/Ctrl+Enter** starts a new background session from either mode using the
+current text and attachments; plain **Enter** still selects a search result.
 **Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -244,10 +255,9 @@ page in your default browser. Update the browser or operating system if that
 browser also shows the update screen.
 
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
-the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
-and **Circle**. Square preserves the full image; rounded and circular icons use a
-centered crop. The choice is saved with your tab-icon preference, and activity
-badges remain visible on every shape.
+the selected agent’s image with a centered circular crop. Activity badges remain
+visible. Earlier saved square or rounded-avatar choices now use the same circle;
+you do not need to reset your preference.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 

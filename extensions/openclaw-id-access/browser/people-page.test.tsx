@@ -242,7 +242,7 @@ describe("Access page", () => {
       "Operator · Chat, run tools, and use connected services",
     );
     expect(container.querySelector('option[value="owner"]')).toBeNull();
-    const picker = container.querySelector("select")!;
+    const picker = container.querySelector<HTMLSelectElement>('select[aria-label="Role"]')!;
     picker.value = "viewer";
     picker.dispatchEvent(new Event("change"));
     flush();
@@ -251,15 +251,92 @@ describe("Access page", () => {
     expect(container.textContent).toContain(
       "Anyone with it can request access, but only you can approve them.",
     );
-    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer");
+    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer", undefined);
     expect(container.querySelector("form")).toBeNull();
     expect(container.textContent).toContain("Viewer invite · expires");
     button(container, "Invite someone")!.click();
     flush();
     expect(container.querySelector("input")?.value).toBe("");
     expect(document.activeElement).toBe(container.querySelector("input"));
-    expect(container.querySelector("select")?.value).toBe("operator");
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Role"]')?.value).toBe(
+      "operator",
+    );
     expect(container.textContent).not.toContain("https://example.test/#synthetic-invite");
+  });
+
+  it("keeps the existing-person selection local to invite registration", async () => {
+    const { container, request } = await mountPage([
+      linked({
+        rootPub: pendingInvite.pending!.devicePub,
+        existingProfiles: [{ id: "person-mia", displayName: "Mia's existing profile" }],
+      }),
+    ]);
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Existing person on this claw"]')).not.toBeNull(),
+    );
+    const picker = container.querySelector<HTMLSelectElement>(
+      '[aria-label="Existing person on this claw"]',
+    )!;
+    expect(picker.options[0]?.textContent).toBe("Create a new person");
+    picker.value = "person-mia";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+    const input = container.querySelector<HTMLInputElement>('input[type="email"]')!;
+    input.value = "friend@example.test";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    button(container, "Create invite link")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "openclawId.authority",
+        expect.objectContaining({ action: "register_invite", existingProfileId: "person-mia" }),
+      ),
+    );
+    const { signAsOwner } = await import("./owner-signing.js");
+    expect(signAsOwner).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "InviteCap",
+      expect.not.objectContaining({ existingProfileId: expect.anything() }),
+    );
+    await vi.waitFor(() => expect(button(container, "Invite someone")).toBeDefined());
+    button(container, "Invite someone")!.click();
+    flush();
+    expect(
+      container.querySelector<HTMLSelectElement>('[aria-label="Existing person on this claw"]')
+        ?.value,
+    ).toBe("");
+  });
+
+  it("shows the chosen profile before approval and a persisted fallback after approval", async () => {
+    const bound = {
+      ...pendingInvite,
+      existingProfile: { id: "person-mia", displayName: "Mia's existing profile" },
+    };
+    const { container, emit } = await mountPage([
+      linked({ invites: [bound] }),
+      linked({
+        invites: [
+          {
+            ...bound,
+            status: "approved",
+            pending: undefined,
+            existingProfile: {
+              ...bound.existingProfile,
+              fallbackReason:
+                "This person is already linked to another OpenClaw ID. A new profile was created.",
+            },
+          },
+        ],
+      }),
+    ]);
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Will join as Mia's existing profile"),
+    );
+    emit();
+    await vi.waitFor(() => expect(container.textContent).toContain("A new profile was created."));
+    expect(container.textContent).toContain(
+      "This person is already linked to another OpenClaw ID.",
+    );
+    expect(container.textContent).not.toContain("Will join as");
   });
 
   it("shows who is asking, from which device, and which invite they used", async () => {

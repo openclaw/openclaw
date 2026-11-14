@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onSettled, Repeat, Show } from "solid-js";
+import { createMemo, lazy, onSettled, Repeat, Show } from "solid-js";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -8,6 +8,7 @@ import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -177,71 +178,19 @@ export function ChatVoiceStatus(props: {
   );
 }
 
-// Dictation feedback starts on the click itself: pulsing bars while the microphone
-// opens, then the live input level while listening. The permission hint only
-// appears when opening takes long enough that a browser prompt is the likely cause.
-const DICTATION_PERMISSION_HINT_DELAY_MS = 1_000;
-
-function DictationStartingLabel() {
-  const [slow, setSlow] = createSignal(false);
-  onSettled(() => {
-    const timer = globalThis.setTimeout(() => setSlow(true), DICTATION_PERMISSION_HINT_DELAY_MS);
-    return () => globalThis.clearTimeout(timer);
-  });
-  return (
-    <>
-      {slow() ? t("chat.composer.microphoneAccessPending") : t("chat.composer.dictationStarting")}
-    </>
-  );
-}
+// The dictation phase view loads with the first dictation, outside the boot bundle.
+const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
+  export: "ActiveDictationStatus",
+});
 
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
-  const phase = createMemo((): MicrophoneMeterStatus | null => {
-    const dictation = props.readDictation();
-    if (!dictation?.active) {
-      return null;
-    }
-    return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
-  });
-  const inputLevel = createMemo(() => props.readDictation()?.inputLevel);
   return (
-    <Show when={phase()} keyed>
-      {(current) => (
-        <div class="agent-chat__composer-status-stack">
-          <div
-            class={[
-              "agent-chat__dictation-status",
-              { "agent-chat__dictation-status--finalizing": current === "thinking" },
-            ]}
-            role={current === "connecting" ? "status" : undefined}
-            aria-live={current === "connecting" ? "polite" : undefined}
-          >
-            <MicrophoneActivity
-              status={current}
-              inputLevel={current === "listening" ? inputLevel() : undefined}
-            />
-            <span
-              class={[
-                "agent-chat__dictation-phase",
-                {
-                  "agent-chat__dictation-phase--listening text-shimmer": current === "listening",
-                  "agent-chat__dictation-phase--starting": current === "connecting",
-                },
-              ]}
-            >
-              {current === "connecting" ? (
-                <DictationStartingLabel />
-              ) : current === "thinking" ? (
-                t("chat.composer.dictationFinalizing")
-              ) : (
-                t("chat.composer.dictationListening")
-              )}
-            </span>
-          </div>
-        </div>
-      )}
+    <Show when={props.readDictation()?.active}>
+      <ChatLazyBoundary>
+        <ActiveDictationStatus readDictation={props.readDictation} />
+      </ChatLazyBoundary>
     </Show>
   );
 }

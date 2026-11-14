@@ -92,14 +92,19 @@ export async function initializeDurableProcesses(options: { assertCurrent?: () =
       backgrounded: true,
       cursorKeyMode: "normal",
     });
+    // Prepare the wake at adoption so poll and process lists report it; exit prepares it again.
+    const prepareNotification = () => {
+      session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
+      return prepareAdoptedDurableProcessNotification(session, record.sessionId);
+    };
+    await prepareNotification();
     const run = bind(session, record, current);
     addSession(session);
     void run
       .wait()
       .then(async (exit) => {
         session.finalizing = true;
-        session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
-        await prepareAdoptedDurableProcessNotification(session, record.sessionId);
+        await prepareNotification();
         await settleExecProcessExit({
           session,
           outcome: buildExecExitOutcome({

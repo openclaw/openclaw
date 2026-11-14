@@ -405,8 +405,7 @@
 }
 
 .agent-chat__composer-combobox
-  > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction),
-.agent-chat__composer-prediction-actions {
+  > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction) {
   /* Keep text aligned while the native scrollport reaches the surface edge. */
   padding-inline: calc(
     var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
@@ -570,27 +569,21 @@
   pointer-events: none;
 }
 
-.agent-chat__composer-prediction-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding-block: 4px;
+.agent-chat__composer-combobox[data-prediction] > .agent-chat__composer-prediction {
+  max-height: none;
 }
 
-.agent-chat__composer-prediction-actions button {
-  border: 0;
-  padding: 2px 0;
-  background: transparent;
-  color: var(--muted);
+.agent-chat__composer-prediction-hint {
+  display: inline-block;
+  margin-inline-start: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
   font-size: var(--control-ui-text-xs);
-}
-
-.agent-chat__composer-prediction-actions button:hover {
-  color: var(--text-strong);
-}
-
-.agent-chat__composer-prediction-actions kbd {
-  margin-inline-end: 4px;
+  line-height: 1.4;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .agent-chat__composer-input-row {

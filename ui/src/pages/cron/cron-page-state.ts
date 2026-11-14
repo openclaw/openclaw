@@ -654,7 +654,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }
       if (runNow) {
         // Explicit create-and-run intent survives navigation while saving.
-        await runCronJob(cronState, result.jobId, "force");
+        await runCronJob(cronState, result.jobId);
       }
       // Creating returns to the overview's all-job history.
       if (
@@ -693,8 +693,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onClosePanel: closePanel,
     onClone: cloneJob,
     onToggle: (job: CronJob, enabled: boolean) => toggle(job, enabled),
-    onRun: (job: CronJob, mode?: "force" | "due") =>
-      runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+    onRun: (job: CronJob) => runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id)),
     onRemove: (job: CronJob) => {
       const view = presentation.capture();
       return removeJob(job).catch((error: unknown) => presentation.reportError(view, error));

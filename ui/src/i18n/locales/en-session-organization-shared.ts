@@ -3,6 +3,9 @@ import { en } from "./en.ts";
 
 const enSessionOrganizationShared = {
   sessionsView: {
+    renameSession: "Rename session",
+    verbose: "Verbose",
+    reasoning: "Reasoning",
     personalGroupAdd: "Add to section",
     personalGroupReferenceAdded: "Added to section. Sessions stay in their groups.",
     personalGroups: "Sections",

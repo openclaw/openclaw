@@ -163,3 +163,27 @@ This page is an index. Each section below moved to a child page, and every ancho
 - [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
 - [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under
 - [Timezone](/concepts/timezone) — timezone configuration
+
+### Per-job Access
+
+Agent-turn jobs accept optional `cyberAccessProgram`: `standard`, `daybreak_blue`,
+or `daybreak_red`. Use `openclaw automations add --access standard` to pin a job
+to Standard, or `openclaw automations edit <jobId> --access daybreak_blue`.
+`--clear-access` (or an update patch with `cyberAccessProgram: null`) removes
+the override. Jobs without the field keep their existing selection behavior.
+The choice is reported in full and compact job reads and does not change the
+conversation's saved Access. Current role, account, model, and runtime grants
+still apply when the job runs; saving a choice does not grant access.
+OpenAI CLI runtimes reject explicit Daybreak because they cannot honor that choice;
+select Standard or use the OpenClaw or native Codex runtime.
+
+Jobs with explicit Access persist with a private `accessAgentTurn` payload kind.
+Readers from before this feature reject that unknown kind and quarantine the job
+instead of silently inheriting a different Access selection. Clearing the override
+writes the ordinary `agentTurn` form again. Jobs without Access keep their stored
+shape. This follows the existing command-schedule envelope and adds no SQL migration.
+
+After a downgrade, restore a supporting version to recover quarantined definitions;
+older versions cannot run or edit them as ordinary agent turns. This guard covers
+stores written by this version. It cannot protect exported definitions manually
+rewritten as `agentTurn`, or copies written before this safeguard was introduced.

@@ -270,8 +270,12 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     submitRequested: () => presentation().submitRequested,
     waitingForComposition: () => handoffPending,
     begin(): void {
+      if (!active()) {
+        modes.open();
+      }
       publish({
         ...current,
+        mode: modes.current,
         returnFocus: active()
           ? current.returnFocus
           : document.activeElement instanceof HTMLElement
@@ -436,7 +440,6 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         event.preventDefault();
         event.stopPropagation();
         if (
-          current.mode === "compose" &&
           !event.repeat &&
           (current.draft?.value.trim() || attachmentFiles.length > 0 || staged.length > 0) &&
           matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)

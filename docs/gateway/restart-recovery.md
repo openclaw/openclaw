@@ -583,7 +583,7 @@ one new input through the normal session-event path:
 
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
-If the session had running background exec processes, that same input also says:
+If the session had running ordinary (non-durable) background exec processes, that same input also says:
 
 > Background exec processes were stopped; rerun them if still needed.
 
@@ -644,7 +644,7 @@ Children are not adopted or independently resumed at startup.
 A child that already ended its execution with `sessions_yield waitFor:"message"`
 keeps its paused task across restart. Shutdown marks that session directly;
 startup consumes the marker while preserving the registry's exact paused task,
-without replaying execution or restoring old tool or completion authority.
+without replaying execution or restoring old tool authority.
 The same registry fact protects a recorded message wait after an unclean stop.
 A fresh continuation from its controlling requester goes through ordinary
 admission and retains task-owned result delivery. If the requester finishes or
@@ -666,10 +666,14 @@ recovery path. Its single resume input reconciles the stopped children's work;
 it is not re-parked waiting for their old executions. A stopped child also needs
 reconciliation when other children still have reachable waits.
 
-The same recovery applies when a child's recorded completion authority belonged
-to the previous process, including a message-waiting or nested child. A saved
-yield is not a reachable wake after that authority retires. The root resumes to
-inspect saved results or explicitly continue the child through current admission.
+Startup admits pending completion custody against the requester's current
+principal, session ID, and lifecycle revision. It never reuses the previous
+process's authority. This covers nested yielded requesters and captured results
+that were waiting for a busy or yielded requester. The whole outstanding cohort
+keeps one requester authority, including when a paused child continues in a new
+turn. Normal delivery records the receipt so another restart cannot deliver it
+again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
+custody.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes

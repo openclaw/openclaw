@@ -68,15 +68,23 @@ it("waits for Windows tree extinction before ending stdin", async () => {
   }
 });
 
-it("rejects waitForExit when the process owner is lost and never reports an exit", async () => {
+it.each([false, true])("settles owner loss without exit (EPIPE: %s)", async (epipe) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const pipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+  let onChildError: Parameters<ClaudeChild["onError"]>[0] | undefined;
   const lost = new Error("service child cleanup identity lost: anchor channel closed");
   // The owner emits an error and rejects its waits, but no exit event ever arrives.
   const child: ClaudeChild = {
     supportsRawOutput: true,
-    stdin: { write: (_data, callback) => callback?.(), end: () => {} },
+    stdin: {
+      write: (_data, callback) => callback?.(epipe ? pipe : undefined),
+      end: () => {},
+    },
     onStdout: () => {},
     onStderr: () => {},
-    onError: () => {},
+    onError: (listener) => {
+      onChildError = listener;
+    },
     onExit: () => {},
     consumeStdout: () => new Promise<void>(() => {}),
     wait: () => Promise.reject(lost),
@@ -89,6 +97,7 @@ it("rejects waitForExit when the process owner is lost and never reports an exit
     withDiagnostics: async (error: unknown) => error,
     [Symbol.dispose]: () => {},
   });
+  const onError = vi.fn();
   const context = { command: "claude", args: [], cwd: ".", env: {} };
   const transport = await createClaudeCliTransport({
     context,
@@ -97,8 +106,15 @@ it("rejects waitForExit when the process owner is lost and never reports an exit
     currentContext: () => context,
     onMessage: async () => {},
     onRequest: async () => () => ({}),
-    onError: () => {},
+    onError,
   });
+  if (epipe) {
+    const initialization = transport.initialize();
+    const rejected = expect(initialization).rejects.toBe(lost);
+    onChildError?.(lost, "process");
+    await rejected;
+    expect(onError).toHaveBeenCalledExactlyOnceWith(lost);
+  }
   transport.close();
   await expect(transport.waitForExit()).rejects.toMatchObject({
     message: expect.stringContaining("retry the message"),

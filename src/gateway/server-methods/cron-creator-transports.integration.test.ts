@@ -36,7 +36,7 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
-import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,

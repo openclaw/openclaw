@@ -124,7 +124,7 @@ const historyMessages = [
 it.skipIf(!available).each([true, false])(
   "hydrates native read-only review in the original transcript, Templates=%s",
   async (templatesEnabled) => {
-    const prebuilt = inject("controlUiE2ePrebuiltAssets");
+    const prebuilt = inject("controlUiE2eDeploymentAssets");
     const server = prebuilt
       ? await startBuiltControlUiE2eServer(prebuilt.root)
       : await startControlUiE2eServer();
@@ -353,7 +353,7 @@ it.skipIf(!available).each([true, false])(
 it.skipIf(!available)(
   "keeps inline review category rows and chevrons inside narrow cards",
   async () => {
-    const prebuilt = inject("controlUiE2ePrebuiltAssets");
+    const prebuilt = inject("controlUiE2eDeploymentAssets");
     const server = prebuilt
       ? await startBuiltControlUiE2eServer(prebuilt.root)
       : await startControlUiE2eServer();

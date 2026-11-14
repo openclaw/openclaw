@@ -134,6 +134,8 @@ function ProviderCredentials(props: ProviderRowProps) {
         <ProviderProfiles
           {...props}
           canMutate={props.canMutate && !props.configBusy}
+          canSignInAgain={() => props.canConnect(props.card)}
+          onSignInAgain={() => props.onConnect(props.card)}
           keyAction={keySource(props.card) === undefined ? keyAction : undefined}
         />
       </Show>

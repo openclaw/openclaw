@@ -10,9 +10,18 @@ it("refuses fanout before writing its matrix when the current quota cannot cover
   const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-budget-"), "", 98);
   const result = f.preview();
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("requires 51200 requests for 98 packages; 5000 remain");
+  expect(result.stderr).toContain("requires 26112 requests for 98 packages; 5000 remain");
   expect(existsSync(result.output)).toBe(false);
   expect(existsSync(f.previewManifest)).toBe(false);
+});
+
+it("admits the full 101-package carrier-backed release within a fresh GitHub quota", async () => {
+  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-full-budget-"), "", 101, false);
+  f.json("/rate_limit", { resources: { core: { remaining: 30000, reset: 4_070_908_800 } } });
+  f.save();
+  const result = f.preview();
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(readFileSync(f.previewManifest, "utf8")).packages).toHaveLength(101);
 });
 
 // Distinct processes are essential: an in-memory client spy misses the retained
@@ -34,6 +43,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
       .filter((line) => line.startsWith('{"githubRequestAccounting"'))
       .map((line) => JSON.parse(line).githubRequestAccounting)
       .find((entry) => entry.scope === "prepared-npm-command");
+    expect(accounting?.limit).toBe(accounting.command === "load" ? 1024 : 128);
     expect(accounting?.used).toBe(
       f
         .records()

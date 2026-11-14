@@ -244,6 +244,85 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
+  it("recovers an exact policy-waived receipt without treating its failed workload as success", async () => {
+    const data = await fixture();
+    const original = await discoverReusableReleaseChild(data.request, data.deps);
+    if (!original) {
+      throw new Error("expected original reusable receipt");
+    }
+    data.run.conclusion = "failure";
+    data.jobs[0]!.name = "checks-node-agentic-control-plane-runtime-state";
+    data.jobs[1]!.name = "openclaw/ci-gate";
+    for (const job of data.jobs.slice(0, 2)) {
+      job.conclusion = "failure";
+    }
+    data.jobs[1]!.steps = [
+      {
+        name: "Verify selected CI lanes",
+        status: "completed",
+        conclusion: "failure",
+      },
+    ];
+    data.receipt.workloadConclusion = "failure";
+    data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
+      ...job,
+      name: data.jobs[index]!.name,
+      conclusion: "failure",
+    }));
+    data.receipt.compositeJobsSha256 = jsonDigest({
+      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
+      plannedRunAttempt: data.receipt.plannedRunAttempt,
+      jobs: data.receipt.jobs,
+    });
+    await data.seal();
+    const selection = {
+      ...original,
+      receiptSha256: data.receipt.sha256,
+      artifact: {
+        ...original.artifact,
+        digest: data.artifact.digest,
+        sizeInBytes: data.artifact.size_in_bytes,
+      },
+    };
+    const deps = {
+      ...data.deps,
+      getJobLog: async () =>
+        "##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)",
+    };
+    await expect(validateReusableReleaseChild(selection, data.request, deps)).rejects.toThrow(
+      "current successful attempt",
+    );
+    const recovered = await validateReusableReleaseChild(
+      selection,
+      {
+        ...data.request,
+        policyTargetVersion: "2026.11.5-beta.3",
+      },
+      deps,
+    );
+    expect(recovered.run.conclusion).toBe("failure");
+    expect(recovered.receipt.workloadConclusion).toBe("failure");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        {
+          ...data.request,
+          policyTargetVersion: "2026.11.5-beta.3",
+        },
+        { ...deps, getJobLog: async () => "##[error]artifact integrity failed" },
+      ),
+    ).rejects.toThrow("unwaived failure");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        {
+          ...data.request,
+          policyTargetVersion: "2026.11.5-beta.4",
+        },
+        deps,
+      ),
+    ).rejects.toThrow();
+  });
   it("reads twelve complete inventories four at a time within the shared deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);

@@ -129,7 +129,8 @@ export async function createClaudeCliTransport(params: {
     inputFailure ??= Promise.resolve()
       .then(async () => {
         beginShutdown();
-        await exited;
+        // Owner loss rejects cleanup without emitting an exit event.
+        await Promise.race([exited, child.waitForExtinction?.() ?? child.wait()]);
         const failure = context?.abortSignal?.aborted
           ? context.abortSignal.reason
           : forcedExit

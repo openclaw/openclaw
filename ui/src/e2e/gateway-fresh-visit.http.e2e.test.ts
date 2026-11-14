@@ -23,7 +23,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   browserLaunchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] },
   async startServer() {
-    const productionRoot = inject("controlUiE2ePrebuiltAssets")?.root;
+    const productionRoot = inject("controlUiE2eDeploymentAssets")?.root;
     if (productionRoot) {
       // The deployment lane owns immutable production-relative assets.
       currentUiRoot = productionRoot;

@@ -20,7 +20,7 @@ import {
   startOpenClawIdIngressListener,
   type OpenClawIdIngressListener,
 } from "./ingress-listener.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { upstreamHeaders } from "./tunnel-child/headers.js";
 import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
 

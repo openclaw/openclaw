@@ -23,7 +23,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.engine":
-    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" / "kitesurf" for external CDP browsing. External engines require an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and expose only their supported operations. Lightpanda has no screenshots; Kitesurf renders experimental screenshots.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
@@ -468,7 +468,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a follow-up for the originating session.",
   "tools.exec.notifyOnExitEmptySuccess":
-    "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
+    "When true (default), successful backgrounded exec exits with empty output still wake the originating session, so a silent waiter reports back. Set false to keep silent successes quiet; the agent then collects them with process poll.",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",

@@ -113,10 +113,10 @@ it("waits for selected-agent defaults after catalog hydration", async () => {
   await vi.waitFor(() => expect(find("model-option", "openai/gpt-5.6-luna")).not.toBeNull());
   const loading = draw(null);
   const trigger = loading.querySelector("[data-chat-model-select]")!;
-  expect(trigger.getAttribute("aria-busy")).toBe("true");
-  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Loading models…");
-  expect(trigger.querySelector(".skeleton")?.getAttribute("aria-hidden")).toBe("true");
-  expect(trigger.textContent).not.toMatch(/Loading models|Default model/);
+  expect(trigger.getAttribute("aria-busy")).not.toBe("true");
+  expect(trigger.getAttribute("aria-label")).not.toContain("Loading models");
+  expect(trigger.querySelector(".skeleton")).toBeNull();
+  expect(trigger.textContent).not.toContain("Loading models");
   expect(controlElement(loading, "thinking-select")?.dataset.chatThinkingDisabled).toBe("true");
   const ready = draw(effortAgent);
   expect(controlElement(ready, "model-default", "true")?.textContent).toContain(sol.name);

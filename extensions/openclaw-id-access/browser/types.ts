@@ -50,6 +50,9 @@ export type Member = {
 /** What an accepted removal cut (`openclawId.authority` submit result `removal`). */
 export type RemovalSummary = { devices: number; connectionsClosed: number; runsCancelled: number };
 
+/** A local personal profile with no OpenClaw ID linked yet. */
+export type ExistingProfile = { id: string; displayName: string | null };
+
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {
   inviteId: string;
@@ -59,6 +62,8 @@ export type Invite = {
   createdAt: number;
   expiresAt: number;
   status: "open" | "pending" | "approved" | "denied" | "expired";
+  /** Local invite selection and its approval outcome; never part of the signed cap. */
+  existingProfile?: ExistingProfile & { fallbackReason?: string };
   pending?: {
     accountId: string;
     devicePub: string;
@@ -86,6 +91,7 @@ export type Link = {
   members?: Member[];
   roles?: Array<{ name: string; defined: boolean }>;
   invites?: Invite[];
+  existingProfiles?: ExistingProfile[];
   nodes?: NodeRecord[];
   nodeInvites?: NodeInvite[];
   publication?:

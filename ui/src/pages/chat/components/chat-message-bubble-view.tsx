@@ -15,6 +15,7 @@ import {
 } from "solid-js";
 import { readMessageWorkContext } from "../../../../../src/chat/work-context.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -326,19 +327,43 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
   );
 }
 
-function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
-  const content = (
-    <MarkdownText
-      class="chat-thinking"
-      content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
-        codeBlockInteraction: "interactive",
-      })}
-    />
-  );
+/** A quiet one-line step that opens into the full thought, like a tool row. */
+function MessageReasoning(props: Pick<ContentProps, "state" | "options" | "messageKey">) {
+  // The transcript's per-message disclosure store keeps a thought open when its
+  // row remounts, as when Worked closes and reopens or the row scrolls away.
+  const disclosureId = () => `reasoning:${props.messageKey}`;
+  const open = () => props.options.isUserMessageExpanded?.(disclosureId()) ?? false;
+  // Shimmer only while the thought itself is the live part of the reply.
+  const thinking = () => props.options.isStreaming && !props.state().bodyMarkdown;
   return (
-    <Show when={props.options.bubbleMode} fallback={content}>
-      <ChatBubbleActivity label={t("chat.view.reasoning")}>{content}</ChatBubbleActivity>
-    </Show>
+    <div class="chat-reasoning">
+      <button
+        class="chat-inline-disclosure"
+        type="button"
+        aria-expanded={open() ? "true" : "false"}
+        aria-label={t("chat.view.reasoning")}
+        onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
+      >
+        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+          <Icon name="brain" />
+        </span>
+        <span>{open() ? t("chat.view.reasoning") : ""}</span>
+        <span class="chat-tool-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      </button>
+      <MarkdownText
+        class={
+          open()
+            ? "chat-thinking"
+            : `chat-thinking chat-thinking--preview${thinking() ? " text-shimmer" : ""}`
+        }
+        inert={!open()}
+        content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
+          codeBlockInteraction: "interactive",
+        })}
+      />
+    </div>
   );
 }
 
@@ -388,7 +413,11 @@ function BubbleContents(props: ContentProps) {
         <AssistantViews {...props} />
       </Show>
       <Show when={props.state().reasoningMarkdown}>
-        <MessageReasoning state={props.state} options={props.options} />
+        <MessageReasoning
+          state={props.state}
+          options={props.options}
+          messageKey={props.messageKey}
+        />
       </Show>
       <Show
         when={

@@ -12,6 +12,11 @@ export const sessionManagerReadToolResultProjectionEntries = Symbol.for(
   "openclaw.session-manager.read-tool-result-projection-entries",
 );
 
+/** Internal retained-tail construction belongs to the prepared compaction lifecycle. */
+export const sessionManagerFromCompactionSource = Symbol.for(
+  "openclaw.session-manager.from-compaction-source",
+);
+
 export type SessionManagerPersistenceTarget = SessionTranscriptTargetBinding;
 export type SessionManagerBoundedContextLimits = SessionTranscriptContextSelection;
 export type PreparedSessionTranscriptReload = PreparedSessionTranscriptHydration;

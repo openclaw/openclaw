@@ -1,5 +1,4 @@
 import { createMemo } from "solid-js";
-import { t } from "../../i18n/index.ts";
 import { resolveChatModelSnapshot } from "./components/chat-model-catalog-presentation.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import type { ChatComposerSnapshot } from "./session-message-cache.ts";
@@ -15,7 +14,6 @@ export function ChatPaneModelControl(props: {
     <div
       class="chat-composer-model-control"
       data-composer-catalog-state={props.model.snapshot ? "stale" : undefined}
-      title={props.model.snapshot ? t("chat.modelControls.refreshingModels") : undefined}
     >
       <ChatModelControls
         {...props.model}

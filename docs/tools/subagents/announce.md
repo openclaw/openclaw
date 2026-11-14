@@ -91,8 +91,11 @@ append, so a requester waiting on its child can resume. These tagged mirrors
 record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
-Completion failures retain the concrete delivery error in the run's delivery state
-without queuing a system notice into the parent session. A confirmed handoff remains delivered even if its receipt
+Completion failures retain the concrete delivery error in the run's delivery state.
+A required parent completion that permanently fails also records a visible failure
+notice in the original requester conversation, without starting another agent turn.
+A deleted or reset requester never redirects that notice into a replacement session.
+A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
 

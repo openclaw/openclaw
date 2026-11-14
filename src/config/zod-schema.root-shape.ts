@@ -162,8 +162,8 @@ export const OpenClawSchemaShape = {
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
           z
             .strictObject({
-              /** Browser engine capability preset. Lightpanda is an external, semantic-only CDP service. */
-              engine: z.enum(["chromium", "lightpanda"]).optional(),
+              /** Browser engine capability preset. Lightpanda and Kitesurf are external CDP services. */
+              engine: z.enum(["chromium", "lightpanda", "kitesurf"]).optional(),
               /** CDP port for this profile. Allocated once at creation, persisted permanently. */
               cdpPort: z.number().int().min(1).max(65535).optional(),
               /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -211,29 +211,30 @@ export const OpenClawSchemaShape = {
                 'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
             })
             .superRefine((value, ctx) => {
-              if (value.engine !== "lightpanda") {
+              if (value.engine !== "lightpanda" && value.engine !== "kitesurf") {
                 return;
               }
+              const label = value.engine === "kitesurf" ? "Kitesurf" : "Lightpanda";
               const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
               if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
                 ctx.addIssue({
                   code: "custom",
                   path: ["cdpUrl"],
-                  message: "Lightpanda requires an explicit ws:// or wss:// CDP endpoint",
+                  message: `${label} requires an explicit ws:// or wss:// CDP endpoint`,
                 });
               }
               if (value.attachOnly !== true) {
                 ctx.addIssue({
                   code: "custom",
                   path: ["attachOnly"],
-                  message: "Lightpanda requires attachOnly: true; OpenClaw does not launch it",
+                  message: `${label} requires attachOnly: true; OpenClaw does not launch it`,
                 });
               }
               if (value.driver !== undefined && value.driver !== "openclaw") {
                 ctx.addIssue({
                   code: "custom",
                   path: ["driver"],
-                  message: 'Lightpanda requires the default "openclaw" CDP driver',
+                  message: `${label} requires the default "openclaw" CDP driver`,
                 });
               }
               for (const key of [
@@ -248,7 +249,7 @@ export const OpenClawSchemaShape = {
                   ctx.addIssue({
                     code: "custom",
                     path: [key],
-                    message: `Lightpanda does not support the profile ${key} setting`,
+                    message: `${label} does not support the profile ${key} setting`,
                   });
                 }
               }
@@ -285,11 +286,17 @@ export const OpenClawSchemaShape = {
         }
         const key = endpoint.toString().replace(/\/$/, "");
         const previous = endpoints.get(key);
-        if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+        if (
+          previous &&
+          (previous.engine === "lightpanda" ||
+            profile.engine === "lightpanda" ||
+            previous.engine === "kitesurf" ||
+            profile.engine === "kitesurf")
+        ) {
           ctx.addIssue({
             code: "custom",
             path: ["profiles", name, "cdpUrl"],
-            message: `Lightpanda requires a dedicated CDP endpoint; also used by profile "${previous.name}"`,
+            message: `External browser engines require a dedicated CDP endpoint; also used by profile "${previous.name}"`,
           });
         }
         endpoints.set(key, { name, engine: profile.engine });

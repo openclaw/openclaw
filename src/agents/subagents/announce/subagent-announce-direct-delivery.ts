@@ -394,6 +394,7 @@ async function sendSubagentAnnounceDirectlyBound(
       bestEffortDeliver: params.bestEffortDeliver,
       internalEvents: params.internalEvents,
       channel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
+      ...(params.inputAttachments?.length ? { attachments: params.inputAttachments } : {}),
       accountId: directAgentOrigin?.accountId,
       to: directAgentOrigin?.to,
       threadId: stringifyRouteThreadId(directAgentOrigin?.threadId),

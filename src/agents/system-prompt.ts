@@ -401,7 +401,7 @@ export function buildAgentSystemPrompt(params: {
   const messageToolAvailable = availableTools.has("message");
   const hasAutomations = availableTools.has(AUTOMATIONS_TOOL_NAME);
   const readToolName = resolveToolName("read");
-  const waitToolHints = [
+  const waitHints = [
     hasExec ? `${resolveToolName("exec")} yieldMs` : "",
     hasProcess ? `${resolveToolName("process")}(poll, timeout=<ms>)` : "",
   ].filter(Boolean);
@@ -626,7 +626,7 @@ export function buildAgentSystemPrompt(params: {
     }),
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [
-      waitToolHints.length > 0 && `Long wait: no rapid poll. Use ${waitToolHints.join(" or ")}.`,
+      waitHints.length > 0 && `Wait: end turn if exit wakes you, else ${waitHints.join(" or ")}.`,
       hasSessionsSpawn && [
         "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
         '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',

@@ -4,7 +4,7 @@ import { en } from "./en.ts";
 const enTemplates = {
   templatesCatalog: {
     explore: "Templates",
-    exploreDescription: "Purpose-built agents for your team.",
+    exploreDescription: "Find an agent for your next task.",
     title: "Templates",
     featured: "Featured",
     results: "Results",

@@ -151,7 +151,7 @@ final class GatewayConnectionController {
                 endpoint.port,
                 GatewaySetupRouteProbeBudget.tcpConnectTimeoutSeconds,
                 "ai.openclaw.gateway.setup-route-\(index)")
-            if reachable {
+            if reachable == .reachable {
                 return link.selectingEndpoint(endpoint)
             }
         }
@@ -1336,14 +1336,16 @@ extension GatewayConnectionController {
         let generation = self.trustProbeGeneration
         self.pendingTrustConnect = nil
         self.pendingTrustPrompt = nil
-        let reachable = await self.tcpReachabilityProbe(
+        let tcp = await self.tcpReachabilityProbe(
             host,
             port,
             GatewayTLSFingerprintProbeBudget.tcpConnectTimeoutSeconds,
             queueLabel)
         guard !Task.isCancelled, self.trustProbeGeneration == generation else { return nil }
-        guard reachable else {
-            return .failure(.endpointUnreachable)
+        switch tcp {
+        case .reachable: break
+        case .refused: return .failure(.endpointRefused)
+        case .unreachable: return .failure(.endpointUnreachable)
         }
         let result = await self.tlsFingerprintProbe(url)
         guard !Task.isCancelled, self.trustProbeGeneration == generation else { return nil }

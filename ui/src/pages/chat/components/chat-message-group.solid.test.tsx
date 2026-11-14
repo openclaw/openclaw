@@ -399,6 +399,7 @@ it("keeps frame stream options narrow and live through replacement and first-bub
     '.chat-bubble[data-message-id="answer-stream"]',
   );
   expect(answerBubble).not.toBeNull();
+  expect(view.container.querySelector(".chat-avatar.assistant")).not.toBeNull();
   expect(answerBubble?.classList.contains("chat-bubble--first")).toBe(true);
   setFrame(withStreams("An earlier live item."));
   flush();

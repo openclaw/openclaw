@@ -65,10 +65,10 @@ export async function runGroupThread<T>(params: {
       const config = resolveAgentConfig(params.cfg, agentId);
       return [
         agentId,
-        (config?.identity?.name ?? config?.name ?? agentId)
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 80) || agentId,
+        truncateUtf16Safe(
+          (config?.identity?.name ?? config?.name ?? agentId).replace(/\s+/g, " ").trim(),
+          80,
+        ) || agentId,
       ];
     }),
   );

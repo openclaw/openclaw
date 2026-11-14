@@ -382,8 +382,9 @@ try {
     );
     if (!fs.existsSync(extension)) {
       execFileSync(
-        "clang",
+        "xcrun",
         [
+          "clang",
           "-O2",
           "-Wall",
           "-Wextra",

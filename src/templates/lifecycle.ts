@@ -630,12 +630,10 @@ export async function buildTemplateAddPlan(params: {
     agentId: finalId,
   });
 
-  // Templates keep one conversation per agent: Add schedules every declared automation
-  // in the agent's main session and drops its delivery, since a Template can only
-  // announce to the last channel, which the scheduler rejects on multi-channel hosts.
-  // The owner can change either later in the automation's settings.
-  for (const { delivery: _ignoredDelivery, ...declared } of params.manifest.automations) {
-    const job = { ...declared, session: "main" as const };
+  // Keep the declared execution session independent from delivery. Templates can only
+  // announce to the last channel, which the scheduler rejects on multi-channel hosts,
+  // so channel delivery remains an owner choice after Add.
+  for (const { delivery: _ignoredDelivery, ...job } of params.manifest.automations) {
     actions.push({
       kind: "cronJob",
       id: job.id,

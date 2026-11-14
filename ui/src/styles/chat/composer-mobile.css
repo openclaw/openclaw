@@ -199,10 +199,12 @@
   display: none;
 }
 
-/* The compact prediction row already supplies its text inset. */
+/* Predictions size the compact composer to their complete text and inline hint. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
-  .agent-chat__composer-prediction-actions {
-  padding-inline: 0;
+  .agent-chat__composer-combobox
+  > .agent-chat__composer-prediction {
+  height: auto;
+  max-height: none;
 }
 
 /* Keep typed drafts and their hint on the same font as desktop. Typing grows the
@@ -222,8 +224,7 @@
   flex-shrink: 0;
 }
 
-/* Prediction actions are native main content in addition to the compact text.
-   Reserve their intrinsic height here; editing uses the native content flow. */
+/* Give the prediction its own full-width row above the compact controls. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction]) {
   /* Keep :has() on the subject; a descendant selector invalidates unrelated subtrees. */

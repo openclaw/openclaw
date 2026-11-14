@@ -489,15 +489,12 @@ Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
-`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+Standard dispatched check leases request `blacksmith-4vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a default 60-minute total GitHub job deadline including
 hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
-`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+`blacksmith-8vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
 gates. Select it only for a justified memory need, not merely for more time; see
 [Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
-A native capacity check measured eight CPUs and 30.95 GiB of memory on the
-32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
-isolated runtime validation without increasing the number of jobs or workers.
 Workloads still admit work from observed resources; the runner label is not a
 capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
 

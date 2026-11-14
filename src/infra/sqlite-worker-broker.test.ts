@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import fs, { existsSync } from "node:fs";
 import * as os from "node:os";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as retry from "@openclaw/retry";
@@ -21,6 +21,7 @@ import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.j
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
+import type { GcSample } from "./gc-observer.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
@@ -58,6 +59,64 @@ const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRun
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
 const rejectedOutcome = (reason: unknown) => ({ status: "rejected", reason });
+
+it("retains real SQLite broker forced GC in memory diagnostics", async () => {
+  const samples: GcSample[] = [];
+  let memoryPort: MessagePort | undefined;
+  const receive = workerCpu.receiveWorkerMemoryPort;
+  vi.spyOn(workerCpu, "receiveWorkerMemoryPort").mockImplementation((worker, message) => {
+    if (isRecord(message) && message.status === "memory" && message.port instanceof MessagePort) {
+      memoryPort = message.port;
+    }
+    return receive(worker, message);
+  });
+  workerCpu.setTrackedWorkerGcObserver((batch, script) => {
+    if (script === "sqlite-store.worker.js") {
+      samples.push(...batch);
+    }
+  });
+  onTestFinished(() => workerCpu.setTrackedWorkerGcObserver(undefined));
+  const store = await open(databasePath());
+  assert(memoryPort);
+  const port = memoryPort;
+  // The flush acknowledgement follows GC enablement on the same diagnostics port.
+  const flush = () =>
+    new Promise<void>((resolve) => {
+      const onMessage = (message: unknown) => {
+        if (isRecord(message) && message.flushed === true) {
+          port.off("message", onMessage);
+          resolve();
+        }
+      };
+      port.on("message", onMessage);
+      port.postMessage({ flush: true }, []);
+    });
+  await flush();
+  const before = workerCpu
+    .sampleTrackedWorkerMemory({ refresh: false })
+    .workerTaskMetrics.find((entry) => entry.script === "sqlite-store.worker.js")
+    ?.gc.find((entry) => entry.kind === "mark_sweep_compact");
+  await store.execute({ type: "collectGarbage", input: undefined });
+  await flush();
+  await store.close();
+  const metrics = workerCpu
+    .sampleTrackedWorkerMemory({ refresh: false })
+    .workerTaskMetrics.filter((entry) => entry.script === "sqlite-store.worker.js");
+  expect(samples.some((sample) => sample.kind === "mark_sweep_compact")).toBe(
+    !process.versions.bun,
+  );
+  expect(metrics).toHaveLength(1);
+  expect(metrics[0]).toMatchObject({ workerClass: "writer", tasksCompleted: undefined });
+  const major = metrics[0]!.gc.find((entry) => entry.kind === "mark_sweep_compact");
+  if (process.versions.bun) {
+    expect(samples).toEqual([]);
+    expect(metrics[0]!.gc).toEqual([]);
+    return;
+  }
+  expect(major!.count).toBeGreaterThan(before?.count ?? 0);
+  expect(major!.durationMs).toBeGreaterThan(before?.durationMs ?? 0);
+  expect(major!.reclaimedBytes).toBeGreaterThanOrEqual(before?.reclaimedBytes ?? 0);
+});
 
 it.each([false, true])(
   "dispatches captured SQLite selection without an engine scope (different ambient: %s)",

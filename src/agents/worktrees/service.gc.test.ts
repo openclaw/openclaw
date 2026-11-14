@@ -778,6 +778,7 @@ describe("ManagedWorktreeService garbage collection", () => {
       await fs.mkdir(external);
       await fs.writeFile(path.join(external, "keep.txt"), "unowned data");
       if (leftover === "symlink") {
+        await fs.mkdir(path.dirname(created.path), { recursive: true });
         await fs.symlink(external, created.path, "dir");
       } else {
         await fs.mkdir(created.path, { recursive: true });
