@@ -30,7 +30,7 @@ jobs:
     env:
       LANE: preflight
       PRIVATE_PROOF: ${{ github.workspace }}/../final-a383-private/preflight
-      SAFE_PROOF: ${{ github.workspace }}/../final-a383-safe/preflight
+      SAFE_PROOF: ${{ runner.temp }}/final-a383-safe/preflight
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -173,9 +173,9 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: final-a383-preflight-${{ github.run_id }}-${{ github.run_attempt }}
-        path: '${{ github.workspace }}/../final-a383-safe/preflight/identity.json
+        path: '${{ runner.temp }}/final-a383-safe/preflight/identity.json
 
-          ${{ github.workspace }}/../final-a383-safe/preflight/report.json'
+          ${{ runner.temp }}/final-a383-safe/preflight/report.json'
         if-no-files-found: error
         retention-days: 14
   core:
@@ -184,7 +184,7 @@ jobs:
     env:
       LANE: core
       PRIVATE_PROOF: ${{ github.workspace }}/../final-a383-private/core
-      SAFE_PROOF: ${{ github.workspace }}/../final-a383-safe/core
+      SAFE_PROOF: ${{ runner.temp }}/final-a383-safe/core
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -328,15 +328,15 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: final-a383-core-${{ github.run_id }}-${{ github.run_attempt }}
-        path: '${{ github.workspace }}/../final-a383-safe/core/identity.json
+        path: '${{ runner.temp }}/final-a383-safe/core/identity.json
 
-          ${{ github.workspace }}/../final-a383-safe/core/report.json
+          ${{ runner.temp }}/final-a383-safe/core/report.json
 
-          ${{ github.workspace }}/../final-a383-safe/core/tests.json
+          ${{ runner.temp }}/final-a383-safe/core/tests.json
 
-          ${{ github.workspace }}/../final-a383-safe/core/inner-status.json
+          ${{ runner.temp }}/final-a383-safe/core/inner-status.json
 
-          ${{ github.workspace }}/../final-a383-safe/core/native-diagnostics.json'
+          ${{ runner.temp }}/final-a383-safe/core/native-diagnostics.json'
         if-no-files-found: error
         retention-days: 14
   e2e:
@@ -345,7 +345,7 @@ jobs:
     env:
       LANE: e2e
       PRIVATE_PROOF: ${{ github.workspace }}/../final-a383-private/e2e
-      SAFE_PROOF: ${{ github.workspace }}/../final-a383-safe/e2e
+      SAFE_PROOF: ${{ runner.temp }}/final-a383-safe/e2e
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -489,15 +489,15 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: final-a383-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-        path: '${{ github.workspace }}/../final-a383-safe/e2e/identity.json
+        path: '${{ runner.temp }}/final-a383-safe/e2e/identity.json
 
-          ${{ github.workspace }}/../final-a383-safe/e2e/report.json
+          ${{ runner.temp }}/final-a383-safe/e2e/report.json
 
-          ${{ github.workspace }}/../final-a383-safe/e2e/tests.json
+          ${{ runner.temp }}/final-a383-safe/e2e/tests.json
 
-          ${{ github.workspace }}/../final-a383-safe/e2e/inner-status.json
+          ${{ runner.temp }}/final-a383-safe/e2e/inner-status.json
 
-          ${{ github.workspace }}/../final-a383-safe/e2e/native-diagnostics.json'
+          ${{ runner.temp }}/final-a383-safe/e2e/native-diagnostics.json'
         if-no-files-found: error
         retention-days: 14
   ui:
@@ -506,7 +506,7 @@ jobs:
     env:
       LANE: ui
       PRIVATE_PROOF: ${{ github.workspace }}/../final-a383-private/ui
-      SAFE_PROOF: ${{ github.workspace }}/../final-a383-safe/ui
+      SAFE_PROOF: ${{ runner.temp }}/final-a383-safe/ui
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -657,16 +657,16 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: final-a383-ui-${{ github.run_id }}-${{ github.run_attempt }}
-        path: '${{ github.workspace }}/../final-a383-safe/ui/identity.json
+        path: '${{ runner.temp }}/final-a383-safe/ui/identity.json
 
-          ${{ github.workspace }}/../final-a383-safe/ui/report.json
+          ${{ runner.temp }}/final-a383-safe/ui/report.json
 
-          ${{ github.workspace }}/../final-a383-safe/ui/tests.json
+          ${{ runner.temp }}/final-a383-safe/ui/tests.json
 
-          ${{ github.workspace }}/../final-a383-safe/ui/inner-status.json
+          ${{ runner.temp }}/final-a383-safe/ui/inner-status.json
 
-          ${{ github.workspace }}/../final-a383-safe/ui/native-diagnostics.json
+          ${{ runner.temp }}/final-a383-safe/ui/native-diagnostics.json
 
-          ${{ github.workspace }}/../final-a383-safe/ui/browser-setup.json'
+          ${{ runner.temp }}/final-a383-safe/ui/browser-setup.json'
         if-no-files-found: error
         retention-days: 14
