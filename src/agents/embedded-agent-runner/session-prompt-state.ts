@@ -349,9 +349,9 @@ export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentToo
   let changed = !known;
   const tools = params.tools.flatMap((tool) => {
     const pin = pinned.get(tool.name);
-    // A wider turn does not extend an established pin. Computer discovery supplies live
-    // execution facts, not a new session definition.
-    if (known && (!pin || tool.name === "computer")) {
+    // A wider turn does not extend an established pin (a publication listing alone pins no
+    // tools). Computer discovery supplies live execution facts, not a new session definition.
+    if (known?.tools.length && (!pin || tool.name === "computer")) {
       return pin ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : [];
     }
     if (changed && pin?.description === tool.description) {

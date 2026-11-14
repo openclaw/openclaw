@@ -554,6 +554,12 @@ describe("session tool surface", () => {
     ]);
   });
 
+  it("starts the pin from the first built tools when only an empty pin exists", () => {
+    // A publication listing can pend before any tool is pinned; it must not withhold the set.
+    surface([]);
+    expect(names(surface([tool("read"), tool("exec")]))).toEqual(["exec", "read"]);
+  });
+
   it("keeps the series when a bounded window starts after the compaction", async () => {
     const entries: SessionEntry[] = [historyEntry("compaction", "compaction-1")];
     await persist(entries);
