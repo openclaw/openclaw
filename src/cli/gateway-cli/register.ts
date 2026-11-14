@@ -3,16 +3,13 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import type { DiagnosticStabilityBundle } from "../../logging/diagnostic-stability-bundle.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
-import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
-import { defaultRuntime, ExitError } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
-import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
 import {
   addGatewayClientOptions,
   callGatewayFromCliWithTransport,
@@ -20,10 +17,13 @@ import {
   resolveGatewayRpcOptionsWithLocalPort,
 } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
+import { gatewayAction } from "./gateway-action.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
+import { addGatewayLockRecoveryCommand } from "./register-recover-lock.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
@@ -49,11 +49,35 @@ function gatewayCallOpts(cmd: Command): Command {
   );
 }
 
-async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+async function callGatewayReadOnlyCli(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+  signal?: AbortSignal,
+) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
+    signal,
   });
+}
+
+/** Ctrl+C owns the exit; a reply that lands after it must not be printed. */
+async function callGatewayReadOnlyCliUnlessAborted(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+): Promise<{ result: unknown } | undefined> {
+  const signal = getAsyncWorkSignal();
+  let result: unknown;
+  try {
+    result = await callGatewayReadOnlyCli(method, opts, params, signal);
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+  }
+  return signal?.aborted ? undefined : { result };
 }
 
 function parseGatewayCallParams(value = "{}"): unknown {
@@ -62,42 +86,6 @@ function parseGatewayCallParams(value = "{}"): unknown {
   } catch {
     throw new Error("--params must be valid JSON.");
   }
-}
-
-function gatewayAction(action: Parameters<Command["action"]>[0], label?: string) {
-  return async function (this: Command, ...args: Parameters<typeof action>) {
-    const json = Boolean(this.opts<{ json?: boolean }>().json);
-    // JSON mode preserves structured gateway errors for automation callers.
-    try {
-      await action.apply(this, args);
-    } catch (err) {
-      // Completed output must reach CLI finalization without a second failure envelope.
-      if (err instanceof ExitError) {
-        throw err;
-      }
-      if (!json) {
-        rethrowExpectedCliError(err);
-      }
-      if (json) {
-        const {
-          formatGatewayAuthErrorJson,
-          formatGatewayClientRequestErrorJson,
-          formatGatewayTransportErrorJson,
-        } = await import("../../gateway/call.js");
-        defaultRuntime.writeJson(
-          formatGatewayAuthErrorJson(err) ??
-            formatGatewayClientRequestErrorJson(err) ??
-            formatGatewayTransportErrorJson(err) ??
-            formatCliJsonFailure(err),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      const message = formatErrorMessage(err);
-      defaultRuntime.error(label ? `${label}: ${message}` : message);
-      defaultRuntime.exit(1);
-    }
-  };
 }
 
 function parseDaysOption(raw: unknown): number {
@@ -109,9 +97,7 @@ function parseDaysOption(raw: unknown): number {
     if (parsed !== undefined) {
       return parsed;
     }
-    // A present-but-unparseable value (including an explicit empty one) is
-    // operator error; the main RPC path rejects malformed --timeout the same
-    // way instead of silently defaulting.
+    // A present but malformed value is operator error, like an invalid --timeout.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return 30;
@@ -184,103 +170,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function renderStabilityBundleSummary(params: {
-  bundle: DiagnosticStabilityBundle;
-  path: string;
-  snapshot: DiagnosticStabilitySnapshot;
-  rich: boolean;
-}): string[] {
-  const { bundle, path, rich, snapshot } = params;
-  const processDetails = [
-    `pid=${bundle.process.pid}`,
-    ...(bundle.process.openclawVersion ? [`openclaw=${bundle.process.openclawVersion}`] : []),
-    ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
-    ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
-    `node=${bundle.process.node}`,
-    `${bundle.process.platform}/${bundle.process.arch}`,
-    `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
-  ].join(" ");
-  const lines = [
-    colorize(rich, theme.heading, "Stability bundle"),
-    `${colorize(rich, theme.muted, "Path:")} ${path}`,
-    `${colorize(rich, theme.muted, "Generated:")} ${bundle.generatedAt}`,
-    `${colorize(rich, theme.muted, "Reason:")} ${bundle.reason}`,
-    `${colorize(rich, theme.muted, "Process:")} ${processDetails}`,
-    `${colorize(rich, theme.muted, "Host:")} ${bundle.host.hostname}`,
-  ];
-  if (bundle.error) {
-    const errorParts = [
-      bundle.error.name ? `name=${bundle.error.name}` : "",
-      bundle.error.code ? `code=${bundle.error.code}` : "",
-    ].filter(Boolean);
-    if (errorParts.length > 0) {
-      lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
-    }
-  }
-  const memoryPressure = bundle.evidence?.memoryPressure;
-  if (memoryPressure) {
-    lines.push(
-      `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
-        memoryPressure.reason
-      } rss=${formatStabilityBytes(memoryPressure.memory.rssBytes)} heap=${formatStabilityBytes(
-        memoryPressure.memory.heapUsedBytes,
-      )} threshold=${formatStabilityBytes(memoryPressure.thresholdBytes)}`,
-    );
-    if (memoryPressure.heapStatistics) {
-      lines.push(
-        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatStabilityBytes(
-          memoryPressure.heapStatistics.usedHeapSizeBytes,
-        )} limit=${formatStabilityBytes(
-          memoryPressure.heapStatistics.heapSizeLimitBytes,
-        )} available=${formatStabilityBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
-      );
-    }
-    if (memoryPressure.activeResources) {
-      const resources = Object.entries(memoryPressure.activeResources.byType)
-        .map(([type, count]) => `${type}=${count}`)
-        .join(", ");
-      lines.push(
-        `${colorize(rich, theme.muted, "Active resources:")} total=${
-          memoryPressure.activeResources.total
-        }${resources ? ` · ${resources}` : ""}`,
-      );
-    }
-    if (memoryPressure.topSessionFiles?.length) {
-      const files = memoryPressure.topSessionFiles
-        .slice(0, 5)
-        .map((file) => `${file.relativePath}=${formatStabilityBytes(file.sizeBytes)}`)
-        .join(", ");
-      lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
-    }
-  }
-  lines.push("", ...renderStabilitySummary(snapshot, rich));
-  return lines;
-}
-
-function renderSupportExportResult(
-  result: WriteDiagnosticSupportExportResult,
-  rich: boolean,
-): string[] {
-  return [
-    colorize(rich, theme.heading, "Diagnostics export"),
-    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
-    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
-    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
-    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
-  ];
-}
-
-function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -300,8 +189,8 @@ async function writeSupportExportFromCli(opts: {
   };
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
-    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
+    logLimit: parseOptionalPositiveInteger(opts.logLines, "--log-lines", "."),
+    logMaxBytes: parseOptionalPositiveInteger(opts.logBytes, "--log-bytes", "."),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await import("../daemon-cli/status.gather.js");
@@ -313,8 +202,16 @@ async function writeSupportExportFromCli(opts: {
       });
     },
     readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
+    readGatewayCapabilities: async () =>
+      await callGatewayReadOnlyCli("diagnostics.capabilities", rpc),
   });
-  await printGatewayResult(opts.json, result, (rich) => renderSupportExportResult(result, rich));
+  await printGatewayResult(opts.json, result, (rich) => [
+    colorize(rich, theme.heading, "Diagnostics export"),
+    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
+    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
+    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
+    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
+  ]);
 }
 
 export function registerGatewayCli(program: Command) {
@@ -344,6 +241,7 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
+  addGatewayLockRecoveryCommand(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
 
   gateway
@@ -452,11 +350,15 @@ export function registerGatewayCli(program: Command) {
           if (agentId && opts.allAgents) {
             throw new Error("Use --agent or --all-agents, not both");
           }
-          const summary = (await callGatewayReadOnlyCli("usage.cost", rpcOpts, {
+          const reply = await callGatewayReadOnlyCliUnlessAborted("usage.cost", rpcOpts, {
             days,
             ...(agentId ? { agentId } : {}),
             ...(opts.allAgents ? { agentScope: "all" } : {}),
-          })) as CostUsageSummary;
+          });
+          if (!reply) {
+            return;
+          }
+          const summary = reply.result as CostUsageSummary;
           await printGatewayResult(rpcOpts.json, summary, async (rich) =>
             (await loadCostUsageRenderer()).renderGatewayCostUsageSummary(summary, days, rich),
           );
@@ -470,11 +372,15 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch Gateway health")
       .action(
         gatewayAction(async (opts, command) => {
+          const signal = getAsyncWorkSignal();
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
-            result = await callGatewayReadOnlyCli("health", rpcOpts);
+            result = await callGatewayReadOnlyCli("health", rpcOpts, undefined, signal);
           } catch (error) {
+            if (signal?.aborted) {
+              return;
+            }
             const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
               await import("../../commands/health.js");
             const handled = await emitReachableGatewayAuthDiagnostic({
@@ -488,11 +394,15 @@ export function registerGatewayCli(program: Command) {
               password: rpcOpts.password,
               localPortOverride: rpcOpts.localPortOverride,
               json: Boolean(rpcOpts.json),
+              signal,
             });
             if (handled) {
               return;
             }
             throw error;
+          }
+          if (signal?.aborted) {
+            return;
           }
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
@@ -583,18 +493,80 @@ export function registerGatewayCli(program: Command) {
                   snapshot,
                 },
               },
-              (rich) =>
-                renderStabilityBundleSummary({
-                  bundle: result.bundle,
-                  path: result.path,
-                  rich,
-                  snapshot,
-                }),
+              (rich) => {
+                const { bundle, path } = result;
+                const processDetails = [
+                  `pid=${bundle.process.pid}`,
+                  ...(bundle.process.openclawVersion
+                    ? [`openclaw=${bundle.process.openclawVersion}`]
+                    : []),
+                  ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
+                  ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
+                  `node=${bundle.process.node}`,
+                  `${bundle.process.platform}/${bundle.process.arch}`,
+                  `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
+                ].join(" ");
+                const lines = [
+                  colorize(rich, theme.heading, "Stability bundle"),
+                  `${colorize(rich, theme.muted, "Path:")} ${path}`,
+                  `${colorize(rich, theme.muted, "Generated:")} ${bundle.generatedAt}`,
+                  `${colorize(rich, theme.muted, "Reason:")} ${bundle.reason}`,
+                  `${colorize(rich, theme.muted, "Process:")} ${processDetails}`,
+                  `${colorize(rich, theme.muted, "Host:")} ${bundle.host.hostname}`,
+                ];
+                if (bundle.error) {
+                  const errorParts = [
+                    bundle.error.name ? `name=${bundle.error.name}` : "",
+                    bundle.error.code ? `code=${bundle.error.code}` : "",
+                  ].filter(Boolean);
+                  if (errorParts.length > 0) {
+                    lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
+                  }
+                }
+                const memoryPressure = bundle.evidence?.memoryPressure;
+                if (memoryPressure) {
+                  lines.push(
+                    `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
+                      memoryPressure.reason
+                    } rss=${formatStabilityBytes(memoryPressure.memory.rssBytes)} heap=${formatStabilityBytes(
+                      memoryPressure.memory.heapUsedBytes,
+                    )} threshold=${formatStabilityBytes(memoryPressure.thresholdBytes)}`,
+                  );
+                  if (memoryPressure.heapStatistics) {
+                    lines.push(
+                      `${colorize(rich, theme.muted, "V8 heap:")} used=${formatStabilityBytes(
+                        memoryPressure.heapStatistics.usedHeapSizeBytes,
+                      )} limit=${formatStabilityBytes(
+                        memoryPressure.heapStatistics.heapSizeLimitBytes,
+                      )} available=${formatStabilityBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+                    );
+                  }
+                  if (memoryPressure.activeResources) {
+                    const resources = Object.entries(memoryPressure.activeResources.byType)
+                      .map(([type, count]) => `${type}=${count}`)
+                      .join(", ");
+                    lines.push(
+                      `${colorize(rich, theme.muted, "Active resources:")} total=${
+                        memoryPressure.activeResources.total
+                      }${resources ? ` · ${resources}` : ""}`,
+                    );
+                  }
+                  if (memoryPressure.topSessionFiles?.length) {
+                    const files = memoryPressure.topSessionFiles
+                      .slice(0, 5)
+                      .map((file) => `${file.relativePath}=${formatStabilityBytes(file.sizeBytes)}`)
+                      .join(", ");
+                    lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
+                  }
+                }
+                lines.push("", ...renderStabilitySummary(snapshot, rich));
+                return lines;
+              },
             );
             return;
           }
 
-          const result = await callGatewayReadOnlyCli(
+          const reply = await callGatewayReadOnlyCliUnlessAborted(
             "diagnostics.stability",
             resolveGatewayRpcOptionsWithLocalPort(rpcOpts, command),
             {
@@ -603,8 +575,11 @@ export function registerGatewayCli(program: Command) {
               ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
             },
           );
-          await printGatewayResult(rpcOpts.json, result, (rich) =>
-            renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich),
+          if (!reply) {
+            return;
+          }
+          await printGatewayResult(rpcOpts.json, reply.result, (rich) =>
+            renderStabilitySummary(reply.result as DiagnosticStabilitySnapshot, rich),
           );
         }, "Gateway stability failed"),
       ),

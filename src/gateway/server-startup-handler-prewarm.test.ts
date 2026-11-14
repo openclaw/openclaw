@@ -8,10 +8,7 @@ import {
   tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -118,6 +115,8 @@ beforeEach(() => {
   mocks.events.length = 0;
   vi.clearAllMocks();
   mocks.getMemoryCapabilityRegistration.mockReset();
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
 });
 
 afterEach(async () => {
@@ -125,6 +124,7 @@ afterEach(async () => {
     admission.release();
   }
   await Promise.all(sidecars.splice(0).map((sidecar) => Promise.resolve(sidecar.stop())));
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetGatewayWorkAdmission();
 });
@@ -170,43 +170,37 @@ it("skips retrieval preparation when Memory Core is inactive", async () => {
   expect(mocks.listManagedPlugins).toHaveBeenCalledOnce();
 });
 
+it("leaves browser handlers cold when Control UI is explicitly disabled", async () => {
+  const cfg: OpenClawConfig = { gateway: { controlUi: { enabled: false } } };
+  schedule({ getConfig: () => cfg });
+  await drainPrewarm();
+
+  expect(mocks.events).not.toContain("handlers");
+  expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+  expect(mocks.listManagedPlugins).not.toHaveBeenCalled();
+  expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledExactlyOnceWith({
+    config: cfg,
+    isCancelled: expect.any(Function),
+  });
+  expect(mocks.executeRequest).not.toHaveBeenCalled();
+});
+
 it("does not wait for an elapsed prewarm deadline", async () => {
-  vi.useRealTimers();
-  const clock = createGatewaySchedulerClock(1_000);
-  const firstArmed = createDeferred();
-  const nextArmed = createDeferred<number>();
-  let arms = 0;
-  const scheduler = createTestGatewayScheduler({
-    ...clock.clock,
-    arm: (run, delayMs) => {
-      const cancel = clock.clock.arm(run, delayMs);
-      if (arms++ === 0) {
-        firstArmed.resolve();
-      } else {
-        nextArmed.resolve(delayMs);
-      }
-      return cancel;
-    },
+  const startedAt = Date.now();
+  let contextStartedAt: number | undefined;
+  mocks.prewarmGatewaySessionHistory.mockImplementationOnce(async () => {
+    vi.setSystemTime(Date.now() + 6_000);
   });
-  const later = vi.fn(async () => {});
-  const sidecar = schedule({
-    scheduler,
-    items: [
-      { name: "earlier", load: async () => clock.advanceBy(6_000) },
-      { name: "later", notBeforeMs: 5_000, load: later },
-    ],
+  mocks.prewarmContextWindowCacheAfterReady.mockImplementationOnce(async () => {
+    contextStartedAt = Date.now();
   });
-  try {
-    await firstArmed.promise;
-    await clock.wake();
-    await expect(nextArmed.promise).resolves.toBe(0);
-    expect(later).not.toHaveBeenCalled();
-    await clock.wake();
-    expect(later).toHaveBeenCalledOnce();
-  } finally {
-    await sidecar.stop();
-    await scheduler.stop();
-  }
+
+  schedule();
+  await drainPrewarm();
+
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
+  expect(contextStartedAt).toBe(startedAt + 6_000);
 });
 
 it.each([
@@ -219,20 +213,25 @@ it.each([
   async (kind, stopped) => {
     const ready = createDeferred();
     const warn = vi.fn();
-    const load = vi.fn(async () => {});
-    const observed = kind === "handlers" ? load : mocks.prewarmLocalWorkspaceTemplates;
+    const observed =
+      kind === "handlers"
+        ? mocks.prewarmGatewaySessionHistory
+        : mocks.prewarmLocalWorkspaceTemplates;
     const options = { waitForPostReadyWork: () => ready.promise, log: { warn } };
     const sidecar =
-      kind === "handlers"
-        ? schedule({ ...options, items: [{ name: "sessions", load }] })
-        : scheduleDependencyPreparation(options);
+      kind === "handlers" ? schedule(options) : scheduleDependencyPreparation(options);
     await vi.advanceTimersByTimeAsync(0);
     expect(observed).not.toHaveBeenCalled();
     if (stopped) {
       await sidecar.stop();
     }
     ready.resolve();
-    await drainPrewarm();
+    if (kind === "handlers") {
+      await drainPrewarm();
+    } else {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.dynamicImportSettled();
+    }
     expect(observed).toHaveBeenCalledTimes(stopped ? 0 : 1);
     await sidecar.stop();
     expect(warn).not.toHaveBeenCalled();
@@ -259,45 +258,32 @@ it("prewarms only history while foreground work is active", async () => {
 
 it("logs a failed prewarm and continues to later items", async () => {
   const warn = vi.fn();
-  const laterPrewarm = vi.fn(async () => {});
-  const failedPrewarm = vi.fn().mockRejectedValue(new Error("cold read failed"));
+  mocks.prewarmGatewaySessionHistory.mockRejectedValueOnce(new Error("cold read failed"));
 
-  schedule({
-    log: { warn },
-    items: [
-      { name: "broken", load: failedPrewarm },
-      { name: "later", load: laterPrewarm },
-    ],
-  });
-
-  await vi.runAllTimersAsync();
+  schedule({ log: { warn } });
+  await drainPrewarm();
 
   expect(warn).toHaveBeenCalledWith(
-    "post-ready gateway data prewarm failed for broken: Error: cold read failed",
+    "post-ready gateway data prewarm failed for session-history-worker: Error: cold read failed",
   );
-  expect(failedPrewarm).toHaveBeenCalledOnce();
-  expect(laterPrewarm).toHaveBeenCalledOnce();
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
 });
 
 it("stops before scheduling another event-loop turn", async () => {
   const firstDone = createDeferred();
-  const first = vi.fn(() => firstDone.promise);
-  const second = vi.fn(async () => {});
-  const sidecar = schedule({
-    items: [
-      { name: "first", load: first },
-      { name: "second", load: second },
-    ],
-  });
+  mocks.prewarmGatewaySessionHistory.mockImplementationOnce(() => firstDone.promise);
+  const sidecar = schedule();
 
   await vi.advanceTimersToNextTimerAsync();
-  expect(first).toHaveBeenCalledOnce();
+  await vi.dynamicImportSettled();
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
   const stopping = sidecar.stop();
   firstDone.resolve();
   await stopping;
-  await vi.runAllTimersAsync();
+  await drainPrewarm();
 
-  expect(second).not.toHaveBeenCalled();
+  expect(mocks.events).not.toContain("handlers");
 });
 it("delays context prewarm and uses current config after foreground work", async () => {
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
@@ -348,7 +334,7 @@ it("skips optional discovery if foreground work arrives after admission", async 
 });
 
 function scheduleDependencyPreparation(options: Partial<PrewarmOptions> = {}) {
-  const handles = scheduleGatewayPrewarm(prewarmOptions({ ...options, items: [] }));
+  const handles = scheduleGatewayPrewarm(prewarmOptions(options));
   const sidecar = {
     stop: async () => {
       await Promise.all(handles.map((handle) => Promise.resolve(handle.stop())));
@@ -357,6 +343,48 @@ function scheduleDependencyPreparation(options: Partial<PrewarmOptions> = {}) {
   sidecars.push(sidecar);
   return sidecar;
 }
+
+it("refreshes dependency templates between sessions without overlapping preparations", async () => {
+  const first = createDeferred();
+  mocks.prewarmLocalWorkspaceTemplates.mockImplementationOnce(() => first.promise);
+  const handle = scheduleDependencyPreparation();
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+    first.resolve();
+    const request = foreground();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+    request.release();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(2);
+  } finally {
+    first.resolve();
+    await handle.stop();
+  }
+});
+
+it.each([
+  [0, 0, false],
+  [1000, 201, false],
+  [1000, 200, true],
+] as const)(
+  "reserves constrained memory for requests (limit: %i, available: %i)",
+  async (limit, available, skipped) => {
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
+    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+    const handles = scheduleGatewayPrewarm(prewarmOptions());
+    sidecars.push(...handles);
+    expect(handles).toHaveLength(skipped ? 0 : 2);
+    await vi.waitFor(() => {
+      expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(skipped ? 0 : 1);
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    });
+  },
+);
 
 it.each(["close", "restart"] as const)(
   "cancels dependency preparation on %s and joins installer cleanup",
@@ -367,7 +395,6 @@ it.each(["close", "restart"] as const)(
       started.resolve(signal);
       await cleanup.promise;
     });
-    const request = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground request");
     const handle = scheduleDependencyPreparation();
     let stopping: Promise<void> | undefined;
     try {
@@ -387,7 +414,6 @@ it.each(["close", "restart"] as const)(
       await stopping;
       expect(closed).toBe(true);
     } finally {
-      request.release();
       cleanup.resolve();
       await handle.stop();
       await stopping;

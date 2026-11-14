@@ -26,7 +26,7 @@ import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -53,7 +53,10 @@ vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => state.config ?? {},
 }));
-vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
+vi.mock("./http-auth-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
+  authorizeControlUiReadRequestOrReply: state.auth,
+}));
 vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
   resolveSessionWorkerPlacementContext: () => ({
@@ -81,6 +84,10 @@ async function image(name = "image.png", root = project, contents: string | Buff
   await fs.mkdir(path.dirname(source), { recursive: true });
   await fs.writeFile(source, contents);
   return source;
+}
+
+function loadedSession(canonicalKey: string, agentId = "main") {
+  return { cfg, agentId, canonicalKey, storePath: path.join(temp, "sessions.json"), entry };
 }
 
 async function managedWorkspace() {
@@ -165,13 +172,7 @@ beforeEach(async () => {
     sessionRoot: project,
     permissionMode: "workspace",
   };
-  state.loaded.mockImplementation((requestedKey: string) => ({
-    cfg,
-    agentId: "main",
-    canonicalKey: requestedKey,
-    storePath: path.join(temp, "sessions.json"),
-    entry,
-  }));
+  state.loaded.mockImplementation((requestedKey: string) => loadedSession(requestedKey));
   state.retained.mockImplementation(({ sessionKeys }: { sessionKeys: string[] }) => ({
     entries: sessionKeys.map((key) => ({ sessionKey: key, entry })),
   }));
@@ -278,6 +279,22 @@ it("binds relative media tickets to the execution directory within the session r
   expect((await request("image.png", { ticket, bytes: true })).res.statusCode).toBe(404);
   expect((await request("image.png")).payload).toMatchObject({ available: true });
   expect((await request("image.png", { unscoped: true })).res.statusCode).toBe(404);
+});
+
+it("reports expired relative scratch media in metadata and existing byte tickets", async () => {
+  const relative = ".openclaw/tmp/proof/expired.png";
+  const source = await image(relative);
+  const ticket = await mediaTicket(relative);
+  await fs.unlink(source);
+  await expectMetadata(relative, {
+    available: false,
+    code: "artifact-file-expired",
+    reason: "file expired (scratch cleaned after 24 h)",
+    retryable: false,
+  });
+  const downloaded = await request(relative, { ticket, bytes: true });
+  expect(downloaded.res.statusCode).toBe(410);
+  expect(downloaded.bytes.toString()).toBe("file expired (scratch cleaned after 24 h)");
 });
 
 it.each(["metadata", "bytes"] as const)(
@@ -442,11 +459,8 @@ it("keeps unscoped readers on the default static roots even when a query selects
 it("selects the scoped session's agent when its optional agent parameter is omitted", async () => {
   cfg.agents!.entries!.other = { workspace: project };
   state.loaded.mockImplementation((requestedKey: string) => ({
-    cfg,
-    agentId: "other",
-    canonicalKey: requestedKey,
+    ...loadedSession(requestedKey, "other"),
     storePath: path.join(temp, "other-sessions.json"),
-    entry,
   }));
   const source = await image();
   await expectMetadata(
@@ -471,9 +485,7 @@ it("keeps Gateway-owned inbound images available in a repository session", async
   entry.repositoryWorkspaceId = "remote-workspace";
   const id = "remote-session-upload.png";
   const source = `media://inbound/${id}`;
-  const file = path.join(resolveStateDir(), "media", "inbound", id);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, PNG);
+  await image(id, path.join(resolveStateDir(), "media", "inbound"));
   await expectBytes(source, { ticket: await mediaTicket(source) });
 });
 it("keeps merged-profile media tickets bound to the canonical person's current plugin access", async () => {
@@ -624,8 +636,7 @@ it("preserves legacy Full Access PDF attachments under the configured agent work
   entry.permissionMode = "full";
   const source = await image(name, path.join(temp, "agent"), content);
   await expectBytes(source, {}, Buffer.from(content), "application/pdf");
-  const outside = path.join(temp, name);
-  await fs.writeFile(outside, content);
+  const outside = await image(name, temp, content);
   expect((await request(outside, { bytes: true })).res.statusCode).toBe(404);
 });
 

@@ -62,6 +62,7 @@ async function waitForQaGatewayConnection(
 export async function startQaGatewayRpcClient(params: {
   wsUrl: string;
   token: string;
+  password?: string;
   logs: () => string;
   deviceIdentity?: QaGatewayClientOptions["deviceIdentity"];
   scopes?: QaGatewayClientOptions["scopes"];
@@ -78,7 +79,7 @@ export async function startQaGatewayRpcClient(params: {
 
   const client = new GatewayClient({
     url: params.wsUrl,
-    token: params.token,
+    ...(params.password !== undefined ? { password: params.password } : { token: params.token }),
     requestTimeoutMs: QA_GATEWAY_RPC_TIMEOUT_MS,
     clientName: "gateway-client",
     deviceIdentity: params.deviceIdentity ?? null,

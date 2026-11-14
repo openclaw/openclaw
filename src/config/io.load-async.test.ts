@@ -20,7 +20,7 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutMainSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
@@ -56,13 +56,13 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function fixture(raw?: string) {
+function fixture(config?: unknown) {
   const home = dirs.make("openclaw-config-async-");
   const bundled = path.join(home, "bundled");
   fs.mkdirSync(bundled);
   const configPath = path.join(home, "openclaw.json");
-  if (raw !== undefined) {
-    fs.writeFileSync(configPath, raw);
+  if (config !== undefined) {
+    fs.writeFileSync(configPath, typeof config === "string" ? config : JSON.stringify(config));
   }
   const env: NodeJS.ProcessEnv = {
     HOME: home,
@@ -87,6 +87,28 @@ function fixture(raw?: string) {
 
 function cached<T>(run: () => T) {
   return withPluginCache(createPluginCache(), run);
+}
+
+async function pendingFixture() {
+  const source = { gateway: { mode: "local" }, session: { store: "/srv/synthetic-sessions.json" } };
+  const raw = JSON.stringify(source);
+  const options = fixture(raw);
+  const pending = {
+    pluginId: "fixture-plugin",
+    reason: "Synthetic pending migration",
+    command: "openclaw plugins install @example/fixture-plugin",
+    configPaths: [["session", "store"]],
+    validationExcludedPaths: [["session", "store"]],
+  };
+  await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
+  await closeOpenClawStateDatabaseAsync();
+  return {
+    options,
+    source,
+    raw,
+    pending,
+    databasePath: resolveOpenClawStateSqlitePath(options.env),
+  };
 }
 
 function barrier<T = void>() {
@@ -147,29 +169,13 @@ function observeWith(
   });
 }
 
-it.each(["load", "snapshot", "metadata", "write-snapshot", "policy"] as const)(
-  "offline %s consumes canonical config without reading pending migrations or changing artifacts",
-  async (method) => {
-    const raw = JSON.stringify({
-      gateway: { mode: "local" },
-      session: { store: "/srv/synthetic-session-state/sessions.json" },
-    });
-    const options = fixture(raw);
-    const pending = {
-      pluginId: "fixture-plugin",
-      reason: "The configured plugin is not installed.",
-      command: "openclaw plugins install @example/fixture-plugin",
-      configPaths: [["session", "store"]],
-      validationExcludedPaths: [["session", "store"]],
-    };
-    await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
-    await closeOpenClawStateDatabaseAsync();
-    const databasePath = resolveOpenClawStateSqlitePath(options.env);
-    const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
-    const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
-    const mainSql = observeMainThreadSql();
-    const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
-    try {
+it("offline reads consume canonical config without reading pending migrations or changing artifacts", async () => {
+  const { options, source, raw, pending, databasePath } = await pendingFixture();
+  const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
+  const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+  for (const method of ["load", "metadata", "policy"] as const) {
+    await withoutMainSql(async () => {
       const read = () =>
         cached(async () => {
           if (method === "policy") {
@@ -179,12 +185,7 @@ it.each(["load", "snapshot", "metadata", "write-snapshot", "policy"] as const)(
           if (method === "load") {
             return await io.loadConfigAsync();
           }
-          const snapshot =
-            method === "metadata"
-              ? (await io.readConfigFileSnapshotWithPluginMetadata()).snapshot
-              : method === "write-snapshot"
-                ? (await io.readConfigFileSnapshotForWrite()).snapshot
-                : await io.readConfigFileSnapshot();
+          const { snapshot } = await io.readConfigFileSnapshotWithPluginMetadata();
           expect(snapshot).toMatchObject({ valid: true, raw });
           return snapshot.config;
         });
@@ -192,87 +193,58 @@ it.each(["load", "snapshot", "metadata", "write-snapshot", "policy"] as const)(
       const config = await (method === "load" || method === "policy"
         ? withArtifactPreservingStateReads(read)
         : read());
-      expect(config).toMatchObject({
-        gateway: { mode: "local" },
-        session: { store: "/srv/synthetic-session-state/sessions.json" },
-      });
+      expect(config).toMatchObject(source);
       expect(synchronousSnapshot).not.toHaveBeenCalled();
-      mainSql.expectIdle();
-    } finally {
-      mainSql.restore();
-    }
+    });
     expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
-    expect(family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null))).toEqual(
-      familyBefore,
-    );
-    expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
-    if (method === "policy") {
-      await recordDeferredPluginMigrations({
-        env: options.env,
-        pending: [],
-        resolvedPluginIds: [pending.pluginId],
-      });
-      await expect(readCurrentConfigForPolicyCheckAsync(options)).resolves.toHaveProperty(
-        "session.store",
-        "/srv/synthetic-session-state/sessions.json",
-      );
+    for (const [index, before] of familyBefore.entries()) {
+      const file = family[index]!;
+      const after = fs.existsSync(file) ? fs.readFileSync(file) : null;
+      expect(
+        before === null ? after === null : after?.equals(before),
+        `${file}: before=${before?.length ?? "absent"}, after=${after?.length ?? "absent"}`,
+      ).toBe(true);
     }
-  },
-);
+    await closeOpenClawStateDatabaseAsync();
+    clearBundledDiscoveryModeMemo();
+  }
+  expect(
+    readDeferredPluginMigrations({ env: options.env, artifactPreservingReadOnly: false }),
+  ).toEqual([pending]);
+});
 
 it("validates config and update ownership snapshots while a verified live writer checkpoints", async () => {
-  const raw = JSON.stringify({
-    gateway: { mode: "local" },
-    session: { store: "/srv/synthetic-sessions.json" },
-  });
-  const options = fixture(raw);
-  await recordDeferredPluginMigrations({
-    env: options.env,
-    pending: [
-      {
-        pluginId: "fixture-plugin",
-        reason: "Synthetic pending migration",
-        command: "openclaw plugins install @example/fixture-plugin",
-        configPaths: [["session", "store"]],
-        validationExcludedPaths: [["session", "store"]],
-      },
-    ],
-  });
-  await closeOpenClawStateDatabaseAsync();
-  const databasePath = resolveOpenClawStateSqlitePath(options.env);
+  const { options, raw, databasePath } = await pendingFixture();
   const writer = await startSqliteCheckpointWriter(databasePath);
   const owner = acquireGatewayStateOwner({
     databasePath,
     payload: { ...defaultPayload(databasePath), role: "gateway" },
   });
-  const mainSql = observeMainThreadSql();
   try {
-    for (const method of ["metadata", "write-snapshot"] as const) {
-      await cached(async () => {
-        const io = createConfigIO({ ...options, observe: false });
-        const result =
-          method === "metadata"
-            ? await io.readConfigFileSnapshotWithPluginMetadata()
-            : await io.readConfigFileSnapshotForWrite();
-        expect(result.snapshot).toMatchObject({ valid: true, raw });
-      });
-    }
-    mainSql.expectIdle();
+    await withoutMainSql(async () => {
+      for (const method of ["metadata", "write-snapshot"] as const) {
+        await cached(async () => {
+          const io = createConfigIO({ ...options, observe: false });
+          const result =
+            method === "metadata"
+              ? await io.readConfigFileSnapshotWithPluginMetadata()
+              : await io.readConfigFileSnapshotForWrite();
+          expect(result.snapshot).toMatchObject({ valid: true, raw });
+        });
+      }
+    });
     expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
   } finally {
-    mainSql.restore();
     await writer.stop();
     owner.release();
   }
 });
 
 it("rejects an invalid async load and rolls back its injected config environment", async () => {
-  const { io, env } = fixture(
-    JSON.stringify({
-      gateway: { port: "invalid" },
-      env: { vars: { CONFIG_FIXTURE_VALUE: "rejected" } },
-    }),
-  );
+  const { io, env } = fixture({
+    gateway: { port: "invalid" },
+    env: { vars: { CONFIG_FIXTURE_VALUE: "rejected" } },
+  });
   await expect(io.loadConfigAsync()).rejects.toMatchObject({ code: "INVALID_CONFIG" });
   expect(env.CONFIG_FIXTURE_VALUE).toBeUndefined();
 });
@@ -288,11 +260,8 @@ it("uses the same fresh-install defaults for a missing async configuration", asy
 it.each(["full", "core-only"] as const)(
   "prepares shell key metadata for a %s async load without native SQL",
   async (pluginValidation) => {
-    const { env, configPath, homedir, logger } = fixture(
-      JSON.stringify({ env: { shellEnv: { enabled: true } } }),
-    );
-    const mainSql = observeMainThreadSql();
-    try {
+    const { env, configPath, homedir, logger } = fixture({ env: { shellEnv: { enabled: true } } });
+    await withoutMainSql(async () => {
       await cached(() =>
         createConfigIO({ env, configPath, homedir, logger, pluginValidation }).loadConfigAsync(),
       );
@@ -305,10 +274,7 @@ it.each(["full", "core-only"] as const)(
           ]),
         }),
       );
-      mainSql.expectIdle();
-    } finally {
-      mainSql.restore();
-    }
+    });
   },
 );
 
@@ -398,32 +364,28 @@ it.each(["metadata", "recovered", "invalid", "queued-write"] as const)(
 );
 
 it("keeps prepared discovery facts when another root loads during health observation", async () => {
-  const first = fixture(JSON.stringify({ gateway: { mode: "local", port: 19001 } }));
+  const first = fixture({ gateway: { mode: "local", port: 19001 } });
   const other = fixture();
   observeWith(undefined, async () => {
     await prepareBundledDiscoveryMode(other.env);
   });
   const io = createConfigIO(first);
-  const mainSql = observeMainThreadSql();
-  const config = await cached(() => io.loadConfigAsync());
+  const config = await withoutMainSql(() => cached(() => io.loadConfigAsync()));
   expect(config.gateway?.port).toBe(19001);
-  mainSql.expectIdle();
 });
 
 it("keeps core-only model defaults out of synchronous plugin discovery", async () => {
-  const options = fixture(
-    JSON.stringify({
-      models: {
-        providers: {
-          "fixture-provider": {
-            baseUrl: "https://example.invalid/v1",
-            api: "openai-completions",
-            models: [{ id: "fixture-model", name: "Fixture model" }],
-          },
+  const options = fixture({
+    models: {
+      providers: {
+        "fixture-provider": {
+          baseUrl: "https://example.invalid/v1",
+          api: "openai-completions",
+          models: [{ id: "fixture-model", name: "Fixture model" }],
         },
       },
-    }),
-  );
+    },
+  });
   configHealth.patchConfigHealthEntryToStore(options, options.configPath, {
     lastObservedSuspiciousSignature: "fixture-state",
   });
@@ -431,12 +393,10 @@ it("keeps core-only model defaults out of synchronous plugin discovery", async (
     vi.stubEnv(key, options.env[key]);
   }
   try {
-    const mainSql = observeMainThreadSql();
-    const config = await cached(() =>
-      createConfigIO({ ...options, pluginValidation: "core-only" }).loadConfigAsync(),
+    const config = await withoutMainSql(() =>
+      cached(() => createConfigIO({ ...options, pluginValidation: "core-only" }).loadConfigAsync()),
     );
     expect(config.models?.providers?.["fixture-provider"]?.models[0]?.id).toBe("fixture-model");
-    mainSql.expectIdle();
   } finally {
     vi.unstubAllEnvs();
   }

@@ -1079,20 +1079,37 @@ function verifyWorkflowRun(params: {
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
+  const blockingFailedJobs = failedJobs.filter((job) => {
+    const jobConclusion = normalizeOptionalString(job.conclusion);
+    // Job-level continue-on-error preserves raw failure conclusions in the API.
+    if (
+      workflowName === "OpenClaw NPM Release" &&
+      job.name === "Notify Windows of published Gateway packages" &&
+      (jobConclusion === "failure" ||
+        jobConclusion === "timed_out" ||
+        jobConclusion === "cancelled")
+    ) {
+      console.error(
+        `Warning: ${params.label}: optional Gateway publication notification is ${jobConclusion}; inspect the notification job. Do not republish npm to retry notification.`,
+      );
+      return false;
+    }
+    return true;
+  });
   const acceptedFailure = conclusion === "failure" && params.acceptFailedRun?.(run, jobs) === true;
   params.observe?.(run, failedJobs.length);
-  if (failedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
+  if (blockingFailedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
     runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
-      `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
+      `${params.label}: reran ${blockingFailedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
   if (
     status !== "completed" ||
     (conclusion !== "success" && !acceptedFailure) ||
-    (failedJobs.length > 0 && !acceptedFailure)
+    (blockingFailedJobs.length > 0 && !acceptedFailure)
   ) {
-    const failedNames = failedJobs
+    const failedNames = blockingFailedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
     throw new Error(
@@ -1706,12 +1723,14 @@ export async function verifyBetaRelease(
   options: {
     rootDir?: string;
     pluginNpmReadback?: {
-      // Resolves to an informational note for a superseded published version.
       verify: (
         packageName: string,
         version: string,
         distTag: string,
-      ) => Promise<string | undefined>;
+      ) => Promise<{
+        disposition: "published" | "deferred-auth";
+        note?: string;
+      }>;
       evidence: Record<string, unknown>[];
     };
   } = {},
@@ -1794,29 +1813,33 @@ export async function verifyBetaRelease(
     });
     for (const plugin of npmPlugins) {
       diagnostic.package("pluginNpm", plugin.packageName, "started");
+      let deferredAuth = false;
       // Full publication owns tarball readback, including prior-parent publishes.
       // Only standalone health checks retain metadata verification.
       if (options.pluginNpmReadback) {
-        const note = await options.pluginNpmReadback.verify(
+        const readback = await options.pluginNpmReadback.verify(
           plugin.packageName,
           args.version,
           args.distTag,
         );
-        if (note !== undefined) {
-          lines.push(`plugin npm WARN: ${note}`);
+        deferredAuth = readback.disposition === "deferred-auth";
+        if (readback.note !== undefined) {
+          lines.push(`plugin npm WARN: ${readback.note}`);
         }
       } else {
         await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
       }
       const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
-      diagnostic.observeNpmPublication(scope);
-      const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
-      if (betaFloorError !== undefined) {
-        betaFloorErrors.push({ scope, message: betaFloorError });
-        diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
-      } else {
-        diagnostic.package("pluginNpm", plugin.packageName, "success");
+      if (!deferredAuth) {
+        diagnostic.observeNpmPublication(scope);
+        const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
+        if (betaFloorError !== undefined) {
+          betaFloorErrors.push({ scope, message: betaFloorError });
+          diagnostic.fail(createNpmBetaFloorError([betaFloorError]));
+          continue;
+        }
       }
+      diagnostic.package("pluginNpm", plugin.packageName, "success");
     }
     if (!betaFloorErrors.some(({ scope }) => scope.stage === "pluginNpm")) {
       diagnostic.success("pluginNpm");

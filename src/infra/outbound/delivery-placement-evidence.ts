@@ -1,8 +1,26 @@
 import { listMessageReceiptSourceTargets } from "../../channels/message/receipt.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { DeliveryPlacementEvidence } from "./delivery-placement-evidence.types.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 
 export type { DeliveryPlacementEvidence } from "./delivery-placement-evidence.types.js";
+
+/** Missing placement adds no contradiction; every reported physical send must match the owner. */
+export function deliveryPlacementMatchesContext(
+  placement: DeliveryPlacementEvidence | undefined,
+  context: { channel: string; to: string; threadId?: string | number | null },
+): boolean {
+  const expectedTarget = normalizeTargetForProvider(context.channel, context.to);
+  return (
+    !placement ||
+    (!placement.invalid &&
+      placement.channels.every((channel) => channel === context.channel) &&
+      placement.targets.every(
+        (target) => normalizeTargetForProvider(context.channel, target) === expectedTarget,
+      ) &&
+      placement.threads.every((thread) => thread === String(context.threadId ?? "").trim()))
+  );
+}
 
 /** One logical payload retains every observation before adapter/user callbacks can mutate it. */
 export function createDeliveryPlacementEvidenceRecorder() {

@@ -1,15 +1,15 @@
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
+import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
-import {
-  buildGatewayStatusJsonPayload,
-  resolveStatusUpdateChannelInfo,
-} from "./status-all/format.js";
+import { collectRecoveryDiskUsage } from "./recovery-disk-usage.js";
+import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
@@ -26,7 +26,10 @@ type StatusJsonCommandOptions = {
 /** Prevents --agent from implying that the aggregate status report itself is agent-scoped. */
 export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): void {
   if (opts.agent !== undefined && opts.usage !== true) {
-    throw new Error("--agent is only valid with --usage");
+    throwExpectedCliError("--agent is only valid with --usage");
+  }
+  if (opts.agent !== undefined && !opts.agent.trim()) {
+    throwExpectedCliError("--agent must not be blank");
   }
 }
 
@@ -47,41 +50,54 @@ export async function runStatusJsonCommand(params: {
         params.runtime,
       ),
     )
-    .catch((error: unknown) => reportStatusScanFailure(error, params.runtime, opts.timeoutMs));
+    .catch((error: unknown) =>
+      reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs),
+    );
+  if (!scan) {
+    return;
+  }
   const updateRunStatus = await readUpdateRunStatus();
   const includeSecurityAudit = opts.all === true || opts.deep === true;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
-  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
-    await resolveStatusRuntimeSnapshot({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      timeoutMs: opts.timeoutMs,
-      gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
-      ...(opts.agent ? { agentId: opts.agent } : {}),
-      usage: opts.usage,
-      deep: opts.deep,
-      gatewayReachable: scan.gatewayReachable,
-      ...(scan.gatewayProbe?.startupPhase
-        ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
-        : {}),
-      ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
-      includeSecurityAudit: includeSecurityAudit && !scan.collection,
-      suppressHealthErrors: true,
-      ...(scan.collection && opts.usage
-        ? {
-            resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
-              const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
-                await import("../config/config.js");
-              const snapshot = await readConfigFileSnapshot({
-                observe: false,
-                pluginValidation: "core-only",
-              });
-              await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
-              return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
-            },
-          }
-        : {}),
-    });
+  const snapshot = await resolveStatusRuntimeSnapshot({
+    config: scan.cfg,
+    sourceConfig: scan.sourceConfig,
+    timeoutMs: opts.timeoutMs,
+    gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
+    ...(opts.agent ? { agentId: opts.agent } : {}),
+    usage: opts.usage,
+    deep: opts.deep,
+    gatewayReachable: scan.gatewayReachable,
+    ...(scan.gatewayProbe?.startupPhase
+      ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
+      : {}),
+    ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
+    includeSecurityAudit: includeSecurityAudit && !scan.collection,
+    suppressHealthErrors: true,
+    ...(scan.collection && opts.usage
+      ? {
+          resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
+            const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
+              await import("../config/config.js");
+            const configSnapshot = await readConfigFileSnapshot({
+              observe: false,
+              pluginValidation: "core-only",
+            });
+            await setAppliedRuntimeConfigSnapshot(
+              configSnapshot.runtimeConfig,
+              configSnapshot.sourceConfig,
+            );
+            return resolveStatusUsageSummary({ ...input, config: configSnapshot.runtimeConfig });
+          },
+        }
+      : {}),
+  }).catch((error: unknown) =>
+    reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs),
+  );
+  if (!snapshot) {
+    return;
+  }
+  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } = snapshot;
 
   const databaseEngines = await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores);
   const backups = await readBackupRunFreshness(scan.env ?? {});
@@ -104,6 +120,9 @@ export async function runStatusJsonCommand(params: {
   const databaseFamilies = describeDatabaseEngineSelection(surface.cfg, databaseEngines.stores);
   const payload = {
     ...scan.summary,
+    recoveryCopies:
+      scan.recoveryCopies ??
+      (await collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env })),
     os: scan.osSummary,
     update: surface.update,
     updateChannel: channelInfo.channel,
@@ -116,7 +135,20 @@ export async function runStatusJsonCommand(params: {
       families: databaseFamilies,
       ...databaseEngines,
     },
-    gateway: buildGatewayStatusJsonPayload(surface),
+    gateway: {
+      mode: surface.gatewayMode,
+      url: projectGatewayUrlForDiagnostics(surface.gatewayConnection.url),
+      urlSource: surface.gatewayConnection.urlSource,
+      misconfigured: surface.remoteUrlMissing,
+      reachable: surface.gatewayReachable,
+      ...(surface.gatewayProbe?.startupPhase
+        ? { readiness: "still-starting", startupPhase: surface.gatewayProbe.startupPhase }
+        : {}),
+      connectLatencyMs: surface.gatewayProbe?.connectLatencyMs ?? null,
+      self: surface.gatewaySelf ?? null,
+      error: surface.gatewayProbe?.error ?? null,
+      authWarning: surface.gatewayProbeAuthWarning ?? null,
+    },
     gatewayService: surface.gatewayService,
     nodeService: surface.nodeService,
     agents: scan.agentStatus,

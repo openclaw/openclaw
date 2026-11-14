@@ -23,6 +23,15 @@ const expectFiltered = (...args: Parameters<typeof filterToolResultMediaUrls>) =
   expect(filterToolResultMediaUrls(...args));
 
 describe("tool errors", () => {
+  it.each([
+    ['{"error":"parse denied"}', undefined, "parse denied"],
+    ["not JSON\nsecond line", undefined, "not JSON"],
+    ["null", undefined, "null"],
+    ['{"error":"parse denied"}', { error: "direct denied" }, "direct denied"],
+  ])("extracts JSON diagnostics or their text fallback: %s", (text, details, expected) => {
+    expect(extractToolErrorMessage({ content: [{ type: "text", text }], details })).toBe(expected);
+  });
+
   it("ignores non-error status values", () => {
     expect(extractToolErrorMessage({ details: { status: "0" } })).toBeUndefined();
     expect(extractToolErrorMessage({ details: { status: "completed" } })).toBeUndefined();

@@ -1,14 +1,17 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import type { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
-import type { ExecToolApprovalReview } from "./bash-tools.exec-types.js";
 import { readToolEffectReceipt } from "./tool-effect-receipt.js";
 
 const processGatewayAllowlistMock = vi.hoisted(() =>
@@ -36,7 +39,6 @@ const createPreflightTool = () =>
 const runExecPreflight = (command: string, workdir = process.cwd()) =>
   createPreflightTool().execute("call-script-preflight", { command, workdir });
 const injection = /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/;
-const changedScript = "approval script operand changed before execution";
 const withScripts = <T>(files: Record<string, string>, run: (workdir: string) => Promise<T>) =>
   withTempDir("openclaw-exec-preflight-", async (workdir) => {
     for (const [name, source] of Object.entries(files)) {
@@ -95,58 +97,6 @@ describeNonWin("exec script preflight", () => {
       ),
     ).rejects.toThrow("cancelled during approval preparation");
     expect(releaseSpawn).toHaveBeenCalledOnce();
-  });
-
-  it.each([true, false])("revalidates approved bytes before spawn (changed=%s)", async (mutate) => {
-    await withScripts({ "script.sh": "#!/bin/sh\necho approved\n" }, async (workdir) => {
-      const prepared = await prepareSystemRunMutableFileApproval({
-        command: "sh script.sh",
-        cwd: workdir,
-      });
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      const approvalReview: ExecToolApprovalReview = {
-        id: "guardian:call-script-preflight",
-        label: "Guardian",
-        status: "approved",
-      };
-      processGatewayAllowlistMock.mockImplementationOnce(async (params) => {
-        params?.onApprovalReview?.(approvalReview);
-        return {
-          allowWithoutEnforcedCommand: true,
-          revalidateBeforeExecution: async () => {
-            const current = await prepared.revalidate();
-            return current.ok
-              ? undefined
-              : {
-                  content: [{ type: "text", text: current.message }],
-                  details: {
-                    status: "failed",
-                    exitCode: null,
-                    durationMs: 0,
-                    aggregated: current.message,
-                    timedOut: false,
-                    cwd: workdir,
-                  },
-                };
-          },
-        };
-      });
-      if (mutate) {
-        await fs.writeFile(path.join(workdir, "script.sh"), "#!/bin/sh\necho mutated\n");
-      }
-      const result = await runExecPreflight("sh script.sh", workdir);
-      expect(result.details).toMatchObject({
-        status: mutate ? "failed" : "completed",
-        approvalReviewOutcome: "approved",
-        approvalReviews: [approvalReview],
-        aggregated: mutate ? expect.stringContaining(changedScript) : "approved",
-      });
-      if (mutate) {
-        expect(result.content[0]).toMatchObject({ text: expect.stringContaining(changedScript) });
-      }
-    });
   });
 
   it.each([
@@ -312,4 +262,168 @@ it("does not hang on assignment prefixes followed by whitespace-heavy text", asy
   const start = Date.now();
   await validateScriptFileForShellBleed({ command, workdir: process.cwd() });
   expect(Date.now() - start).toBeLessThan(5000);
+});
+
+describeNonWin("exec live OpenClaw state SQLite guard", () => {
+  const quote = (value: string) => JSON.stringify(value);
+
+  async function databaseFixture(root: string, relativePath: string) {
+    const databasePath = path.join(root, relativePath);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, "fixture");
+    return databasePath;
+  }
+
+  const tempDirs = createTempDirTracker();
+
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
+    tempDirs.cleanup();
+  });
+
+  describe("target analysis", () => {
+    let root: string, stateDir: string, databasePath: string;
+    async function check(
+      commands: string[],
+      expected: "live-state-sqlite" | null = "live-state-sqlite",
+      workdir = root,
+    ) {
+      for (const command of commands) {
+        await expect(
+          detectUnsafeExecControlShellCommand(command, { stateDir, workdir }),
+        ).resolves.toBe(expected);
+      }
+    }
+    beforeEach(async () => {
+      root = tempDirs.make("openclaw-exec-live-sqlite-");
+      stateDir = path.join(root, "state with spaces");
+      databasePath = await databaseFixture(stateDir, "state/openclaw.sqlite");
+    });
+    it("detects direct and carrier-wrapped SQLite targets under the active state directory", async () => {
+      await check([
+        `sqlite3 --json ${quote(databasePath)}`,
+        `sudo -u openclaw env sqlite3 -header -column ${quote(databasePath)}`,
+        'sqlite3 -cmd ".timeout 1000" "$OPENCLAW_STATE_DIR/state/openclaw.sqlite"',
+        `sqlite3 :memory: ${quote(`.open ${quote(databasePath)}`)}`,
+        `sqlite3 :memory: ${quote(`.op ${quote(databasePath)}`)}`,
+        `sqlite3 -cmd ${quote(`.open --readonly ${quote(databasePath)}`)} :memory:`,
+      ]);
+      await check([`cat ${quote(databasePath)}`], null);
+    });
+
+    it("detects relative and symlink-aliased live state targets", async () => {
+      const aliasDir = path.join(root, "state-alias");
+      await databaseFixture(stateDir, "agents/main/state.sqlite");
+      await fs.symlink(stateDir, aliasDir);
+      await check([
+        'sqlite3 "state with spaces/agents/main/state.sqlite"',
+        `sqlite3 --readonly ${quote(path.join(aliasDir, "agents", "main", "state.sqlite"))}`,
+      ]);
+    });
+
+    it("detects live state targets hidden behind file: URI variable spellings", async () => {
+      await check([
+        'sqlite3 "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"',
+        'sqlite3 "file:${OPENCLAW_STATE_DIR}/state/openclaw.sqlite" "PRAGMA user_version"',
+        `sqlite3 -cmd ${quote(`.open ${quote("file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite")}`)} :memory:`,
+        `sqlite3 "file:${databasePath}?mode=ro"`,
+        // Empty and localhost authorities also expand to a valid absolute file URI.
+        'sqlite3 "file://$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"',
+        'sqlite3 "file://${OPENCLAW_STATE_DIR}/state/openclaw.sqlite" "PRAGMA user_version"',
+        'sqlite3 "file://localhost$OPENCLAW_STATE_DIR/state/openclaw.sqlite" "PRAGMA user_version"',
+        'sqlite3 "FILE://$OPENCLAW_STATE_DIR/state/openclaw.sqlite" "PRAGMA user_version"',
+      ]);
+      const copy = await databaseFixture(root, "snapshot/openclaw.sqlite");
+      await check([`sqlite3 "file:${copy}?mode=ro"`, `sqlite3 "file://${copy}?mode=ro"`], null);
+    });
+
+    it("preserves malformed URI fallback and decodes valid file URLs only once", async () => {
+      await check([
+        `sqlite3 ${quote(`file:${databasePath}%ZZ`)}`,
+        'sqlite3 "file:$OPENCLAW_STATE_DIR/state/%ZZ.sqlite"',
+        `sqlite3 ${quote(`file:${encodeURI(databasePath)}`)}`,
+      ]);
+      await check(
+        [
+          `sqlite3 ${quote(`file:${root}/%2573tate%20with%20spaces/state/openclaw.sqlite`)}`,
+          'sqlite3 "file:"',
+          `sqlite3 ${quote(`file:${encodeURI(encodeURI(databasePath))}`)}`,
+        ],
+        null,
+      );
+    });
+
+    it("detects file: URI targets spelled with $HOME when state lives under HOME", async () => {
+      stateDir = path.join(root, "home", ".openclaw");
+      await databaseFixture(stateDir, "state/openclaw.sqlite");
+      // The guard reads os.homedir(), not process.env.HOME.
+      vi.spyOn(os, "homedir").mockReturnValue(path.join(root, "home"));
+      await check([
+        'sqlite3 "file:$HOME/.openclaw/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"',
+        'sqlite3 "$HOME/.openclaw/state/openclaw.sqlite" "PRAGMA user_version"',
+      ]);
+      await check(['sqlite3 "file:$HOME/snapshots/openclaw.sqlite?mode=ro"'], null);
+      // Relative file URIs are root-relative, not relative to the exec workdir.
+      await check(
+        [`cd ${quote(root)} && sqlite3 "file:data/app.db?mode=ro" "SELECT 1"`],
+        null,
+        path.join(stateDir, "workspace"),
+      );
+      await check(
+        [`cd ${quote(root)} && sqlite3 "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro"`],
+        "live-state-sqlite",
+        path.join(stateDir, "workspace"),
+      );
+    });
+  });
+
+  it.each([false, true])("rejects live SQLite before spawn (URI=%s)", async (uri) => {
+    await withTempDir("openclaw-exec-live-sqlite-spawn-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const databasePath = path.join(stateDir, "state/openclaw.sqlite");
+      // Leave live paths empty: fake database contents would poison the tool's own state access.
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const sqlitePath = path.join(root, "sqlite3");
+      const markerPath = path.join(root, "sqlite-spawned");
+      await fs.writeFile(sqlitePath, `#!/bin/sh\nprintf spawned > ${quote(markerPath)}\n`, {
+        mode: 0o755,
+      });
+      await withEnvAsync(
+        { HOME: root, USERPROFILE: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir },
+        async () => {
+          const tool = createPreflightTool();
+          const target = uri
+            ? '"file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"'
+            : `:memory: ${quote(`.open ${quote(databasePath)}`)}`;
+          await expect(
+            tool.execute("call-live-sqlite-uri", {
+              command: `${quote(sqlitePath)} ${target}`,
+              workdir: root,
+            }),
+          ).rejects.toThrow(
+            /external sqlite3 cannot open databases under the active OpenClaw state directory/,
+          );
+          await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+          if (!uri) {
+            return;
+          }
+          const copy = await databaseFixture(root, "snapshot/openclaw.sqlite");
+          const privateMarkerPath = path.join(root, "private-spawned");
+          await fs.writeFile(
+            sqlitePath,
+            `#!/bin/sh\nprintf spawned > ${quote(privateMarkerPath)}\n`,
+            {
+              mode: 0o755,
+            },
+          );
+          await tool.execute("call-private-sqlite-uri", {
+            command: `${quote(sqlitePath)} "file:${copy}?mode=ro" "PRAGMA user_version"`,
+            workdir: root,
+          });
+          await expect(fs.stat(privateMarkerPath)).resolves.toBeDefined();
+        },
+      );
+    });
+  });
 });

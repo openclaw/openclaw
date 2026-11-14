@@ -1,15 +1,19 @@
 import { Dynamic, type JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createSignal, createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
+import { Icon } from "./solid/icon.tsx";
 import "../styles/wizard-step-controls.css";
+import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
@@ -26,6 +30,10 @@ type WizardStepControlsProps = {
   confirmAffirmativeLabel?: string;
   leadingAction?: JSX.Element;
   externalAuthInput?: boolean;
+  /** Model-setup sign-in identity: Gateway brand id (icon) and display name. */
+  brandId?: string;
+  providerLabel?: string;
+  signInIcon?: JSX.Element;
   presentation?: "channels" | "model-setup";
   channelSelect?: boolean;
   answerLabel?: string;
@@ -87,82 +95,93 @@ function OptionBody(props: { option: WizardStepOption; channels?: boolean; selec
         </span>
       }
     >
-      <span class="channels-wizard__option-label">
-        {props.selected === undefined ? "" : props.selected ? "☑ " : "☐ "}
-        {props.option.label}
-      </span>
+      <span class="channels-wizard__option-label">{props.option.label}</span>
       <Show when={props.option.hint}>
         <span class="channels-wizard__option-hint">{props.option.hint}</span>
+      </Show>
+      <Show when={props.selected}>
+        <span class="channels-wizard__option-check" aria-hidden="true">
+          <Icon name="check" />
+        </span>
       </Show>
     </Show>
   );
 }
 
-function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation" | "onAutofocusRef">) {
+type SignInProps = Pick<
+  WizardStepControlsProps,
+  "step" | "presentation" | "onAutofocusRef" | "brandId" | "providerLabel" | "signInIcon"
+> & { waiting: boolean };
+
+function SignIn(props: SignInProps) {
+  return (
+    <Show when={props.step.externalUrl || props.step.deviceCode}>
+      <Show when={props.presentation === "model-setup"} fallback={<EmbeddedSignIn {...props} />}>
+        <ModelSetupSignIn
+          step={props.step}
+          waiting={props.waiting}
+          icon={props.signInIcon}
+          brandId={props.brandId}
+          providerLabel={props.providerLabel}
+          onAutofocusRef={props.onAutofocusRef}
+        />
+      </Show>
+    </Show>
+  );
+}
+
+function EmbeddedSignIn(props: SignInProps) {
   const code = createMemo(() => props.step.deviceCode);
   const copyLabel = () => t(code() ? "modelSetup.wizard.copyCode" : "modelSetup.wizard.copyLink");
   const copyValue = createMemo(() => code()?.code ?? props.step.externalUrl);
   return (
-    <Show when={props.step.externalUrl || code()}>
-      <div class="wizard-step__sign-in">
-        <p class="muted">{code()?.message ?? t("modelSetup.wizard.browserInstructions")}</p>
-        <Show when={code()}>
-          {(value) => <code class="wizard-step__sign-in-code">{value().code}</code>}
+    <div class="wizard-step__sign-in">
+      <p class="muted">{code()?.message ?? t("modelSetup.wizard.browserInstructions")}</p>
+      <Show when={code()}>
+        {(value) => <code class="wizard-step__sign-in-code">{value().code}</code>}
+      </Show>
+      <div class="wizard-step__actions">
+        <Show when={props.step.externalUrl}>
+          <a
+            ref={(element) => props.onAutofocusRef?.(element)}
+            class="btn primary wizard-step__external-link"
+            data-link-reader-external
+            href={props.step.externalUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("modelSetup.wizard.openSignIn")}
+          </a>
         </Show>
-        <div class="wizard-step__actions">
-          <Show when={props.step.externalUrl}>
-            <a
-              ref={(element) => props.onAutofocusRef?.(element)}
-              class="btn primary wizard-step__external-link"
-              autofocus={props.presentation === "model-setup"}
-              data-link-reader-external
-              href={props.step.externalUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("modelSetup.wizard.openSignIn")}
-            </a>
-          </Show>
-          <Show when={copyValue()} keyed>
-            {(value) => {
-              let label!: HTMLSpanElement;
-              return (
-                <button
-                  type="button"
-                  class="btn"
-                  onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
-                >
-                  <span ref={(element) => (label = element)} data-copy-label>
-                    {copyLabel()}
-                  </span>
-                </button>
-              );
-            }}
-          </Show>
-        </div>
-        <div
-          class={["muted", { "wizard-step__waiting": props.presentation === "model-setup" }]}
-          role="status"
-          aria-live="polite"
-          aria-busy={props.presentation === "model-setup" ? "true" : undefined}
-        >
-          <Show when={props.presentation === "model-setup"}>
-            <span class="wizard-step__spinner" aria-hidden="true" />
-          </Show>
-          {props.presentation === "model-setup"
-            ? (props.step.progressMessage ?? t("modelSetup.waitingForApproval"))
-            : t("modelSetup.wizard.waiting")}
-        </div>
-        <Show when={code()?.expiresInMinutes}>
-          <div class="muted">
-            {t("modelSetup.wizard.expires", { count: String(code()?.expiresInMinutes) })}
-          </div>
-        </Show>
-        <Show when={code()}>
-          <p class="muted">{t("modelSetup.wizard.deviceCodeWarning")}</p>
+        <Show when={copyValue()} keyed>
+          {(value) => {
+            let label!: HTMLSpanElement;
+            return (
+              <button
+                type="button"
+                class="btn"
+                onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
+              >
+                <span ref={(element) => (label = element)} data-copy-label>
+                  {copyLabel()}
+                </span>
+              </button>
+            );
+          }}
         </Show>
       </div>
-    </Show>
+      <div class="muted" role="status" aria-live="polite">
+        {t("modelSetup.wizard.waiting")}
+      </div>
+      <Show when={code()?.expiresInMinutes}>
+        <div class="muted">
+          {t("modelSetup.wizard.expires", { count: String(code()?.expiresInMinutes) })}
+        </div>
+      </Show>
+      <Show when={code()}>
+        <p class="muted">{t("modelSetup.wizard.deviceCodeWarning")}</p>
+      </Show>
+    </div>
   );
 }
 
@@ -178,7 +197,9 @@ function ActionRow(props: {
   );
 }
 
-function Answer(props: WizardStepControlsProps & { label: string; onClick?: () => void }) {
+function Answer(
+  props: WizardStepControlsProps & { label: string; disabled?: boolean; onClick?: () => void },
+) {
   const label = () => props.answerLabel ?? props.label;
   const button = (
     <button
@@ -186,7 +207,7 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
       autofocus={props.presentation === "model-setup"}
-      disabled={props.busy}
+      disabled={props.busy || props.disabled}
       onClick={() => props.onClick?.()}
     >
       {label()}
@@ -225,8 +246,24 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
 function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
+  const focusText = () => props.presentation === "model-setup";
+  let form: HTMLFormElement | undefined;
+  // Disabling the field while a reply is pending drops its focus to the page. When the reply
+  // settles on this step (e.g. a validation rejection), give it back unless focus moved elsewhere.
+  createPendingFocus(() => props.busy, {
+    requested: (busy, wasBusy) => !busy && wasBusy === true,
+    focus: () => {
+      const input = form?.elements.namedItem("wizard-text");
+      if (document.activeElement === document.body && input instanceof HTMLInputElement) {
+        input.focus({ preventScroll: true });
+      }
+    },
+  });
   return (
     <form
+      ref={(element) => {
+        form = element;
+      }}
       class="wizard-step__form"
       onSubmit={(event) => {
         event.preventDefault();
@@ -240,14 +277,11 @@ function TextForm(props: WizardStepControlsProps) {
     >
       <Show when={props.step.message}>
         <div class={stepClass(props, "message")}>
-          {/* This pre-wrap message retains the original Lit label spacing. */}
-          {"\n              "}
           <label for={props.inputId}>{formatUiExternalText(props.step.message!)}</label>
-          {"\n            "}
         </div>
       </Show>
       <Show when={!props.externalAuthInput}>
-        <SignIn {...props} />
+        <SignIn {...props} waiting={false} />
       </Show>
       <Show
         when={props.step.sensitive && props.onToggleSensitiveVisibility}
@@ -259,7 +293,15 @@ function TextForm(props: WizardStepControlsProps) {
             type={props.step.sensitive ? "password" : "text"}
             autocomplete={props.step.sensitive ? "off" : "on"}
             placeholder={props.step.placeholder ?? ""}
-            ref={liveValue(value)}
+            ref={[
+              liveValue(value),
+              (element) => {
+                if (focusText()) {
+                  props.onAutofocusRef?.(element);
+                }
+              },
+            ]}
+            autofocus={focusText()}
             disabled={props.busy}
             aria-invalid={props.validationErrorId ? "true" : undefined}
             aria-describedby={props.validationErrorId}
@@ -297,7 +339,7 @@ function TextForm(props: WizardStepControlsProps) {
 function TextStep(props: WizardStepControlsProps) {
   return (
     <Show when={props.externalAuthInput} fallback={<TextForm {...props} />}>
-      <SignIn {...props} />
+      <SignIn {...props} waiting />
       <details class="wizard-step__manual-entry">
         <summary class="muted">{t("modelSetup.wizard.manualEntry")}</summary>
         <TextForm {...props} />
@@ -320,35 +362,73 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       props.channelSelect &&
       props.options.every((option) => typeof option.value === "string"),
   );
-  const params = createMemo<PickerParams<ChannelPickerOption>>(() => {
-    const selected = props.options.findIndex((option) => Object.is(option.value, props.value));
-    return {
-      label: label(),
-      value:
-        selected < 0
-          ? null
-          : channels()
-            ? String(props.options[selected]?.value)
-            : String(selected),
-      options: props.options.map<ChannelPickerOption>((option, index) => ({
+  // A picker's preselected choice needs a way forward, so these steps answer with Continue.
+  const confirms = () =>
+    props.presentation === "channels" ||
+    (props.presentation === "model-setup" && props.options.length > 2);
+  const [picked, setPicked] = createSignal<{ step: string; value: unknown }>();
+  const current = () => {
+    const choice = picked();
+    return choice?.step === props.step.id ? choice.value : props.value;
+  };
+  const selectedIndex = () =>
+    props.options.findIndex((option) => Object.is(option.value, current()));
+  // Keep the bridge's required params object stable while the active step changes.
+  const params: PickerParams<ChannelPickerOption> = {
+    get label() {
+      return label();
+    },
+    get value() {
+      const selected = selectedIndex();
+      return selected < 0
+        ? null
+        : channels()
+          ? String(props.options[selected]?.value)
+          : String(selected);
+    },
+    get options() {
+      return props.options.map<ChannelPickerOption>((option, index) => ({
         value: channels() ? String(option.value) : String(index),
         label: option.label,
         description: option.hint,
         kind: channels() ? "channel" : "neutral",
-      })),
-      disabled: props.busy,
-      invalid: Boolean(props.validationErrorId),
-      describedBy: props.validationErrorId,
-      onChange: (value) => props.onAnswer(channels() ? value : props.options[Number(value)]?.value),
-    };
-  });
+      }));
+    },
+    get disabled() {
+      return props.busy;
+    },
+    get invalid() {
+      return Boolean(props.validationErrorId);
+    },
+    get describedBy() {
+      return props.validationErrorId;
+    },
+    onChange: (value) => {
+      const answer = channels() ? value : props.options[Number(value)]?.value;
+      if (confirms()) {
+        setPicked({ step: props.step.id, value: answer });
+      } else {
+        props.onAnswer(answer);
+      }
+    },
+  };
   return (
     <Show
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
-        <Show when={channels()} fallback={<Picker params={params()} />}>
-          <ChannelPicker {...params()} />
-        </Show>
+        <>
+          <Show when={channels()} fallback={<Picker params={params} />}>
+            <ChannelPicker {...params} />
+          </Show>
+          <Show when={confirms()}>
+            <Answer
+              {...props}
+              label={t("modelSetup.wizard.continue")}
+              disabled={selectedIndex() < 0}
+              onClick={() => props.onAnswer(current())}
+            />
+          </Show>
+        </>
       }
     >
       <div
@@ -399,8 +479,7 @@ function MultipleChoice(props: WizardStepControlsProps & { options: WizardStepOp
               when={props.presentation === "channels"}
               fallback={
                 <label class="wizard-step__option">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected().some((value) => Object.is(value, option().value))}
                     disabled={props.busy}
                     aria-invalid={props.validationErrorId ? "true" : undefined}
@@ -459,16 +538,9 @@ function OptionsStep(props: WizardStepControlsProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            {props.presentation === "channels"
-              ? props.busy && <Answer {...props} label={t("modelSetup.wizard.continue")} />
-              : props.presentation === "model-setup"
-                ? options().length > 2 &&
-                  props.leadingAction && (
-                    <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
-                      {props.leadingAction}
-                    </openclaw-modal-actions>
-                  )
-                : props.leadingAction}
+            {props.presentation === "channels" || props.presentation === "model-setup"
+              ? undefined
+              : props.leadingAction}
           </>
         }
       >
@@ -520,8 +592,15 @@ function ConfirmStep(props: WizardStepControlsProps) {
 function ContinueStep(props: WizardStepControlsProps) {
   return (
     <>
-      <Message {...props} />
-      <SignIn {...props} />
+      {/* Model-setup sign-in folds the step message into its own heading block. */}
+      <Show
+        when={
+          props.presentation !== "model-setup" || !(props.step.externalUrl || props.step.deviceCode)
+        }
+      >
+        <Message {...props} />
+      </Show>
+      <SignIn {...props} waiting={false} />
       <Answer
         {...props}
         label={t("modelSetup.wizard.continue")}
@@ -540,7 +619,7 @@ function ProgressStep(props: WizardStepControlsProps) {
           <Message {...props} />
         </div>
       </Show>
-      <SignIn {...props} />
+      <SignIn {...props} waiting />
       <Show when={props.leadingAction}>
         <ActionRow
           modal={props.presentation === "model-setup"}

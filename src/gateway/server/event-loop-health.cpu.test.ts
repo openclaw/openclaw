@@ -1,3 +1,4 @@
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { cpus } from "node:os";
 import { performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
@@ -10,6 +11,13 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  openSync: vi.fn(),
+  readSync: vi.fn(),
+  closeSync: vi.fn(),
+  readFileSync: vi.fn(),
+}));
 vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   cpus: vi.fn(),
@@ -33,7 +41,11 @@ function hostCpu(user: number, idle: number) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
+  vi.stubGlobal("process", {
+    ...process,
+    platform: "darwin",
+    versions: { ...process.versions, bun: undefined },
+  });
   now = 10_000;
   vi.spyOn(performance, "now").mockImplementation(() => now);
   vi.spyOn(process, "cpuUsage").mockImplementation((previous) => ({
@@ -49,7 +61,11 @@ beforeEach(() => {
   revision = 0;
   workers = [{ cpuUsage: workerUsage }];
   workerUsage.mockReset().mockImplementation(async () => ({ user: now * 500, system: 0 }));
-  vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({ workers, revision }));
+  vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({
+    workers,
+    revision,
+    currentRevision: () => revision,
+  }));
   mainThreadUsage.mockReset().mockImplementation(() => ({ user: now * 250, system: 0 }));
   vi.spyOn(process, "threadCpuUsage").mockImplementation(mainThreadUsage);
   vi.mocked(cpus)
@@ -175,7 +191,7 @@ describe("CPU breakdown sampling", () => {
     expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0);
   });
 
-  it.each(["timeout", "reset", "stop"] as const)(
+  it.each(["timeout", "reset", "stop", "worker churn"] as const)(
     "fences pending worker replies after %s without delaying process samples",
     async (action) => {
       const monitor = await createMonitor();
@@ -188,12 +204,14 @@ describe("CPU breakdown sampling", () => {
       if (action === "timeout") {
         now += 101;
         await clock.advanceTo(now);
+      } else if (action === "worker churn") {
+        revision++;
       } else {
         monitor[action]();
       }
       slow.resolve({ user: now * 500, system: 0 });
       await setImmediate();
-      if (action === "timeout") {
+      if (action === "timeout" || action === "worker churn") {
         expect(monitor.snapshot()).toBe(health);
         await sample();
         expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
@@ -208,4 +226,93 @@ describe("CPU breakdown sampling", () => {
       }
     },
   );
+});
+
+describe("Linux host CPU sampling", () => {
+  let stat: string;
+  beforeEach(() => {
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    stat = "cpu  100 20 30 400 900 5 800 700 60 10\ncpu0 0 0 0 0 0 0 0 0 0 0\n";
+    vi.mocked(openSync).mockReset().mockReturnValue(42);
+    vi.mocked(closeSync).mockReset();
+    vi.mocked(readSync)
+      .mockReset()
+      .mockImplementation((_fd, buffer) => {
+        return Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength).write(stat);
+      });
+    vi.mocked(readFileSync).mockReset().mockReturnValue("0-1,4,6-7\n");
+  });
+
+  it("reads bounded aggregate counters without collecting per-core CPU metadata", async () => {
+    const monitor = await createMonitor();
+    stat = "cpu  120 30 40 460 1900 15 1800 1700 70 20\ncpu0 0 0 0 0 0 0 0 0 0 0\n";
+    await sample();
+    // user+nice+sys+irq = 50 busy ticks; idle = 60. Ignore iowait,
+    // softirq and steal; guest times are already included in user/nice.
+    expect(monitor.snapshot()?.cpuBreakdown).toMatchObject({
+      hostUtilization: 0.455,
+      hostCpuCount: 5,
+    });
+    expect(cpus).not.toHaveBeenCalled();
+    expect(openSync).toHaveBeenCalledTimes(2);
+    expect(closeSync).toHaveBeenCalledTimes(2);
+    expect(readSync).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readSync).mock.calls[0]?.[1].byteLength).toBeLessThanOrEqual(256);
+  });
+
+  it("matches per-core utilization on recorded 128-core Linux samples within rounding", async () => {
+    vi.mocked(readFileSync).mockReturnValue("0-127\n");
+    // Recorded /proc/stat aggregate rows, one second apart. Summing the
+    // corresponding per-core deltas gives user=114, nice=16, sys=86,
+    // idle=12571, irq=0: 216 / 12787 = 0.017 after diagnostic rounding.
+    // The kernel rounds aggregate and individual-core ticks separately.
+    stat = "cpu  298164289 127260169 341723678 9996274020 45356420 0 785276 0 0 0\n";
+    const monitor = await createMonitor();
+    stat = "cpu  298164402 127260185 341723768 9996286597 45356428 0 785276 0 0 0\n";
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown).toMatchObject({
+      hostUtilization: 0.017,
+      hostCpuCount: 128,
+    });
+  });
+
+  it.each([
+    "truncated",
+    "wrong label",
+    "invalid ticks",
+    "rollback",
+    "no ticks",
+    "topology",
+    "read failure",
+  ])("omits unavailable utilization after %s and recovers on fresh samples", async (failure) => {
+    const monitor = await createMonitor();
+    if (failure === "truncated") {
+      stat = "cpu 100 20 30";
+    }
+    if (failure === "wrong label") {
+      stat = "cpu0 100 20 30 400 900 5\n";
+    }
+    if (failure === "invalid ticks") {
+      stat = "cpu  NaN 20 30 400 900 5\n";
+    }
+    if (failure === "rollback") {
+      stat = "cpu  99 20 30 400 900 5\n";
+    }
+    if (failure === "topology") {
+      vi.mocked(readFileSync).mockReturnValue("0-3\n");
+    }
+    if (failure === "read failure") {
+      vi.mocked(readSync).mockImplementationOnce(() => {
+        throw new Error("unavailable");
+      });
+    }
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.hostUtilization).toBeUndefined();
+    expect(closeSync).toHaveBeenCalledTimes(2);
+    stat = "cpu  200 30 40 500 900 15\n";
+    await sample();
+    stat = "cpu  220 40 50 560 1900 25\n";
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.hostUtilization).toBe(0.455);
+  });
 });

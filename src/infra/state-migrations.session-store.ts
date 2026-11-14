@@ -13,10 +13,10 @@ import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-s
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginDoctorSessionStoreAgentIds } from "../plugins/doctor-contract-preparation.js";
 import {
   collectRelevantDoctorPluginIds,
   isPluginDoctorMigrationDeferred,
-  listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
@@ -53,11 +53,13 @@ import {
   sessionStorePathsMatch,
 } from "./state-migrations.session-store-paths.js";
 import {
+  isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
   resolveCanonicalAgentSessionOwner,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 type SessionKeyCanonicalizationOptions = {
   agentId: string;
@@ -251,29 +253,6 @@ export function canonicalizeSessionStore({
   return { store: canonical, legacyKeys };
 }
 
-export function isAmbiguousSharedStoreKey(
-  key: string,
-  mainKey: string,
-  scope?: SessionScope,
-): boolean {
-  const raw = key.trim();
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (!raw || lower === "global" || lower === "unknown") {
-    return false;
-  }
-  if (
-    scope === "global" &&
-    canonicalizeMainSessionAlias({
-      cfg: { session: { scope, mainKey } },
-      agentId: DEFAULT_AGENT_ID,
-      sessionKey: lower,
-    }) === "global"
-  ) {
-    return false;
-  }
-  return !resolveCanonicalAgentSessionOwner(raw) || isLegacyDefaultMainAliasKey(lower, mainKey);
-}
-
 export function aliasedSessionStoreMigrationWarning(params: {
   subject: "migration of" | "ACP metadata migration for";
   count: number;
@@ -420,11 +399,11 @@ export async function migrateOrphanedSessionKeys(params: {
       : undefined;
   const pluginAgentIds =
     params.additionalAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
+    (await preparePluginDoctorSessionStoreAgentIds({
       config: params.cfg,
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
+    }));
   const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
 
   // Fixed session.store paths can be shared by several agent owners.
@@ -505,9 +484,13 @@ export async function migrateOrphanedSessionKeys(params: {
     );
     let parsed: ReturnType<typeof parseSessionStoreJson5>;
     try {
-      parsed = parseSessionStoreJson5(fs.readFileSync(storePath, "utf-8"));
+      parsed = parseSessionStoreJson5(
+        decodeUtf8Input(fs.readFileSync(storePath), "Legacy session store"),
+      );
     } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      (err instanceof Utf8InputError ? recoverableWarnings : warnings).push(
+        `Could not read ${storePath}: ${String(err)}`,
+      );
       continue;
     }
     if (
@@ -639,11 +622,11 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   const storeConfig = params.cfg.session?.store;
   const pluginAgentIds =
     params.pluginSessionStoreAgentIds ??
-    listPluginDoctorSessionStoreAgentIds({
+    (await preparePluginDoctorSessionStoreAgentIds({
       config: params.cfg,
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
-    });
+    }));
   const normalizedPluginAgentIds = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
   const declaredAgentIds = new Set([
     ...listConfiguredSessionStoreAgentIds(params.cfg).map((id) => normalizeAgentId(id)),

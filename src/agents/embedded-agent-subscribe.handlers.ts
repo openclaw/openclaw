@@ -6,7 +6,7 @@ import {
   type AgentAssistantSourceReceipt,
   bindAgentAssistantSource,
 } from "../infra/agent-events.js";
-import { recordEmbeddedSessionForkMessage } from "./embedded-agent-runner/session-fork.js";
+import { resolveAssistantReplySource } from "./embedded-agent-reply-source.js";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -30,10 +30,8 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   let assistantSource: AgentAssistantSourceReceipt | undefined;
+  let assistantReplyToId: string | undefined;
   const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
-    const onError = (err: unknown) => {
-      ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-    };
     // Tool-result delivery must settle before later assistant or terminal events;
     // suppression flags would discard those events instead of preserving order.
     const run = () => {
@@ -43,7 +41,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         }
         return handler();
       } catch (err) {
-        onError(err);
+        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
         return undefined;
       }
     };
@@ -53,13 +51,18 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       return;
     }
 
-    const task = Promise.resolve(result)
-      .then(() => {}, onError)
-      .finally(() => {
+    const settle = async () => {
+      try {
+        await result;
+      } catch (err) {
+        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+      } finally {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
         }
-      });
+      }
+    };
+    const task = settle();
     ctx.state.pendingEventChain = task;
     return task;
   };
@@ -74,35 +77,38 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     ) {
       if (evt.type === "message_start" || !assistantSource) {
         assistantSource = {};
+        assistantReplyToId = resolveAssistantReplySource(
+          ctx.params.getUserTranscriptContexts?.(),
+          ctx.params.messageChannel,
+        );
       }
       bindAgentAssistantSource(evt.message, assistantSource);
+      if (evt.type === "message_end" && assistantReplyToId) {
+        // Native persistence follows synchronous emit, before queued handlers can settle.
+        evt.message.openclawDelivery = {
+          ...evt.message.openclawDelivery,
+          sourceMessageId: assistantReplyToId,
+        };
+      }
     }
     // Model facts advance before persistence, independently of queued reply delivery.
-    ctx.captureModelEvent(evt);
-    if (
-      evt.type === "message_end" &&
-      ctx.params.sessionId &&
-      !ctx.state.unsubscribed &&
-      (evt.message.role === "user" ||
-        evt.message.role === "toolResult" ||
-        (evt.message.role === "assistant" &&
-          !isSubscribeTranscriptOnlyOpenClawAssistantMessage(evt.message)))
-    ) {
-      recordEmbeddedSessionForkMessage(ctx.params.sessionId, ctx.params.runId, evt.message);
-    }
+    const assistantReasoning = ctx.captureModelEvent(evt);
     // Capture tool facts before reply delivery can delay their lifecycle handlers.
     const readResult =
       evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;
     recordEmbeddedToolTrajectoryEvent(ctx, evt, readResult);
     switch (evt.type) {
-      case "message_start":
-        void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
+      case "message_start": {
+        // Delivery can delay lifecycle handlers; snapshot at the native event boundary.
+        const sourceMessageId = assistantReplyToId;
+        void scheduleEvent(evt, () => handleMessageStart(ctx, evt, sourceMessageId));
         return;
+      }
       case "message_update":
         void scheduleEvent(evt, () => handleMessageUpdate(ctx, evt));
         return;
       case "message_end":
-        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
+        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt, assistantReasoning));
         return;
       case "turn_start":
         // Async tool fragments share one provider turn; only a new model call starts a batch.
@@ -111,7 +117,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "turn_end":
-        void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
+        void scheduleEvent(evt, () => {
+          ctx.noteLastAssistant(evt.message);
+        });
         return;
       case "tool_execution_start":
         void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));

@@ -50,7 +50,11 @@ export function createSessionTranscriptHistoryPool(
         canCloseNativeResources =
           captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
         return {
-          options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } },
+          options: {
+            workerData: {
+              databaseEngineSelection: getDatabaseEngineSelection(),
+            },
+          },
         };
       },
     },
@@ -94,5 +98,14 @@ export type SessionDatabaseWorkerLane = {
   native: boolean;
   pending: number;
   idleTimer?: NodeJS.Timeout;
+  idleCleanupListener?: Disposable;
   rotation?: Promise<void>;
+};
+
+export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
+  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
+};
+
+export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
 };

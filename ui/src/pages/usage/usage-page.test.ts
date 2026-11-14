@@ -20,6 +20,8 @@ import {
   focusDocument,
   preloadUsage,
   refreshButton,
+  selectUsageSession,
+  changeUsageControl,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -33,30 +35,53 @@ function usageRequest(
   );
 }
 
+it("retires usage before a restricted reconnect can refresh the mounted page", async () => {
+  vi.useFakeTimers();
+  focusDocument();
+  const snapshot = cacheSnapshot("fresh");
+  const request = usageRequest(() => snapshot.result);
+  const { context, page } = await loadUsagePage(request, false, (application) =>
+    application.setGatewaySnapshot({
+      hello: gatewayHelloForMethods(["sessions.usage", "usage.status"]),
+    }),
+  );
+  await settleUsageTimers(page, 300_001);
+  context.setGatewaySnapshot({ phase: "reconnecting" });
+  request.mockClear();
+  context.setGatewaySnapshot({
+    phase: "connected",
+    hello: gatewayHelloForMethods(["sessions.usage", "usage.status"], ["operator.sessions.read"]),
+  });
+  expect(request).not.toHaveBeenCalled();
+  await settleUsageTimers(page);
+  await page.refresh();
+  expect(request).not.toHaveBeenCalled();
+  expect(page.usageResult).toBeNull();
+});
+
 describe("UsagePage cache convergence", () => {
   it("shows an exhausted empty page as partial and clears its message after refresh", async () => {
-    vi.useFakeTimers();
-    focusDocument();
     const message =
       "Usage request exceeded its 15-second budget; narrow the date range or select a session.";
     let result: SessionsUsageResult = {
       ...cacheSnapshot("partial").result,
       partial: { reason: "time-budget", message },
     };
-    const request = vi.fn(async (method: string) =>
-      method === "usage.status" ? { updatedAt: 1, providers: [] } : result,
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const page = await createPage(client, true, contextWithClient(client));
-    await preloadUsage(page);
-    expect(page.querySelector(".callout.danger")?.textContent).toBe(message);
+    const request = usageRequest(() => result);
+    const { page } = await loadUsagePage(request);
+    expect(page.querySelector(".callout.danger")).toBeNull();
+    expect(
+      page.querySelector(".usage-partial-notice:not(.usage-partial-notice--off)")?.textContent,
+    ).toContain(message);
     expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
     result = cacheSnapshot("fresh").result;
     refreshButton(page).click();
     await vi.advanceTimersByTimeAsync(0);
     await page.updateComplete;
-    expect(page.querySelector(".callout.danger")).toBeNull();
+    expect(page.querySelector(".usage-partial-notice")?.classList).toContain(
+      "usage-partial-notice--off",
+    );
   });
 
   beforeEach(() => {
@@ -77,7 +102,7 @@ describe("UsagePage cache convergence", () => {
       if (!hidden) {
         context.publishUsage({ usageUpdatedAt: Date.now(), usageRefreshFailed: true });
         await settleUsageTimers(page);
-        expect(textOf(page, ".usage-cache-warning.warning")).toContain("Automatic checks paused");
+        expect(textOf(page, ".usage-cache-warning.warn")).toContain("Automatic checks paused");
         expect(page.querySelector(".usage-overview-card")).not.toBeNull();
         expect(usageCalls(request)).toHaveLength(1);
       }
@@ -135,31 +160,31 @@ describe("UsagePage cache convergence", () => {
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
       // Badges keep their slots; uncomputed totals show placeholders, never values.
       expect(
-        [...page.querySelectorAll(".usage-header-metrics .usage-metric-badge strong")].every(
+        [...page.querySelectorAll(".usage-summary-strip .usage-metric-badge strong")].every(
           (node) => node.textContent === "—",
         ),
       ).toBe(!committed);
-      expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+      expect(page.querySelector(".usage-cache-warning.warn")).toBeNull();
       expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
       await settleUsageTimers(page, 35_000);
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
-      expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+      expect(page.querySelector(".usage-cache-warning.warn")).toBeNull();
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
       expect(usageCalls(request)).toHaveLength(1);
       context.publishUsage({ usageUpdatedAt: 1, usageRefreshFailed: true });
       await settleUsageTimers(page);
       expect(page.querySelector(".usage-loading-card")).toBeNull();
-      expect(textOf(page, ".usage-cache-warning.warning")).toContain("Automatic checks paused");
+      expect(textOf(page, ".usage-cache-warning.warn")).toContain("Automatic checks paused");
       expect(usageCalls(request)).toHaveLength(1);
       window.dispatchEvent(new Event("focus"));
       await settleUsageTimers(page);
       expect(page.querySelector(".usage-loading-card")).toBeNull();
-      expect(textOf(page, ".usage-cache-warning.warning")).toContain("Automatic checks paused");
+      expect(textOf(page, ".usage-cache-warning.warn")).toContain("Automatic checks paused");
       expect(usageCalls(request)).toHaveLength(2);
       refreshButton(page).click();
       await settleUsageTimers(page);
-      expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+      expect(page.querySelector(".usage-cache-warning.warn")).toBeNull();
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
       expect(usageCalls(request)).toHaveLength(3);
     },
@@ -185,7 +210,7 @@ describe("UsagePage cache convergence", () => {
       ] as const) {
         context.publishUsage({ agentId, usageUpdatedAt: index, usageRefreshFailed: failed });
         await settleUsageTimers(page);
-        expect(Boolean(page.querySelector(".usage-cache-warning.warning"))).toBe(paused);
+        expect(Boolean(page.querySelector(".usage-cache-warning.warn"))).toBe(paused);
         expect(usageCalls(request)).toHaveLength(reads);
       }
     },
@@ -200,14 +225,13 @@ describe("UsagePage cache convergence", () => {
     const { context, page } = await loadUsagePage(request);
     context.publishUsage({ usageUpdatedAt: 1, usageRefreshFailed: true });
     await page.updateComplete;
-    expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
+    expect(page.querySelector(".usage-cache-warning.warn")).not.toBeNull();
     const input = page.querySelector<HTMLInputElement>("input.usage-date-input")!;
-    input.value = "2026-08-01";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+    changeUsageControl(input, "2026-08-01");
     await vi.advanceTimersByTimeAsync(400);
     expect(usageCalls(request)).toHaveLength(2);
     await page.updateComplete;
-    expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
+    expect(page.querySelector(".usage-cache-warning.warn")).not.toBeNull();
     snapshot = cacheSnapshot("fresh");
     context.publishUsage({ usageUpdatedAt: Date.now() });
     await settleUsageTimers(page);
@@ -224,10 +248,10 @@ describe("UsagePage cache convergence", () => {
     context.publishUsage({ agentId: "other", usageUpdatedAt: 1, usageRefreshFailed: true });
     context.publishUsage({ agentId: "main", usageUpdatedAt: 2, usageRefreshFailed: true });
     await page.updateComplete;
-    expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
+    expect(page.querySelector(".usage-cache-warning.warn")).not.toBeNull();
     refreshButton(page).click();
     await settleUsageTimers(page);
-    expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+    expect(page.querySelector(".usage-cache-warning.warn")).toBeNull();
     for (const [scopeId, paused] of [
       ["other", true],
       ["main", false],
@@ -238,14 +262,14 @@ describe("UsagePage cache convergence", () => {
       expect(
         request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1],
       ).toMatchObject(scopeId ? { agentId: scopeId } : { agentScope: "all" });
-      expect(Boolean(page.querySelector(".usage-cache-warning.warning"))).toBe(paused);
+      expect(Boolean(page.querySelector(".usage-cache-warning.warn"))).toBe(paused);
     }
     refreshButton(page).click();
     await settleUsageTimers(page);
-    expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+    expect(page.querySelector(".usage-cache-warning.warn")).toBeNull();
     context.publishUsage({ agentId: "main", usageUpdatedAt: 3, usageRefreshFailed: true });
     await page.updateComplete;
-    expect(page.querySelector(".usage-cache-warning.warning")).not.toBeNull();
+    expect(page.querySelector(".usage-cache-warning.warn")).not.toBeNull();
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -336,7 +360,7 @@ describe("UsagePage cache convergence", () => {
       expect(Boolean(page.querySelector(".usage-cache-warning"))).toBe(
         failed || failureAfterCommit !== "none",
       );
-      expect(Boolean(page.querySelector(".usage-cache-warning.warning"))).toBe(
+      expect(Boolean(page.querySelector(".usage-cache-warning.warn"))).toBe(
         failed || failureAfterCommit !== "none",
       );
     },
@@ -365,12 +389,12 @@ it("does not transfer a manual detail refresh to a replacement selection", async
     return { providers: [] };
   });
   const { page } = await loadUsagePage(request);
-  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[0]!.click();
+  selectUsageSession(page);
   await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[0]));
 
   refreshing = true;
   refreshButton(page).click();
-  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[1]!.click();
+  selectUsageSession(page, 1);
   await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[1]));
   manual.resolve(result);
   await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));

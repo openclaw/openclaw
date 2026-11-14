@@ -8,6 +8,10 @@ const LINUX_CA_BUNDLE_PATHS = [
   "/etc/ssl/ca-bundle.pem",
 ] as const;
 
+// Earlier releases wrote this into macOS services. Apple no longer updates it, so it
+// still carries roots the macOS trust store distrusts; NODE_USE_SYSTEM_CA replaces it.
+const LEGACY_DARWIN_CA_BUNDLE_PATH = "/etc/ssl/cert.pem";
+
 type EnvMap = Record<string, string | undefined>;
 
 // Startup TLS environment defaults for child Node processes. macOS needs
@@ -24,7 +28,6 @@ export function resolveNodeStartupTlsEnvironment(
     platform?: NodeJS.Platform;
     execPath?: string;
     includeDarwinDefaults?: boolean;
-    accessSync?: (path: string, mode?: number) => void;
   } = {},
 ): NodeStartupTlsEnvironment {
   const env = params.env ?? (process.env as EnvMap);
@@ -32,19 +35,19 @@ export function resolveNodeStartupTlsEnvironment(
   const includeDarwinDefaults = params.includeDarwinDefaults ?? true;
 
   let nodeExtraCaCerts = readNonBlankString(env.NODE_EXTRA_CA_CERTS);
+  if (platform === "darwin" && nodeExtraCaCerts?.trim() === LEGACY_DARWIN_CA_BUNDLE_PATH) {
+    nodeExtraCaCerts = undefined;
+  }
   if (nodeExtraCaCerts === undefined) {
-    if (platform === "darwin" && includeDarwinDefaults) {
-      nodeExtraCaCerts = "/etc/ssl/cert.pem";
-    } else if (platform === "linux") {
+    if (platform === "linux") {
       const execPath = params.execPath ?? process.execPath;
       // Version-manager Node may not inherit system CAs; supply NODE_EXTRA_CA_CERTS.
       const isVersionManagerRuntime =
         Boolean(env.NVM_DIR?.trim()) || matchesVersionManagerPath(execPath, "linux-ca");
       if (isVersionManagerRuntime) {
-        const accessSync = params.accessSync ?? fs.accessSync.bind(fs);
         for (const candidate of LINUX_CA_BUNDLE_PATHS) {
           try {
-            accessSync(candidate, fs.constants.R_OK);
+            fs.accessSync(candidate, fs.constants.R_OK);
             nodeExtraCaCerts = candidate;
             break;
           } catch {

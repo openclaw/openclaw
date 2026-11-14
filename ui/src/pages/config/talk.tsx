@@ -5,7 +5,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // same config draft, so both stay in sync without narrowing the schema.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Errored, Loading, Show } from "solid-js";
 import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
@@ -20,6 +20,7 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { DeviceTalk, VoiceWakeEditor, type VoiceWakeEditorState } from "./talk-device.tsx";
@@ -36,24 +37,41 @@ export type TalkRealtimeProviderOption = TalkCatalogResult["realtime"]["provider
 export type TalkCatalogState =
   | { kind: "loading" }
   | { kind: "unavailable" }
+  | { kind: "failed"; error: unknown }
   | {
       kind: "ready";
       ready: boolean;
       activeProvider: string | null;
       providers: readonly TalkRealtimeProviderOption[];
+      /** Speech-to-text group of the same catalog read. */
+      transcription?: TalkCatalogResult["transcription"];
     };
 
 type TalkViewProps = {
+  presentationRetired: () => Promise<void>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
-  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
+  voiceWake?: {
+    readState: () => VoiceWakeEditorState;
+    scope?: object | null;
+    saving: boolean;
+    readWriteResult: () => void;
+    onInput: (text: string) => void;
+    onRetry: () => void;
+  };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  catalogScope?: object | null;
   modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
   onVoiceChange: (voice: string | null) => void;
+  /**
+   * Speech-to-text section, rendered from the same catalog read. The accessor
+   * keeps one mounted section across catalog re-reads.
+   */
+  transcription?: (catalog: () => TalkCatalogState) => JSX.Element;
   /** Embedded schema editor for the full `talk` section. */
   editor: JSX.Element;
 };
@@ -122,12 +140,16 @@ export function effectiveTalkValues(
 }
 
 function StatusRow(props: TalkViewProps) {
-  const status = createMemo(() => {
+  const status = () => {
     const catalog = props.catalog;
     if (catalog.kind !== "ready") {
       return {
         description:
-          catalog.kind === "unavailable" ? t("talkPage.status.unavailableHint") : undefined,
+          catalog.kind === "failed"
+            ? formatUiError(catalog.error, t("talkPage.status.catalogFailedHint"))
+            : catalog.kind === "unavailable"
+              ? t("talkPage.status.unavailableHint")
+              : undefined,
         kind: "muted" as const,
         label: t(catalog.kind === "loading" ? "common.loading" : "talkPage.status.unavailable"),
       };
@@ -139,11 +161,12 @@ function StatusRow(props: TalkViewProps) {
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
-  });
+  };
+  // The first catalog reply supplies this line without moving the schema editor below it.
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
-      description={status().description}
+      description={status().description ?? "\u00a0"}
       control={<SettingsStatus kind={status().kind} label={status().label} />}
     />
   );
@@ -331,14 +354,33 @@ function ModelFamilyRow(props: TalkViewProps) {
   );
 }
 
+function TalkCatalogRows(props: TalkViewProps) {
+  return (
+    <>
+      <StatusRow {...props} />
+      <ProviderRow {...props} />
+      <ModelRow {...props} />
+      <VoiceRow {...props} />
+      <ModelFamilyRow {...props} />
+    </>
+  );
+}
+
 export function Talk(props: TalkViewProps) {
   return (
     <section class="talk-page">
       <SettingsPage>
-        <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
+        <DeviceTalk
+          capability={props.nativeDeviceSettings}
+          snapshot={props.nativeDeviceSnapshot}
+          presentationRetired={props.presentationRetired}
+        />
         {props.voiceWake && (
           <VoiceWakeEditor
-            state={props.voiceWake.state}
+            readState={props.voiceWake.readState}
+            scope={props.voiceWake.scope}
+            saving={props.voiceWake.saving}
+            readWriteResult={props.voiceWake.readWriteResult}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />
@@ -347,12 +389,31 @@ export function Talk(props: TalkViewProps) {
           title={t("talkPage.voiceSection.title")}
           description={t("talkPage.voiceSection.description")}
         >
-          <StatusRow {...props} />
-          <ProviderRow {...props} />
-          <ModelRow {...props} />
-          <VoiceRow {...props} />
-          <ModelFamilyRow {...props} />
+          <Errored
+            fallback={(error) => (
+              <TalkCatalogRows {...props} catalog={{ kind: "failed", error: error() }} />
+            )}
+          >
+            <Loading
+              on={props.catalogScope}
+              fallback={<TalkCatalogRows {...props} catalog={{ kind: "loading" }} />}
+            >
+              <TalkCatalogRows {...props} />
+            </Loading>
+          </Errored>
         </SettingsSection>
+        {props.transcription && (
+          <Errored
+            fallback={(error) => props.transcription!(() => ({ kind: "failed", error: error() }))}
+          >
+            <Loading
+              on={props.catalogScope}
+              fallback={props.transcription(() => ({ kind: "loading" }))}
+            >
+              {props.transcription(() => props.catalog)}
+            </Loading>
+          </Errored>
+        )}
       </SettingsPage>
       {props.editor}
     </section>

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338803,
-  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 91561,
+  "reason": "PR #195865 (L310): warm cached-page reveal latch in startup boot owners; lead byte exception",
+  "updatedAt": "2026-11-09"
 }

@@ -1,4 +1,3 @@
-import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
@@ -20,6 +19,17 @@ type GatewaySessionStoreView = {
 
 export type GatewaySessionStoreCache = Map<string, GatewaySessionStoreView>;
 
+/** Session keys are data; ordinary objects retain a V8 shape transition per key. */
+export function createGatewaySessionStore(
+  entries: readonly { sessionKey: string; entry: SessionEntry }[],
+): Record<string, SessionEntry> {
+  const store: Record<string, SessionEntry> = Object.create(null);
+  for (const { sessionKey, entry } of entries) {
+    store[sessionKey] = entry;
+  }
+  return store;
+}
+
 export type GatewaySessionStoreRead = {
   storePath: string;
   clone?: boolean;
@@ -33,7 +43,7 @@ export type GatewaySessionStoreRead = {
     readConsistency?: SessionEntryReadScope["readConsistency"];
     readSource?: SessionEntryReadSource;
   };
-  result?: Result<Record<string, SessionEntry>, unknown>;
+  result?: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
   capturedReadSource?: CapturedSessionEntryReadSource;
 };
@@ -72,14 +82,11 @@ export function readGatewaySessionStore(
       loaded = loadGatewaySessionLookupStore(read);
       cache?.set(cacheKey, loaded);
     }
-    read.result = ok(loaded.store);
+    read.result = loaded.store;
     read.readSource = loaded.readSource;
     read.capturedReadSource = loaded.capturedReadSource;
   }
-  if (!read.result.ok) {
-    throw read.result.error;
-  }
-  return read.result.value;
+  return read.result;
 }
 
 function loadGatewaySessionLookupStore({
@@ -110,7 +117,7 @@ function loadGatewaySessionLookupStore({
       },
     });
     return {
-      store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+      store: createGatewaySessionStore(entries),
       ...(readSource ? { readSource } : {}),
       ...(capturedReadSource ? { capturedReadSource } : {}),
     };
@@ -119,7 +126,7 @@ function loadGatewaySessionLookupStore({
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return {
-    store: Object.fromEntries(
+    store: createGatewaySessionStore(
       listEntries({
         env: options.env,
         ...(agentId ? { agentId } : {}),
@@ -129,7 +136,7 @@ function loadGatewaySessionLookupStore({
           : {}),
         ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
         storePath,
-      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      }),
     ),
   };
 }

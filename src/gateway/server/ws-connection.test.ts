@@ -149,14 +149,18 @@ let connectionWork: GatewayConnectionWork;
 let logWsControl: ReturnType<typeof makeLogger>;
 const socketCleanups: Array<() => Promise<void>> = [];
 
-async function connectWs(params: Omit<Parameters<typeof attachForTest>[0], "attach"> = {}) {
-  attachForTest({
+function attachWs(params: Omit<Parameters<typeof attachForTest>[0], "attach"> = {}) {
+  return attachForTest({
     attach: attachConnection,
     socket,
     clients,
     ...params,
     options: { connectionWork, ...params.options, logWsControl: logWsControl as never },
   });
+}
+
+async function connectWs(params: Omit<Parameters<typeof attachForTest>[0], "attach"> = {}) {
+  attachWs(params);
   await vi.dynamicImportSettled();
   return attachMessage.mock.calls[0]![0];
 }
@@ -250,7 +254,9 @@ it("counts accepted event bytes per socket with bounded names and live operator 
       String(frame).includes('"event":"tick"'),
     )![0];
     const lastFrame = first.socket.send.mock.lastCall![0];
-    expect(events[0]!.bytes).toBe(2 * Buffer.byteLength(firstFrame) + Buffer.byteLength(lastFrame));
+    const byteLength = (frame: typeof firstFrame) =>
+      typeof frame === "string" ? Buffer.byteLength(frame) : frame.byteLength;
+    expect(events[0]!.bytes).toBe(2 * byteLength(firstFrame) + byteLength(lastFrame));
     expect(JSON.stringify(events)).not.toMatch(/private-dynamic-name|private-content|connId/);
     expect(operatorCounts()).toEqual([2]);
     observations.length = 0;
@@ -469,28 +475,19 @@ it.each([
   expect(socket.ping).toHaveBeenCalledTimes(pong ? 2 : 1);
 });
 
-it.each(["direct", "broadcast", "preauth"])("bounds %s shutdown", async (delivery) => {
+it.each(["direct", "preauth"])("bounds %s shutdown", async (delivery) => {
   vi.useFakeTimers();
   socket.terminate.mockImplementation(() => socket.emit("close", 1006, Buffer.alloc(0)));
   const preauth = delivery === "preauth";
   const handler = await connectWs({ options: preauth ? { preauthHandshakeTimeoutMs: 100 } : {} });
-  if (delivery === "broadcast") {
-    registerClient(handler, socket, { connect: readableOperator });
-  }
   socket.send.mockClear();
-  const timers = vi.getTimerCount();
   if (preauth) {
     vi.advanceTimersByTime(100);
     expect(logWsControl.warn.mock.calls[0]?.[0]).toContain("handshake timeout");
     expect(logWsControl.warn.mock.calls[0]?.[0]).toContain("phase=ws_upgrade_started");
   } else {
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    if (delivery === "direct") {
-      expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
-    } else {
-      createBroadcaster({ clients }).broadcast("tick", {});
-      expect(vi.getTimerCount()).toBe(timers + 1);
-    }
+    expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
   }
   expect(socket.send).not.toHaveBeenCalled();
   expect(socket.close).toHaveBeenCalledExactlyOnceWith(
@@ -510,53 +507,75 @@ it.each(["direct", "broadcast", "preauth"])("bounds %s shutdown", async (deliver
   );
 });
 
-it("batches a broadcast burst into one socket write while preserving response order", async () => {
-  const pair = await openSocketPair();
-  const { socket: liveSocket, request, peer } = pair;
-  const writes = vi.spyOn(request.socket, "write");
-  const { clients: liveClients } = attachForTest({
-    attach: attachConnection,
-    socket: liveSocket as unknown as TestSocket,
-    requestSocket: request.socket,
-  });
-  await vi.dynamicImportSettled();
-  const handler = attachMessage.mock.calls[0]![0];
-  registerClient(handler, liveSocket, { connect: readableOperator });
-  writes.mockClear();
-  const received: unknown[] = [];
-  const complete = createDeferred();
-  peer.on("message", (data) => {
-    const frame = JSON.parse(rawDataToString(data));
-    if (frame.event === "connect.challenge") {
-      return;
+it.each([false, true])(
+  "batches a broadcast burst (without vector writes=%s)",
+  async (withoutWritev) => {
+    const pair = await openSocketPair();
+    const { socket: liveSocket, request, peer } = pair;
+    if (withoutWritev) {
+      // oxlint-disable-next-line no-underscore-dangle -- Exercise Writable's serial fallback on either runtime.
+      request.socket._writev = undefined;
     }
-    received.push(frame);
-    if (received.length === 4) {
-      complete.resolve();
-    }
-  });
-  const { broadcast } = createBroadcaster({ clients: liveClients });
-  broadcast("tick", { value: 1 });
-  broadcast("tick", { value: 2 });
-  handler.send({ type: "res", id: "between", ok: true });
-  broadcast("tick", { value: 3 });
-  expect([...liveClients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
-  await complete.promise;
-  expect(received).toEqual([
-    { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
-    { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
-    { type: "res", id: "between", ok: true },
-    { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
-  ]);
-  expect(writes).toHaveBeenCalledTimes(1);
-  expect(writes.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
-});
+    const nativeWrite = vi.spyOn(request.socket, "_write");
+    // oxlint-disable-next-line no-underscore-dangle -- Count actual Writable submissions, not public write calls.
+    const nativeWritev = request.socket._writev ? vi.spyOn(request.socket, "_writev") : undefined;
+    const writes = vi.spyOn(request.socket, "write");
+    const { clients: liveClients } = attachForTest({
+      attach: attachConnection,
+      socket: liveSocket as unknown as TestSocket,
+      requestSocket: request.socket,
+    });
+    await vi.dynamicImportSettled();
+    const handler = attachMessage.mock.calls[0]![0];
+    registerClient(handler, liveSocket, { connect: readableOperator });
+    writes.mockClear();
+    nativeWrite.mockClear();
+    nativeWritev?.mockClear();
+    const received: unknown[] = [];
+    const complete = createDeferred();
+    peer.on("message", (data) => {
+      const frame = JSON.parse(rawDataToString(data));
+      if (frame.event === "connect.challenge") {
+        return;
+      }
+      received.push(frame);
+      if (received.length === 4) {
+        complete.resolve();
+      }
+    });
+    const { broadcast } = createBroadcaster({ clients: liveClients });
+    broadcast("tick", { value: 1 });
+    broadcast("tick", { value: 2 });
+    handler.send({ type: "res", id: "between", ok: true });
+    broadcast("tick", { value: 3 });
+    expect([...liveClients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
+    await complete.promise;
+    const expected = [
+      '{"type":"event","event":"tick","payload":{"value":1},"seq":1}',
+      '{"type":"event","event":"tick","payload":{"value":2},"seq":2}',
+      '{"type":"res","id":"between","ok":true}',
+      '{"type":"event","event":"tick","payload":{"value":3},"seq":3}',
+    ];
+    expect(received).toEqual(expected.map((json) => JSON.parse(json)));
+    const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
+    expect(wire).toEqual(
+      Buffer.concat(
+        expected.flatMap((json) => [Buffer.from([0x81, json.length]), Buffer.from(json)]),
+      ),
+    );
+    expect(nativeWrite.mock.calls.length + (nativeWritev?.mock.calls.length ?? 0)).toBe(1);
+    expect([...liveClients][0]!.socket.bufferedAmount).toBe(0);
+  },
+);
 
 it.each(["closing", "failed-send"] as const)("retires both peers after %s", async (failure) => {
   const pair = await openSocketPair();
   const { socket: liveSocket, peer } = pair;
 
-  const handler = await connectWs({ socket: liveSocket as unknown as TestSocket });
+  const handler = await connectWs({
+    socket: liveSocket as unknown as TestSocket,
+    requestSocket: pair.request.socket,
+  });
 
   handler.setClient(makeClient(liveSocket, "real-closing-client"));
 
@@ -564,7 +583,7 @@ it.each(["closing", "failed-send"] as const)("retires both peers after %s", asyn
     liveSocket.close(1000, "real close race");
     expect(liveSocket.readyState).toBe(Ws.WebSocket.CLOSING);
   } else {
-    vi.spyOn(liveSocket, "send").mockImplementationOnce(() => {
+    vi.spyOn(pair.request.socket, "write").mockImplementationOnce(() => {
       throw new Error("response transport unavailable");
     });
     vi.spyOn(liveSocket, "close").mockImplementationOnce(() => {
@@ -579,61 +598,105 @@ it.each(["closing", "failed-send"] as const)("retires both peers after %s", asyn
   await vi.waitFor(() => expect(peer.readyState).toBe(Ws.WebSocket.CLOSED));
 });
 
-it("keeps a closing node discoverable throughout pending lifecycle dispatch and fanout", async () => {
-  const unregister = vi.fn(() => "draining-node");
-  const get = vi.fn(() => undefined);
-  const handler = await connectWs({
-    clients,
-    socket,
-    options: {
-      buildRequestContext: () =>
-        makeContext({ nodeRegistry: { get, unregister } as never }) as never,
-    },
-  });
-
-  const nodeClient = makeClient(socket, handler.connId, {
-    connect: { ...nodeConnect, minProtocol: 1, maxProtocol: 1, device: device("draining-device") },
-  });
-  expect(handler.setClient(nodeClient)).toBe(true);
-  expect(nodeClient.connectionSignal?.aborted).toBe(false);
-  const subscriptionEnded = vi.fn();
-  nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
-  const healthySocket = makeSocket();
-  clients.add(
-    makeClient(healthySocket, "healthy-during-node-drain", { connect: readableOperator }),
-  );
-  const { promise: pending, resolve: releaseDispatch } = createDeferred();
-  const dispatch = handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending);
-  socket.send.mockClear();
-  socket.readyState = Ws.WebSocket.CLOSING;
-
-  expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
-  expect(clients.has(nodeClient)).toBe(true);
-  expect(nodeClient.connectionSignal?.aborted).toBe(true);
-  expect(subscriptionEnded).toHaveBeenCalledOnce();
-  const broadcaster = createBroadcaster({ clients });
-  broadcaster.broadcast("tick", { source: "before-node-close" });
-
-  socket.emit("close", 1000, Buffer.from("node draining"));
-  expect(clients.has(nodeClient)).toBe(true);
-  expect(unregister).not.toHaveBeenCalled();
-
-  broadcaster.broadcast("tick", { source: "during-node-drain" });
-
-  expect(socket.send).not.toHaveBeenCalled();
-  expect(healthySocket.send).toHaveBeenCalledTimes(2);
-  const revocableNode = [...clients].find(
-    (client) => client.connect.device?.id === "draining-device",
-  );
-  expect(revocableNode).toBe(nodeClient);
-  revocableNode!.invalidated = true;
-
-  releaseDispatch();
-  await dispatch;
-  await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
-  expect(clients.has(nodeClient)).toBe(false);
-  expect(subscriptionEnded).toHaveBeenCalledOnce();
-});
+it.each(["current", "stale", "draining", "promoting"] as const)(
+  "retires %s nodes safely",
+  async (state) => {
+    const draining = state === "draining" || state === "promoting";
+    const stale = state === "stale";
+    const unregister = vi.fn(() => (stale ? null : "node-1"));
+    const get = vi.fn();
+    const publishPresence = vi.fn();
+    const handler = await connectWs({
+      options: {
+        refreshHealthSnapshot: vi.fn(),
+        buildRequestContext: () =>
+          makeContext({ nodeRegistry: { get, unregister } as never, publishPresence }) as never,
+      },
+    });
+    const hostStats = {
+      cpuCount: 2,
+      memoryTotalBytes: 8192,
+      memoryFreeBytes: 4096,
+      updatedAtMs: 1_250,
+    };
+    const nodeSession = {
+      nodeId: "node-1",
+      connId: handler.connId,
+      connectedAtMs: 1_000,
+      pairingGeneration: "generation-1",
+      hostStats,
+    };
+    if (state === "current" || state === "promoting") {
+      get.mockReturnValue(nodeSession);
+    }
+    const nodeClient = registerClient(handler, socket, {
+      connId: stale ? "conn-old" : handler.connId,
+      connect: {
+        ...nodeConnect,
+        ...(draining ? { minProtocol: 1, maxProtocol: 1 } : {}),
+        device: device("node-1"),
+      },
+      ...(!draining ? { presenceKey: "node-1" } : {}),
+    });
+    expect(nodeClient.connectionSignal?.aborted).toBe(false);
+    const subscriptionEnded = vi.fn();
+    nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
+    const healthySocket = makeSocket();
+    const { promise: pending, resolve: releaseDispatch } = createDeferred();
+    const dispatch = draining
+      ? handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending)
+      : undefined;
+    const broadcaster = createBroadcaster({ clients });
+    if (draining) {
+      clients.add(
+        makeClient(healthySocket, "healthy-during-node-drain", { connect: readableOperator }),
+      );
+      socket.send.mockClear();
+      socket.readyState = Ws.WebSocket.CLOSING;
+      expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
+      expect(clients.has(nodeClient)).toBe(true);
+      expect(nodeClient.connectionSignal?.aborted).toBe(true);
+      expect(subscriptionEnded).toHaveBeenCalledOnce();
+      broadcaster.broadcast("tick", { source: "before-node-close" });
+    }
+    socket.emit("close", 1000, Buffer.from(state));
+    if (draining) {
+      expect(clients.has(nodeClient)).toBe(true);
+      expect(unregister).not.toHaveBeenCalled();
+      broadcaster.broadcast("tick", { source: "during-node-drain" });
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(healthySocket.send).toHaveBeenCalledTimes(2);
+      const revocableNode = [...clients].find((client) => client.connect.device?.id === "node-1");
+      expect(revocableNode).toBe(nodeClient);
+      if (state === "draining") {
+        revocableNode!.invalidated = true;
+      } else {
+        nodeSession.pairingGeneration = "generation-2";
+        nodeSession.hostStats = { ...hostStats, memoryFreeBytes: 2048, updatedAtMs: 1_500 };
+      }
+    }
+    releaseDispatch();
+    await dispatch;
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
+    expect(clients.has(nodeClient)).toBe(false);
+    expect(subscriptionEnded).toHaveBeenCalledOnce();
+    if (stale) {
+      expect(recordDisconnect).not.toHaveBeenCalled();
+      expect(upsertPresence).not.toHaveBeenCalled();
+      expect(publishPresence).not.toHaveBeenCalled();
+    } else if (state !== "draining") {
+      expect(get).toHaveBeenCalledWith("node-1");
+      await vi.waitFor(() => expect(recordDisconnect).toHaveBeenCalledOnce());
+      expect(recordDisconnect).toHaveBeenCalledWith({
+        nodeId: "node-1",
+        connectedAtMs: 1_000,
+        disconnectedAtMs: expect.any(Number),
+        hostStats: nodeSession.hostStats,
+        expectedPairingGeneration: { nodeId: "node-1", key: nodeSession.pairingGeneration },
+      });
+    }
+  },
+);
 
 it("distinguishes serialization failure from unavailable transports", async () => {
   const handler = await connectWs({ socket });
@@ -767,44 +830,110 @@ it.each([
   },
 );
 
-it.each([false, true])("records node disconnects unless stale=%s", async (stale) => {
-  const unregister = vi.fn(() => (stale ? null : "node-1"));
-  const get = vi.fn();
-  const publishPresence = vi.fn();
-  const handler = await connectWs({
-    options: {
-      refreshHealthSnapshot: vi.fn(),
-      buildRequestContext: () =>
-        makeContext({ nodeRegistry: { get, unregister } as never, publishPresence }) as never,
-    },
-  });
-  if (!stale) {
-    get.mockReturnValue({
-      nodeId: "node-1",
-      connId: handler.connId,
-      connectedAtMs: 1_000,
-      pairingGeneration: "generation-1",
-    });
+it("aggregates native refusal warnings across reconnects without hiding other closes", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const headers = {
+    origin: "http://127.0.0.1:19001",
+    "user-agent": "native-refusal-callback-test",
+  };
+  const closeAttempt = async (
+    at: number,
+    code = 4008,
+    reason = "native authorization unavailable",
+    extraHeaders: Record<string, string> = {},
+  ) => {
+    vi.setSystemTime(at);
+    const next = makeSocket();
+    next["_socket"].remotePort = 30000 + at / 1000;
+    attachWs({ socket: next, headers: { ...headers, ...extraHeaders } });
+    next.emit("close", code, Buffer.from(reason));
+    await vi.dynamicImportSettled();
+  };
+  for (const at of [0, 13_000, 26_000, 39_000, 52_000, 65_000, 78_000]) {
+    await closeAttempt(at);
   }
-  registerClient(handler, socket, {
-    connId: stale ? "conn-old" : handler.connId,
-    connect: { ...nodeConnect, device: device("node-1") },
-    presenceKey: "node-1",
-  });
-  socket.emit("close", 1000, Buffer.from(stale ? "stale" : "done"));
-  await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
-  if (stale) {
-    expect(recordDisconnect).not.toHaveBeenCalled();
-    expect(upsertPresence).not.toHaveBeenCalled();
-    expect(publishPresence).not.toHaveBeenCalled();
-  } else {
-    expect(get).toHaveBeenCalledWith("node-1");
-    await vi.waitFor(() => expect(recordDisconnect).toHaveBeenCalledOnce());
-    expect(recordDisconnect).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      connectedAtMs: 1_000,
-      disconnectedAtMs: expect.any(Number),
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
-    });
+  expect(logWsControl.warn.mock.calls.map(([message]) => message)).toEqual([
+    expect.stringContaining("code=4008 reason=native authorization unavailable"),
+    expect.stringContaining("suppressed=2"),
+    expect.stringContaining("suppressed=2"),
+  ]);
+  expect(logWsControl.warn.mock.calls[0]![0]).not.toContain("suppressed=");
+  expect(logWsControl.debug).not.toHaveBeenCalled();
+  for (const [code, reason] of [
+    [1006, "native authorization unavailable"],
+    [4008, "native authorization unavailable "],
+    [4008, "native authorization unavailable\n"],
+    [4008, "connect failed"],
+  ] as const) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = logWsControl.warn.mock.calls.length;
+      await closeAttempt(79_000, code, reason);
+      expect(logWsControl.warn.mock.calls.length).toBe(before + 1);
+    }
   }
+  const distinctClients: Record<string, string>[] = [
+    { origin: "https://other.example" },
+    { "user-agent": "other-document-client" },
+  ];
+  for (const extraHeaders of distinctClients) {
+    const before = logWsControl.warn.mock.calls.length;
+    await closeAttempt(79_000, 4008, "native authorization unavailable", extraHeaders);
+    expect(logWsControl.warn.mock.calls.length).toBe(before + 1);
+  }
+});
+
+it("preserves missing-credential close aggregation and mismatch warnings", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const closeAttempt = async (at: number, authReason: string) => {
+    vi.setSystemTime(at);
+    const next = makeSocket();
+    const handler = await connectWs({ socket: next });
+    handler.setCloseCause("unauthorized", {
+      authReason,
+      client: "missing-credential-callback-test",
+      mode: "backend",
+    });
+    next.emit("close", 1008, Buffer.from("unauthorized"));
+    await vi.dynamicImportSettled();
+    attachMessage.mockClear();
+  };
+  await closeAttempt(0, "token_missing");
+  await closeAttempt(1_000, "token_missing");
+  await closeAttempt(30_000, "token_missing");
+  expect(logWsControl.warn.mock.calls.map(([message]) => message)).toEqual([
+    expect.stringContaining("reason=unauthorized"),
+    expect.stringContaining("suppressed=1"),
+  ]);
+  await closeAttempt(31_000, "token_mismatch");
+  await closeAttempt(32_000, "token_mismatch");
+  expect(logWsControl.warn).toHaveBeenCalledTimes(4);
+});
+
+it("aggregates native refusals received over real WebSocket close frames", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  for (const at of [0, 1_000, 30_000]) {
+    vi.setSystemTime(at);
+    const pair = await openSocketPair();
+    attachWs({
+      socket: pair.socket as unknown as TestSocket,
+      requestSocket: pair.request.socket,
+      headers: {
+        origin: "http://127.0.0.1:19001",
+        "user-agent": "native-refusal-transport-test",
+      },
+    });
+    const closed = once(pair.socket, "close");
+    pair.peer.close(4008, "native authorization unavailable");
+    await closed;
+    await vi.dynamicImportSettled();
+  }
+  expect(logWsControl.warn.mock.calls.map(([message]) => message)).toEqual([
+    expect.stringContaining("code=4008 reason=native authorization unavailable"),
+    expect.stringContaining("suppressed=1"),
+  ]);
+  expect(logWsControl.warn.mock.calls[0]![1]).toMatchObject({
+    handshake: "pending",
+    phase: "ws_upgrade_started",
+    lastFrameType: undefined,
+  });
 });

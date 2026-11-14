@@ -1,16 +1,22 @@
+import { once } from "node:events";
 import http from "node:http";
+import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { TestContext } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexNativeTestState } from "./native-app-server.test-support.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type CodexTurnStartParams } from "./protocol.js";
 import { createAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
 
 export async function runNativeTurn(
   client: CodexAppServerClient,
   threadId: string,
   text: string,
-  options: { timeoutMs?: number; completionTimeoutMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    completionTimeoutMs?: number;
+    collaborationMode?: CodexTurnStartParams["collaborationMode"];
+  } = {},
 ) {
   const completed = createDeferred<unknown>();
   void completed.promise.catch(() => undefined);
@@ -37,6 +43,7 @@ export async function runNativeTurn(
       {
         threadId,
         input: [{ type: "text", text, text_elements: [] }],
+        ...(options.collaborationMode ? { collaborationMode: options.collaborationMode } : {}),
       },
       { timeoutMs: options.timeoutMs },
     );
@@ -48,25 +55,19 @@ export async function runNativeTurn(
 }
 
 export async function listenForNativeResponses(
-  context: TestContext,
+  context: Pick<TestContext, "onTestFinished">,
   listener: http.RequestListener,
 ) {
   const server = http.createServer(listener);
   context.onTestFinished(async () => {
     server.closeAllConnections();
     if (server.listening) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Missing loopback provider address");
@@ -104,10 +105,7 @@ export function nativeProviderConfig(
     ...settings,
     "[features]",
     ...features,
-    "[analytics]",
-    "enabled=false",
-    "[feedback]",
-    "enabled=false",
+    ["[analytics]", "enabled=false", "[feedback]", "enabled=false"].join("\n"),
     `[model_providers.${provider}]`,
     `name="Synthetic ${provider} provider"`,
     `base_url="http://127.0.0.1:${port}/v1"`,
@@ -131,15 +129,14 @@ export function nativeAppServerOptions(
     ),
     ...extraEnv,
   };
+  const options = createAppServerOptions();
   return {
-    ...createAppServerOptions(),
+    ...options,
     start: {
-      transport: "stdio" as const,
+      ...options.start,
       command: native.command,
       commandSource: "config" as const,
-      args: ["app-server"],
       cwd: native.cwd,
-      headers: {},
       env,
       clearEnv: Object.keys(process.env).filter((key) => !(key in env)),
     },

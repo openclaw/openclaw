@@ -44,15 +44,11 @@ function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
   return false;
 }
 
-type CreateBrowserRuntimeStateParams = {
+export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
   port: number;
   server?: Server | null;
-};
-
-export async function createBrowserRuntimeState(
-  params: CreateBrowserRuntimeStateParams,
-): Promise<BrowserServerState> {
+}): Promise<BrowserServerState> {
   const state: BrowserServerState = {
     server: params.server ?? null,
     port: params.port,

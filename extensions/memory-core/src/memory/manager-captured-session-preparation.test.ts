@@ -41,13 +41,11 @@ describe("captured session preparation", () => {
       await manager.sync({ reason: "baseline", force: true });
       const entered = createDeferred<void>();
       const resume = createDeferred<void>();
-      const prepare = cpu.prepareMemoryIndexInWorker;
-      vi.spyOn(cpu, "prepareMemoryIndexInWorker").mockImplementation(async (input) => {
-        const result = await prepare(input);
-        if (input.source === "sessions") {
-          entered.resolve();
-          await resume.promise;
-        }
+      const prepare = cpu.prepareSessionIndexInWorker;
+      vi.spyOn(cpu, "prepareSessionIndexInWorker").mockImplementation(async (input, stream) => {
+        const result = await prepare(input, stream);
+        entered.resolve();
+        await resume.promise;
         return result;
       });
       const sync = manager.sync({ reason: "cli", force: true });
@@ -62,7 +60,7 @@ describe("captured session preparation", () => {
         const afterForget = db
           .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path")
           .all();
-        await expect(sync).rejects.toThrow("forgotten");
+        await expect(sync).rejects.toThrow("retry the full reindex");
         expect(
           db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all(),
         ).toEqual(afterForget);

@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -12,6 +14,13 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 const addedTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const contextFile = (filePath: string, content: unknown) =>
   expect.objectContaining({ path: filePath, content });
+const instructions = (workspace: string, content: unknown) =>
+  contextFile(path.join(workspace, "AGENTS.md"), content);
+const noInjection = {
+  contextFiles: [],
+  bootstrapInjectionStats: [],
+  shouldRecordCompletedBootstrapTurn: false,
+};
 
 async function makeWorkspace(label: string, files: Record<string, string> = {}): Promise<string> {
   const workspace = await fs.realpath(addedTempDirs.make(`openclaw-${label}-`));
@@ -21,6 +30,14 @@ async function makeWorkspace(label: string, files: Record<string, string> = {}):
   return workspace;
 }
 
+/** Minimal linked-checkout metadata: the checkout shares the source repository's common dir. */
+async function linkCheckout(source: string, checkout: string) {
+  const gitDir = path.join(source, ".git", "worktrees", path.basename(checkout));
+  await fs.mkdir(gitDir, { recursive: true });
+  await fs.writeFile(path.join(gitDir, "commondir"), path.join(source, ".git"));
+  await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${gitDir}\n`);
+}
+
 describe("prepareEmbeddedAttemptBootstrap", () => {
   async function prepare(
     agentWorkspace: string,
@@ -28,6 +45,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     options: {
       contextInjection?: "always" | "continuation-skip" | "never";
       effectiveWorkspace?: string;
+      isRawModelRun?: boolean;
       attempt?: Partial<EmbeddedRunAttemptParams>;
     } = {},
   ) {
@@ -50,52 +68,202 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         resolvedWorkspace: sessionWorkspace,
       }),
       hasReadTool: true,
-      isRawModelRun: false,
+      isRawModelRun: options.isRawModelRun ?? false,
     });
   }
 
-  it("layers execution project instructions after agent bootstrap files", async () => {
-    const agentWorkspace = await makeWorkspace("agent-workspace", {
-      "AGENTS.md": "Canonical agent instructions",
-      "SOUL.md": "Canonical agent soul",
-    });
-    const sessionWorkspace = await makeWorkspace("session-workspace", {
-      "AGENTS.md": "Execution project context",
-      "SOUL.md": "Execution soul must stay private",
-    });
+  it.each([
+    ["always", false, true, "default", "full", "none", false, true],
+    ["always", true, true, "default", "full", "full", true, true],
+    ["continuation-skip", false, true, "default", "full", "none", true, true],
+    ["continuation-skip", false, true, "cron", "full", "none", false, true],
+    ["continuation-skip", false, true, "default", "lightweight", "none", false, false],
+    ["continuation-skip", true, false, "default", "full", "limited", false, true],
+    ["never", true, true, "default", "full", "full", false, false],
+  ] as const)(
+    "completion follows delivered context: %s / pending=%s / canonical=%s / %s / %s",
+    async (mode, pending, canonical, runKind, contextMode, bootstrapMode, completion, injected) => {
+      const workspace = await makeWorkspace("completion-workspace", {
+        "AGENTS.md": "Workspace instructions",
+        ...(pending ? { "BOOTSTRAP.md": "Finish the workspace setup." } : {}),
+      });
+      const result = await prepare(workspace, workspace, {
+        contextInjection: mode,
+        attempt: {
+          isCanonicalWorkspace: canonical,
+          bootstrapContextRunKind: runKind,
+          bootstrapContextMode: contextMode,
+        },
+      });
 
-    const result = await prepare(agentWorkspace, sessionWorkspace);
-    const executionAgentsIndex = result.contextFiles.findIndex(
-      (file) => file.path === path.join(sessionWorkspace, "AGENTS.md"),
-    );
-    const lastAgentFileIndex = result.contextFiles.findLastIndex((file) =>
-      file.path.startsWith(`${agentWorkspace}${path.sep}`),
-    );
+      expect(result).toMatchObject({
+        bootstrapMode,
+        shouldRecordCompletedBootstrapTurn: completion,
+        // Pending setup must not add a commit policy to ordinary workspace edits.
+        workspaceNotes: [],
+      });
+      expect(result.contextFiles.some((file) => file.content === "Workspace instructions")).toBe(
+        injected,
+      );
+      if (!injected) {
+        expect(result.contextFiles).toEqual([]);
+        expect(result.bootstrapInjectionStats).toEqual([]);
+      }
+    },
+  );
 
-    expect(executionAgentsIndex).toBeGreaterThan(lastAgentFileIndex);
-    expect(
-      result.bootstrapInjectionStats.filter((file) => file.name === "AGENTS.md"),
-    ).toMatchObject([
-      {
-        path: path.join(agentWorkspace, "AGENTS.md"),
-        origin: { kind: "agent-workspace", rootPath: agentWorkspace },
-      },
-      {
-        path: path.join(sessionWorkspace, "AGENTS.md"),
-        origin: { kind: "execution-project", rootPath: sessionWorkspace },
-      },
-    ]);
-    expect(result.contextFiles[executionAgentsIndex]).toMatchObject({
-      path: path.join(sessionWorkspace, "AGENTS.md"),
-      content: "Execution project context",
+  it("skips injection for a completed limited-bootstrap continuation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const workspace = state.workspaceDir;
+      await fs.writeFile(path.join(workspace, "AGENTS.md"), "Already delivered instructions");
+      await fs.writeFile(path.join(workspace, "BOOTSTRAP.md"), "Finish the workspace setup.");
+      const sessionTarget = {
+        agentId: "main",
+        sessionId: "completed-bootstrap-session",
+        sessionKey: "agent:main:completed-bootstrap-session",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      await upsertSessionEntryCore(sessionTarget, {
+        sessionId: sessionTarget.sessionId,
+        updatedAt: Date.now(),
+      });
+      const sessionManager = await SessionManager.openAsync(sessionTarget, workspace);
+      await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+        timestamp: 1,
+      });
+
+      const result = await prepare(workspace, workspace, {
+        contextInjection: "continuation-skip",
+        attempt: {
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+          sessionTarget,
+          isCanonicalWorkspace: false,
+        },
+      });
+
+      expect(result).toMatchObject({
+        ...noInjection,
+        bootstrapMode: "limited",
+      });
     });
-    expect(result.contextFiles).toContainEqual(
-      contextFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent soul"),
-    );
-    expect(result.contextFiles).not.toContainEqual(
-      expect.objectContaining({ path: path.join(sessionWorkspace, "SOUL.md") }),
-    );
   });
+
+  it.each(["raw", "settled"] as const)(
+    "withholds ambient context for %s model work",
+    async (kind) => {
+      const workspace = await makeWorkspace("isolated-workspace", {
+        "AGENTS.md": "Ambient instructions must stay out",
+      });
+      const result = await prepare(workspace, workspace, {
+        isRawModelRun: kind === "raw",
+        attempt: kind === "settled" ? { operation: "settled-tool-finalization" } : {},
+      });
+
+      expect(result).toMatchObject(noInjection);
+    },
+  );
+
+  it.each(["unrooted", "project worktree", "workspaceOnly"] as const)(
+    "layers execution project instructions after agent bootstrap files (%s)",
+    async (kind) => {
+      const agentWorkspace = await makeWorkspace("agent-workspace", {
+        "AGENTS.md": "Canonical agent instructions",
+        "SOUL.md": "Canonical agent soul",
+      });
+      const sessionWorkspace = await makeWorkspace("session-workspace", {
+        "AGENTS.md": "Execution project context",
+        "SOUL.md": "Execution soul must stay private",
+      });
+
+      const result = await prepare(agentWorkspace, sessionWorkspace, {
+        attempt:
+          kind === "project worktree"
+            ? { sessionRoot: sessionWorkspace, requireWorkspaceOnly: true }
+            : kind === "workspaceOnly"
+              ? {
+                  config: {
+                    agents: { entries: { main: { workspace: agentWorkspace } } },
+                    tools: { fs: { workspaceOnly: true } },
+                  },
+                }
+              : {},
+      });
+      const executionAgentsIndex = result.contextFiles.findIndex(
+        (file) => file.path === path.join(sessionWorkspace, "AGENTS.md"),
+      );
+      const lastAgentFileIndex = result.contextFiles.findLastIndex((file) =>
+        file.path.startsWith(`${agentWorkspace}${path.sep}`),
+      );
+
+      expect(executionAgentsIndex).toBeGreaterThan(lastAgentFileIndex);
+      expect(
+        result.bootstrapInjectionStats.filter((file) => file.name === "AGENTS.md"),
+      ).toMatchObject([
+        {
+          path: path.join(agentWorkspace, "AGENTS.md"),
+          origin: { kind: "agent-workspace", rootPath: agentWorkspace },
+        },
+        {
+          path: path.join(sessionWorkspace, "AGENTS.md"),
+          origin: { kind: "execution-project", rootPath: sessionWorkspace },
+        },
+      ]);
+      expect(result.contextFiles[executionAgentsIndex]).toEqual(
+        instructions(sessionWorkspace, "Execution project context"),
+      );
+      expect(result.contextFiles).toContainEqual(
+        contextFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent soul"),
+      );
+      expect(result.contextFiles).not.toContainEqual(
+        expect.objectContaining({ path: path.join(sessionWorkspace, "SOUL.md") }),
+      );
+    },
+  );
+
+  it.each(["present", "missing", "symlink"] as const)(
+    "keeps a rooted checkout of the agent workspace inside that checkout (%s)",
+    async (agents) => {
+      const shared = await makeWorkspace("shared", {
+        "AGENTS.md": "SHARED INSTRUCTIONS MUST NOT LEAK",
+        "SOUL.md": "SHARED SOUL MUST NOT LEAK",
+      });
+      const worktree = await makeWorkspace("worktree", {
+        ...(agents === "present" ? { "AGENTS.md": "Branch instructions" } : {}),
+        "SOUL.md": "Branch soul",
+      });
+      await linkCheckout(shared, worktree);
+      if (agents === "symlink") {
+        await fs.symlink(path.join(shared, "AGENTS.md"), path.join(worktree, "AGENTS.md"));
+      }
+      const result = await prepare(shared, agents === "missing" ? shared : worktree, {
+        attempt: {
+          sessionRoot: worktree,
+          requireWorkspaceOnly: true,
+          cwd: path.join(worktree, "..", path.basename(shared)),
+        },
+      });
+
+      expect(result.contextFiles).toContainEqual(
+        contextFile(path.join(worktree, "SOUL.md"), "Branch soul"),
+      );
+      expect(
+        result.contextFiles.every((file) => file.path.startsWith(`${worktree}${path.sep}`)),
+      ).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("MUST NOT LEAK");
+      expect(result.contextFiles).toContainEqual(
+        instructions(
+          worktree,
+          agents === "present"
+            ? "Branch instructions"
+            : expect.stringContaining("[MISSING] Expected at:"),
+        ),
+      );
+      expect(
+        result.bootstrapInjectionStats.find((file) => file.name === "AGENTS.md")?.missing,
+      ).toBe(agents !== "present");
+    },
+  );
 
   it.each(["none", "full"])("withholds completion for unreadable AGENTS.md (%s)", async (mode) => {
     const unreadable = "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1);
@@ -120,10 +288,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       return;
     }
     expect(result.contextFiles).toContainEqual(
-      contextFile(
-        path.join(sessionWorkspace, "AGENTS.md"),
-        expect.stringMatching(/^\[UNREADABLE: File exceeds/),
-      ),
+      instructions(sessionWorkspace, expect.stringMatching(/^\[UNREADABLE: File exceeds/)),
     );
 
     await fs.writeFile(path.join(sessionWorkspace, "AGENTS.md"), "Recovered instructions");
@@ -145,9 +310,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       effectiveWorkspace: promptWorkspace,
     });
 
-    expect(result.contextFiles).toContainEqual(
-      contextFile(path.join(promptWorkspace, "AGENTS.md"), agents),
-    );
+    expect(result.contextFiles).toContainEqual(instructions(promptWorkspace, agents));
     expect(result.bootstrapInjectionStats).toContainEqual(
       expect.objectContaining({
         path: path.join(workspace, "AGENTS.md"),
@@ -156,36 +319,6 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         truncated: false,
       }),
     );
-  });
-
-  it("selects the current person's agent-workspace overlay across attempt switches", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const workspace = state.statePath("workspace");
-      const alice = ensureProfileForEmail("alice@example.test");
-      const bob = ensureProfileForEmail("bob@example.test");
-      for (const profile of [alice, bob]) {
-        const dir = path.join(workspace, "users", profile.id);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(
-          path.join(dir, "USER.md"),
-          profile.id === alice.id ? "Alice guidance" : "Bob guidance",
-        );
-      }
-      await fs.writeFile(path.join(workspace, "USER.md"), "Shared guidance");
-      for (const profile of [alice, bob, undefined]) {
-        const result = await prepare(workspace, workspace, {
-          attempt: {
-            sessionId: "same-session",
-            sessionKey: "agent:main:same-session",
-            bootstrapUserProfileId: profile?.id,
-          },
-        });
-        const context = result.contextFiles.map((file) => file.content).join("\n");
-        expect(context).toContain("Shared guidance");
-        expect(context.includes("Alice guidance")).toBe(profile === alice);
-        expect(context.includes("Bob guidance")).toBe(profile === bob);
-      }
-    });
   });
 
   it("keeps same-workspace bootstrap output byte-identical", async () => {

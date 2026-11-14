@@ -19,6 +19,10 @@ import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
+import { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -35,8 +39,21 @@ function fixture(sessionKey = "agent:main:target") {
     put: (entry: SessionEntry, key = sessionKey) =>
       writeEntry({ ...scope, sessionKey: key }, entry),
     snapshot: (label?: string, key = sessionKey) => readSnapshot(database(), key, label),
+    addMembers: () => {
+      assignSessionOwner(scope, {
+        owner: { type: "human", id: "owner" },
+        assignedBy: { type: "system", id: "fixture" },
+        assignedAt: 1,
+      });
+      recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
+    },
   };
 }
+const members = {
+  owner: { actor: { type: "human", id: "owner" } },
+  participants: [{ identity: { type: "agent", id: "peer" } }],
+  participantCount: 1,
+};
 const savedEntry = (prompt: string): SessionEntry => ({
   sessionId: "target",
   updatedAt: 1,
@@ -53,6 +70,47 @@ afterEach(async () => {
   cleanupTempDirs(tempDirs);
 });
 
+it.each([false, true])(
+  "reuses retained creation facts after discovery (resident=%s)",
+  async (resident) => {
+    const { scope, put, database, addMembers } = fixture();
+    const target = {
+      ...savedEntry("retained prompt"),
+      systemPromptReport: promptReport(1, 1, 0),
+    };
+    if (resident) {
+      put(target);
+      addMembers();
+    }
+    const storePath = database().path;
+    await readSessionEntriesFromStoreInWorker({
+      ...scope,
+      storePath,
+      sessionKeys: [scope.sessionKey],
+    });
+    const requests = vi.spyOn(historyLane.pool, "run");
+    await createSession({ ...scope, storePath }, ({ existingEntry, targetEntry, labelInUse }) => {
+      if (resident) {
+        const expected = { ...target, ...members };
+        expect([existingEntry, targetEntry]).toMatchObject([expected, expected]);
+        expect(existingEntry).not.toBe(targetEntry);
+      } else {
+        expect([existingEntry, targetEntry]).toEqual([undefined, undefined]);
+      }
+      expect(labelInUse).toBe(false);
+      return inspectOnly();
+    });
+    expect(requests).not.toHaveBeenCalled();
+
+    const updated = { ...target, sessionId: "updated", updatedAt: 2 };
+    put(updated);
+    await createSession({ ...scope, storePath }, ({ existingEntry, targetEntry }) => {
+      expect([existingEntry, targetEntry]).toMatchObject([updated, updated]);
+      return inspectOnly();
+    });
+  },
+);
+
 it("preserves a competing creation committed while the initial entry is prepared", async () => {
   const { scope, put, database } = fixture();
   const competing = { sessionId: "competing", updatedAt: 1, label: "retained" };
@@ -68,80 +126,25 @@ it("preserves a competing creation committed while the initial entry is prepared
   expect(loadSessionEntry(scope)).toMatchObject(competing);
 });
 
-it("preserves adopted history without selecting a new projection", async () => {
-  const { scope: target, put, database } = fixture();
-  const scope = { ...target, sessionId: "target" };
-  const entry = { sessionId: "target", updatedAt: 1 };
-  put(entry);
-  let before: ReturnType<typeof readTranscriptStorageRows> = [];
-  const result = await createSession(scope, async () => {
-    await Promise.resolve();
-    replaceTranscriptEventsSync(scope, [
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "Retained text.\r\n  Keep spacing." },
-      },
-    ]);
-    before = readTranscriptStorageRows(database(), "target");
-    return { ok: true, entry: { ...entry, label: "adopted" } };
-  });
-  expect(result).toMatchObject({ ok: true, entry: { ...entry, label: "adopted" } });
-  expect(readTranscriptStorageRows(database(), "target")).toEqual(before);
-});
-
-it("prepares and adopts a complete target without decoding sibling entries", async () => {
-  const { scope, put, snapshot } = fixture();
-  const target = {
-    ...savedEntry("target-saved-prompt"),
-    systemPromptReport: {
-      source: "run" as const,
-      generatedAt: 1,
-      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    },
-  };
+it("preserves history added during asynchronous adoption", async () => {
+  const { scope, put, database } = fixture();
+  const target = { sessionId: "target", updatedAt: 1 };
   put(target);
-  put(
-    {
-      sessionId: "sibling",
-      updatedAt: 1,
-      displayName: "unrelated-entry-marker",
-      skillsSnapshot: { prompt: "unrelated-saved-prompt".repeat(1024), skills: [] },
-    },
-    "agent:main:sibling",
-  );
-  assignSessionOwner(scope, {
-    owner: { type: "human", id: "owner" },
-    assignedBy: { type: "system", id: "fixture" },
-    assignedAt: 1,
-  });
-  recordSessionParticipant(scope, { identity: { type: "agent", id: "peer" }, promptedAt: 1 });
-  snapshot();
-  const parse = vi.spyOn(JSON, "parse");
-  const prepared = snapshot();
-  const siblingPayloadReads = parse.mock.calls.filter(([json]) =>
-    json.includes("unrelated-entry-marker"),
-  ).length;
-  parse.mockRestore();
-  expect(prepared.existingEntry).toMatchObject(target);
-  expect(siblingPayloadReads).toBe(0);
-  const created = await createSession(scope, ({ existingEntry }) => {
+  let before: ReturnType<typeof readTranscriptStorageRows> = [];
+  const created = await createSession(scope, async ({ existingEntry }) => {
     expect(existingEntry).toMatchObject(target);
+    await Promise.resolve();
+    replaceTranscriptEventsSync({ ...scope, sessionId: target.sessionId }, [
+      timedMessageEvent("user-1", null, "2026-07-15T21:23:03.698Z", {
+        role: "user",
+        content: "Retained text.\r\n  Keep spacing.",
+      }),
+    ]);
+    before = readTranscriptStorageRows(database(), target.sessionId);
     return { ok: true, entry: { ...existingEntry!, label: "adopted" } };
   });
   expect(created).toMatchObject({ ok: true, entry: { ...target, label: "adopted" } });
-  expect(loadSessionEntry(scope)).toMatchObject({
-    ...target,
-    label: "adopted",
-    owner: { actor: { type: "human", id: "owner" } },
-    participants: [{ identity: { type: "agent", id: "peer" } }],
-    participantCount: 1,
-  });
+  expect(readTranscriptStorageRows(database(), target.sessionId)).toEqual(before);
 });
 it("preserves normalized and opaque target identities after reopening", async () => {
   const key = "agent:main:matrix:group:!Room:example.org";

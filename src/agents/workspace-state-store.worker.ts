@@ -8,6 +8,7 @@ import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { assertAgentDeletionWorkerPredicate } from "../state/agent-deletion.worker.js";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { createWorkspaceStateIdentity } from "./workspace-state-identity.js";
@@ -25,9 +26,7 @@ import {
   hasRecentWorkspaceSetupState,
   recentWorkspaceAttestation,
   replaceWorkspaceAttestationInDatabase,
-  WORKSPACE_SETUP_STATE_VERSION,
   type WorkspaceAttestationInput,
-  type WorkspaceSetupState,
   type WorkspaceStateDatabase,
   type WorkspaceStateDatabaseHandle,
 } from "./workspace-state-store.kernel.js";
@@ -37,6 +36,10 @@ import type {
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceSetupState,
+} from "./workspace-state-types.js";
 
 function deleteWorkspace(
   database: WorkspaceStateDatabaseHandle,
@@ -72,7 +75,7 @@ function deleteWorkspace(
         .deleteFrom("workspace_path_aliases")
         .where("alias_key", "=", lexicalAlias.workspaceKey),
     );
-    workspaceStatePublication.stagePostimages(database.db, [true]);
+    workspaceStatePublication.stageDeletions(database.db, ["aliases"]);
     storedIdentity = undefined;
   }
   const identity =
@@ -100,6 +103,7 @@ export function mergeWorkspaceSetupStateInDatabase(
   if (next.setupCompletedAt) {
     assertCanonicalTimestamp(next.setupCompletedAt, "setup completed");
   }
+  ensureColumn(database.db, "workspace_setup_state", "bootstrap_deferred INTEGER");
   const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
   const identity = resolution.identity;
   const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
@@ -109,12 +113,16 @@ export function mergeWorkspaceSetupStateInDatabase(
     version: WORKSPACE_SETUP_STATE_VERSION,
     ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}),
     ...(setupCompletedAt ? { setupCompletedAt } : {}),
+    ...((next.bootstrapDeferred ?? snapshot.setup.bootstrapDeferred)
+      ? { bootstrapDeferred: true }
+      : {}),
   };
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
   const values = {
     workspace_path: identity.workspacePath,
     version: WORKSPACE_SETUP_STATE_VERSION,
     bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
+    bootstrap_deferred: merged.bootstrapDeferred ? 1 : null,
     setup_completed_at: merged.setupCompletedAt ?? null,
     updated_at: nowMs,
   };
@@ -125,14 +133,45 @@ export function mergeWorkspaceSetupStateInDatabase(
       .values({ workspace_key: identity.workspaceKey, ...values })
       .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
-  workspaceStatePublication.stagePostimages(database.db, [true]);
   registerWorkspaceStateAliasIdentitiesInTransaction({
     database,
     identity,
     aliases: resolution.aliases,
     updatedAtMs: nowMs,
   });
+  workspaceStatePublication.stagePostimages(database.db, [
+    { ...snapshot, setupExists: true, setupUpdatedAtMs: nowMs, setup: merged },
+  ]);
   return merged;
+}
+
+export function rollbackWorkspaceBootstrapSeedInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+): void {
+  assertCanonicalTimestamp(bootstrapSeededAt, "bootstrap rollback");
+  const { identity } = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
+  const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
+  if (snapshot.setup.bootstrapSeededAt !== bootstrapSeededAt || snapshot.setup.setupCompletedAt) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<WorkspaceStateDatabase>(database.db)
+      .updateTable("workspace_setup_state")
+      .set({ bootstrap_seeded_at: null })
+      .where("workspace_key", "=", identity.workspaceKey),
+  );
+  workspaceStatePublication.stagePostimages(database.db, [
+    {
+      ...snapshot,
+      setup: {
+        version: WORKSPACE_SETUP_STATE_VERSION,
+        ...(snapshot.setup.bootstrapDeferred ? { bootstrapDeferred: true } : {}),
+      },
+    },
+  ]);
 }
 
 function expire(
@@ -260,6 +299,22 @@ export const workspaceStateOperations = {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
         return result;
+      }),
+    ),
+  "workspace.rollbackBootstrapSeed": (
+    input: WorkspaceStateWorkerOperations["workspace.rollbackBootstrapSeed"]["input"],
+    context: WorkerWriteOperationContext,
+  ) =>
+    context.write((writer) =>
+      captureWorkspaceStateReceipt(writer.db, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        rollbackWorkspaceBootstrapSeedInDatabase(
+          writer,
+          input.workspaceDir,
+          input.bootstrapSeededAt,
+        );
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
       }),
     ),
   "workspace.expire": (

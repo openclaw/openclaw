@@ -30,16 +30,12 @@ async function writeDelayedCallbackPeer(
 ) {
   await fs.writeFile(
     file,
-    `import { appendFileSync } from "node:fs";
+    `import { createInterface } from "node:readline";
 ${fixtureReceiptClientSource(endpoint)}
 const source = ${JSON.stringify(file)};
 const method = ${JSON.stringify(callback)};
-function record(line) {
-  appendFileSync(source + ".log", line + "\\n");
-  sendReceipt(source, line);
-}
+const record = (line) => sendReceipt(source, line);
 announce(source + ":" + process.pid);
-let buffer = "";
 let callbackId = 1000;
 const pending = new Map();
 let completeCallback;
@@ -99,14 +95,8 @@ async function receive(message) {
     send({ id: message.id, error: { code: -32603, message: error.message } });
   }
 }
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  let newline;
-  while ((newline = buffer.indexOf("\\n")) >= 0) {
-    const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
-    if (line) void receive(JSON.parse(line));
-  }
+createInterface({ input: process.stdin }).on("line", (line) => {
+  if (line) void receive(JSON.parse(line));
 });
 `,
   );
@@ -136,16 +126,19 @@ for (const callback of ["sampling/createMessage", "elicitation/create"] as const
       },
     });
     const views: NativeMcpServerView[] = [];
+    const acquire = async (callerContext: NativeMcpClientContext) => {
+      const view = await acquireNativeMcpServer(runtime, "fixture", callerContext);
+      views.push(view);
+      return view;
+    };
+    const probe = async (view: NativeMcpServerView) =>
+      payload(await view.callTool({ name: "probe" }, options(signal)));
     try {
-      const first = await acquireNativeMcpServer(runtime, "fixture", caller("A"));
-      views.push(first);
+      const first = await acquire(caller("A"));
       const secondContext = caller("B");
-      const second = await acquireNativeMcpServer(runtime, "fixture", secondContext);
-      views.push(second);
-      const firstPid = processId(payload(await first.callTool({ name: "probe" }, options(signal))));
-      expect(processId(payload(await second.callTool({ name: "probe" }, options(signal))))).toBe(
-        firstPid,
-      );
+      const second = await acquire(secondContext);
+      const firstPid = processId(await probe(first));
+      expect(processId(await probe(second))).toBe(firstPid);
       const cancelled = new AbortController();
       const origin = first.callTool({ name: "origin" }, options(cancelled.signal));
       const rejected = expect(origin).rejects.toThrow("cancelled request A");
@@ -167,7 +160,7 @@ for (const callback of ["sampling/createMessage", "elicitation/create"] as const
       await Promise.all([first.release(), second.release()]);
       const fresh = await acquireNativeMcpServer(runtime, "fixture", secondContext);
       try {
-        const result = payload(await fresh.callTool({ name: "probe" }, options(signal)));
+        const result = await probe(fresh);
         expect(result).toMatchObject({ name: "probe" });
         expect(processId(result)).not.toBe(firstPid);
         expect(payload(await fresh.callTool({ name: "callback" }, options(signal)))).toMatchObject({

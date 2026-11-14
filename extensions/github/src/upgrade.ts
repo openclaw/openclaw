@@ -1,12 +1,10 @@
-type GitHubPluginPolicy = {
+/** Explain the core-preview cutover without changing an operator's trust policy. */
+export function collectGitHubUpgradeWarnings(policy: {
   enabled: boolean;
   allow: readonly string[];
   deny: readonly string[];
   entries: Record<string, { enabled?: boolean }>;
-};
-
-/** Explain the core-preview cutover without changing an operator's trust policy. */
-export function collectGitHubUpgradeWarnings(policy: GitHubPluginPolicy): string[] {
+}): string[] {
   if (
     !policy.enabled ||
     policy.deny.includes("github") ||

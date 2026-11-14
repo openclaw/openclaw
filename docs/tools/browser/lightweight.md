@@ -1,5 +1,5 @@
 ---
-summary: "Use an externally managed Lightpanda browser for JavaScript and DOM tasks"
+summary: "Use externally managed Lightpanda and Kitesurf browser engines"
 title: "Lightweight browsers"
 read_when:
   - You want browser tasks to use a lightweight engine instead of Chromium
@@ -14,12 +14,75 @@ OpenClaw `browser` tool through an explicitly configured profile. It is not a
 visual-browser replacement: keep a Chromium profile for screenshots, PDF output,
 and applications that require unsupported browser features.
 
-The examples pin Lightpanda **1.0.0**. They do not change your existing browser
+The examples pin Lightpanda **1.0.2**. They do not change your existing browser
 profile, install a service, or migrate a logged-in Chrome profile.
+
+## Kitesurf (experimental)
+
+[Cloudflare Kitesurf](https://github.com/cloudflare/kitesurf) parses HTML, applies
+CSS, executes JavaScript, and renders images in Workers without a Chromium
+process. It is not a Chromium distribution. Its CDP endpoint implements a subset
+of Chrome's protocol; some unsupported commands return empty success responses.
+The upstream source has an [Apache-2.0 root license](https://github.com/cloudflare/kitesurf/blob/main/LICENSE).
+This adapter does not bundle the engine or audit its transitive dependencies.
+
+Build and start a local engine using the upstream README, then select it explicitly:
+
+```json5
+{
+  browser: {
+    profiles: {
+      kitesurf: {
+        engine: "kitesurf",
+        cdpUrl: "ws://127.0.0.1:8787/devtools/browser",
+        attachOnly: true,
+      },
+    },
+  },
+}
+```
+
+Use `profile: "kitesurf"` on browser calls. OpenClaw never launches or deploys
+Kitesurf. Each profile needs its own endpoint. Targets live only for the CDP
+connection; disconnecting loses them. Closing one Kitesurf tab preserves other
+tabs on that connection. Do not use this profile to preserve logins.
+
+The initial adapter admits navigation, tabs, text, efficient AI snapshots with
+`refs: "aria"`, semantic click/type/fill/select/press/wait/evaluate/close, and
+screenshots. Screenshot fidelity is experimental and may differ from Chromium.
+PDF, downloads, uploads, dialogs, emulation, logs, visual actions, scoped/native
+snapshots, and action batches are not exposed. Keep Chromium for those workflows.
+This is an OpenClaw qualification boundary, not a claim that upstream lacks every
+unexposed feature.
+
+Cloudflare deployment requires the Workers Paid plan and Dynamic Workers.
+Deployment is optional and separate from OpenClaw. Protect a deployed endpoint
+with authentication; upstream has no built-in authentication. OpenClaw does not
+currently provide a Kitesurf-specific Cloudflare Access service-token setup flow.
+Do not put service-token secrets in a CDP URL. Local development needs no deployment.
+
+### Compare engines
+
+The existing opt-in benchmark runs the same synthetic form workflow through
+OpenClaw's browser routes, including a checked, exactly-once submission:
+
+```bash
+node --import ./scripts/tsx.mjs extensions/browser/scripts/bench-lightweight.ts --endpoint ws://127.0.0.1:8787/devtools/browser --engine kitesurf --iterations 10 --output kitesurf-benchmark.json
+```
+
+For local fixtures, start the **local test engine only** with Kitesurf's
+`KITESURF_ALLOW_PRIVATE_NETWORK=1` variable (for example pass
+`--var KITESURF_ALLOW_PRIVATE_NETWORK:1` to `wrangler dev`). Do not enable this on
+an exposed service. The benchmark separately scopes OpenClaw's navigation policy
+to its fixture. See the Lightpanda benchmark below for native Chromium/Lightpanda
+comparisons. External endpoints report no engine memory or startup measurement;
+null means unavailable, not zero. Run engines serially with the same iteration
+count and record engine revisions, host, and failures. This is a synthetic
+compatibility/latency test, not a general web-compatibility or cost ranking.
 
 ## Browser plugin architecture
 
-The bundled Browser plugin owns both engine adapters. Chromium and Lightpanda
+The bundled Browser plugin owns the engine adapters. Chromium, Lightpanda, and Kitesurf
 use the same `browser` tool, profile selection, route admission, navigation
 policy, and session lifecycle. The registered adapter selects capabilities,
 CDP normalization, snapshot defaults, and connection lifetime; it does not add
@@ -38,9 +101,12 @@ the Lightpanda engine. Existing profiles and engine configuration are unchanged.
 ## Licensing and distribution
 
 OpenClaw's adapter remains MIT-licensed. The optional Lightpanda engine is
-**AGPL-3.0-or-later**, not MIT: see its
-[pinned source notice](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/src/main.zig#L1)
-and [license](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/LICENSE).
+**AGPL**, not MIT. Version 1.0.2 has inconsistent declarations: its
+[licensing document](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/LICENSING.md)
+says `AGPL-3.0-only`, while its
+[pinned source notice](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/src/main.zig#L1)
+allows later versions. Record that discrepancy during your SBOM review; neither
+interpretation makes the engine permissively licensed.
 The existing Playwright client is Apache-2.0; the existing `ws` client is MIT.
 Their licenses and third-party notices still apply.
 
@@ -121,7 +187,8 @@ the official container image has Linux amd64 and arm64 variants.
 From the repository root:
 
 ```sh
-docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml up -d
+docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml up -d --wait
+docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml ps
 docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.host.yaml exec lightpanda /bin/lightpanda version
 ```
 
@@ -129,6 +196,21 @@ The sample publishes CDP on `127.0.0.1:9222` only. Set `LIGHTPANDA_PORT` to sele
 another host port, and update the profile URL to match. The image is pinned by its
 multi-platform digest, so Docker selects the host architecture without pulling a
 moving `latest` or `nightly` version.
+
+The healthcheck opens an independent local CDP WebSocket session and checks its
+handshake. This proves listener readiness, not successful browsing or OpenClaw
+integration. The sample leaves memory, CPU, and PID limits unset. Set limits for
+your measured workload in your deployment's Compose configuration, or use
+[`docker update`](https://docs.docker.com/reference/cli/docker/container/update/)
+with `--memory`, `--cpus`, and `--pids-limit` for an existing container.
+`restart: unless-stopped` restarts a crashed engine but does not restart a
+still-running unhealthy container. Monitor unhealthy status and replace failed
+workers through your deployment's supervisor. Restarting loses that worker's
+page/login state; do not automatically replay clicks or submissions.
+
+The stop signal is `SIGTERM`, with a 10-second grace period, overriding the
+upstream image's immediate `SIGKILL`. This is a single-worker example, not a
+high-availability service or transparent failover guarantee.
 
 CDP gives a client control over the browser; the sample does not add CDP
 authentication. Do not change the loopback binding to a public address. Use an
@@ -145,7 +227,7 @@ docker compose -f deploy/lightpanda/compose.yaml -f deploy/lightpanda/compose.ho
 Merge the sidecar into the repository's existing Compose project:
 
 ```sh
-docker compose -f docker-compose.yml -f deploy/lightpanda/compose.yaml up -d lightpanda
+docker compose -f docker-compose.yml -f deploy/lightpanda/compose.yaml up -d --wait lightpanda
 ```
 
 Configure the OpenClaw Gateway with `cdpUrl: "ws://lightpanda:9222"` in the profile
@@ -166,13 +248,13 @@ successful engine startup does not prove sidecar connectivity.
 ## Native Linux and macOS
 
 Download the release binary for your operating system and CPU from
-[Lightpanda 1.0.0](https://github.com/lightpanda-io/browser/releases/tag/1.0.0).
+[Lightpanda 1.0.2](https://github.com/lightpanda-io/browser/releases/tag/1.0.2).
 The sample's `deploy/lightpanda/SHA256SUMS` records the release asset digests.
 
 For Linux x86-64, run from the repository root:
 
 ```sh
-curl --fail --location --output lightpanda-x86_64-linux https://github.com/lightpanda-io/browser/releases/download/1.0.0/lightpanda-x86_64-linux &&
+curl --fail --location --output lightpanda-x86_64-linux https://github.com/lightpanda-io/browser/releases/download/1.0.2/lightpanda-x86_64-linux &&
   sha256sum --check --ignore-missing deploy/lightpanda/SHA256SUMS &&
   chmod +x lightpanda-x86_64-linux &&
   LIGHTPANDA_DISABLE_TELEMETRY=1 LIGHTPANDA_DISABLE_CORE_DUMP=1 ./lightpanda-x86_64-linux serve --host 127.0.0.1 --port 9222
@@ -181,7 +263,7 @@ curl --fail --location --output lightpanda-x86_64-linux https://github.com/light
 For macOS Apple silicon:
 
 ```sh
-curl --fail --location --output lightpanda-aarch64-macos https://github.com/lightpanda-io/browser/releases/download/1.0.0/lightpanda-aarch64-macos &&
+curl --fail --location --output lightpanda-aarch64-macos https://github.com/lightpanda-io/browser/releases/download/1.0.2/lightpanda-aarch64-macos &&
   shasum --algorithm 256 --check --ignore-missing deploy/lightpanda/SHA256SUMS &&
   chmod +x lightpanda-aarch64-macos &&
   LIGHTPANDA_DISABLE_TELEMETRY=1 LIGHTPANDA_DISABLE_CORE_DUMP=1 ./lightpanda-aarch64-macos serve --host 127.0.0.1 --port 9222
@@ -238,15 +320,76 @@ Do not set `executablePath` to Lightpanda: its CLI is not Chrome's launch CLI.
   and the separate `aria` snapshot format are unsupported in this adapter.
 - JavaScript and web APIs are not a guarantee that every website will work.
   Verify the sites and interaction patterns you actually use.
-- Lightpanda 1.0.0 enforces CORS by default. Cross-origin fetch/XHR requests need
+- Lightpanda 1.0.2 enforces CORS by default. Cross-origin fetch/XHR requests need
   the destination's appropriate CORS headers; the sample does not disable this
   protection. The engine also takes its language from `--locale` instead of
   falling back to English.
 
 The engine and its session model are documented in the
-[pinned Lightpanda source](https://github.com/lightpanda-io/browser/tree/588f6223b9cae8a2406aeef035ed9363a3e404fd).
+[pinned Lightpanda source](https://github.com/lightpanda-io/browser/tree/c5f7bb29b127040c899d4e181b5709f76fc71a6f).
 See [browser profiles](/tools/browser/profiles) and
 [remote browsers](/tools/browser/remote) for the shared profile and routing rules.
+
+## Page classification and judge
+
+Browser `action="judge"` triages page blockers with the calling agent's selected
+[Decision model](/concepts/decision-models), without returning page text to the
+primary model. It reads up to 6,000 body-text characters from the existing tab,
+adds the untrusted-content wrapper, and returns the typed Decision outcome.
+It works with both text-capable Chromium and Lightpanda profiles. The bundled
+`browser-automation` skill explains the separate loading,
+empty-results, login, consent, bot-challenge, paywall, error, and unsupported-browser
+questions. It is explicit, advisory work, not automatic navigation policy.
+
+Use the selected provider only when page data is authorized for that destination.
+Hosted Decision providers can charge; a local browser does not imply local
+inference. Missing tools or unavailable inference leave ordinary browser
+inspection available, not an automatic model/engine fallback. Missing, uncertain,
+or all-low blocker scores do not prove usable content, especially on blank or
+truncated pages. Consent, login, CAPTCHA, and payment actions still need their
+normal authorization.
+
+This is **not native Lightpanda `judge()` support**. As inspected on October 24,
+2026, upstream
+[`page.judge()`](https://github.com/lightpanda-io/lightpanda-python/blob/7b17601189e49c0678e2914fa51994958c81a968/lightpanda/browser.py#L324-L349)
+on the experimental `page-classify` branch calls the MCP `classify` tool. The
+branch's [CDP LP dispatcher](https://github.com/lightpanda-io/browser/blob/e04f855dd202446828799ebdccab31116425ff31/src/server/cdp/domains/lp.zig#L34-L73)
+does not expose classification. OpenClaw's adapter uses CDP, so neither an engine
+version nor a successful connection establishes this capability. Opening a
+separate MCP session would not classify the existing CDP page and its login state.
+
+The upstream [classification implementation](https://github.com/lightpanda-io/browser/blob/e04f855dd202446828799ebdccab31116425ff31/src/browser/classify.zig#L233-L255)
+builds URL/title/status plus at most 8,192 bytes of semantic-tree content, then
+[calls TypeSafe](https://github.com/lightpanda-io/browser/blob/e04f855dd202446828799ebdccab31116425ff31/src/browser/tools.zig#L1988-L2024).
+It is not evidence of embedded model weights or offline inference. Native
+integration needs an upstream classification operation that targets the existing
+CDP session, with explicit capability discovery and inference configuration.
+Until then, do not guess `LP.classify`/`LP.judge` methods or forward OpenClaw
+credentials into an external browser process.
+The released [Lightpanda 1.0.2](https://github.com/lightpanda-io/browser/tree/c5f7bb29b127040c899d4e181b5709f76fc71a6f)
+does not include the experimental classification tool. Python's feature branch
+also shortcuts HTTP failures into local flags; these are not model probabilities
+and OpenClaw does not fabricate those judgments.
+
+## Lightpanda 1.0.2 compatibility
+
+The normal OpenClaw snapshot, reference-based typing/clicking, wait, and text
+workflow was verified with the Linux x86-64 release binary and Playwright 1.64.0.
+A successful click response is not proof that the task finished: wait for the
+expected page state and read it back before reporting success or retrying a
+submission.
+
+The release improves mouse events inside shadow DOM, but an OpenClaw fixture
+with a button in an open shadow root still fails Playwright's hit-target check
+(`root.elementsFromPoint is not a function`). Use Chromium for affected sites;
+do not force clicks or replay submissions to hide this compatibility gap.
+
+Upstream's `fetch --dump structured_data` and `fetch --markdown-alternate` are
+standalone Lightpanda CLI features, not new OpenClaw browser-tool arguments.
+The upstream `LP.getPageStatus` CDP method reports page issues, including
+JavaScript errors and failed or skipped resources. It is not exposed as an
+OpenClaw browser action, and a clean issue summary alone does not prove task
+completion. The adapter's capability limits above remain unchanged.
 
 ## Verification and benchmarks
 
@@ -351,7 +494,7 @@ container/binary version separately with the report. A Windows Node controller
 can use the same external-engine interface, but Windows Docker runtime behavior
 has not been verified for this sample.
 
-Compare the same fixed tasks with a pinned Chromium baseline. Record
+Compare the same deterministic tasks with a pinned Chromium baseline. Record
 task completion before reporting speed or memory improvements; unsupported or
 failed work must not be counted as a successful fast result. Report warm and
 cold runs separately, engine versions, host OS/architecture, client overhead,

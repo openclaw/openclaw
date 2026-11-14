@@ -43,11 +43,9 @@ import {
   joinTelegramTextParts,
   resolveTelegramNonTextBody,
   hasLeadingBotCommandAddressedToOtherBot,
-  hasBotMentionInText,
   hasBotMention,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessagePlaceholder,
-  resolveTelegramRichMessageText,
 } from "./bot/body-helpers.js";
 import {
   buildTelegramGroupPeerId,
@@ -57,7 +55,10 @@ import {
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
-import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import {
+  isTelegramForumServiceMessage,
+  isTelegramForumTopicTitleUpdate,
+} from "./forum-service-message.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import {
   resolveTelegramCommandIngressAuthorization,
@@ -197,17 +198,20 @@ export async function resolveTelegramInboundBody(params: {
     messageTextParts.text,
     messageTextParts.entities,
   ).trim();
-  const richText = resolveTelegramRichMessageText(msg);
   // Only text and locations participate in the audio transcription preflight.
   const hasUserText = Boolean(rawText || nonTextBody?.kind === "location");
   let rawBody = [rawText, nonTextBody?.text].filter(Boolean).join("\n").trim();
   if (!rawBody) {
-    rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? "";
+    rawBody = resolveTelegramRichMessagePlaceholder(msg) ?? "";
   }
   if (!rawBody && msg.sticker && !stickerHasMedia && !formattedStickerDescription) {
     rawBody = msg.sticker.emoji?.trim() || formatMediaPlaceholderText(nativeMediaFacts);
   }
-  if (!rawBody && nativeMediaFacts.length === 0) {
+  const privateTopicTitleUpdate =
+    msg.chat.type === "private" &&
+    msg.message_thread_id != null &&
+    isTelegramForumTopicTitleUpdate(msg);
+  if (!rawBody && nativeMediaFacts.length === 0 && !privateTopicTitleUpdate) {
     return null;
   }
 
@@ -244,6 +248,7 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingChannel: "telegram",
         OriginatingTo: originatingTo,
         AccountId: accountId,
+        MessageSid: String(msg.message_id),
         ChatType: isGroup ? "group" : "direct",
         MessageThreadId: replyThreadId,
         media: materializedMedia,
@@ -277,24 +282,23 @@ export async function resolveTelegramInboundBody(params: {
     : messageTextParts;
   const hasAnyMention = mentionTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
-    ? (mentionMessages
-        ? mentionMessages.some((message) => hasBotMention(message, botUsername, primaryCtx.me?.id))
-        : hasBotMention(msg, botUsername, primaryCtx.me?.id)) ||
-      (richText ? hasBotMentionInText(richText, botUsername) : false)
+    ? mentionMessages
+      ? mentionMessages.some((message) => hasBotMention(message, botUsername, primaryCtx.me?.id))
+      : hasBotMention(msg, botUsername, primaryCtx.me?.id)
     : false;
   const mentionText = mentionMessages || !msg.contact ? mentionTextParts.text : "";
   const groupThread = resolveGroupThreadMentionFacts({
     cfg,
     channel: "telegram",
     peerId: isGroup ? String(chatId) : resolveTelegramDirectPeerId({ chatId, senderId }),
-    text: [mentionText, richText, preflightTranscript].filter(Boolean).join("\n"),
+    text: [mentionText, preflightTranscript].filter(Boolean).join("\n"),
     sessionKey: params.sessionKey,
     acpBinding: params.acpBinding,
   });
   const computedWasMentioned =
     Boolean(groupThread?.mentionedAgentIds.length) ||
     matchesMentionWithExplicit({
-      text: mentionText || richText || "",
+      text: mentionText,
       mentionRegexes,
       explicit: {
         hasAnyMention,
@@ -412,7 +416,7 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
-    inboundEventKind,
+    inboundEventKind: privateTopicTitleUpdate ? "room_event" : inboundEventKind,
     groupThread,
     mentionFacts: {
       canDetectMention,

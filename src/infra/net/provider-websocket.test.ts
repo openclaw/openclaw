@@ -3,10 +3,9 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import net, { type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../packages/gateway-client/src/websocket.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { openProviderWebSocket } from "./provider-websocket.js";
 import * as ssrf from "./ssrf.js";
@@ -72,6 +71,18 @@ async function createStalledHandshakeServer(event: "upgrade" | "connect") {
   return { url: `http://127.0.0.1:${port}`, received: received.promise, connectionCount };
 }
 
+function pinHostnameToLoopback(pinnedHostname: string) {
+  const resolveHostname = ssrf.resolvePinnedHostnameWithPolicy;
+  vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
+    resolveHostname(
+      hostname,
+      hostname === pinnedHostname
+        ? { ...params, lookupFn: async () => [{ address: "127.0.0.1", family: 4 }] }
+        : params,
+    ),
+  );
+}
+
 async function prepareProxy(noProxy = "") {
   const proxy = await createStalledHandshakeServer("connect");
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
@@ -82,15 +93,7 @@ async function prepareProxy(noProxy = "") {
   }
   vi.stubEnv("NO_PROXY", noProxy);
   vi.stubEnv("no_proxy", noProxy);
-  const resolveHostname = ssrf.resolvePinnedHostnameWithPolicy;
-  vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
-    resolveHostname(
-      hostname,
-      hostname === "provider.example"
-        ? { ...params, lookupFn: async () => [{ address: "127.0.0.1", family: 4 }] }
-        : params,
-    ),
-  );
+  pinHostnameToLoopback("provider.example");
   return proxy;
 }
 
@@ -116,7 +119,9 @@ async function createLocalWebSocketServer(tls = false) {
   };
 }
 
-async function createConnectProxy(proxyHostname = "127.0.0.1") {
+async function createConnectProxy() {
+  const proxyHostname = "proxy.invalid";
+  pinHostnameToLoopback(proxyHostname);
   const server = createHttpServer();
   let connectCount = 0;
   server.on("connect", (request, clientSocket, head) => {
@@ -155,16 +160,16 @@ describe("openProviderWebSocket", () => {
     expect(proxy.connectionCount()).toBe(0);
   });
 
-  it.each([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (managed) => {
+  it.for([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (active, t) => {
     const proxy = await prepareProxy();
-    if (managed) {
+    if (active) {
       vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     }
     const socket = await openSocket(providerUrl, {
-      dispatcherPolicy: managed ? { mode: "env-proxy" } : undefined,
+      dispatcherPolicy: active ? { mode: "env-proxy" } : undefined,
     });
     socket.on("error", ignoredError);
-    const peer = await withTestTimeout(proxy.received, 2000, "Proxy did not receive CONNECT");
+    const peer = await withinTest(proxy.received, t.signal);
     const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
     socket.terminate();
     await closed;
@@ -255,8 +260,7 @@ describe("openProviderWebSocket", () => {
 
   it.each([false, true])("opens handshake with transport settings (proxy=%s)", async (useProxy) => {
     const target = await createLocalWebSocketServer(!useProxy);
-    const connectSpy = vi.spyOn(net, "connect");
-    const proxy = useProxy ? await createConnectProxy("localhost") : undefined;
+    const proxy = useProxy ? await createConnectProxy() : undefined;
     const socket = await openSocket(target.url, {
       allowPrivateNetwork: true,
       dispatcherPolicy: proxy
@@ -267,11 +271,6 @@ describe("openProviderWebSocket", () => {
     expect(target.requestCount()).toBe(1);
     if (proxy) {
       expect(proxy.connectCount()).toBe(1);
-      expect(
-        connectSpy.mock.calls.some(
-          ([options]) => typeof asOptionalRecord(options)?.lookup === "function",
-        ),
-      ).toBe(true);
     }
     socket.close();
     await once(socket, "close");

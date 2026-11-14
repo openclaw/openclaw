@@ -1,4 +1,8 @@
 export * from "./error-details.js";
+export {
+  validateDiagnosticsCpuProfileParams,
+  type DiagnosticsCpuProfileParams,
+} from "./schema/diagnostics.js";
 export * from "./node-permissions.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
@@ -47,6 +51,7 @@ export {
   type SessionToolOverrides,
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
+export * from "./schema/native-subagents.js";
 export * from "./schema/session-participant.js";
 export {
   SessionOwnerSessionCountSchema,

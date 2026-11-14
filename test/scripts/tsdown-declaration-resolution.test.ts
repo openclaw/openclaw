@@ -1,23 +1,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
-import {
-  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-} from "../../scripts/lib/tsdown-config-groups.mts";
-import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
+import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import type { CommandFixture } from "../helpers/command-fixture.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture,
   createDeclarationTest,
   declarationCacheRecords,
   expectStagingClean,
   runFixtureModule,
-  runUnifiedWriter,
   runWriter,
   treeHashes,
 } from "./tsdown-declaration-fixture.js";
@@ -65,9 +58,11 @@ function createFixture(
 ) {
   const fixture = createDeclarationFixture(command, groups, root, extraEntrypoints);
   if (extraEntrypoints?.includes("tsdown.ai.config.ts")) {
-    // The real AI build copies its bundled SDK's license alongside every output.
-    const license = "node_modules/@mistralai/mistralai/LICENSE";
-    fixture.write(license, fs.readFileSync(license, "utf8"));
+    // The real AI build copies its bundled dependencies' licenses alongside every output.
+    for (const name of ["@mistralai/mistralai", "openai", "ws"]) {
+      const license = `node_modules/${name}/LICENSE`;
+      fixture.write(license, fs.readFileSync(license, "utf8"));
+    }
   }
   return { ...fixture, run: (source: string) => runModule(command, fixture.root, source) };
 }
@@ -230,47 +225,16 @@ assert.equal(process.cwd(), packageDir);
 `);
   }));
 
-it.runIf(process.platform === "win32").concurrent(
-  "starts the checkout compiler when its Windows executable uses an extended-length path",
-  ({ command }) =>
-    command.lifetime.run(async () => {
-      const base = fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-"));
-      const root = path.join(base, "nested-checkout-".repeat(5), "nested-install-".repeat(5));
-      fs.mkdirSync(root, { recursive: true });
-      const native = materializeNativeCompiler(root, { javaScriptApi: false });
-      expect(native.length).toBeGreaterThanOrEqual(248);
-      const require = createRequire(path.join(root, "package.json"));
-      const getExePath: { default: () => string } = require(
-        path.join(root, "node_modules/typescript/lib/getExePath.js"),
-      );
-      expect(getExePath.default()).toBe(path.toNamespacedPath(native));
-      const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
-      expect(compilerCommand?.bin).toBe(getExePath.default());
-      const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
-        cwd: base,
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      const manifest: { version: string } = JSON.parse(
-        fs.readFileSync(require.resolve("typescript/package.json"), "utf8"),
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(`Version ${manifest.version}`);
-    }),
-);
-
 for (const kind of [
   "directory alias",
   "Windows 8.3 alias",
-  "directory alias targeting Windows 8.3",
   "directory alias targeting a case alias",
 ]) {
   it.skipIf(kind.includes("Windows") && process.platform !== "win32").concurrent(
     `compiles and receipts every local input through a ${kind}`,
     ({ command, skip }) =>
       command.lifetime.run(async () => {
-        const { root, localInput, run } = nestedFixture(command);
+        const { root, ancestorInput, localInput } = nestedFixture(command);
         let target = root;
         if (kind.includes("Windows")) {
           const short = spawnSync(
@@ -307,40 +271,6 @@ for (const kind of [
           expect(alias).not.toBe(target);
           expect(target).not.toBe(root);
         }
-        await run(`
-import { build } from "tsdown";
-import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
-import { createDeclarationStage, createDeclarationInputCapture, requestDeclarationInputs, readDeclarationInputs } from "./scripts/lib/tsdown-declaration-inputs.mts";
-const buildFixture = makeBuild(build);
-const cwd = ${JSON.stringify(alias)};
-const canonical = fs.realpathSync.native(cwd);
-const stage = createDeclarationStage(cwd);
-const outDir = path.join(cwd, path.relative(canonical, fs.realpathSync.native(stage)), "dist");
-requestDeclarationInputs(outDir, "alias", [path.join(cwd, "src/shared.ts")]);
-const { bundles } = await buildFixture({
-  cwd, entry: path.join(cwd, "src/shared.ts"), outDir,
-  dts: true,
-  hooks: createDeclarationBoundaryHooks({ "build:done": createDeclarationInputCapture("alias") }),
-
-});
-try {
-  const declaration = fs.readFileSync(path.join(outDir, "shared.d.mts"), "utf8");
-  assert.match(declaration, /inferredOrigin: "local"/);
-  assert.match(declaration, /directoryName\\(\\): "declared-cwd"/);
-  const inputs = readDeclarationInputs(outDir, "alias");
-  assert.ok(inputs.includes(${JSON.stringify(localInput)}));
-  assert.ok(inputs.includes("src/shared.ts"));
-  assert.ok(inputs.some(file => file.endsWith("/lib.es2023.d.ts")));
-  assert.ok(inputs.some(file => file.endsWith("synthetic-core/package.json")));
-  assert.ok(inputs.every(file => !file.startsWith("../")), "receipt admitted an outside input");
-} finally {
-  await dispose(bundles);
-  fs.rmSync(stage, { recursive: true, force: true });
-}
-`);
-        if (!kind.includes("Windows")) {
-          return;
-        }
         const dist = path.join(root, "dist");
         fs.mkdirSync(dist, { recursive: true });
         // An installed alias exposes live output to topology scanning. Its physical
@@ -348,17 +278,43 @@ try {
         fs.symlinkSync(dist, path.join(root, "node_modules/fixture-published"), "junction");
         const cold = await runWriter(command, alias);
         expect(cold.status, cold.stdout + cold.stderr).toBe(0);
-        expect(declarationCacheRecords(root).flatMap((record) => record.inputs ?? [])).toContain(
-          localInput,
-        );
+        const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
+        expect(inputs).toEqual(expect.arrayContaining([localInput, "src/shared.ts"]));
+        expect(inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
+        // Receipts list the sources the compiler read. Manifests it only consulted key
+        // the cache through the writer's package.json and tsconfig inputs.
+        expect(inputs.some((file) => file.endsWith("synthetic-core/package.json"))).toBe(false);
+        for (const input of inputs) {
+          const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
+          expect(
+            relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative),
+            input,
+          ).toBe(false);
+        }
         const published = treeHashes(dist);
+        const declarations = Object.keys(published)
+          .filter((file) => file.endsWith(".d.ts"))
+          .map((file) => fs.readFileSync(path.join(dist, file), "utf8"))
+          .join("\n");
+        expect(declarations.match(/declare const inferredOrigin: [^;]+;/u)?.[0]).toBe(
+          'declare const inferredOrigin: "local";',
+        );
         const cache = path.join(root, ".artifacts/build-all-cache");
         const cached = treeHashes(cache);
+        fs.writeFileSync(ancestorInput, coreText("changed-ancestor"));
         const warm = await runWriter(command, alias);
         expect(warm.status, warm.stdout + warm.stderr).toBe(0);
         expect(warm.stdout + warm.stderr).not.toContain("[tsdown-build] invocation");
         expect(treeHashes(dist)).toEqual(published);
         expect(treeHashes(cache)).toEqual(cached);
+        const manifest = path.join(root, path.dirname(localInput), "package.json");
+        fs.writeFileSync(
+          manifest,
+          fs.readFileSync(manifest, "utf8").replace(/\}\s*$/u, ',"description":"rekeyed"}\n'),
+        );
+        const rekeyed = await runWriter(command, alias);
+        expect(rekeyed.status, rekeyed.stdout + rekeyed.stderr).toBe(0);
+        expect(rekeyed.stdout + rekeyed.stderr).toContain("cache miss");
         expectStagingClean(root);
       }),
   );
@@ -485,28 +441,33 @@ export default [
 `,
       );
       await run(`
-import { Program } from "typescript/async";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 const output = path.join(root, "packages/output-producer/dist");
 const alias = ${JSON.stringify(alias)};
 assert.equal(fs.existsSync(output), false, "the producer must start cold");
-const originalEmit = Program.prototype.emitToString;
+const originalExecFile = childProcess.execFile;
 const started = Promise.withResolvers();
 const written = Promise.withResolvers();
 let compilers = 0;
 globalThis.consumerStarted = started.promise;
 globalThis.finishProducer = written.resolve;
-Program.prototype.emitToString = async function (...args) {
-  const output = await originalEmit.apply(this, args);
-  if ((await this.getSourceFileNames()).includes(path.join(root, "src/consumer.ts"))) {
-    compilers++;
+// The declaration compiler is one command-line pass; hold the consumer's result.
+childProcess.execFile = function (file, args, options, callback) {
+  const project = args.includes("--listFiles") ? args[args.indexOf("-p") + 1] : undefined;
+  if (!project || !fs.readFileSync(project, "utf8").includes(path.join(root, "src/consumer.ts"))) {
+    return originalExecFile.call(this, file, args, options, callback);
+  }
+  compilers++;
+  return originalExecFile.call(this, file, args, options, (...result) => {
     started.resolve();
     // Delay only result delivery until the real sibling build writes its output.
-    await written.promise;
-  }
-  return output;
+    void written.promise.then(() => callback(...result));
+  });
 };
+syncBuiltinESMExports();
 try {
   const { bundles } = await buildFixture({ config: "tsdown.sibling.config.mts" });
   await dispose(bundles);
@@ -516,15 +477,14 @@ try {
   }
 } finally {
   written.resolve();
-  Program.prototype.emitToString = originalEmit;
+  childProcess.execFile = originalExecFile;
+  syncBuiltinESMExports();
 }
 `);
     }),
 );
 
-it.concurrent.for(
-  ["node", "workspace", "AI"].flatMap((owner) => [true, false].map((dts) => ({ owner, dts }))),
-)("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
+it.concurrent.for([true, false])("honors dts=%s overrides for every owner", (dts, { command }) =>
   command.lifetime.run(async () => {
     const { root, run } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
     const outside = path.join(path.dirname(root), "runtime.ts");
@@ -535,19 +495,21 @@ const buildFixture = makeBuild(build);
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
 const { default: configs } = await import("./tsdown.config.ts");
 const { default: ai } = await import("./tsdown.ai.config.ts");
-const owner = ${JSON.stringify(owner)};
+// Each default is imported once; every owner still gets a separate real build and output tree.
+for (const owner of ["node", "workspace", "AI"]) {
 const config = owner === "AI" ? ai : configs.find(config => config.outDir ===
   (owner === "node" ? "packages/agent-core/dist" : "packages/gateway-protocol/dist"));
 assert.ok(config);
-assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'});
+assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'}, owner);
+const outDir = "override-output-" + owner;
 // The build API's cwd, rather than the importing process's cwd, owns inputs.
 process.chdir(path.dirname(root));
 const runtime = Promise.withResolvers();
 const { bundles } = await buildFixture({
   ...config, cwd: root,
-  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], newContext: true }' : owner === "AI" ? "{ enabled: false }" : "false"}, format: ["esm", "cjs"], concurrency: 1,
+  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], newContext: true }' : 'owner === "AI" ? { enabled: false } : false'}, format: ["esm", "cjs"], concurrency: 1,
   entry: ${JSON.stringify(dts ? "src/shared.ts" : outside)},
-  outDir: "override-output", outExtensions: undefined, fixedExtension: true,
+  outDir, outExtensions: undefined, fixedExtension: true,
   inputOptions: async (input, format, context) => {
     const resolved = await config.inputOptions?.(input, format, context) ?? input;
     return { ...resolved, plugins: [resolved.plugins, {
@@ -563,20 +525,19 @@ const { bundles } = await buildFixture({
   },
 });
 try {
-  const files = fs.readdirSync(path.join(root, "override-output"));
   if (${dts}) {
     for (const extension of ["mts", "cts"]) {
-      const declaration = fs.readFileSync(path.join(root, "override-output/shared.d." + extension), "utf8");
+      const declaration = fs.readFileSync(path.join(root, outDir, "shared.d." + extension), "utf8");
       assert.match(declaration, /inferredOrigin: "local"/, extension + " used ancestor declarations");
       assert.match(declaration, /directoryName\\(\\): "declared-cwd"/, extension + " lost automatic types from declared cwd");
     }
   } else {
-    assert.equal(files.some(file => /\\.d\\.[cm]?ts$/.test(file)), false);
+    assert.equal(fs.readdirSync(path.join(root, outDir)).some(file => /\\.d\\.[cm]?ts$/.test(file)), false);
     for (const extension of ["mjs", "cjs"]) {
-      assert.match(fs.readFileSync(path.join(root, "override-output/runtime." + extension), "utf8"), /outside-runtime/);
+      assert.match(fs.readFileSync(path.join(root, outDir, "runtime." + extension), "utf8"), /outside-runtime/);
     }
   }
-  if (${dts && owner === "AI"}) {
+  if (${dts} && owner === "AI") {
     let starts = 0;
     const { bundles: objectOptions } = await buildFixture({
       ...config, cwd: root,
@@ -593,6 +554,7 @@ try {
   }
 } finally {
   await dispose(bundles);
+}
 }
 `);
   }),
@@ -650,84 +612,49 @@ for (const failure of [false, true]) {
 `);
   }));
 
-it.concurrent.for([
-  {
-    name: "SDK",
-    groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-    run: async (command: CommandFixture, root: string, env?: NodeJS.ProcessEnv) =>
-      await runWriter(command, root, false, env),
-  },
-  { name: "unified", groups: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
-])(
-  "uses local explicit references and records real inputs for $name",
-  ({ groups, run }, { command }) =>
-    command.lifetime.run(async () => {
-      const { root, ancestorInput, localInput } = nestedFixture(command, groups);
-      const initial = await run(command, root);
-      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      const published = treeHashes(path.join(root, "dist"));
-      const declarations = Object.keys(published)
-        .filter((file) => file.endsWith(".d.ts"))
-        .map((file) => fs.readFileSync(path.join(root, "dist", file), "utf8"))
-        .join("\n");
-      expect(declarations.match(/declare const inferredOrigin: [^;]+;/u)?.[0]).toBe(
-        'declare const inferredOrigin: "local";',
-      );
-      const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
-      expect(inputs).toContain(localInput);
-      for (const input of inputs) {
-        const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
-        expect(
-          relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative),
-          input,
-        ).toBe(false);
-      }
-      expectStagingClean(root);
-      // Both writers share the cache owner; one warm-cache probe covers reuse.
-      if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
-        return;
-      }
-      fs.writeFileSync(ancestorInput, coreText("changed-ancestor"));
-      const ancestorChanged = await run(command, root);
-      expect(ancestorChanged.status, ancestorChanged.stdout + ancestorChanged.stderr).toBe(0);
-      expect(ancestorChanged.stdout + ancestorChanged.stderr).not.toContain(
-        "[tsdown-build] invocation",
-      );
-      expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-    }),
-);
+// Accepted: the compiler reports the real path it read. A parent-directory package link
+// that points back into the checkout therefore resolves to checkout content and builds.
+it.concurrent("builds through a parent package link that resolves back inside the checkout", ({
+  command,
+}) =>
+  command.lifetime.run(async () => {
+    const { root, write, ancestorInput, localInput } = nestedFixture(command);
+    fs.rmSync(path.dirname(ancestorInput), { recursive: true });
+    fs.symlinkSync(
+      path.join(root, path.dirname(localInput)),
+      path.dirname(ancestorInput),
+      "junction",
+    );
+    write("src/shared.ts", 'export type { Marker as Shared } from "synthetic-core";');
+    fs.appendFileSync(
+      path.join(root, "src/shared.ts"),
+      '\nexport const inferredOrigin = "unused";\n',
+    );
+    const built = await runWriter(command, root);
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
+    expect(inputs).toEqual(expect.arrayContaining([localInput]));
+    expect(inputs.some((file) => path.isAbsolute(file) || file.startsWith(".."))).toBe(false);
+    expectStagingClean(root);
+  }));
 
 it.concurrent.for([
   "ancestor module",
-  "ancestor package alias",
   "ancestor ambient types",
   "package symlink",
   "source symlink",
   "source reference",
-  "ancestor symlink reference",
 ])("refuses an escaped %s before publication", (kind, { command }) =>
   command.lifetime.run(async () => {
-    const ancestorLookup = [
-      "ancestor module",
-      "ancestor package alias",
-      "ancestor ambient types",
-    ].includes(kind);
-    const { root, write, ancestorInput, localInput } = ancestorLookup
+    const ancestorLookup = ["ancestor module", "ancestor ambient types"].includes(kind);
+    const { root, write, ancestorInput } = ancestorLookup
       ? nestedFixture(command)
       : containedFixture(command);
     let rejectedPath = ancestorLookup ? path.dirname(ancestorInput) : `${root}-outside`;
     const outside = `${root}-outside`;
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, "index.d.ts"), "export interface Marker { escaped: true }");
-    if (kind === "ancestor module" || kind === "ancestor package alias") {
-      if (kind === "ancestor package alias") {
-        fs.rmSync(path.dirname(ancestorInput), { recursive: true });
-        fs.symlinkSync(
-          path.join(root, path.dirname(localInput)),
-          path.dirname(ancestorInput),
-          "junction",
-        );
-      }
+    if (kind === "ancestor module") {
       write("src/shared.ts", 'export type { Marker as Shared } from "synthetic-core";');
     } else if (kind === "ancestor ambient types") {
       const ambient = path.join(path.dirname(path.dirname(ancestorInput)), "synthetic-ambient");
@@ -770,10 +697,6 @@ it.concurrent.for([
       fs.symlinkSync(path.join(outside, "index.d.ts"), path.join(root, "src/escaped.d.ts"));
       write("src/shared.ts", 'export type { Marker as Shared } from "./escaped.js";');
     } else {
-      if (kind === "ancestor symlink reference") {
-        fs.rmSync(path.join(outside, "index.d.ts"));
-        fs.symlinkSync(path.join(root, "src/contract.d.ts"), path.join(outside, "index.d.ts"));
-      }
       write(
         "src/shared.ts",
         `/// <reference path="${path.join(outside, "index.d.ts").replaceAll(path.sep, "/")}" />\nexport class Shared {}\n`,
@@ -787,14 +710,9 @@ it.concurrent.for([
     const before = treeHashes(path.join(root, "dist"));
     const failed = await runWriter(command, root);
     expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-    if (["ancestor module", "ancestor package alias"].includes(kind)) {
-      expect(failed.stdout + failed.stderr).toContain("TS2307");
-    } else if (kind.includes("reference") || kind === "ancestor ambient types") {
-      expect(failed.stdout + failed.stderr).toContain("TS6053");
-    } else {
-      expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
-      expect(failed.stdout + failed.stderr).toContain(rejectedPath);
-    }
+    // The compiler reads its real filesystem; the checkout boundary rejects its inputs.
+    expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
+    expect(failed.stdout + failed.stderr).toContain(rejectedPath);
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);
   }),

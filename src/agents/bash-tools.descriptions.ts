@@ -1,3 +1,5 @@
+import { EXEC_WAIT_RECIPE } from "./bash-tools.exec-output.js";
+
 export const EXEC_AUTO_REVIEW_GUIDANCE =
   "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
 
@@ -12,12 +14,17 @@ export function describeExecTool(params?: {
       : [
           "Run shell now; background continuation supported.",
           "Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle.",
-          "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
+          `Long run: a command still running at yieldMs returns a handle. When the running result says its exit wakes this conversation, end the turn instead of polling; otherwise process poll collects the result. ${EXEC_WAIT_RECIPE} Output while still running does not start another turn. Background commands can outlive the turn; use process kill when no longer needed. This is not a saved, restartable automation.`,
         ];
   const base = [
+    params?.hasCronTool
+      ? "For continuous monitoring with future alerts, check automations for supported saved watchers. Ordinary background output cannot wake you to report new events."
+      : undefined,
     ...continuation,
     "Omit host/node to use the session's configured host.",
-    params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
+    params?.hasCronTool
+      ? "A one-time wait in this conversation is one background command; saved, recurring or cross-session follow-ups use automations."
+      : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]
     .filter(Boolean)
@@ -33,8 +40,10 @@ export function describeProcessTool(params?: { hasCronTool?: boolean }): string 
   return [
     "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill.",
     "poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",
+    "kill requests termination or returns the retained terminal result for an already-finished session. After a termination request, poll until a terminal result confirms exit and cleanup before saying stopped. A running poll is still pending. remove hides the record and cannot confirm cleanup.",
+    "Later process results supersede turn-start snapshots. Control sessions by sessionId; a displayed host PID is not a portable sandbox PID.",
     params?.hasCronTool
-      ? "No polling as timer/reminder; scheduled follow-up uses automations."
+      ? "No polling as timer/reminder; scheduled follow-up uses automations. On a requested monitoring stop, also stop any ordinary exec sessions you created for that request; stopping a saved automation does not stop them. Preserve unrelated work."
       : undefined,
   ]
     .filter(Boolean)

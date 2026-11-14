@@ -53,12 +53,6 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
-type IrcPrivmsgEvent = {
-  senderNick: string;
-  connectedNick: string;
-  rawLine: string;
-};
-
 export type IrcClientOptions = {
   host: string;
   port: number;
@@ -72,7 +66,11 @@ export type IrcClientOptions = {
   connectTimeoutMs?: number;
   messageChunkMaxChars?: number;
   abortSignal?: AbortSignal;
-  onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
+  onPrivmsg?: (event: {
+    senderNick: string;
+    connectedNick: string;
+    rawLine: string;
+  }) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
   onDisconnect?: () => void;
@@ -97,7 +95,7 @@ function buildFallbackNick(nick: string): string {
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
-  if (base.length >= maxNickLen) {
+  if (base.length + suffix.length > maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;
@@ -220,7 +218,8 @@ export async function connectIrcClient(options: IrcClientOptions) {
   const sendPrivmsg = async (target: string, text: string, replyTo?: string) => {
     const effect = captureEffectAuthority();
     const normalizedTarget = sanitizeIrcTarget(target);
-    const cleaned = sanitizeIrcOutboundText(text);
+    const message = text.replace(/\r\n|[\r\t]/g, " ");
+    const cleaned = sanitizeIrcOutboundText(message);
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
@@ -231,7 +230,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     const lineOverheadBytes =
       relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
+    let remaining = replyTo ? sanitizeIrcOutboundText(`${message}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
@@ -261,12 +260,12 @@ export async function connectIrcClient(options: IrcClientOptions) {
       });
   };
 
-  let lastReceivedAt = Date.now();
+  let lastReceivedAt = performance.now();
   const livenessTimer = setInterval(() => {
     if (!ready || closed) {
       return;
     }
-    const silentMs = Date.now() - lastReceivedAt;
+    const silentMs = performance.now() - lastReceivedAt;
     if (silentMs >= IRC_LIVENESS_TIMEOUT_MS) {
       fail(new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`));
       // Let the close listener notify the monitor, which owns reconnect and backoff.
@@ -323,7 +322,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (receiveOverflowed) {
       return;
     }
-    lastReceivedAt = Date.now();
+    lastReceivedAt = performance.now();
     buffer += chunk;
     let idx = buffer.indexOf("\n");
     while (idx !== -1) {

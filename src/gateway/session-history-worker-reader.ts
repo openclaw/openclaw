@@ -8,7 +8,8 @@ import type {
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
-import { resolveCronJobsStorePath } from "../cron/store/paths.js";
+import { resolveCronStoreSelectionInDatabase } from "../cron/store/paths.js";
+import { runInScopedOpenClawAgentReadSnapshot } from "../state/openclaw-agent-db-readonly-scope.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { getUserProfileDisplaysNative } from "../state/user-profile-list.native.js";
 import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
@@ -16,8 +17,9 @@ import {
   projectForwardedMessages,
   readForwardedCronJobIds,
 } from "./chat-display-projection.history.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import type { prepareCliSessionHistoryReader } from "./cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
-import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
@@ -213,19 +215,21 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "rpc") {
-    const { readChatHistoryPageKernel } =
-      await import("./server-methods/chat-history-page-kernel.js");
-    const { encodeChatHistoryResponsePage } =
-      await import("./server-methods/chat-history-response-page.js");
-    const cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
-      ? await (
-          await import("./cli-session-history.js")
-        ).prepareCliSessionHistoryReader(request.params, options.readers)
-      : undefined;
+    const { readChatHistoryPageKernel } = await import("./chat-history-page-kernel.js");
+    const { encodeChatHistoryResponsePage } = await import("./chat-history-response-page.js");
+    let cli: Awaited<ReturnType<typeof prepareCliSessionHistoryReader>>;
     try {
-      const page = await readChatHistoryPageKernel(request.params, {
-        ...options,
-        ...(cli ? { readers: cli.readers, readMessageSequence: cli.sequence } : {}),
+      // One PostgreSQL snapshot serves the CLI import check and every transcript read of this page.
+      const page = await runInScopedOpenClawAgentReadSnapshot(async () => {
+        cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
+          ? await (
+              await import("./cli-session-history.js")
+            ).prepareCliSessionHistoryReader(request.params, options.readers)
+          : undefined;
+        return readChatHistoryPageKernel(request.params, {
+          ...options,
+          ...(cli ? { readers: cli.readers, readMessageSequence: cli.sequence } : {}),
+        });
       });
       cli?.applyPagination(page);
       const messages = page.messages.filter(
@@ -245,11 +249,12 @@ export async function readSessionHistoryRequest(
         const state = { path, env };
         const jobIds = [...new Set(readForwardedCronJobIds(displayMessages).map(toUSVString))];
         const names = jobIds.length
-          ? withExistingOpenClawStateDatabaseReadOnly(
-              ({ db }) =>
-                readCronJobNamesInDatabase(db, jobIds, resolveCronJobsStorePath(undefined, env)),
-              state,
-            )
+          ? withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+              const selection = resolveCronStoreSelectionInDatabase(db, undefined, env);
+              return selection.status === "ready"
+                ? readCronJobNamesInDatabase(db, jobIds, selection.storeKey)
+                : new Map<string, string>();
+            }, state)
           : undefined;
         let profiles: ReturnType<typeof getUserProfileDisplaysNative> | undefined;
         const project = createCurrentUserProfileMessageProjector((id) =>

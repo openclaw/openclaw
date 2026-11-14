@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
+import type { WebSearchProviderToolExecutionContext } from "../plugins/web-provider-types.js";
 import {
   createOAuthAuthProfileStore,
   createWebSearchTestProvider,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore,
@@ -33,7 +33,6 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const tokens = { access: "test-access", refresh: "test-refresh" };
 const unconfigured = "Web search is supported but not configured.";
 async function expectSearch(
   expected: boolean,
@@ -54,6 +53,12 @@ async function expectSearch(
   );
   expect(tools.some((tool) => tool.name === "web_search")).toBe(expected);
   expect(onWebSearchConfiguration.mock.calls).toEqual(fact === undefined ? [] : [[fact]]);
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  const entries = catalogRef.current?.entries ?? [];
+  expect(entries.some((entry) => entry.name === "web_search")).toBe(expected);
+  expect(createCodeModeCatalogProjection(entries).byCallableName.has("web_search")).toBe(expected);
+  expect(tools.map((tool) => tool.name)).toContain("web_fetch");
 }
 beforeEach(() => {
   resolveProviders.mockReset().mockReturnValue([]);
@@ -65,6 +70,91 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
+});
+
+it.each([
+  { model: "gpt-5.4", profile: undefined, expected: "openai:configured" },
+  { model: "gpt-5.4", profile: "openai:selected", expected: "openai:selected" },
+  { model: "gpt-5.5", profile: undefined, expected: undefined },
+])(
+  "retains the selected credential owner through search execution ($model, $profile)",
+  async ({ model, profile, expected }) => {
+    const execute = vi.fn(async () => ({ results: [] }));
+    resolveProviders.mockReturnValue([
+      createWebSearchTestProvider({
+        pluginId: "test-search",
+        id: "test-search",
+        requiresCredential: false,
+        credentialPath: "plugins.entries.test-search.config.apiKey",
+        createTool: () => ({ description: "Fixture search", parameters: {}, execute }),
+      }),
+    ]);
+    const tools = await createOpenClawToolsAsync({
+      config: {
+        agents: { defaults: { model: "openai/gpt-5.4@openai:configured" } },
+        tools: { web: { search: { provider: "test-search" } } },
+      },
+      webSearchModelSelection: { provider: "openai", model, authProfileId: profile },
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    const search = tools.find((tool) => tool.name === "web_search");
+    expect(search).toBeDefined();
+    await search?.execute("selected-search", { query: "synthetic query" });
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "synthetic query" }),
+      expect.objectContaining({
+        modelSelection: { provider: "openai", model, authProfileId: expected },
+      }),
+    );
+  },
+);
+
+it("carries invocation authority through assembled search preparation", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const effect = vi.fn();
+  let allowed = true;
+  const assertInvocationCurrent = () => {
+    if (!allowed) {
+      throw new Error("Search invocation retired");
+    }
+  };
+  resolveProviders.mockReturnValue([
+    createWebSearchTestProvider({
+      pluginId: "test-search",
+      id: "test-search",
+      requiresCredential: false,
+      credentialPath: "plugins.entries.test-search.config.apiKey",
+      createTool: () => ({
+        description: "Fixture search",
+        parameters: {},
+        async execute(_args, context?: WebSearchProviderToolExecutionContext) {
+          entered.resolve();
+          await release.promise;
+          context?.assertCurrent?.();
+          effect();
+          return { results: [] };
+        },
+      }),
+    }),
+  ]);
+  const tools = await createOpenClawToolsAsync({
+    config: { tools: { web: { search: { provider: "test-search" } } } },
+    assertInvocationCurrent,
+    disableMessageTool: true,
+    disablePluginTools: true,
+    wrapBeforeToolCallHook: false,
+  });
+  const search = tools.find((tool) => tool.name === "web_search");
+  expect(search).toBeDefined();
+  const pending = search!.execute("retired-search", { query: "synthetic query" });
+  await entered.promise;
+  allowed = false;
+  release.resolve();
+  await expect(pending).rejects.toThrow("Search invocation retired");
+  expect(effect).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -81,37 +171,26 @@ it.each([
   },
 );
 
-it.each([
-  [true, false, "test-search-auth", true, false],
-  [true, true, "unrelated-provider", false, false],
-  [true, true, "test-search-auth", true, false],
-  [true, undefined, "test-search-auth", true, false],
-  [false, undefined, "test-search-auth", false, false],
-  [false, undefined, "test-search-auth", false, true],
-] as const)(
-  "uses prepared=%s source=%s provider=%s configured=%s selectedReader=%s",
-  async (prepared, authProfileStoreSource, provider, configured, selectedReader) => {
+it.each([true, false])(
+  "uses the prepared auth owner (available=%s) without standalone admission",
+  async (prepared) => {
     const agentDir = tempDirs.make("openclaw-search-source-");
-    const reader: SessionEntryCohortReader | undefined = selectedReader
-      ? {
-          database: { agentId: "main", path: agentDir, env: {} },
-          sessionKey: "agent:main:test",
-          logicalAgentId: "main",
-          storePaths: [agentDir],
-          assertCurrent: () => {},
-          readEntry: unexpectedRead,
-          withRead: unexpectedRead,
-        }
-      : undefined;
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        agentDir,
-        store: createOAuthAuthProfileStore({ provider, profileId: `${provider}:test`, ...tokens }),
-      },
-    ]);
-    if (!prepared) {
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
+    const reader: SessionEntryCohortReader = {
+      database: { agentId: "main", path: agentDir, env: {} },
+      sessionKey: "agent:main:test",
+      logicalAgentId: "main",
+      storePaths: [agentDir],
+      assertCurrent: () => {},
+      readEntry: unexpectedRead,
+      withRead: unexpectedRead,
+    };
+    const store = createOAuthAuthProfileStore({
+      provider: "test-search-auth",
+      profileId: "test-search-auth:test",
+      access: "test-access",
+      refresh: "test-refresh",
+    });
+    replaceRuntimeAuthProfileStoreSnapshots(prepared ? [{ agentDir, store }] : []);
     resolveProviders.mockReturnValue([
       {
         ...createWebSearchTestProvider({
@@ -127,13 +206,9 @@ it.each([
       .spyOn(authSource, "hasAnyAuthProfileStoreSourceAsync")
       .mockResolvedValue(false);
     await expectSearch(
-      configured,
-      configured,
-      {
-        config: {},
-        agentDir,
-        authProfileStoreSource,
-      },
+      prepared,
+      prepared,
+      { config: {}, agentDir, authProfileStoreSource: false },
       { reader },
     );
     expect(
@@ -143,49 +218,23 @@ it.each([
   },
 );
 
-it.each(["full", "minimal"] as const)(
-  "gives concise missing-setup context in %s prompts without a callable",
-  (promptMode) => {
-    const render = (webSearchUnconfigured: boolean, capabilityToolNames: string[] = []) =>
-      buildConfiguredAgentSystemPrompt({
-        config: {},
-        workspaceDir: "/workspace",
-        tools: [],
-        capabilityToolNames,
-        webSearchUnconfigured,
-        promptMode,
-      });
-    const prompt = render(true);
-    expect(prompt).toContain(unconfigured);
-    expect(prompt).toContain("openclaw configure --section web");
-    expect(prompt).toContain("Settings → Ask OpenClaw");
-    expect(prompt).not.toContain("- web_search:");
-    expect(render(false)).not.toContain(unconfigured);
-    expect(render(true, ["web_search"])).not.toContain(unconfigured);
-  },
-);
-
-it("excludes unconfigured search from initial tools, discovery, and Code Mode", () => {
-  const tools = createOpenClawCodingTools({
-    config: {},
-    workspaceDir: "/tmp/openclaw-web-search-test",
-    disableMessageTool: true,
-    wrapBeforeToolCallHook: false,
-    toolConstructionPlan: {
-      includeBaseCodingTools: false,
-      includeShellTools: false,
-      includeChannelTools: false,
-      includeOpenClawTools: true,
-      includePluginTools: false,
-    },
-  });
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools });
-  const entries = catalogRef.current?.entries ?? [];
-  expect.soft(tools.map((tool) => tool.name)).not.toContain("web_search");
-  expect.soft(entries.map((entry) => entry.name)).not.toContain("web_search");
-  expect(createCodeModeCatalogProjection(entries).byCallableName.has("web_search")).toBe(false);
-  expect(tools.map((tool) => tool.name)).toContain("web_fetch");
+it("gives missing-setup context in minimal prompts without a callable", async () => {
+  const render = (webSearchUnconfigured: boolean, capabilityToolNames: string[] = []) =>
+    buildConfiguredAgentSystemPrompt({
+      config: {},
+      workspaceDir: "/workspace",
+      tools: [],
+      capabilityToolNames,
+      webSearchUnconfigured,
+      promptMode: "minimal",
+    });
+  const prompt = await render(true);
+  expect(prompt).toContain(unconfigured);
+  expect(prompt).toContain("openclaw configure --section web");
+  expect(prompt).toContain("Settings → Ask OpenClaw");
+  expect(prompt).not.toContain("- web_search:");
+  expect(await render(false)).not.toContain(unconfigured);
+  expect(await render(true, ["web_search"])).not.toContain(unconfigured);
 });
 
 async function unexpectedRead(): Promise<never> {

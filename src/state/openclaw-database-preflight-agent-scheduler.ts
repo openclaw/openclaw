@@ -29,12 +29,15 @@ export async function preflightAgentDatabasesBounded<T>(
   startup?: {
     signal: AbortSignal;
     canDefer: (target: T) => boolean;
+    /** Clean-closed stores admit in-process; unsealed ones need a cold reader process. */
+    cleanClose?: (target: T) => boolean;
     track: (work: Promise<unknown>) => void;
     defer: (
       inspections: { target: T; result: Promise<OpenClawDatabaseSchemaPreflight> }[],
       reason: string,
     ) => AgentDatabaseAdmissionRefusal[];
   },
+  takePrestartedReader?: () => ReturnType<typeof createAgentSchemaInspectionWorker> | undefined,
 ): Promise<AgentDatabasePreflightStats> {
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
@@ -51,6 +54,15 @@ export async function preflightAgentDatabasesBounded<T>(
     return true;
   };
 
+  // Inspect cheap clean-closed stores first so slow unsealed stores at the head of the list
+  // cannot hold both slots past the startup wait and defer the whole fleet. The partition is
+  // stable, so targets sharing a path keep their claim order and results keep list order.
+  const sealed = startup?.cleanClose;
+  const inspectionOrder = targets.map((_, index) => index);
+  if (sealed) {
+    const isSealed = targets.map((target) => sealed(target));
+    inspectionOrder.sort((left, right) => Number(isSealed[right]) - Number(isSealed[left]));
+  }
   const inspections: Array<OpenClawDatabaseSchemaPreflight | undefined> = [];
   const failures = new Map<number, unknown>();
   let nextInspectionIndex = 0;
@@ -95,17 +107,17 @@ export async function preflightAgentDatabasesBounded<T>(
   };
 
   const worker = async () => {
-    await using reader = createAgentSchemaInspectionWorker();
+    await using reader = takePrestartedReader?.() ?? createAgentSchemaInspectionWorker();
     readers.push(reader);
     while (true) {
       if (inspectionSignal?.aborted || failures.size > 0) {
         return;
       }
 
-      const index = nextInspectionIndex;
-      if (index >= targets.length) {
+      if (nextInspectionIndex >= inspectionOrder.length) {
         return;
       }
+      const index = inspectionOrder[nextInspectionIndex]!;
       nextInspectionIndex += 1;
 
       const target = targets[index];

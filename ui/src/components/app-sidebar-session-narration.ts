@@ -6,7 +6,9 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
+import { stripAssistantMessageText } from "../lib/chat/assistant-message-text.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import {
   isSessionNarrationEvent,
@@ -19,7 +21,6 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
 } from "../lib/sessions/session-key.ts";
-import { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
 import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import {
   deriveSidebarNarrationLine,
@@ -33,12 +34,11 @@ const SIDEBAR_NARRATION_BUFFER_CHARS = 16_384;
 const SIDEBAR_NARRATION_RETRY_INITIAL_MS = 500;
 const SIDEBAR_NARRATION_RETRY_MAX_MS = 30_000;
 
-type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
 
 type NarrationSubscription = {
   source: NarrationSource;
-  subscription: SessionMessageSubscription;
+  subscription: Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 };
 
 type NarrationRetry = {
@@ -47,25 +47,9 @@ type NarrationRetry = {
   timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
-type PendingSubscription = NarrationRetry & { agentId: string | null };
-
 function createNarrationRetry(): NarrationRetry {
   return { retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS, retryAt: 0, timer: null };
 }
-
-type ThrottledLine = {
-  lastPublishedAt: number;
-  pending: string | null;
-  timer: ReturnType<typeof globalThis.setTimeout> | null;
-};
-
-type NarrationStream = {
-  // Keep the full stream length even after visibleText trims its bounded buffer.
-  consumedLength: number;
-  internalDepth: number;
-  delimiterTail: string;
-  visibleText: string;
-};
 
 export type SidebarNarrationSyncInput = {
   enabled: boolean;
@@ -91,13 +75,9 @@ function eventAgentMatches(targetAgentId: string, payloadAgentId: unknown): bool
 
 /** Owns the bounded session subscriptions and per-row activity throttles. */
 export function createSidebarNarration() {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let stopVisibility: (() => void) | undefined;
-  function notify() {
-    for (const listener of listeners) {
-      listener();
-    }
-  }
+  const notify = listeners.publish;
   let currentSource: NarrationSource | null = null;
   let currentInput: SidebarNarrationSyncInput | null = null;
   let visibilityDocument: Document | null = null;
@@ -112,10 +92,26 @@ export function createSidebarNarration() {
   let currentAgentId = "main";
   let desiredKeys = new Set<string>();
   const subscriptions = new Map<string, NarrationSubscription>();
-  const pendingSubscriptions = new Map<string, PendingSubscription>();
-  const streams = new Map<string, NarrationStream>();
+  const pendingSubscriptions = new Map<string, NarrationRetry & { agentId: string | null }>();
+  const streams = new Map<
+    string,
+    {
+      // Keep the full stream length even after visibleText trims its bounded buffer.
+      consumedLength: number;
+      internalDepth: number;
+      delimiterTail: string;
+      visibleText: string;
+    }
+  >();
   const runIds = new Map<string, string>();
-  const throttles = new Map<string, ThrottledLine>();
+  const throttles = new Map<
+    string,
+    {
+      lastPublishedAt: number;
+      pending: string | null;
+      timer: ReturnType<typeof globalThis.setTimeout> | null;
+    }
+  >();
   let lines = new Map<string, string>();
   let observerDigests = new Map<string, SessionObserverDigest>();
   let tools = new Map<string, SidebarToolActivity>();
@@ -198,21 +194,35 @@ export function createSidebarNarration() {
     if (!enabled || !connected) {
       return;
     }
-    if (event.event === "chat") {
-      handleChatEvent(event.payload);
-      return;
-    }
     if (event.event === "session.narration") {
       handleNarrationEvent(event.payload);
       return;
     }
-    if (event.event === "session.observer") {
-      handleObserverEvent(event.payload);
+    if (
+      event.event !== "chat" &&
+      event.event !== "session.observer" &&
+      event.event !== "agent" &&
+      event.event !== "session.tool"
+    ) {
       return;
     }
-    if (event.event === "agent" || event.event === "session.tool") {
-      handleAgentEvent(event.payload);
+    if (!event.payload || typeof event.payload !== "object") {
+      return;
     }
+    const record = event.payload as Record<string, unknown>;
+    const key = matchingDesiredKey(record.sessionKey, record.agentId);
+    if (!key) {
+      return;
+    }
+    if (event.event === "chat") {
+      handleChatEvent(record, key);
+      return;
+    }
+    if (event.event === "session.observer") {
+      handleObserverEvent(record, key);
+      return;
+    }
+    handleAgentEvent(record, key);
   }
 
   function disconnect(): void {
@@ -338,15 +348,7 @@ export function createSidebarNarration() {
     return null;
   }
 
-  function handleChatEvent(payload: unknown): void {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const record = payload as Record<string, unknown>;
-    const key = matchingDesiredKey(record.sessionKey, record.agentId);
-    if (!key) {
-      return;
-    }
+  function handleChatEvent(record: Record<string, unknown>, key: string): void {
     observeRun(key, record.runId);
     if (observerDigests.has(key)) {
       return;
@@ -359,7 +361,7 @@ export function createSidebarNarration() {
     }
     const deltaText = typeof record.deltaText === "string" ? record.deltaText : "";
     const messageText = message
-      ? stripThinkingTags(extractAssistantPhaseText(message) ?? "")
+      ? stripAssistantMessageText(message, extractAssistantPhaseText(message) ?? "", "narration")
       : null;
     const consumed = streams.get(key)?.consumedLength ?? 0;
     // A newly subscribed sidebar can join mid-run. Within one run the server's
@@ -473,15 +475,7 @@ export function createSidebarNarration() {
     }
   }
 
-  function handleAgentEvent(payload: unknown): void {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const record = payload as Record<string, unknown>;
-    const key = matchingDesiredKey(record.sessionKey, record.agentId);
-    if (!key) {
-      return;
-    }
+  function handleAgentEvent(record: Record<string, unknown>, key: string): void {
     if (record.stream === "lifecycle") {
       observeRun(key, record.runId);
       return;
@@ -518,14 +512,9 @@ export function createSidebarNarration() {
     }
   }
 
-  function handleObserverEvent(payload: unknown): void {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const record = payload as Record<string, unknown>;
-    const key = matchingDesiredKey(record.sessionKey, record.agentId);
+  function handleObserverEvent(record: Record<string, unknown>, key: string): void {
     const runId = typeof record.runId === "string" ? record.runId.trim() : "";
-    if (!key || !runId) {
+    if (!runId) {
       return;
     }
     const digest = { ...record, runId };
@@ -658,10 +647,7 @@ export function createSidebarNarration() {
   }
   return {
     read: () => ({ lines, observerDigests, tools, runIds }),
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: listeners.subscribe,
     sync,
     handleEvent,
     disconnect,

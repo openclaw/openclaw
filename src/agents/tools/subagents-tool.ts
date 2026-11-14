@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Type } from "typebox";
+import {
+  getAgentToolExecutionContext,
+  type AgentToolPendingInput,
+} from "../../../packages/agent-core/src/tool-execution-context.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -105,6 +109,7 @@ function waitForSelectedRuns(params: {
   readRuns: (snapshot: ReadonlyMap<string, SubagentRunRecord>) => SubagentRunRecord[];
   timeoutMs: number;
   signal?: AbortSignal;
+  pendingInput?: AgentToolPendingInput;
 }) {
   // A publisher's temporary scope must not own preparation started by its wake.
   const inWaitContext = AsyncLocalStorage.snapshot();
@@ -146,6 +151,7 @@ function waitForSelectedRuns(params: {
     let abortError: Error | undefined;
     const cleanup = () => {
       unsubscribe();
+      unsubscribeInput?.();
       clearTimeout(timer);
       params.signal?.removeEventListener("abort", onAbort);
     };
@@ -193,12 +199,13 @@ function waitForSelectedRuns(params: {
             return;
           }
           const state = result.value;
-          if (!timedOut && !state.reason) {
+          const inputPending = params.pendingInput?.hasPending() === true;
+          if (!timedOut && !state.reason && !inputPending) {
             return;
           }
           settled = true;
           cleanup();
-          resolve({ ...state, reason: state.reason ?? "timeout" });
+          resolve({ ...state, reason: state.reason ?? (inputPending ? "input" : "timeout") });
         } catch (error) {
           fail(error);
         }
@@ -221,6 +228,7 @@ function waitForSelectedRuns(params: {
       });
     };
     const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
+    const unsubscribeInput = params.pendingInput?.subscribe(wake);
     params.signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -365,6 +373,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
               timeoutMs:
                 Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
               signal,
+              pendingInput: getAgentToolExecutionContext()?.pendingInput,
             })),
           });
         }

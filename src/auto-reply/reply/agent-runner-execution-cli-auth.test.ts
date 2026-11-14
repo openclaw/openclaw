@@ -1,10 +1,10 @@
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import * as agentScope from "../../agents/agent-scope.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
+import * as modelSelectionConfig from "../../agents/model-selection-config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
@@ -15,6 +15,7 @@ import {
   fallbackAttemptOptions,
   getExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
   initialFallbackAttemptOptions,
   useProductionEmbeddedRunExecutionParamsForTest,
   type FallbackRunnerParams,
@@ -51,9 +52,20 @@ describe("executeAgentTurn: CLI credential selection", () => {
       expected: managedProfile,
     },
     {
-      name: "rejects an incompatible explicit account before CLI execution",
+      name: "selects CLI credentials after the configured primary account fails over",
       selected: primaryProfile,
       source: "user",
+      primary: "openai",
+      provider: "claude-cli",
+      backend: "claude-cli",
+      profiles: [primaryProfile, managedProfile],
+      expected: managedProfile,
+    },
+    {
+      name: "rejects an incompatible session-pinned account before CLI execution",
+      selected: primaryProfile,
+      source: "user",
+      pinned: true,
       primary: "openai",
       provider: "claude-cli",
       backend: "claude-cli",
@@ -152,19 +164,27 @@ describe("executeAgentTurn: CLI credential selection", () => {
       resolvePluginSetupCliBackend: () => undefined,
     });
     state.isCliProviderMock.mockImplementation((provider) => provider === testCase.backend);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(
+        params,
         testCase.provider,
         model,
         fallbackAttemptOptions(params, "rate_limit"),
       ),
-      provider: testCase.provider,
-      model,
-      attempts: [],
-    }));
+    );
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    const entry: SessionEntry = {
+      sessionId: followupRun.run.sessionId,
+      updatedAt: 1,
+      ...("pinned" in testCase
+        ? { authProfileOverride: testCase.selected, authProfileOverrideSource: "user" }
+        : {}),
+    };
+    const result = executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => entry,
+    });
     if ("error" in testCase) {
       expect(await result).toMatchObject({ kind: "final", payload: { isError: true } });
       expect(state.runCliAgentMock).not.toHaveBeenCalled();
@@ -190,16 +210,18 @@ describe("executeAgentTurn: CLI credential selection", () => {
       const fallbackOptions = vi
         .spyOn(agentRunnerUtils, "resolveModelFallbackOptions")
         .mockImplementation(resolveModelFallbackOptions);
-      const actualAgentScope = await vi.importActual<typeof agentScope>(
-        "../../agents/agent-scope.js",
+      const actualModelSelectionConfig = await vi.importActual<typeof modelSelectionConfig>(
+        "../../agents/model-selection-config.js",
       );
-      const resolveFallbackAvailability = actualAgentScope.resolveModelFallbackAvailability;
-      const projectFallbackOverride = actualAgentScope.modelFallbackOverrideFromAvailability;
+      const resolveFallbackAvailability =
+        actualModelSelectionConfig.resolveModelFallbackAvailability;
+      const projectFallbackOverride =
+        actualModelSelectionConfig.modelFallbackOverrideFromAvailability;
       const availability = vi
-        .spyOn(agentScope, "resolveModelFallbackAvailability")
+        .spyOn(modelSelectionConfig, "resolveModelFallbackAvailability")
         .mockImplementation(resolveFallbackAvailability);
       const fallbackOverride = vi
-        .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
+        .spyOn(modelSelectionConfig, "modelFallbackOverrideFromAvailability")
         .mockImplementation(projectFallbackOverride);
       onTestFinished(() => {
         availability.mockRestore();

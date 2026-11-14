@@ -2,20 +2,25 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import plugin from "../extensions/typesafe/index.js";
-import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
-import type {
-  DecisionBatch,
-  DecisionProviderV1,
-  ProviderDecisionOutcome,
-} from "../src/decisions/types.js";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import type { DecisionProviderContextV2 } from "../src/decisions/provider-context.js";
+import type { ProviderDecisionOutcomeV2 } from "../src/decisions/provider-outcomes.js";
+import type { DecisionProviderV2 } from "../src/decisions/provider-types.js";
+import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
+import type { DecisionBatch, DecisionBatchResult } from "../src/decisions/types.js";
 import type { OpenClawPluginApi } from "../src/plugins/types.js";
 import { parseBenchmarkInteger, runBenchmarkEntrypoint } from "./lib/benchmark-harness.mts";
 
-// Builds and eager imports precede measurement. The first evaluation and total
+// Builds and selected-case imports precede measurement. The first evaluation and total
 // CPU include lazy client/validator initialization; warm timings exclude it.
 export async function benchmarkDecisionTransport(requests: number) {
   parseBenchmarkInteger(String(requests), "requests", 2, 1000);
+  const [{ default: plugin }, { default: manifest }, { closeProviderTransportDispatcherPool }] =
+    await Promise.all([
+      import("../extensions/typesafe/index.js"),
+      import("../extensions/typesafe/openclaw.plugin.json", { with: { type: "json" } }),
+      import("../src/agents/provider-transport-dispatcher-pool.js"),
+    ]);
   const sockets = new Set<Socket>();
   let connections = 0;
   let received = 0;
@@ -79,25 +84,27 @@ export async function benchmarkDecisionTransport(requests: number) {
     server.listen(0, "127.0.0.1", resolve);
   });
   let result: Record<string, unknown> | undefined;
+  let active = true;
   try {
     const address = server.address();
     assert(address && typeof address === "object");
-    let provider: DecisionProviderV1 | undefined;
+    const config = {
+      plugins: {
+        entries: {
+          typesafe: { config: { baseUrl: `http://127.0.0.1:${address.port}` } },
+        },
+      },
+    };
+    let provider: DecisionProviderV2 | undefined;
     const fixtureApi = {
       runtime: {
         config: {
-          current: () => ({
-            plugins: {
-              entries: {
-                typesafe: { config: { baseUrl: `http://127.0.0.1:${address.port}` } },
-              },
-            },
-          }),
+          current: () => config,
         },
       },
       registerDecisionProvider: (registered) => {
-        assert.equal(registered.contractVersion, 1);
-        provider = registered as DecisionProviderV1;
+        assert(registered.contractVersion === 2);
+        provider = registered;
       },
     } satisfies {
       runtime: { config: Pick<OpenClawPluginApi["runtime"]["config"], "current"> };
@@ -106,25 +113,50 @@ export async function benchmarkDecisionTransport(requests: number) {
     // This fixture supplies only the host surfaces used by TypeSafe registration.
     plugin.register(fixtureApi as unknown as OpenClawPluginApi);
     assert(provider);
-    assert.equal(provider.isReady?.(), true);
+    // Prepare component facts before measurement through the actual manifest and
+    // registered hooks; do not invent a local credential or measure Gateway startup.
+    const catalog = normalizeModelCatalog(manifest.modelCatalog, {
+      ownedProviders: new Set(manifest.providers),
+    });
+    const declared = catalog?.providers?.typesafe?.models?.find((row) => row.id === "kev-latest");
+    assert(declared?.name);
+    const transport = provider.provider?.normalizeTransport?.({
+      config,
+      provider: provider.id,
+      modelId: declared.id,
+    });
+    const auth = provider.provider?.resolveSyntheticAuth?.({ config, provider: provider.id });
+    assert(transport?.baseUrl && auth?.apiKey);
+    const model: DecisionProviderContextV2["model"] = {
+      ...declared,
+      name: declared.name,
+      provider: provider.id,
+      baseUrl: transport.baseUrl,
+    };
     const batch = {
-      state: { message: "Synthetic service outage" },
+      state: { type: "json", value: { message: "Synthetic service outage" } },
       questions: {
         route: { type: "choice", criteria: { support: "Service outages", sales: "Purchases" } },
         priority: { type: "score", criteria: ["Routine", "Urgent"] },
         escalate: { type: "boolean", instructions: "Does this need attention?" },
       },
-    } satisfies DecisionBatch;
+    } satisfies DecisionBatchV2;
     const timingsMs: number[] = [];
     const memoryBefore = process.memoryUsage();
     const cpuBefore = process.cpuUsage();
     let peakRssBytes = memoryBefore.rss;
     for (let index = 0; index < requests; index++) {
       const started = performance.now();
-      const outcome: ProviderDecisionOutcome = await provider.evaluate(batch, {
-        model: "kev-latest",
-        signal: AbortSignal.timeout(5000),
-        deadlineMonotonicMs: started + 5000,
+      const signal = AbortSignal.timeout(5000);
+      const deadlineMonotonicMs = started + 5000;
+      const outcome: ProviderDecisionOutcomeV2 = await provider.evaluate(batch, {
+        model,
+        config,
+        auth,
+        signal,
+        deadlineMonotonicMs,
+        isAdmissible: () =>
+          active && server.listening && !signal.aborted && performance.now() < deadlineMonotonicMs,
       });
       if (fixtureError) {
         throw fixtureError;
@@ -144,6 +176,7 @@ export async function benchmarkDecisionTransport(requests: number) {
         priority: { type: "score", score: 0.75, confidence: 0.75, probabilities: [0.25, 0.75] },
         escalate: { type: "boolean", probabilityTrue: 0.8 },
       });
+      assert.deepEqual(outcome.result.usage, { inputTokens: 32, outputTokens: 0 });
       peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
     }
     const cpu = process.cpuUsage(cpuBefore);
@@ -161,6 +194,7 @@ export async function benchmarkDecisionTransport(requests: number) {
       idleSocketsBeforeTeardown: sockets.size,
     };
   } finally {
+    active = false;
     // Idle sockets are deliberate reuse, not leaks. Exercise the lifecycle owner
     // before closing the fixture so server teardown cannot hide client leaks.
     const closed = [...sockets].map((socket) => once(socket, "close"));
@@ -191,11 +225,121 @@ export async function benchmarkDecisionTransport(requests: number) {
   return result;
 }
 
+async function benchmarkDecisionConversion(evaluations: number) {
+  const [{ decisionResultV1ToV2, decisionResultV2ToV1 }, { validateDecisionResultV2 }] =
+    await Promise.all([
+      import("../src/decisions/compatibility.js"),
+      import("../src/decisions/result-validation.js"),
+    ]);
+  const batch: DecisionBatch = {
+    state: "synthetic evidence",
+    questions: {
+      boolean: { type: "boolean" },
+      choice: { type: "choice", criteria: { yes: "yes", no: "no" } },
+      score: { type: "score", criteria: ["low", "middle", "high"] },
+    },
+  };
+  const v2Batch: DecisionBatchV2 = {
+    state: { type: "text", text: "synthetic evidence" },
+    questions: batch.questions,
+  };
+  const reported: DecisionBatchResult = {
+    model: "synthetic-model",
+    answers: {
+      boolean: { type: "boolean", probabilityTrue: 0.99 },
+      choice: { type: "choice", choice: "no", probabilities: { yes: 0.9, no: 0.9 } },
+      score: { type: "score", score: 0.25, probabilities: [0.7, 0.7, 0.7] },
+    },
+    usage: { inputTokens: 0, outputTokens: 2.5 },
+  };
+  const expected: DecisionBatchResult = {
+    model: "synthetic-model",
+    answers: {
+      boolean: { type: "boolean", probabilityTrue: 0.99 },
+      choice: { type: "choice", choice: "no", probabilities: { yes: 0.9, no: 0.9 } },
+      score: { type: "score", score: 0.25, probabilities: [0.7, 0.7, 0.7] },
+    },
+    usage: { inputTokens: 0, outputTokens: 2.5 },
+  };
+  const capabilities = normalizeModelCatalog(
+    {
+      providers: {
+        fixture: {
+          models: [
+            {
+              id: reported.model,
+              name: "Fixture",
+              inference: {
+                chat: false,
+                decision: {
+                  protocol: "fixture",
+                  input: ["text"],
+                  questions: {
+                    boolean: { probabilities: "boolean", abstention: false },
+                    choice: { probabilities: "provider-defined", abstention: false },
+                    score: { probabilities: "provider-defined", abstention: false },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    { ownedProviders: new Set(["fixture"]) },
+  )?.providers?.fixture?.models[0]?.inference?.decision;
+  assert(capabilities);
+  const unchanged = JSON.stringify({ batch, v2Batch, reported, capabilities });
+  const timingsMs: number[] = [];
+  const memoryBefore = process.memoryUsage();
+  const cpuBefore = process.cpuUsage();
+  let peakRssBytes = memoryBefore.rss;
+  let validatedOutputs = 0;
+  // Setup never calls a converter or validator: index zero is the cold first entry.
+  for (let index = 0; index < evaluations; index++) {
+    const started = performance.now();
+    const converted = decisionResultV1ToV2(batch, reported);
+    assert(converted, "V1 conversion refused the fixed admitted fixture");
+    const valid = validateDecisionResultV2(v2Batch, converted, capabilities);
+    const roundTrip = decisionResultV2ToV1(v2Batch, converted);
+    timingsMs.push(performance.now() - started);
+    assert.equal(valid, true, "Independent public validation refused the converted result");
+    assert.deepEqual(converted, expected);
+    assert.deepEqual(roundTrip, expected);
+    assert.equal(Object.hasOwn(converted, "metadata"), false);
+    validatedOutputs++;
+    peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+  }
+  const cpu = process.cpuUsage(cpuBefore);
+  assert.equal(JSON.stringify({ batch, v2Batch, reported, capabilities }), unchanged);
+  assert.equal(capabilities.questions?.choice?.probabilities, "provider-defined");
+  assert.equal(capabilities.questions?.score?.probabilities, "provider-defined");
+  const processCpu = process.cpuUsage();
+  return {
+    case: "conversion",
+    fixture: "provider-defined-v1-estimates",
+    evaluations,
+    validatedOutputs,
+    firstEvaluationMs: timingsMs[0],
+    warmTimingsMs: timingsMs.slice(1),
+    cpuMs: (cpu.user + cpu.system) / 1000,
+    peakRssBytes,
+    memoryBefore,
+    memoryAfter: process.memoryUsage(),
+    processCpuMs: (processCpu.user + processCpu.system) / 1000,
+    processPeakRssBytes: process.resourceUsage().maxRSS * 1024,
+  };
+}
+
 if (import.meta.main) {
   await runBenchmarkEntrypoint("bench-decision-transport-worker", async () => {
     const requests = parseBenchmarkInteger(process.argv[2] ?? "50", "requests", 2, 1000);
-    console.log(
-      `[bench-decision-transport-result] ${JSON.stringify(await benchmarkDecisionTransport(requests))}`,
-    );
+    const workload = process.argv[3] ?? "http";
+    assert(workload === "http" || workload === "conversion", "Unknown benchmark case");
+    const result =
+      workload === "http"
+        ? await benchmarkDecisionTransport(requests)
+        : await benchmarkDecisionConversion(requests);
+    console.log(`[bench-decision-transport-result] ${JSON.stringify(result)}`);
   });
 }

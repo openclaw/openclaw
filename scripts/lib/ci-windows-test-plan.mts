@@ -1,6 +1,7 @@
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
 import { isRuntimeTestFileIncluded, type RuntimeTestSelection } from "./ci-node-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
+import { readWindowsTargets } from "./windows-test-targets.mts";
 
 export type WindowsTestShard = {
   check_name: string;
@@ -72,14 +73,12 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/infra/ports.test.ts": 3.2,
   "src/infra/process-env.test.ts": 0.1,
   "src/infra/sqlite-private-directory.windows.test.ts": 1.3,
-  "src/infra/sqlite-snapshot-staging.cancellation.test.ts": 7.4,
   "src/infra/sqlite-snapshot.test.ts": 9.7,
   "src/infra/ssh-client.windows.test.ts": 0.4,
   "src/infra/state-migrations.audit-logs.windows.test.ts": 1.6,
   "src/infra/state-migrations.legacy-session-store.test.ts": 3.9,
   "src/infra/update-candidate-state.budget.test.ts": 16.5,
   "src/infra/update-candidate-state.cleanup.test.ts": 23.2,
-  "src/infra/update-candidate-state.namespaced-paths.test.ts": 11.3,
   "src/infra/update-candidate-state.online-backup.process.test.ts": 4,
   "src/infra/update-managed-service-handoff-command.test.ts": 3.3,
   "src/infra/update-managed-service-handoff-database-publication.test.ts": 8.1,
@@ -156,22 +155,6 @@ const targetSeconds = 420;
 function addTimingSeconds(total: number, seconds: number): number {
   // Preserve measured 0.1s precision so floating-point drift cannot inflate Math.ceil.
   return Math.round((total + seconds) * 10) / 10;
-}
-
-function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>>): string[] {
-  const targets = [1, 2].flatMap((part) => {
-    const script = scripts[`test:windows:ci:${part}`];
-    const match = script?.match(/^node scripts\/test-projects\.mts (.+)$/u);
-    const files = match?.[1]?.trim().split(/\s+/u);
-    if (!files?.length || files.some((file) => !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
-      throw new Error(`Windows CI part ${part} must declare explicit test-projects file targets`);
-    }
-    return files;
-  });
-  if (new Set(targets).size !== targets.length) {
-    throw new Error("Windows CI package scripts must not repeat a test file");
-  }
-  return targets;
 }
 
 export function createWindowsTestShards(

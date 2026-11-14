@@ -41,6 +41,8 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
       maxActions: 100,
       maxActionsPerRow: 3,
       supportsStyles: false,
+      // Older clients show a message with a disabled button as unsupported, so
+      // native disabled buttons follow the same richMessages opt-in as tables.
       supportsDisabled: false,
     },
     selects: {
@@ -55,8 +57,13 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
 export function resolveTelegramPresentationCapabilities(params: {
   richMessages: boolean;
 }): typeof TELEGRAM_PRESENTATION_CAPABILITIES {
+  const { limits } = TELEGRAM_PRESENTATION_CAPABILITIES;
   return params.richMessages
-    ? { ...TELEGRAM_PRESENTATION_CAPABILITIES, tables: true }
+    ? {
+        ...TELEGRAM_PRESENTATION_CAPABILITIES,
+        tables: true,
+        limits: { ...limits, actions: { ...limits.actions, supportsDisabled: true } },
+      }
     : TELEGRAM_PRESENTATION_CAPABILITIES;
 }
 
@@ -145,55 +152,6 @@ export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPa
         copyReplyPayloadMetadata(payload, { ...payload, text }),
       );
 
-function partitionTelegramPresentationBlocks(params: {
-  presentation: MessagePresentation;
-  presentationControlsSelected: boolean;
-  buttonOptions: TelegramButtonBuildOptions;
-}): {
-  fallbackBlocks: MessagePresentation["blocks"];
-  nativeControlBlocks: MessagePresentationInteractiveBlock[];
-} {
-  const fallbackBlocks: MessagePresentation["blocks"] = [];
-  const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
-  const partitionControls = <T>(
-    controls: readonly T[],
-    blockFor: (controls: T[]) => MessagePresentationInteractiveBlock,
-  ): boolean => {
-    const native: T[] = [];
-    const fallback: T[] = [];
-    for (const control of controls) {
-      const buttons = buildTelegramPresentationButtons(
-        { blocks: [blockFor([control])] },
-        params.buttonOptions,
-      );
-      (buttons?.length ? native : fallback).push(control);
-    }
-    if (native.length > 0) {
-      nativeControlBlocks.push(blockFor(native));
-    }
-    if (fallback.length > 0) {
-      fallbackBlocks.push(blockFor(fallback));
-    }
-    return fallback.length > 0;
-  };
-  for (const block of params.presentation.blocks) {
-    if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
-      continue;
-    }
-    if (block.type === "buttons") {
-      partitionControls(block.buttons, (buttons) => ({ type: "buttons", buttons }));
-    } else if (
-      !partitionControls(block.options, (options) => ({ ...block, options })) &&
-      block.placeholder
-    ) {
-      // Telegram maps selects to buttons, so retain the select prompt in message text.
-      fallbackBlocks.push({ type: "text", text: block.placeholder });
-    }
-  }
-  return { fallbackBlocks, nativeControlBlocks };
-}
-
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
 export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
@@ -203,6 +161,7 @@ export function canonicalizeTelegramPresentationPayload(
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
         buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"];
+        typedCallbackOwner?: unknown;
       })
     | undefined;
   if (!normalizedPresentation) {
@@ -222,7 +181,10 @@ export function canonicalizeTelegramPresentationPayload(
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
+    supportsDisabled: richTables,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
+    // Set by prepareSendPayload, so it persists with queued deliveries.
+    ...(telegramData?.typedCallbackOwner === "agent" ? { typedCallbackOwner: "agent" } : {}),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {
@@ -232,18 +194,51 @@ export function canonicalizeTelegramPresentationPayload(
     buttonOptions,
   );
   const presentationControlsSelected = existingButtons === undefined;
-  const { fallbackBlocks, nativeControlBlocks } = partitionTelegramPresentationBlocks({
-    presentation,
-    presentationControlsSelected,
-    buttonOptions,
-  });
+  const fallbackBlocks: MessagePresentation["blocks"] = [];
+  const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
+  const partitionControls = <T>(
+    controls: readonly T[],
+    blockFor: (controls: T[]) => MessagePresentationInteractiveBlock,
+  ): boolean => {
+    const native: T[] = [];
+    const fallback: T[] = [];
+    for (const control of controls) {
+      const buttons = buildTelegramPresentationButtons(
+        { blocks: [blockFor([control])] },
+        buttonOptions,
+      );
+      (buttons?.length ? native : fallback).push(control);
+    }
+    if (native.length > 0) {
+      nativeControlBlocks.push(blockFor(native));
+    }
+    if (fallback.length > 0) {
+      fallbackBlocks.push(blockFor(fallback));
+    }
+    return fallback.length > 0;
+  };
+  for (const block of presentation.blocks) {
+    if (!presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
+      fallbackBlocks.push(block);
+      continue;
+    }
+    if (block.type === "buttons") {
+      partitionControls(block.buttons, (buttons) => ({ type: "buttons", buttons }));
+    } else if (
+      !partitionControls(block.options, (blockOptions) => ({ ...block, options: blockOptions })) &&
+      block.placeholder
+    ) {
+      // Telegram maps selects to buttons, so retain the select prompt in message text.
+      fallbackBlocks.push({ type: "text", text: block.placeholder });
+    }
+  }
   // Only native labels are clipped; unavailable controls retain their full text.
   const presentationButtons = buildTelegramPresentationButtons(
     adaptMessagePresentationForChannel({
       presentation: { blocks: nativeControlBlocks },
       capabilities: {
         limits: {
-          actions: { maxLabelLength: 64 },
+          actions: { maxLabelLength: 64, supportsDisabled: richTables },
           selects: { maxLabelLength: 64 },
         },
       },
@@ -345,6 +340,7 @@ export function resolveFinalTelegramPresentationText(params: {
   const droppedControls: TelegramDroppedControl[] = [];
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: params.allowWebAppButtons === true,
+    supportsDisabled: true,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
   };
   // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.

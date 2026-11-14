@@ -77,7 +77,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_CLI_PACKAGE: "clawhub@0.23.3"
 
@@ -657,6 +657,14 @@ jobs:
           path: .release-tooling
           fetch-depth: 1
 
+      - name: Install trusted plugin tooling dependencies
+        if: inputs.prepared_artifact == ''
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Pack ClawHub package artifact
         if: inputs.prepared_artifact == ''
         env:
@@ -667,7 +675,6 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
-          PNPM_CONFIG_MODULES_DIR: ${{ github.workspace }}/node_modules
         run: bash .release-tooling/scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}" --metadata-root .release-tooling
 
       - name: Setup Node for prepared promotion
@@ -682,6 +689,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
           PACKAGE_ENTRY: ${{ toJson(matrix.plugin) }}
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
         run: |
           set -euo pipefail
           printf '%s' "${PREPARED_ARTIFACT}" > "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
@@ -717,6 +727,7 @@ jobs:
       - name: Upload ClawHub package artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ matrix.plugin.artifactName }}
           path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
           if-no-files-found: error
@@ -865,6 +876,21 @@ jobs:
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: node scripts/release-approval-receipt.mjs wait-clawhub-authorization
+      - name: Recheck original packed publication absence
+        if: inputs.prepared_artifact != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          PUBLISH_SCOPE: ${{ inputs.publish_scope }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PREPARED_ARTIFACT" > "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
+          if jq -e '.kind == "openclaw-clawhub-original-packed"' "$RUNNER_TEMP/clawhub-prepared-descriptor.json" >/dev/null; then
+            node scripts/clawhub-prepared-artifact.mjs check-absent \
+              --descriptor "$RUNNER_TEMP/clawhub-prepared-descriptor.json"
+          fi
       - name: Write recovery environment approval receipt
         if: needs.validate_release_publish_approval.outputs.direct_recovery == 'true'
         env:

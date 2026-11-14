@@ -1,21 +1,11 @@
 // Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createCompactionNoticePayload } from "../auto-reply/reply/compaction-notice.js";
-import { rethrowExpectedCliError } from "../cli/failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-
-type SessionsCompactCliOptions = {
-  key: string;
-  agent?: string;
-  maxLines?: number;
-  timeout?: string;
-  url?: string;
-  token?: string;
-  password?: string;
-  json?: boolean;
-};
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 type SessionsCompactResult = {
   ok?: boolean;
@@ -39,8 +29,6 @@ type SessionsCompactResult = {
     };
   };
 };
-
-type SessionsCompactRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 function describeCompaction(result: SessionsCompactResult, fallbackKey: string): string {
   const sessionKey = sanitizeTerminalText(result.key ?? fallbackKey);
@@ -68,14 +56,24 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
 }
 
 export async function sessionsCompactCommand(
-  opts: SessionsCompactCliOptions,
+  opts: {
+    key: string;
+    agent?: string;
+    maxLines?: number;
+    timeout?: string;
+    url?: string;
+    token?: string;
+    password?: string;
+    json?: boolean;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   const agent = opts.agent?.trim();
   if (opts.agent !== undefined && !agent) {
     throw new Error("--agent must not be blank");
   }
-  const rpcOpts: SessionsCompactRpcOpts = {
+  const signal = getAsyncWorkSignal();
+  const rpcOpts: Parameters<typeof callGatewayFromCliWithTransport>[1] = {
     url: opts.url,
     token: opts.token,
     password: opts.password,
@@ -94,12 +92,16 @@ export async function sessionsCompactCommand(
   try {
     result = (await callGatewayFromCliWithTransport("sessions.compact", rpcOpts, params, {
       defaultTimeoutMs: 10_000,
+      signal,
     })) as SessionsCompactResult;
   } catch (err) {
+    // A Ctrl+C settles the pending compaction wait; keep the canonical abort
+    // outcome instead of reporting the cancelled compaction as a failure.
+    signal?.throwIfAborted();
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (opts.json) {
-      writeRuntimeJson(runtime, { ok: false, key: opts.key, error: message });
+      writeRuntimeJson(runtime, { ...formatCliJsonFailure(message), key: opts.key });
     } else {
       runtime.error(`Compaction failed: ${sanitizeTerminalText(message)}`);
     }

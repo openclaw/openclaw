@@ -4,7 +4,7 @@ import type { DraftCloudProfile } from "./discovery.ts";
 import { renderPicker } from "./where-chip.test-support.ts";
 
 describe("Cloud backend picker presentation", () => {
-  it("orders actual backend groups while retaining disabled and missing selections", () => {
+  it("orders actual backend groups while retaining disabled and missing selections", async () => {
     const cloudProfiles: DraftCloudProfile[] = [
       { id: "AWS", providerId: "crabbox", providerDisplayId: "local-container" },
       { id: "Azure", providerId: "crabbox", providerDisplayId: "incus" },
@@ -13,7 +13,7 @@ describe("Cloud backend picker presentation", () => {
       { id: "production", providerId: "crabbox", providerDisplayId: "aws" },
     ];
     const onSelect = vi.fn();
-    const container = renderPicker(
+    const container = await renderPicker(
       true,
       undefined,
       { cloudProfiles, cloudProfileId: "missing" },
@@ -45,7 +45,7 @@ describe("Cloud backend picker presentation", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("uses the backend rather than the profile name in both trigger and filtered menu", () => {
+  it("uses the backend rather than the profile name in both trigger and filtered menu", async () => {
     const onSelect = vi.fn();
     const cloudProfiles: DraftCloudProfile[] = [
       {
@@ -56,7 +56,7 @@ describe("Cloud backend picker presentation", () => {
         machines: [{ id: "standard", label: "Standard", default: true }],
       },
     ];
-    const container = renderPicker(
+    const container = await renderPicker(
       true,
       undefined,
       { cloudProfiles, cloudProfileId: "aws" },
@@ -66,7 +66,7 @@ describe("Cloud backend picker presentation", () => {
     const row = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')!;
     for (const element of [trigger, row]) {
       expect(element.querySelector('[data-provider-icon="azure"]')).not.toBeNull();
-      expect(element.getAttribute("aria-description")).toBe("Cloud worker provider: Azure");
+      expect(element.getAttribute("aria-description")).toBe("Cloud provider: Azure");
       expect(element.textContent).toContain("Linux");
       expect(element.textContent).toContain("Standard");
     }

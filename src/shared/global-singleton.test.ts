@@ -1,142 +1,116 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  drainGlobalSingletonLifecycleState,
+  drainGlobalSingletonLifecycleState as drain,
   readGlobalSingleton,
-  resolveGlobalMap,
+  resolveGlobalMap as mapFor,
   resolveGlobalSingleton,
+  resetGlobalSingletonLifecycleState,
 } from "./global-singleton.js";
 
 const TEST_KEY = Symbol("global-singleton:test");
 const TEST_MAP_KEY = Symbol("global-singleton:test-map");
+const register = (reset: () => void | Promise<void>, key = TEST_KEY) =>
+  resolveGlobalSingleton(key, () => ({}), reset);
 
-afterEach(() => {
-  delete (globalThis as Record<PropertyKey, unknown>)[TEST_KEY];
-  delete (globalThis as Record<PropertyKey, unknown>)[TEST_MAP_KEY];
-});
+afterEach(() => [TEST_KEY, TEST_MAP_KEY].forEach((key) => Reflect.deleteProperty(globalThis, key)));
 
 describe("resolveGlobalSingleton", () => {
+  it("resets only the current registered owner without creating an absent one", async () => {
+    const absent = Symbol("absent-owner");
+    await resetGlobalSingletonLifecycleState(absent);
+    expect(readGlobalSingleton(absent)).toBeUndefined();
+    const [oldReset, currentReset, otherReset] = [vi.fn(), vi.fn(), vi.fn()];
+    register(oldReset);
+    register(currentReset);
+    register(otherReset, TEST_MAP_KEY);
+
+    await resetGlobalSingletonLifecycleState(TEST_KEY);
+    expect(oldReset).not.toHaveBeenCalled();
+    expect(currentReset).toHaveBeenCalledOnce();
+    expect(otherReset).not.toHaveBeenCalled();
+  });
+
+  it("propagates the registered owner's cleanup failure", async () => {
+    const error = new Error("owner cleanup failed");
+    register(() => Promise.reject(error));
+    await expect(resetGlobalSingletonLifecycleState(TEST_KEY)).rejects.toBe(error);
+    register(() => {});
+  });
+
   it("reuses an initialized singleton", () => {
     const create = vi.fn(() => ({ value: 1 }));
 
     expect(readGlobalSingleton(TEST_KEY)).toBeUndefined();
     const first = resolveGlobalSingleton(TEST_KEY, create);
-    const second = resolveGlobalSingleton(TEST_KEY, create);
-
-    expect(first).toBe(second);
+    expect(resolveGlobalSingleton(TEST_KEY, create)).toBe(first);
     expect(readGlobalSingleton(TEST_KEY)).toBe(first);
     expect(create).toHaveBeenCalledTimes(1);
   });
-});
-
-describe("global singleton lifecycle resets", () => {
-  it("keeps map resets registered across repeated lifecycle drains", async () => {
-    const map = resolveGlobalMap<string, number>(TEST_MAP_KEY, (state) => state.clear());
-    map.set("first", 1);
-    await drainGlobalSingletonLifecycleState();
-    map.set("second", 2);
-    await drainGlobalSingletonLifecycleState();
-
-    expect(map.size).toBe(0);
-    expect(resolveGlobalMap<string, number>(TEST_MAP_KEY)).toBe(map);
-  });
-
   it("keeps only the latest reset owner for a duplicated slot", async () => {
-    const duplicateKey = Symbol("global-singleton:duplicate-owner");
     const firstReset = vi.fn();
     const secondReset = vi.fn();
-    resolveGlobalSingleton(duplicateKey, () => ({}), firstReset);
-    resolveGlobalSingleton(duplicateKey, () => ({}), secondReset);
+    register(firstReset);
+    register(secondReset);
 
-    await drainGlobalSingletonLifecycleState();
+    await drain();
 
     expect(firstReset).not.toHaveBeenCalled();
     expect(secondReset).toHaveBeenCalledOnce();
-    delete (globalThis as Record<PropertyKey, unknown>)[duplicateKey];
   });
 
   it("awaits asynchronous resets while starting sibling owners", async () => {
-    const asyncKey = Symbol("global-singleton:async-reset");
-    const siblingKey = Symbol("global-singleton:async-sibling");
     const { promise: held, resolve: release } = createDeferred();
     const siblingReset = vi.fn();
-    resolveGlobalSingleton(
-      asyncKey,
-      () => ({}),
-      async () => await held,
-    );
-    resolveGlobalSingleton(siblingKey, () => ({}), siblingReset);
+    register(() => held);
+    register(siblingReset, TEST_MAP_KEY);
 
-    const drain = drainGlobalSingletonLifecycleState();
+    const pending = drain();
     try {
       expect(siblingReset).toHaveBeenCalledOnce();
     } finally {
       release();
-      try {
-        await drain;
-      } finally {
-        delete (globalThis as Record<PropertyKey, unknown>)[asyncKey];
-        delete (globalThis as Record<PropertyKey, unknown>)[siblingKey];
-      }
+      await pending;
     }
   });
 
   it("runs every registered reset before reporting failures", async () => {
-    const failingKey = Symbol("global-singleton:failing-reset");
-    const succeedingKey = Symbol("global-singleton:succeeding-reset");
-    let shouldThrow = true;
     const succeedingReset = vi.fn();
-    resolveGlobalSingleton(
-      failingKey,
-      () => ({}),
-      () => {
-        if (shouldThrow) {
-          throw new Error("reset failed");
-        }
-      },
-    );
-    resolveGlobalSingleton(succeedingKey, () => ({}), succeedingReset);
+    register(() => {
+      throw new Error("reset failed");
+    });
+    register(succeedingReset, TEST_MAP_KEY);
 
     try {
-      await expect(drainGlobalSingletonLifecycleState()).rejects.toThrow(AggregateError);
+      await expect(drain()).rejects.toThrow(AggregateError);
       expect(succeedingReset).toHaveBeenCalledOnce();
     } finally {
-      shouldThrow = false;
-      delete (globalThis as Record<PropertyKey, unknown>)[failingKey];
-      delete (globalThis as Record<PropertyKey, unknown>)[succeedingKey];
+      register(() => {});
     }
   });
 
   it("retains shared state for terminal persistence after other owners close", async () => {
-    const sharedKey = Symbol("global-singleton:shared-state");
-    const shared = resolveGlobalMap<string, string>(sharedKey, "shared-state");
-    const runtime = resolveGlobalMap<string, string>(TEST_MAP_KEY, "close-and-restart");
+    const shared = mapFor<string, string>(TEST_KEY, "shared-state");
+    const runtime = mapFor<string, string>(TEST_MAP_KEY, "close-and-restart");
     runtime.set("server", "running");
     shared.set("boot", "incomplete");
 
-    await drainGlobalSingletonLifecycleState("close", { retainSharedState: true });
+    await drain("close", { retainSharedState: true });
     expect(runtime.size).toBe(0);
     expect(shared.get("boot")).toBe("incomplete");
     shared.set("boot", "complete");
-    await drainGlobalSingletonLifecycleState("shared-state");
+    await drain("shared-state");
     expect(shared.size).toBe(0);
-    delete (globalThis as Record<PropertyKey, unknown>)[sharedKey];
   });
 
   it("preserves close-only state across restart drains", async () => {
-    const closeOnlyKey = Symbol("global-singleton:close-only");
-    const state = resolveGlobalMap<string, number>(
-      closeOnlyKey,
-      (value) => value.clear(),
-      "close-only",
-    );
+    const state = mapFor<string, number>(TEST_KEY, (value) => value.clear(), "close-only");
     state.set("pending", 1);
 
-    await drainGlobalSingletonLifecycleState("restart");
+    await drain("restart");
     expect(state.get("pending")).toBe(1);
 
-    await drainGlobalSingletonLifecycleState("close");
+    await drain("close");
     expect(state.size).toBe(0);
-    delete (globalThis as Record<PropertyKey, unknown>)[closeOnlyKey];
   });
 });

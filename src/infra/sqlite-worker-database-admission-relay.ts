@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { isPromise } from "node:util/types";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
@@ -7,8 +5,19 @@ import {
   readSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission-record.js";
+import {
+  assertSqliteDatabaseAdmissionWaitActive,
+  hasSqliteDatabaseAdmissionWait,
+  readSqliteDatabaseAdmissionDeadline,
+} from "./sqlite-database-admission-wait.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
+
+export {
+  assertSqliteDatabaseAdmissionWaitActive,
+  readSqliteDatabaseAdmissionDeadline,
+  withSqliteDatabaseAdmissionWait,
+} from "./sqlite-database-admission-wait.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
@@ -18,61 +27,9 @@ const ABANDONED = 2;
 const ADMISSION_PEER_SAFETY_TIMEOUT_MS = 10 * 60_000;
 export const SQLITE_COLD_ADMISSION_PENDING = 4;
 
-type AdmissionWait = { readonly deadlineAtMs?: number; assertActive?: () => void };
-type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope; active: boolean };
-const admissionWait = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteDatabaseAdmissionWait"),
-  () => new AsyncLocalStorage<AdmissionWaitScope>(),
-);
-
-/** Callers own the deadline; worker transports carry its remaining absolute budget. */
-export function withSqliteDatabaseAdmissionWait<T>(wait: AdmissionWait, run: () => T): T {
-  const scope = { wait, parent: admissionWait.getStore(), active: true };
-  const close = () => {
-    scope.active = false;
-  };
-  let pending = false;
-  try {
-    const value = admissionWait.run(scope, run);
-    if (isPromise(value)) {
-      pending = true;
-      void value.then(close, close);
-    }
-    return value;
-  } finally {
-    if (!pending) {
-      close();
-    }
-  }
-}
-
-export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
-  let deadline: number | undefined;
-  for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
-    // Retained worker callbacks keep async ancestry, but never a settled caller's budget.
-    if (!scope.active) {
-      continue;
-    }
-    const value = scope.wait.deadlineAtMs;
-    if (value !== undefined) {
-      deadline = Math.min(deadline ?? Infinity, value);
-    }
-  }
-  return deadline;
-}
-
-function assertAdmissionWaitActive(): void {
-  try {
-    for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
-      if (scope.active) {
-        scope.wait.assertActive?.();
-      }
-    }
-  } catch {
-    throw new SqliteWorkerError(
-      "SQLite admission facts exchange cancelled by its caller",
-      "unavailable",
-    );
+export class SqliteDatabaseAdmissionTimeoutError extends SqliteWorkerError {
+  constructor() {
+    super("SQLite admission facts exchange timed out; the host did not reply", "unavailable");
   }
 }
 
@@ -129,13 +86,10 @@ export function exchangeDatabaseAdmissions(
       : Math.max(0, deadlineAtMs - Date.now());
   const deadlineNs = readSqliteWorkerMonotonicNs() + BigInt(Math.ceil(timeoutMs)) * 1_000_000n;
   const remaining = () => {
-    assertAdmissionWaitActive();
+    assertSqliteDatabaseAdmissionWaitActive();
     const remainingMs = Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1e6;
     if (remainingMs <= 0) {
-      throw new SqliteWorkerError(
-        "SQLite admission facts exchange timed out; the host did not reply",
-        "unavailable",
-      );
+      throw new SqliteDatabaseAdmissionTimeoutError();
     }
     return remainingMs;
   };
@@ -160,7 +114,7 @@ export function exchangeDatabaseAdmissions(
         decision,
         0,
         REQUESTED,
-        admissionWait.getStore() ? Math.min(100, remainingMs) : remainingMs,
+        hasSqliteDatabaseAdmissionWait() ? Math.min(100, remainingMs) : remainingMs,
       );
     }
     remaining();

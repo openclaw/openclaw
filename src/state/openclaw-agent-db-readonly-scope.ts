@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { beginPostgresReadOnlyTransaction } from "../infra/postgres-sync/transaction.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -26,6 +27,7 @@ import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-r
 import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseReadValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -42,6 +44,7 @@ type ReadScopeTarget = {
   path: string;
   validation?: OpenClawAgentDatabaseReadValidation;
 };
+type SnapshotHold = { database?: OpenClawAgentReadOnlyDatabaseHandle; end?: () => void };
 const readOnlyScope = new AsyncLocalStorage<OpenClawAgentDatabaseReadOnlyScope>();
 const log = createSubsystemLogger("state/agent-db");
 type ReadOnlyScopes = {
@@ -54,13 +57,15 @@ const retainedScopes = resolveGlobalSingleton<ReadOnlyScopes>(
   () => ({ paths: new Map(), active: new Set() }),
 );
 
-/** One retained connection, revoked by its caller, database lifecycle, or idle expiry. */
+/** One logical reader, revoked by its caller, database lifecycle, or idle expiry. */
 export class OpenClawAgentDatabaseReadOnlyScope {
   private database?: OpenClawAgentReadOnlyDatabaseHandle;
+  private retainedValidation?: OpenClawAgentDatabaseReadValidation;
   private target?: ReadScopeTarget;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private unregisterResource?: () => void;
   private borrowers = 0;
+  private snapshotHold?: SnapshotHold;
 
   constructor(private readonly cached = false) {}
 
@@ -91,6 +96,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     this.idleTimer = undefined;
     this.database?.close();
     this.database = undefined;
+    this.retainedValidation = undefined;
     this.borrowers = 0;
     if (this.target && retainedScopes.paths.get(this.target.path) === this) {
       retainedScopes.paths.delete(this.target.path);
@@ -153,6 +159,27 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     return this.target?.agentId === agentId && this.target.path === pathname;
   }
 
+  /** PostgreSQL reads in one serialized task share a single read-only snapshot. */
+  async runInSnapshot<T>(operation: () => Promise<T>): Promise<T> {
+    const hold: SnapshotHold = {};
+    this.snapshotHold = hold;
+    try {
+      return await operation();
+    } finally {
+      this.snapshotHold = undefined;
+      this.endSnapshotHold(hold);
+    }
+  }
+
+  private endSnapshotHold(hold: SnapshotHold): void {
+    const { database, end } = hold;
+    hold.database = hold.end = undefined;
+    if (database) {
+      end?.();
+      this.releaseBorrow(database);
+    }
+  }
+
   private acquire(options: OpenClawAgentDatabaseOptions) {
     const finish = (database: OpenClawAgentReadOnlyDatabaseHandle) => {
       const requestedAgentId = normalizeAgentId(options.agentId);
@@ -165,7 +192,12 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       this.touch();
       return { found: true, database } as const;
     };
-    if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
+    if (
+      this.database &&
+      ((this.retainedValidation &&
+        Atomics.load(new Int32Array(this.retainedValidation.valid), 0) !== 1) ||
+        !isOpenClawAgentDatabasePathCurrent(this.database))
+    ) {
       this.discardConnection();
     }
     if (this.database) {
@@ -190,7 +222,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
         if (this.cached) {
           retainedScopes.paths.set(this.database.path, this);
         }
-        retainedScopes.unregisterExit ??= registerSqliteCacheExitClose(() => {
+        retainedScopes.unregisterExit ??= registerProcessExitCleanup(() => {
           for (const scope of retainedScopes.active) {
             scope.close();
           }
@@ -205,6 +237,8 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     if (validation && !adoptOpenClawAgentDatabaseValidation(database, validation)) {
       throw new Error("Session reader validation does not match its current physical owner");
     }
+    // Later requests can carry a successor receipt while this connection still owns the old one.
+    this.retainedValidation ??= getOpenClawAgentDatabaseValidation(database);
     // The open owner validates the schema once; runtime reads retain that admission.
     return finish(database);
   }
@@ -214,6 +248,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       return;
     }
     this.borrowers--;
+    if (this.borrowers === 0 && isPostgresSqlConnection(database.db)) {
+      database.db.releaseIdleTransport();
+    }
     if (
       this.cached &&
       this.borrowers === 0 &&
@@ -257,7 +294,12 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     options: OpenClawAgentDatabaseOptions,
     behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
   ): OpenClawAgentDatabaseReadOnlyResult<T> {
-    if (this.database?.db.isOpen && this.database.db.isTransaction) {
+    const hold = this.snapshotHold;
+    if (
+      this.database?.db.isOpen &&
+      this.database.db.isTransaction &&
+      hold?.database !== this.database
+    ) {
       return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
     }
     const opened = this.acquire(options);
@@ -267,12 +309,23 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     const { database } = opened;
     this.borrowers++;
     try {
+      if (hold && hold.database !== database && isPostgresSqlConnection(database.db)) {
+        // First read of the task, or admission replaced the held connection.
+        this.endSnapshotHold(hold);
+        hold.end = beginPostgresReadOnlyTransaction(database.db);
+        hold.database = database;
+        this.borrowers++;
+      }
       return behavior.snapshot
         ? readOpenClawAgentDatabaseSnapshot(database, operation)
         : runSqliteReadOperationSync(database.db, () =>
             readOpenClawAgentDatabase(database, operation),
           );
     } catch (error) {
+      if (hold?.database === database) {
+        // A failed statement aborts the transaction; the next read opens a fresh snapshot.
+        this.endSnapshotHold(hold);
+      }
       if (this.cached && this.borrowers === 1) {
         this.discardConnection();
       }
@@ -310,6 +363,11 @@ export function closeIdleOpenClawAgentDatabaseReadOnly(pathname: string): void {
 
 export function retainCachedOpenClawAgentDatabaseReadOnly(options: ReadTarget) {
   return cachedScope(options).retain(options);
+}
+
+/** PostgreSQL reads through the caller's read scope share one snapshot until `operation` settles. */
+export function runInScopedOpenClawAgentReadSnapshot<T>(operation: () => Promise<T>): Promise<T> {
+  return readOnlyScope.getStore()?.runInSnapshot(operation) ?? operation();
 }
 
 /** Reuse the caller's matching read scope, or this thread's idle-expiring reader. */

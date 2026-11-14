@@ -84,9 +84,7 @@ function createContext(params: {
         (params.nested ? { action: { type: "Action.Submit", data: value } } : value),
     },
     sendActivity: vi.fn(async () => undefined),
-    sendActivities: vi.fn(async () => undefined),
     updateActivity: vi.fn(async () => ({ id: ACTIVITY_ID })),
-    deleteActivity: vi.fn(async () => undefined),
   };
 }
 

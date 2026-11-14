@@ -76,12 +76,11 @@ export async function putSessionGroups(params: {
   cfg: OpenClawConfig;
   names: readonly string[];
   sectionOrder?: readonly string[];
-  env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
 }): Promise<SessionGroupRecord[]> {
-  const { cfg, names, sectionOrder, env = process.env } = params;
-  await ensureSessionGroupCatalog(env);
+  const { cfg, names, sectionOrder } = params;
+  await ensureSessionGroupCatalog(process.env);
   const normalized = normalizeUniqueTrimmedStringList(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
@@ -92,7 +91,7 @@ export async function putSessionGroups(params: {
       sectionOrder: normalizedSectionOrder,
       cfg: { agents: cfg.agents, session: cfg.session },
     },
-    env,
+    process.env,
     (facts) => {
       params.assertCurrent?.();
       for (const [, targets] of facts?.groups ?? []) {
@@ -187,9 +186,16 @@ async function mutateSessionGroup(
     }
     const source = prepared.source;
     try {
-      const { stores } = await readSessionGroupMembershipInWorker(params.cfg, env);
+      const { stores, groups } = await readSessionGroupMembershipInWorker(params.cfg, env);
+      // Each store sweep costs a write worker; a store without members has nothing to move.
+      const memberAgents = new Set(
+        groups.find(([name]) => name === from)?.[1].map((member) => member.agentId),
+      );
       // Category updates preserve updatedAt so group maintenance cannot reorder sessions.
       for (const target of stores) {
+        if (!memberAgents.has(target.agentId)) {
+          continue;
+        }
         updatedSessions += await updateSessionGroupCategoriesInWorker({
           scope: { ...target, sessionKey: "", env },
           from,

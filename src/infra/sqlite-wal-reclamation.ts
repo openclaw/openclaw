@@ -135,7 +135,12 @@ export function reclaimSqliteWalFreePages(
           database.exec(`PRAGMA incremental_vacuum(${pages});`);
           options.onCommit?.();
         },
-        { busyTimeoutMs: 0, operationLabel: "incremental-vacuum" },
+        {
+          // The catch below owns pre-entry lock loss as a skipped best-effort pass.
+          beginLockFailureReporting: "suppress",
+          busyTimeoutMs: 0,
+          operationLabel: "incremental-vacuum",
+        },
       );
       completed = true;
     } catch (error) {

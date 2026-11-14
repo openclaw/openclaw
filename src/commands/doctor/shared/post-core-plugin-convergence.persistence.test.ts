@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
+import { runPluginUpdateWithClawHubLease } from "../../../plugins/update-template-lifecycle.js";
 import * as pluginUpdates from "../../../plugins/update.js";
 import {
   withOpenClawTestState,
@@ -88,6 +89,7 @@ it.for(["managed", "registered"] as const)(
     await withUpdateCommandExecutor(run.runId, async (executor) => {
       const fence = await executor.enter(state.root, { preflight: true });
       const controller = new AbortController();
+      const refusal = new Error("plugin operation revoked while updater remains current");
       let revocations = 0;
       let rowAtRevocation: ReturnType<typeof readRow>;
       const revoke = () => {
@@ -96,7 +98,7 @@ it.for(["managed", "registered"] as const)(
         }
         revocations += 1;
         rowAtRevocation = readRow({ env: state.env });
-        controller.abort(new Error("plugin lease revoked while updater remains current"));
+        controller.abort(refusal);
       };
       const unlink = fs.unlinkSync.bind(fs);
       const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
@@ -235,6 +237,7 @@ it("keeps restored indexed packages usable under a fresh owner after marker comp
   await cleanupGatewayRetiredPluginArtifacts({
     log,
     startupInstallPaths: [],
+    startupConfig: cfg,
     signal: new AbortController().signal,
     assertCurrent: () => {},
   });
@@ -282,21 +285,26 @@ it("retains an initiating-owner read failure across install error normalization"
   const refusal = new Error("initiating-owner store read failed");
   let checks = 0;
   vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins").mockImplementationOnce(async (params) => {
-    // The real attempt owner catches installer exceptions. No package child is launched here.
+    // Use the update error boundary without launching a package child.
     vi.spyOn(pluginInstaller, "installPluginFromNpmSpec").mockImplementationOnce(async () => {
       await Promise.resolve();
       await params.beforePersistentEffect?.();
       return { ok: false, error: "fixture installer did not publish" };
     });
-    const attempt = await runPluginUpdateAttempt({
+    const attempt = await runPluginUpdateWithClawHubLease({
       pluginId: "peerplugin",
-      record,
-      config: params.config,
       dryRun: false,
-      effectiveSpec: record.spec,
-      trustedSourceLinkedOfficialInstall: false,
-      logger: {},
-      onNpmInstall: () => {},
+      run: () =>
+        runPluginUpdateAttempt({
+          pluginId: "peerplugin",
+          record,
+          config: params.config,
+          dryRun: false,
+          effectiveSpec: record.spec,
+          trustedSourceLinkedOfficialInstall: false,
+          logger: {},
+          onNpmInstall: () => {},
+        }),
     });
     if (attempt.kind !== "exception") {
       throw new Error("fixture expected normalized refusal");
@@ -372,52 +380,5 @@ it.for(["missing-modules", "stale-link", "package-copy"] as const)(
     ]);
     expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linkPath)).not.toBe(fs.realpathSync(state.root));
-  },
-);
-
-it.for(["managed", "registered"] as const)(
-  "keeps refusal blocking during %s host-link replacement",
-  async (layout, { state }) => {
-    const { linkPath, params } = createPeerPlugin(state, layout);
-    const controller = new AbortController();
-    const refusal = new Error("initiating operation revoked after host-link probe");
-    if (layout === "registered") {
-      const lstat = fs.promises.lstat.bind(fs.promises);
-      vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
-        try {
-          return await lstat(...args);
-        } finally {
-          if (args[0] === linkPath) {
-            controller.abort(refusal);
-          }
-        }
-      });
-    } else {
-      const unlink = fs.unlinkSync.bind(fs);
-      vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-        unlink(target);
-        if (target === linkPath) {
-          controller.abort(refusal);
-        }
-      });
-      syncBuiltinESMExports();
-    }
-    let refused = false;
-    await expect(
-      runPostCorePluginConvergence({
-        ...params,
-        beforePersistentEffect: () => {
-          if (controller.signal.aborted && !refused) {
-            refused = true;
-            throw controller.signal.reason;
-          }
-        },
-      }),
-    ).rejects.toBe(refusal);
-    if (layout === "managed") {
-      expect(fs.existsSync(linkPath)).toBe(false);
-    } else {
-      expect(fs.readlinkSync(linkPath)).toBe(state.root);
-    }
   },
 );

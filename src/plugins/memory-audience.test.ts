@@ -3,7 +3,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { bindMemoryProvider } from "./memory-provider-adapter.js";
-import type { MemoryAudience, MemoryProviderHandle } from "./memory-provider-types.js";
+import type { MemoryProviderHandle } from "./memory-provider-runtime-types.js";
+import type { MemoryAudience } from "./memory-provider-types.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
@@ -55,16 +56,17 @@ function resolveAt(
   sessionKey: string,
   entry: FakeSessionRow,
   senderIsOwner?: boolean,
-  identity: { sessionId?: string } = { sessionId: entry.sessionId },
+  overrides: Partial<Parameters<typeof resolveMemoryAudienceFromEntry>[0]> = {},
 ) {
   fakeSessionOwner.rows.set(sessionKey, entry);
   return resolveMemoryAudienceFromEntry(
     {
       agentId: AGENT_ID,
       sessionKey,
-      sessionId: identity.sessionId,
+      sessionId: entry.sessionId,
       senderIsOwner,
       storePath: STORE_PATH,
+      ...overrides,
     },
     entry,
   );
@@ -135,6 +137,14 @@ function requireGrant(resolution: MemoryAudienceResolution) {
   return resolution;
 }
 
+async function expectDenied(
+  result: Promise<MemoryAudienceResolution>,
+  kind: "ineligible" | "stale-lineage" | "unverified",
+) {
+  await expect(result).resolves.toMatchObject({ status: "denied", kind });
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+}
+
 beforeEach(() => fakeSessionOwner.reset());
 
 it.each([
@@ -181,8 +191,7 @@ it.each([
         : resolveAt(ROOT_KEY, root, true, {
             sessionId: missing === "missing session id" ? undefined : randomUUID(),
           });
-  await expect(result).resolves.toMatchObject({ status: "denied", kind });
-  expect(fakeSessionOwner.activeLeases).toBe(0);
+  await expectDenied(result, kind);
 });
 
 it("denies malformed, stale, cyclic, and cross-agent lineage", async () => {
@@ -206,8 +215,37 @@ it("denies malformed, stale, cyclic, and cross-agent lineage", async () => {
       child.spawnedBySessionId = child.sessionId;
       child.parentSessionLifecycleRevision = child.lifecycleRevision;
     }
-    await expect(resolveChild(parent, child)).resolves.toMatchObject({ status: "denied", kind });
+    await expectDenied(resolveChild(parent, child), kind);
   }
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+});
+
+it("grants owner-private memory across agents only for an owner spawn from an owner direct root", async () => {
+  const FOREIGN_CHILD_KEY = "agent:fm-know:subagent:child";
+  const resolveForeignChild = (parent: FakeSessionRow, child: FakeSessionRow) => {
+    const resolveAgentStorePath = vi.fn((agentId: string) => `/tmp/stores/${agentId}.sqlite`);
+    fakeSessionOwner.rows.set(ROOT_KEY, parent);
+    const resolution = resolveAt(FOREIGN_CHILD_KEY, child, false, {
+      agentId: "fm-know",
+      storePath: "/tmp/stores/fm-know.sqlite",
+      resolveAgentStorePath,
+    });
+    return { resolution, resolveAgentStorePath };
+  };
+
+  const owner = rootEntry();
+  const granted = resolveForeignChild(owner, childEntry(owner));
+  const grant = requireGrant(await granted.resolution);
+  expect(grant.audience).toEqual({ kind: "owner-private", agentId: "fm-know" });
+  expect(granted.resolveAgentStorePath).toHaveBeenCalledWith("main");
+  grant.release();
+
+  const group = rootEntry("group");
+  await expectDenied(resolveForeignChild(group, childEntry(group)).resolution, "ineligible");
+  const nonOwnerSpawn = { ...childEntry(owner), spawnedBySenderIsOwner: false };
+  await expectDenied(resolveForeignChild(owner, nonOwnerSpawn).resolution, "ineligible");
+  const reset = { ...owner, lifecycleRevision: randomUUID() };
+  await expectDenied(resolveForeignChild(reset, childEntry(owner)).resolution, "stale-lineage");
   expect(fakeSessionOwner.activeLeases).toBe(0);
 });
 
@@ -229,31 +267,25 @@ it("denies lineage beyond 64 hops", async () => {
   expect(fakeSessionOwner.activeLeases).toBe(0);
 });
 
-it.each([
-  [
-    "missing both receipts",
-    { spawnedBySenderIsOwner: undefined, parentSessionLifecycleRevision: undefined },
-  ],
-  ["missing the owner receipt", { spawnedBySenderIsOwner: undefined }],
-] as const)(
-  "fails closed with a respawn instruction for a pre-existing spawned row %s",
-  async (_name, legacy) => {
-    const parent = rootEntry();
-    const resolution = await resolveChild(parent, { ...childEntry(parent), ...legacy });
-    expect(resolution).toEqual({
-      status: "denied",
-      kind: "stale-lineage",
-      reason: expect.stringContaining(
-        `spawned session ${CHILD_KEY} predates memory lineage receipts`,
-      ),
-    });
-    expect(resolution.status === "denied" && resolution.reason).toContain(
-      "Respawn it from its parent session to restore memory access.",
-    );
-    expect(fakeSessionOwner.workerReads).toEqual([]);
-    expect(fakeSessionOwner.activeLeases).toBe(0);
-  },
-);
+it("fails closed with a respawn instruction for a spawned row missing its owner receipt", async () => {
+  const parent = rootEntry();
+  const resolution = await resolveChild(parent, {
+    ...childEntry(parent),
+    spawnedBySenderIsOwner: undefined,
+  });
+  expect(resolution).toEqual({
+    status: "denied",
+    kind: "stale-lineage",
+    reason: expect.stringContaining(
+      `spawned session ${CHILD_KEY} predates memory lineage receipts`,
+    ),
+  });
+  expect(resolution.status === "denied" && resolution.reason).toContain(
+    "Respawn it from its parent session to restore memory access.",
+  );
+  expect(fakeSessionOwner.workerReads).toEqual([]);
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+});
 
 it("grants a conversation audience to a new child of a group row without a lifecycle revision", async () => {
   // Channel-created group rows carry no lifecycle revision; the child records that absence.
@@ -455,5 +487,155 @@ it.each(["memory", "other", "reset", "abort"] as const)(
       await observed;
       grant.release();
     }
+  },
+);
+
+const RUN_KEY = "agent:main:cron:job-1:run:run-session";
+
+// A scheduled run row records no spawn receipt; its execution context names the parent.
+function resolveScheduledRun(
+  parent: FakeSessionRow,
+  senderIsOwner: boolean,
+  link: { lifecycleRevision?: string } = { lifecycleRevision: parent.lifecycleRevision },
+  parentKey = ROOT_KEY,
+  runKey = RUN_KEY,
+  run: FakeSessionRow = { sessionId: randomUUID(), updatedAt: 1 },
+) {
+  fakeSessionOwner.rows.set(parentKey, parent);
+  return resolveAt(runKey, run, undefined, {
+    scheduledParent: {
+      sessionKey: parentKey,
+      sessionId: parent.sessionId,
+      senderIsOwner,
+      ...link,
+    },
+  });
+}
+
+it("grants a scheduled child its parent's audience, bound to the run session", async () => {
+  const parent = rootEntry();
+  const grant = requireGrant(await resolveScheduledRun(parent, true));
+  expect(grant.audience).toEqual({ kind: "owner-private", agentId: AGENT_ID });
+  assertSession(grant.audience, RUN_KEY);
+  const shared = requireGrant(await resolveScheduledRun(rootEntry(), false));
+  expect(shared.audience).toMatchObject({ kind: "conversation", sessionKey: ROOT_KEY });
+  // A parent reset during the run revokes the grant before provider I/O.
+  fakeSessionOwner.rows.set(ROOT_KEY, { ...parent, lifecycleRevision: randomUUID() });
+  expect(() => assertCurrent(grant.audience)).toThrow("no longer current");
+});
+
+it("denies a scheduled child whose parent was reset after the link was recorded", async () => {
+  const parent = rootEntry();
+  const resolution = await resolveScheduledRun(parent, true, { lifecycleRevision: randomUUID() });
+  expect(resolution).toMatchObject({ status: "denied", kind: "stale-lineage" });
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+});
+
+it("matches a scheduled parent link that recorded only the session id", async () => {
+  const grant = requireGrant(await resolveScheduledRun(rootEntry("group"), false, {}));
+  expect(grant.audience).toMatchObject({ kind: "conversation", sessionKey: ROOT_KEY });
+});
+
+it("grants an in-session scheduled run its own linked row's audience with the occurrence's owner bit", async () => {
+  const root = rootEntry();
+  const resolve = (lifecycleRevision = root.lifecycleRevision) =>
+    resolveScheduledRun(root, true, { lifecycleRevision }, ROOT_KEY, ROOT_KEY, root);
+  const grant = requireGrant(await resolve());
+  expect(grant.audience).toEqual({ kind: "owner-private", agentId: AGENT_ID });
+  grant.release();
+  const reset = await resolve(randomUUID());
+  expect(reset).toMatchObject({ status: "denied", kind: "stale-lineage" });
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+});
+
+it.each(["spawned-parent", "in-session", "other-parent"] as const)(
+  "caps scheduled requester ownership on a %s link",
+  async (mode) => {
+    const root = rootEntry();
+    fakeSessionOwner.rows.set(ROOT_KEY, root);
+    const spawned = childEntry(root);
+    const parent = mode === "other-parent" ? rootEntry() : spawned;
+    const parentKey = mode === "other-parent" ? "agent:main:linked" : CHILD_KEY;
+    const run = mode === "spawned-parent" ? { sessionId: randomUUID(), updatedAt: 1 } : spawned;
+    const runKey = mode === "spawned-parent" ? RUN_KEY : CHILD_KEY;
+    const resolve = (owner: boolean) =>
+      resolveScheduledRun(parent, owner, undefined, parentKey, runKey, run);
+    if (mode === "spawned-parent") {
+      const owner = requireGrant(await resolve(true));
+      expect(owner.audience).toEqual({ kind: "owner-private", agentId: AGENT_ID });
+      owner.release();
+    }
+    const capped = requireGrant(await resolve(false));
+    expect(capped.audience).toEqual(conversation(root));
+    capped.release();
+  },
+);
+
+// A child-placement run row carries its occurrence's admitted parent; cron copies
+// the parent's chat type onto it, so without the receipt a child roots there.
+function scheduledRunWithChild(params: {
+  occurrenceOwner: boolean;
+  spawnOwner: boolean;
+  receipt?: boolean;
+}) {
+  const parent = rootEntry();
+  const run: FakeSessionRow = {
+    ...rootEntry(),
+    ...(params.receipt === false
+      ? {}
+      : {
+          scheduledMemoryParent: {
+            sessionKey: ROOT_KEY,
+            sessionId: parent.sessionId,
+            lifecycleRevision: parent.lifecycleRevision,
+            senderIsOwner: params.occurrenceOwner,
+          },
+        }),
+  };
+  fakeSessionOwner.rows.set(ROOT_KEY, parent);
+  fakeSessionOwner.rows.set(RUN_KEY, run);
+  const child = { ...childEntry(run, RUN_KEY), spawnedBySenderIsOwner: params.spawnOwner };
+  return { parent, run, child };
+}
+
+it("grants a scheduled run's owner-spawned child its parent's owner-private audience", async () => {
+  const { parent, child } = scheduledRunWithChild({ occurrenceOwner: true, spawnOwner: true });
+  const grant = requireGrant(await resolveAt(CHILD_KEY, child, false));
+  expect(grant.audience).toEqual({ kind: "owner-private", agentId: AGENT_ID });
+  // The grant holds the parent incarnation: a later parent reset revokes it.
+  fakeSessionOwner.rows.set(ROOT_KEY, { ...parent, lifecycleRevision: randomUUID() });
+  expect(() => assertCurrent(grant.audience)).toThrow("no longer current");
+});
+
+it("denies a scheduled run's child once the run's parent was reset or replaced", async () => {
+  for (const change of ["lifecycleRevision", "sessionId"] as const) {
+    fakeSessionOwner.reset();
+    const { parent, child } = scheduledRunWithChild({ occurrenceOwner: true, spawnOwner: true });
+    fakeSessionOwner.rows.set(ROOT_KEY, { ...parent, [change]: randomUUID() });
+    await expectDenied(resolveAt(CHILD_KEY, child, false), "stale-lineage");
+  }
+});
+
+it.each([
+  ["a non-owner occurrence", { occurrenceOwner: false, spawnOwner: false }],
+  ["a non-owner spawn on an owner run row", { occurrenceOwner: true, spawnOwner: false }],
+  ["an owner spawn on a non-owner run row", { occurrenceOwner: false, spawnOwner: true }],
+  ["a run row without a receipt", { occurrenceOwner: true, spawnOwner: true, receipt: false }],
+] as const)(
+  "keeps resolving a scheduled run's child from the run row for %s",
+  async (_name, params) => {
+    const { run, child } = scheduledRunWithChild(params);
+    const grant = requireGrant(await resolveAt(CHILD_KEY, child, true));
+    // Only the run row's own lineage applies, exactly as without a receipt.
+    expect(grant.audience).toEqual(
+      params.spawnOwner
+        ? { kind: "owner-private", agentId: AGENT_ID }
+        : {
+            kind: "conversation",
+            agentId: AGENT_ID,
+            sessionKey: RUN_KEY,
+            sessionId: run.sessionId,
+          },
+    );
   },
 );

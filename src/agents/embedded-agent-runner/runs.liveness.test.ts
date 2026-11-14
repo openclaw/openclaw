@@ -27,6 +27,7 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -158,11 +159,7 @@ it("reports quiet runtime waits without scheduling abort", async () => {
   });
   const events: DiagnosticEventPayload[] = [];
   const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-  let recoveryAtDiagnosticTick: ReturnType<typeof operation.watchdog.snapshot>["recovery"];
-  const recover = vi.fn((request: Parameters<typeof recoverStuckDiagnosticSession>[0]) => {
-    recoveryAtDiagnosticTick = request.operation?.watchdog.snapshot().recovery;
-    return recoverStuckDiagnosticSession(request);
-  });
+  const recover = vi.fn(recoverStuckDiagnosticSession);
   try {
     startGatewayDiagnosticHeartbeat(
       createTestGatewayScheduler("fake-timers"),
@@ -180,17 +177,18 @@ it("reports quiet runtime waits without scheduling abort", async () => {
     expect(recover).not.toHaveBeenCalled();
     expect(abort).not.toHaveBeenCalled();
 
+    // Release between diagnostic heartbeats so the controller timer reaches the stall first.
+    await vi.advanceTimersByTimeAsync(10_000);
     runtimeOwnsLiveness = false;
+    // Releasing runtime liveness starts a fresh semantic window, not a retroactive stall.
     await vi.advanceTimersByTimeAsync(30_000);
-    // Diagnostics request a tick from the captured controller once the runtime wait ends.
-    expect(recover).toHaveBeenCalledOnce();
-    expect(recover.mock.calls[0]?.[0].operation).toBe(operation);
-    expect(recoveryAtDiagnosticTick).toMatchObject({ status: "pending" });
-    await expect(recover.mock.results[0]?.value).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active_reply_work",
-    });
-    // The controller timer started recovery before the diagnostic projection observed it.
+    expect(abort).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().recovery).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(recover).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().recovery).toMatchObject({ status: "pending" });
+    expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
+    // The real controller timer owns recovery; diagnostic projection must not duplicate it.
     resumeRecovery.resolve();
     await operation.ownerSettlement;
     expect(abort).toHaveBeenCalledOnce();
@@ -218,22 +216,19 @@ it("waits in bounded slices, then reclaims host-owned work without a millisecond
     });
 
   const callerAbort = new AbortController();
-  let settled = false;
   const waiting = admitReplyTurn({
     sessionId,
     sessionKey,
     kind: "visible",
     resetTriggered: false,
     upstreamAbortSignal: callerAbort.signal,
-  }).then((result) => {
-    settled = true;
-    return result;
   });
+  const settled = observeSettlement(waiting);
   try {
     await waits[0].promise;
     vi.advanceTimersByTime(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
     await waits[1].promise;
-    expect(settled).toBe(false);
+    expect(settled()).toBe(false);
     expect(abort).not.toHaveBeenCalled();
     expect(waitForIdle.mock.calls.length).toBeGreaterThan(1);
     expect(new Set(waitForIdle.mock.calls.map(([, timeout]) => timeout))).toEqual(
@@ -241,7 +236,8 @@ it("waits in bounded slices, then reclaims host-owned work without a millisecond
     );
 
     runtimeOwnsLiveness = false;
-    vi.advanceTimersByTime(1_000);
+    // The released native turn finalizes in a fresh semantic window before host work is reclaimed.
+    await vi.advanceTimersByTimeAsync(6 * 60_000 + 1_000);
     const result = await waiting;
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
     expect(result.status).toBe("owned");

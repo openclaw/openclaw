@@ -1,9 +1,16 @@
+import { MessagePort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { receiveAuthProfileUpdateValue } from "../agents/auth-profiles/store-update-transfer.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { readExactSessionEntryRow as readSessionRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseIntegrityVerification,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
@@ -16,49 +23,18 @@ import {
   recordAgentDatabaseAdmissions as recordAdmissions,
 } from "./agent-database-admission.js";
 import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase as openAgentDb } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution as captureExecution } from "./openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath as stateSqlitePath } from "./openclaw-state-db.paths.js";
 
-const journalReads = vi.hoisted(() => new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/worker-cpu.js")>();
-  const preload = `
-    import { DatabaseSync } from "node:sqlite";
-    import { workerData } from "node:worker_threads";
-    const prepare = DatabaseSync.prototype.prepare;
-    DatabaseSync.prototype.prepare = function(sql) {
-      const statement = prepare.call(this, sql);
-      if (/\\bFROM\\s+"?agent_deletion_journal"?\\b/i.test(sql)) {
-        for (const method of ["all", "get", "iterate", "run"]) {
-          const execute = statement[method].bind(statement);
-          statement[method] = (...args) => {
-            Atomics.add(new Int32Array(workerData.testStartupJournalReads), 0, 1);
-            return execute(...args);
-          };
-        }
-      }
-      return statement;
-    };
-  `;
-  return {
-    ...actual,
-    createCpuTrackedWorker(filename, options) {
-      return actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: { ...options?.workerData, testStartupJournalReads: journalReads },
-      });
-    },
-  } satisfies typeof actual;
-});
-
-it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
+it.each([
+  "normal-startup-normal",
+  "deletion-before-commit",
+  "auth-read",
+  "deletion-before-auth-publication",
+] as const)(
   "reuses the native actor with request-scoped startup journal checks (%s)",
   async (scenario) => {
     await withState({ scenario: "minimal" }, async (state) => {
@@ -68,6 +44,24 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
         { ...options, sessionKey },
         { sessionId: "startup-journal", updatedAt: 1, label: "seed" },
       );
+      const authStore = {
+        version: 1,
+        profiles: {
+          "fixture:startup": {
+            type: "token" as const,
+            provider: "fixture",
+            token: "synthetic-startup-credential",
+          },
+        },
+      };
+      const authScenario =
+        scenario === "auth-read" || scenario === "deletion-before-auth-publication";
+      if (authScenario) {
+        saveAuthProfileStore(authStore, state.agentDir("worker"), {
+          filterExternalAuthProfiles: false,
+          syncExternalCli: false,
+        });
+      }
       const database = openAgentDb(options);
       const execution = captureExecution(options);
       const writer = openNodeSqliteDatabase(stateSqlitePath(state.env));
@@ -88,7 +82,7 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
         publishAgentDeletionJournalStatus(writer, "worker", "pending");
       };
       const incarnations = new Set<string>();
-      const startupStages = new Set<string>();
+      let authRows: unknown;
       let afterAuthorize: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
       const source: AgentDatabaseRequestExecutionSource = {
         assertCurrent: () => execution.assertCurrent(),
@@ -103,8 +97,18 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
                 incarnations.add(identity.incarnation);
               }
             }
-            if (binding.attachment.startupJournal) {
-              startupStages.add(request.stage);
+            if (isRecord(request.facts) && isRecord(request.facts.publication)) {
+              const publication = request.facts.publication;
+              if (publication.kind === "auth-store-read") {
+                if (!(publication.port instanceof MessagePort)) {
+                  throw new Error("Auth read omitted its field transport");
+                }
+                try {
+                  authRows = receiveAuthProfileUpdateValue(publication.port);
+                } finally {
+                  publication.port.close();
+                }
+              }
             }
             afterAuthorize?.(request);
             if (!grant()) {
@@ -127,18 +131,26 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
           }),
         );
       };
-      const reads = new Int32Array(journalReads);
+      const revokeIntegrity = () => {
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        revokeSqliteDatabaseAdmissionsForPath(database.path);
+        expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
+      };
+      const prepareWriter = () => execution.prepare(source);
       const readLabel = () => readSessionRow(database, sessionKey)?.entry.label;
       const replaceNormally = async (label: string) => {
-        Atomics.store(reads, 0, 0);
         await replace(label);
-        expect({ reads: Atomics.load(reads, 0), label: readLabel() }).toEqual({ reads: 0, label });
+        expect(readLabel()).toBe(label);
       };
       try {
-        await execution.runExisting(source, (scope) =>
-          scope.execute({ type: "database.prepareWrite", input: undefined }),
-        );
+        await prepareWriter();
         await replaceNormally("normal-before");
+        if (scenario === "normal-startup-normal") {
+          revokeIntegrity();
+          await prepareWriter();
+          expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
+          revokeIntegrity();
+        }
         const refusal = inspectionRefusal({
           agentId: "worker",
           paths: [database.path],
@@ -148,17 +160,45 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
         recordAdmissions([refusal], { env: state.env, source: "startup" });
         const replaceDuringStartup = (label: string) =>
           preparePending(refusal, { env: state.env, assertCurrent() {} }, async () => {
+            if (scenario === "normal-startup-normal") {
+              await prepareWriter();
+              expect(readSqliteDatabaseIntegrityVerification(database.path)).toEqual({
+                verifiedAt: expect.any(Number),
+              });
+            }
             await replace(label);
           });
-        if (scenario === "deletion-before-commit") {
-          let inserted = false;
-          afterAuthorize = (request) => {
-            if (request.stage === "transaction" && !inserted) {
-              inserted = true;
-              // A separate connection bypasses canonical begin's admission invalidation.
-              insertDeletion();
-            }
-          };
+        let inserted = false;
+        const deletionStage =
+          scenario === "deletion-before-auth-publication"
+            ? "prepare"
+            : scenario === "deletion-before-commit"
+              ? "transaction"
+              : undefined;
+        afterAuthorize = (request) => {
+          if (deletionStage === request.stage && !inserted) {
+            inserted = true;
+            // A separate connection bypasses canonical begin's admission invalidation.
+            insertDeletion();
+          }
+        };
+        if (authScenario) {
+          const read = preparePending(refusal, { env: state.env, assertCurrent() {} }, async () => {
+            await execution.runExisting(source, (scope) =>
+              scope.execute({ type: "authProfiles.read", input: undefined }),
+            );
+          });
+          if (scenario === "deletion-before-auth-publication") {
+            await expect(read).rejects.toThrow("deleted during startup inspection");
+            expect(inserted).toBe(true);
+            expect(authRows).toBeUndefined();
+            expect(readRefusal("worker", options)).toBe(refusal);
+          } else {
+            await read;
+            expect(authRows).toMatchObject({ store: { status: "readable", raw: authStore } });
+            expect(readRefusal("worker", options)).toBeUndefined();
+          }
+        } else if (scenario === "deletion-before-commit") {
           await expect(replaceDuringStartup("must-roll-back")).rejects.toThrow(
             "deleted during startup inspection",
           );
@@ -169,11 +209,12 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
           await replaceDuringStartup("startup");
           expect(readRefusal("worker", options)).toBeUndefined();
           expect(readLabel()).toBe("startup");
-          expect(startupStages).toEqual(new Set(["prepare", "transaction", "commit"]));
         }
-        expect(Atomics.load(reads, 0)).toBeGreaterThan(0);
         afterAuthorize = undefined;
         if (scenario === "normal-startup-normal") {
+          revokeIntegrity();
+          await prepareWriter();
+          expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
           insertDeletion();
           await replaceNormally("normal-after");
         }

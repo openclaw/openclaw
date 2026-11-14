@@ -23,8 +23,8 @@ import {
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { SESSION_TRANSCRIPT_WORKER_LIMITS } from "./session-transcript-read-pools.js";
 import type {
-  SessionEntryWorkerInput,
   SessionEntriesWorkerInput,
+  SessionEntriesWorkerUpdate,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
@@ -32,7 +32,7 @@ import type {
 import {
   acquireSessionTranscriptReadResource,
   armDatabaseWorkerIdleRetirement,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   registerSessionTranscriptReaderLane,
@@ -77,7 +77,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
     ) {
       // Register before admission yields; cleanup also owns reads waiting to dispatch.
       const resources = new Set<HistoryDatabaseResource>();
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       lane.pending++;
       refreshDatabaseWorkerPressureSubscription();
       try {
@@ -127,7 +127,7 @@ const modelContextReads = createSessionTranscriptReadPool<
 
 // Background transcript exports cannot occupy the foreground context worker.
 const sessionEntries = createSessionTranscriptReadPool<
-  SessionEntryWorkerInput | SessionEntriesWorkerInput | SessionResetRecallWorkerInput
+  SessionEntriesWorkerInput | SessionResetRecallWorkerInput
 >(resolveWorkerPoolSize("singleton"), true);
 
 export async function readSessionTranscriptModelContextInWorker(
@@ -193,11 +193,12 @@ export async function readSessionTranscriptContextMessagesInWorker(
   admission: SessionContextMessagesWorkerInput["admission"],
   signal?: AbortSignal,
   expectedIdentity?: SessionContextMessagesWorkerInput["expectedIdentity"],
+  seed?: SessionContextMessagesWorkerInput["seed"],
 ) {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
     await modelContextReads.run(
-      { kind: "context-messages", target, admission, expectedIdentity },
+      { kind: "context-messages", target, admission, expectedIdentity, seed },
       { timeoutMs: 60_000, signal },
       {
         storePaths: [target.storePath],
@@ -211,25 +212,22 @@ export async function readSessionTranscriptContextMessagesInWorker(
   return value;
 }
 
-export async function prepareSessionEntryInWorker(
-  absPath: string,
-  options: SessionEntryWorkerInput["options"],
-) {
-  const result = await readSessionEntryInWorker({
-    kind: "session-entry",
-    absPath,
-    options,
-  });
-  if (!("entry" in result)) {
-    throw new Error("Session transcript worker returned a snapshot instead of an export");
-  }
-  return result;
-}
+type SessionEntriesStreamResult = Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"];
 
-export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorkerInput["entries"]) {
-  const result = unwrapSessionTranscriptWorkerReply<
-    "session-entry" | "session-entries" | "session-reset-recall"
-  >(
+/**
+ * Streams a bounded group of exports through one background worker request. Each delivered page
+ * and reset is acknowledged only after `deliver` settles, so neither side retains a whole export.
+ */
+export async function streamSessionEntriesInWorker(
+  entries: SessionEntriesWorkerInput["entries"],
+  deliver: (
+    index: number,
+    update: Exclude<SessionEntriesWorkerUpdate, { value: unknown }>,
+  ) => Promise<void>,
+): Promise<SessionEntriesStreamResult[]> {
+  const results: SessionEntriesStreamResult[] = [];
+  let received = 0;
+  const result = unwrapSessionTranscriptWorkerReply<"session-entries" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-entries",
@@ -238,7 +236,32 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
           return { ...entry, ...(receipt ? { admission: { ...receipt } } : {}) };
         }),
       },
-      { inputBytes: JSON.stringify(entries).length * 2 },
+      {
+        inputBytes: JSON.stringify(entries).length * 2,
+        onRequest: async (progress) => {
+          // SAFETY: The paired worker delivers one entry's updates in order, then its summary.
+          const update = progress as {
+            kind: "session-entries";
+            index: number;
+          } & SessionEntriesWorkerUpdate;
+          if (
+            update.kind !== "session-entries" ||
+            !Number.isInteger(update.index) ||
+            update.index < 0 ||
+            update.index >= entries.length ||
+            update.index in results
+          ) {
+            throw new Error("Invalid session export delivery");
+          }
+          if ("value" in update) {
+            results[update.index] = update.value;
+            received++;
+          } else {
+            await deliver(update.index, "page" in update ? { page: update.page } : { reset: true });
+          }
+          return { input: undefined, timeoutMs: 60_000 };
+        },
+      },
       {
         storePaths: entries.map(({ options }) => options.storePath),
         admissionPaths: [
@@ -253,68 +276,19 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
     ),
   );
   if (!("entries" in result)) {
-    throw new Error("Session transcript worker returned a single export instead of a batch");
+    throw new Error("Session transcript worker returned reset metadata instead of exports");
   }
-  return result.entries;
-}
-
-export async function readSessionEntrySnapshotInWorker(
-  absPath: string,
-  options: SessionEntryWorkerInput["options"],
-  includeOriginalMessages: boolean,
-) {
-  const result = await readSessionEntryInWorker({
-    kind: "session-entry",
-    mode: "snapshot",
-    includeOriginalMessages,
-    absPath,
-    options,
-  });
-  if (!("snapshot" in result)) {
-    throw new Error("Session transcript worker returned an export instead of a snapshot");
+  if (received !== entries.length) {
+    throw new Error("Session transcript worker returned an incomplete export batch");
   }
-  return result.snapshot;
-}
-
-async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
-  const { absPath, options } = input;
-  const receipt = resolveSessionTranscriptReadFence(options);
-  const result = unwrapSessionTranscriptWorkerReply<
-    "session-entry" | "session-entries" | "session-reset-recall"
-  >(
-    await sessionEntries.run(
-      {
-        ...input,
-        ...(receipt ? { admission: { ...receipt } } : {}),
-      },
-      {
-        inputBytes:
-          2 *
-          (absPath.length +
-            options.agentId.length +
-            options.sessionId.length +
-            options.storePath.length +
-            (options.sessionKey?.length ?? 0)),
-      },
-      {
-        storePaths: [options.storePath],
-        admissionPaths: [resolveUnsuffixedSqliteTargetFromSessionStorePath(options.storePath).path],
-      },
-    ),
-  );
-  if (!("entry" in result) && !("snapshot" in result)) {
-    throw new Error("Session transcript worker returned reset metadata instead of an export");
-  }
-  return result;
+  return results;
 }
 
 export async function readSessionResetRecallCutoffInWorker(
   scope: SessionResetRecallWorkerInput["scope"],
 ) {
   const receipt = resolveSessionTranscriptReadFence(scope);
-  const result = unwrapSessionTranscriptWorkerReply<
-    "session-entry" | "session-entries" | "session-reset-recall"
-  >(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entries" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-reset-recall",

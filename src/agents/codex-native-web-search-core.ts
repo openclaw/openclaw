@@ -101,10 +101,7 @@ export function resolveCodexNativeSearchActivation(
             : undefined;
 
   return {
-    globalWebSearchEnabled,
     codexNativeEnabled: codexConfig.enabled,
-    codexMode: codexConfig.mode,
-    nativeEligible,
     state: inactiveReason ? ("managed_only" as const) : ("native_active" as const),
     ...(inactiveReason ? { inactiveReason } : {}),
   };

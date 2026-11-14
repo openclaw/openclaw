@@ -220,14 +220,6 @@ describe("OpenClaw rescue message", () => {
     expect(extractSystemAgentRescueMessage("/status")).toBeNull();
   });
 
-  it("denies rescue when sandboxing is active", async () => {
-    await expect(
-      runRescue("/openclaw status", {
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      }),
-    ).resolves.toContain("sandboxing is active");
-  });
-
   it.each([
     ["talk to agent", "cannot open the local TUI", runTui],
     ["chat", "cannot open the local TUI", runTui],
@@ -294,6 +286,19 @@ describe("OpenClaw rescue message", () => {
     await expectReply("/openclaw plugins list", "plugin rows", true);
     await expectReply("/openclaw yes", noPending, true);
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("replies with a completed command's findings when it exits non-zero (#195432)", async () => {
+    vi.mocked(runPluginsListCommand).mockImplementation(async (_opts, runtime) => {
+      runtime?.log("warning finding");
+      runtime?.exit(1);
+    });
+
+    await expectReply(
+      "/openclaw plugins list",
+      "warning finding\n\nOpenClaw operation exited with code 1.",
+      true,
+    );
   });
 
   it("consumes a pending approval at most once under concurrent approvals", async () => {

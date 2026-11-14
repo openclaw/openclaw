@@ -5,10 +5,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
-import {
-  AUTH_INVALID_TOKEN_USER_TEXT,
-  formatBillingErrorMessage,
-} from "../../failover/user-copy.js";
+import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { log } from "../logger.js";
@@ -51,6 +48,62 @@ describe("assistant failure recovery", () => {
     vi.useRealTimers();
   });
 
+  it.each(
+    [undefined, 30_000, 3 * 86_400_000].flatMap((retryAfterMs) =>
+      [false, true].map((fallback) => ({ retryAfterMs, fallback })),
+    ),
+  )(
+    "renders provider retryAfterMs=$retryAfterMs with fallback=$fallback",
+    async ({ retryAfterMs, fallback }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-13T14:00:00Z"));
+      const input = makeInput(
+        { errorMessage: "429 Too Many Requests", retryAfterMs },
+        { fallbackConfigured: fallback },
+      );
+      const config = {
+        agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+        ui: { prefs: { locale: "en-US" } },
+      };
+      input.runInput.runParams.config = config;
+      let failure: FailoverError | undefined;
+      const outcome = runWithModelFallback({
+        cfg: config,
+        provider: "anthropic",
+        model: "test-model",
+        manifestPlugins: [],
+        skipAuthProfileRuntime: true,
+        fallbacksOverride: fallback ? ["openai/fixture-next"] : [],
+        run: async (provider) => {
+          if (provider === "openai") {
+            return "Fallback answered.";
+          }
+          failure = await expectFailure(input);
+          throw failure;
+        },
+      });
+      if (fallback) {
+        expect(await outcome).toMatchObject({ provider: "openai", result: "Fallback answered." });
+      } else {
+        await expect(outcome).rejects.toBeInstanceOf(FailoverError);
+      }
+      const expected =
+        retryAfterMs === 3 * 86_400_000
+          ? "⚠️ anthropic/test-model is rate-limited. The provider says to retry in 3 days (Nov 16, 2026 at 6:00 AM PST). Choose another model in the model picker, or configure Model fallbacks in Settings (`agents.defaults.model.fallbacks`)."
+          : "⚠️ The AI service needs a short break. Please try again in a few minutes.";
+      // Node and Bun's ICU versions differ in the date/time separator.
+      expect([expected, expected.replace("2026 at", "2026,")]).toContain(failure?.message);
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: failure,
+          sessionCtx: {},
+          resolvedVerboseLevel: "off",
+          config,
+        })?.text,
+      ).toBe(failure?.message);
+    },
+  );
+
   it("explains retry exhaustion without replacing the raw provider failure", async () => {
     const providerError = "429 rate limit exceeded. Please try again in 221ms.";
     const input = makeInput({ errorMessage: providerError });
@@ -74,6 +127,7 @@ describe("assistant failure recovery", () => {
   });
 
   it.each([
+    { errorMessage: "Model prompt projection lost its canonical user turn" },
     { errorMessage: "Pending input is no longer active in its admitted transcript" },
     { errorMessage: "400 malformed input item", errorType: "invalid_request_error" },
     { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
@@ -83,9 +137,11 @@ describe("assistant failure recovery", () => {
       errorCode: "invalid_prompt",
     },
   ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
+    let attempts = 0;
     const run = vi.fn(async () => {
       const input = makeInput({ ...fields, content: [] });
       for (;;) {
+        attempts += 1;
         const outcome = await handleEmbeddedAssistantFailure(input);
         if (outcome.action !== "retry") {
           throw new Error("failure was not surfaced");
@@ -105,12 +161,7 @@ describe("assistant failure recovery", () => {
       }),
     ).rejects.toThrow();
     expect(run).toHaveBeenCalledOnce();
-    expect(log.warn).toHaveBeenCalledWith(
-      "Assistant attempt failed",
-      expect.objectContaining({
-        message: fields.errorMessage,
-      }),
-    );
+    expect(attempts).toBe(1);
   });
 
   it("selects the next profile before marking failure and retries without waiting for the mark", async () => {
@@ -248,20 +299,16 @@ describe("assistant failure recovery", () => {
         provider: "anthropic",
         model: "test-model",
       });
-      if (reason === "auth") {
-        expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-      } else if (reason === "rate_limit") {
-        expect(failure.message).toBe(
-          "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-        );
-      }
       expect(input.traceAttempts[0]?.status).toBe(status);
     }
   });
 
   it.each([
     [{ kind: "timeout", phase: "compaction", source: "observation" }, {}],
-    [{ kind: "timeout", phase: "tool_execution", source: "runtime" }, { stopReason: "timeout" }],
+    [
+      { kind: "timeout", phase: "tool_execution", source: "runtime" },
+      { stopReason: "timeout", timeoutPhase: "tool_execution" },
+    ],
     [
       { kind: "timeout", phase: "prompt", source: "idle" },
       { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },

@@ -1,10 +1,12 @@
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   callGoogleMeetGateway,
   parseOptionalNumber,
   type ResolveSpaceOptions,
 } from "./cli-shared.js";
 import type { GoogleMeetConfig } from "./config.js";
+import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export function addGoogleMeetOAuthOptions(command: Command): Command {
@@ -42,6 +44,7 @@ export type GoogleMeetCliCommandContext = {
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
   operationTimeoutMs: number;
+  oauthRuntime?: GoogleMeetOAuthRuntime;
 };
 
 export function resolveCliMeetingInput(config: GoogleMeetConfig, value?: string): string {
@@ -73,4 +76,18 @@ export async function callGoogleMeetRuntime<Result>(
   });
   // SAFETY: Each method's gateway handler returns the same Result as the paired local runtime call.
   return delegated.ok ? (delegated.payload as Result) : local(await context.ensureRuntime());
+}
+
+/** Interrupted reads resolve undefined so Ctrl+C or SIGTERM exits without printing. */
+export async function readGoogleMeetRuntime<Result>(
+  ...args: Parameters<typeof callGoogleMeetRuntime<Result>>
+): Promise<Result | undefined> {
+  try {
+    return await callGoogleMeetRuntime(...args);
+  } catch (error) {
+    if (getAsyncWorkSignal()?.aborted) {
+      return undefined;
+    }
+    throw error;
+  }
 }

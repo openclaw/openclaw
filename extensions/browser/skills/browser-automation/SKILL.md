@@ -38,7 +38,6 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 5. Report real blockers:
    - Debug network failures with `action="requests"`, optional URL/type `filter`, and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Use a managed profile; existing-session profiles do not support this log.
    - Debug page errors with `action="errors"` and `limit` (default 50 recent entries). `clear=true` clears the collected log after reading. Existing-session profiles do not support this log.
-   - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.
    - Do not claim the browser is not logged in just because the current page shows a permission or onboarding dialog. Inspect the visible UI first.
 
 ## Browser batch CLI
@@ -51,6 +50,12 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 - Response: `{ "results": [{ "ok": true } | { "ok": false, "error": "..." }, ...] }` in order; with default `stopOnError` the array ends at the first failure. Any failed entry exits nonzero; use `--json` to preserve the full response in scripts.
 
 ## Code Mode Loop
+
+For explicit page-blocker triage with a configured Decision model, read
+[Page triage](references/page-triage.md). Browser `action="judge"` classifies a
+bounded observation through the selected Decision provider and returns answers,
+not page text, to the primary model. It works on text-capable Chromium and
+Lightpanda profiles; it is not Lightpanda native `judge()`.
 
 When `tools.codeMode` is enabled, the Browser tool has no normal turn — it is cataloged behind `exec`/`wait`. Call it from exec cells as an async global, using the callable name the exec quick index advertises for the Browser tool (normally `browser`; colliding names get suffixed, and a client tool can win an identical name). An exact `catalog.search("browser")` returns a handle already bound to the effective callable name, so resolve the handle in each cell and call it instead of hard-coding the literal global; an empty result means the Browser tool is not cataloged in this run.
 

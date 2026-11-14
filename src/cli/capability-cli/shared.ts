@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -20,6 +19,7 @@ import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { CapabilityTransport } from "./metadata.js";
 
@@ -29,7 +29,7 @@ export function resolveTransport(opts: {
   defaultTransport: CapabilityTransport;
 }): CapabilityTransport {
   if (opts.local && opts.gateway) {
-    throw new Error("Pass only one of --local or --gateway.");
+    throwExpectedCliError("Pass only one of --local or --gateway.");
   }
   if (opts.local) {
     return "local";
@@ -51,7 +51,7 @@ export function resolveCapabilityProviderAgentId(
 ): string {
   const requestedAgentId = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requestedAgentId) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const agentId = resolveAgentOperationAgentId(cfg, requestedAgentId, {
     surface,
@@ -107,20 +107,9 @@ export function requireProviderModelOverride(
     return undefined;
   }
   if (!provider) {
-    throw new Error("Model overrides must use the form <provider/model>.");
+    throwExpectedCliError("Model overrides must use the form <provider/model>.");
   }
   return { provider, model };
-}
-
-export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const value = parseStrictPositiveInteger(raw);
-  if (value === undefined) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
 }
 
 export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {

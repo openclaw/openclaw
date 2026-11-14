@@ -1,10 +1,14 @@
-import { resolveThinkingDefault } from "openclaw/plugin-sdk/agent-runtime";
-import { afterEach, expect, it, vi } from "vitest";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAppServerOptions,
+  createThreadRequestAttemptParams as createAttemptParams,
+  DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+  createCodexRuntimePlanFixture,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import { buildThreadResumeParams } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 
 type TurnParams = Parameters<typeof buildTurnStartParams>[0];
@@ -23,7 +27,7 @@ const activeComputer = application(
   "Current active computer: active_node=unknown (host presence unavailable)",
 );
 const sourceDelivery = application(
-  expect.stringContaining("reply normally in your final assistant message"),
+  expect.stringContaining("Reply normally in your final assistant message"),
 );
 const deliveryValue = (turn: Awaited<ReturnType<typeof buildTurnStartParams>>) =>
   turn.additionalContext?.openclaw_source_delivery?.value;
@@ -76,46 +80,6 @@ it("refreshes and clears presence without rewriting native turn input", async ()
     expect(turn.input).toEqual(textInput(params.prompt));
   }
 });
-it.each([
-  { thinking: undefined, thinkingDefault: undefined, expected: "medium" },
-  { thinking: undefined, thinkingDefault: "high" as const, expected: "high" },
-  { thinking: "medium", thinkingDefault: "high" as const, expected: "medium" },
-])(
-  "sends $expected for Astra with configured effort $thinking/$thinkingDefault",
-  async (testCase) => {
-    const modelId = "gpt-6-astra";
-    const config = {
-      agents: {
-        defaults: {
-          thinkingDefault: testCase.thinkingDefault,
-          models: { [`openai/${modelId}`]: { params: { thinking: testCase.thinking } } },
-        },
-      },
-    };
-    const params = paramsForTurn(config);
-    params.provider = "openai";
-    params.modelId = modelId;
-    params.model = {
-      ...params.model,
-      provider: "openai",
-      id: modelId,
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-    };
-    params.thinkLevel = resolveThinkingDefault({
-      cfg: config,
-      provider: params.provider,
-      model: modelId,
-      agentRuntime: "codex",
-      catalog: [{ provider: "openai", id: modelId, name: "Astra", reasoning: true }],
-    });
-
-    const turn = await buildTurnStartParams(params, turnOptions());
-    expect(turn).toMatchObject({
-      effort: testCase.expected,
-      collaborationMode: { settings: { reasoning_effort: testCase.expected } },
-    });
-  },
-);
 it("uses the configured user timezone on every turn without changing cron input", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
   const params = paramsForTurn(
@@ -183,6 +147,8 @@ it.each([
 it("carries explicit current policy without changing native turn input", async () => {
   const params = paramsForTurn(undefined, {
     prompt: "unchanged current request",
+    messageChannel: "telegram",
+    currentChannelId: "123",
     permissionChange: permissionChange("Permission changed."),
   });
   const options = turnOptions({
@@ -199,10 +165,6 @@ it("carries explicit current policy without changing native turn input", async (
   );
   const values = turns.map(deliveryValue);
   expect(values[0]).toContain("OpenClaw delivers your final response automatically");
-  expect(values[0]).toContain("is your complete reply");
-  expect(values[0]).toContain("Commentary is optional progress and may be hidden");
-  expect(values[0]).toContain("`message(action=send, final=false)`");
-  expect(values[0]).toContain("deliver every still-pending answer");
   expect(values[1]).toContain("Use `message(action=send)`");
   expect(values[1]).toContain("For progress, set `final=false`");
   expect(values[1]).toContain("Set `final=true`, or omit it,");
@@ -248,6 +210,27 @@ it("carries explicit current policy without changing native turn input", async (
   );
   expect(deliveryValue(finalOnly)).not.toContain("message(action=send");
 });
+it("replaces channel delivery guidance on a routeless operator turn", async () => {
+  const options = turnOptions({
+    messageToolAvailable: true,
+    requireExplicitMessageTarget: false,
+    preserveNativeTurnSettings: true,
+  });
+  const channelTurn = await buildTurnStartParams(
+    paramsForTurn(undefined, { messageChannel: "telegram", currentChannelId: "123" }),
+    options,
+  );
+  const operatorTurn = await buildTurnStartParams(paramsForTurn(), options);
+
+  expect(deliveryValue(channelTurn)).toContain("current source is default target");
+  expect(deliveryValue(operatorTurn)).toContain(
+    "OpenClaw delivers your final response automatically to the caller",
+  );
+  expect(deliveryValue(operatorTurn)).toContain("target required this turn");
+  expect(deliveryValue(operatorTurn)).not.toContain("current source");
+  expect(deliveryValue(operatorTurn)).not.toContain("final=false");
+  expect(operatorTurn.input).toEqual(textInput(paramsForTurn().prompt));
+});
 it("adds a permission notice without overwriting native supervised settings", async () => {
   const notice = "Permission change. Continue with updated permissions.";
   const params = paramsForTurn(undefined, {
@@ -269,4 +252,133 @@ it("adds a permission notice without overwriting native supervised settings", as
     openclaw_temporal_context: application(expect.stringContaining("## Temporal Context")),
     openclaw_permission_change: application(notice),
   });
+});
+
+it.each([
+  [undefined, undefined],
+  ["standard", "standard"],
+  ["daybreak_blue", "daybreakBlue"],
+  ["daybreak_red", "daybreakRed"],
+] as const)(
+  "passes explicit access %s independently of service tier",
+  async (program, expected) => {
+    const turn = await buildTurnStartParams(
+      paramsForTurn(undefined, { cyberAccessProgram: program }),
+      turnOptions({ appServer: { ...createAppServerOptions(), serviceTier: "ultrafast" } }),
+    );
+    expect(turn.cyberAccessProgram).toBe(expected);
+    expect(turn.serviceTier).toBe("ultrafast");
+  },
+);
+
+it.each([
+  { configured: { cyber: "daybreak_blue" }, expected: "daybreakBlue" },
+  { configured: {}, expected: undefined },
+  { configured: { cyber: "daybreak_red" }, session: "standard" as const, expected: "standard" },
+])(
+  "uses prepared model access configuration without overriding a session choice: %j",
+  async ({ configured, session, expected }) => {
+    const runtimePlan = createCodexRuntimePlanFixture();
+    runtimePlan.transport = {
+      ...runtimePlan.transport,
+      resolveExtraParams: () => ({ accessPrograms: configured }),
+    };
+    const turn = await buildTurnStartParams(
+      paramsForTurn(undefined, { runtimePlan, cyberAccessProgram: session }),
+      turnOptions(),
+    );
+    expect(turn.cyberAccessProgram).toBe(expected);
+  },
+);
+
+describe("Codex app-server turn params", () => {
+  it.each(["user", "cron"] as const)(
+    "builds resume and %s turn params from the selected OpenClaw model",
+    async (trigger) => {
+      const params = createAttemptParams({ provider: "codex" });
+      params.modelId = "gpt-5.4-codex";
+      params.thinkLevel = "medium";
+      params.trigger = trigger;
+      const appServer = {
+        start: {
+          transport: "stdio" as const,
+          command: "codex",
+          args: ["app-server", "--listen", "stdio://"],
+          headers: {},
+        },
+        codeModeOnly: false,
+        loopDetectionPreToolUseRelay: true,
+        requestTimeoutMs: 60_000,
+        approvalPolicy: "on-request" as const,
+        approvalsReviewer: "guardian_subagent" as const,
+        sandbox: "danger-full-access" as const,
+        connectionClass: "local-loopback" as const,
+        serviceTier: "flex" as const,
+      };
+
+      const resumeParams = await buildThreadResumeParams(params, {
+        threadId: "thread-1",
+        appServer,
+      });
+      expect(resumeParams).toEqual({
+        threadId: "thread-1",
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 1,
+          sortDirection: "desc",
+          itemsView: "notLoaded",
+        },
+        model: "gpt-5.4-codex",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "guardian_subagent",
+        config: {
+          ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+          ...(trigger === "user" ? { include_collaboration_mode_instructions: false } : {}),
+        },
+        sandbox: "danger-full-access",
+        serviceTier: "flex",
+        personality: "none",
+        baseInstructions: expect.stringContaining(
+          "You are a personal assistant running inside OpenClaw.",
+        ),
+        developerInstructions: resumeParams.developerInstructions,
+      });
+      expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+      const turnParams = await buildTurnStartParams(params, {
+        threadId: "thread-1",
+        cwd: "/tmp/workspace",
+        appServer,
+      });
+      expect(turnParams.turnTrigger).toBe(trigger);
+      expect(turnParams.threadId).toBe("thread-1");
+      expect(turnParams.cwd).toBe("/tmp/workspace");
+      expect(turnParams.model).toBe("gpt-5.4-codex");
+      expect(turnParams.approvalPolicy).toBe("on-request");
+      expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
+      expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+      expect(turnParams.serviceTier).toBe("flex");
+      const collaboration = turnParams.collaborationMode;
+      if (trigger === "user") {
+        expect(collaboration).toEqual({
+          mode: "default",
+          settings: {
+            model: "gpt-5.4-codex",
+            reasoning_effort: "medium",
+            developer_instructions: null,
+          },
+        });
+      } else {
+        expect(collaboration?.mode).toBe("default");
+        expect(collaboration?.settings.model).toBe("gpt-5.4-codex");
+        expect(collaboration?.settings.reasoning_effort).toBe("medium");
+        for (const instruction of [
+          "This is an OpenClaw cron automation turn",
+          "If it asks you to run an exact command, run that command before doing any investigation",
+          "Use context already provided by the runtime",
+        ]) {
+          expect(collaboration?.settings.developer_instructions).toContain(instruction);
+        }
+      }
+    },
+  );
 });

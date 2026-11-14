@@ -1,4 +1,3 @@
-// Plugins authoring command tests cover plugin authoring command output and file generation.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -11,6 +10,7 @@ import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plug
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   loadToolPlugin,
   runPluginsBuildCommand,
@@ -25,6 +25,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const readText = (root: string, file: string) => fs.readFileSync(path.join(root, file), "utf8");
+const readJson = (root: string, file: string) => JSON.parse(readText(root, file));
+const writeJsonFile = (file: string, value: unknown) =>
+  fs.writeFileSync(file, JSON.stringify(value, null, 2));
 
 function createDemoMetadata(optional = false) {
   const entry = defineToolPlugin({
@@ -55,18 +59,11 @@ function sourceProject(
 ) {
   const sourceDir = path.join(root, "src");
   fs.mkdirSync(sourceDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify(
-      {
-        name: `openclaw-plugin-${id}`,
-        type: "module",
-        openclaw: { extensions: ["./src/index.ts"] },
-      },
-      null,
-      2,
-    ),
-  );
+  writeJsonFile(path.join(root, "package.json"), {
+    name: `openclaw-plugin-${id}`,
+    type: "module",
+    openclaw: { extensions: ["./src/index.ts"] },
+  });
   const entryPath = path.join(sourceDir, "index.ts");
   fs.writeFileSync(
     entryPath,
@@ -113,6 +110,10 @@ describe("plugin authoring commands", () => {
 
   it("preserves manifest-owned metadata while updating generated fields", () => {
     const metadata = createDemoMetadata(true);
+    const signals = {
+      authSignals: [{ provider: "demo", envVars: ["DEMO_API_KEY"] }],
+      configSignals: [{ rootPath: "plugins.entries.optional-demo-tools.config.apiKey" }],
+    };
     const existingManifest = {
       id: "old-id",
       name: "Old name",
@@ -122,13 +123,8 @@ describe("plugin authoring commands", () => {
         agentToolResultMiddleware: ["existing-middleware"],
       },
       toolMetadata: {
-        demo_optional_echo: {
-          authSignals: [{ provider: "demo", envVars: ["DEMO_API_KEY"] }],
-          configSignals: [{ rootPath: "plugins.entries.optional-demo-tools.config.apiKey" }],
-        },
-        stale_tool: {
-          optional: true,
-        },
+        demo_optional_echo: structuredClone(signals),
+        stale_tool: { optional: true },
       },
     };
 
@@ -147,11 +143,7 @@ describe("plugin authoring commands", () => {
         agentToolResultMiddleware: ["existing-middleware"],
       },
       toolMetadata: {
-        demo_optional_echo: {
-          optional: true,
-          authSignals: [{ provider: "demo", envVars: ["DEMO_API_KEY"] }],
-          configSignals: [{ rootPath: "plugins.entries.optional-demo-tools.config.apiKey" }],
-        },
+        demo_optional_echo: { optional: true, ...signals },
       },
     });
     expect((manifest.toolMetadata as Record<string, unknown>).stale_tool).toBeUndefined();
@@ -165,24 +157,6 @@ describe("plugin authoring commands", () => {
     ).toEqual([]);
   });
 
-  it("aligns package metadata with the selected runtime extension entry", () => {
-    expect(
-      buildToolPluginPackageManifest({
-        packageManifest: {
-          name: "demo",
-          openclaw: { setupEntry: "./setup.ts", extensions: ["./src/other.ts"] },
-        },
-        entry: "./src/index.ts",
-      }),
-    ).toEqual({
-      name: "demo",
-      openclaw: {
-        setupEntry: "./setup.ts",
-        extensions: ["./src/other.ts", "./src/index.ts"],
-      },
-    });
-  });
-
   it("builds and installs selected entries without changing sibling runtime pairs", async () => {
     const { root: tmpDir, entry: sourceEntry } = sourceProject("entry-pairs");
     const packagePath = path.join(tmpDir, "package.json");
@@ -191,17 +165,18 @@ describe("plugin authoring commands", () => {
       fs.mkdirSync(path.dirname(path.join(tmpDir, entry)), { recursive: true });
       fs.writeFileSync(path.join(tmpDir, entry), fs.readFileSync(sourceEntry));
     }
-    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const packageManifest = readJson(tmpDir, "package.json");
     packageManifest.openclaw = {
+      setupEntry: runtimeEntries[0],
       extensions: ["./src/a/index.ts", "./src/b/index.ts"],
       runtimeExtensions: runtimeEntries,
     };
-    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    writeFixtureJsonSync(packagePath, packageManifest);
     const { installPluginFromPath } = await import("../plugins/install-package.js");
 
     await runPluginsBuildCommand({ root: tmpDir, entry: runtimeEntries[0] });
 
-    const generated = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const generated = readJson(tmpDir, "package.json");
     const installed = await installPluginFromPath({
       path: tmpDir,
       extensionsDir: tempDirs.make("openclaw-plugin-entry-install-"),
@@ -209,15 +184,15 @@ describe("plugin authoring commands", () => {
     expect(installed.ok, installed.ok ? undefined : installed.error).toBe(true);
     expect(installed).toMatchObject({ pluginId: "entry-pairs" });
     expect(generated.openclaw).toEqual({
+      setupEntry: runtimeEntries[0],
       extensions: ["./dist/a/index.js", "./src/b/index.ts"],
       runtimeExtensions: runtimeEntries,
     });
+    expect(generated.name).toBe(packageManifest.name);
     if (!installed.ok) {
       throw new Error(installed.error);
     }
-    expect(
-      JSON.parse(fs.readFileSync(path.join(installed.targetDir, "package.json"), "utf8")),
-    ).toEqual(generated);
+    expect(readJson(installed.targetDir, "package.json")).toEqual(generated);
   });
 
   it.each<{
@@ -226,6 +201,11 @@ describe("plugin authoring commands", () => {
     expected: string[];
     runtimeExtensions?: string[];
   }>([
+    {
+      extensions: ["./src/other.ts"],
+      entry: "./src/index.ts",
+      expected: ["./src/other.ts", "./src/index.ts"],
+    },
     {
       extensions: ["./dist/a/index.js", "./dist/b/index.js"],
       entry: "./src/a/index.ts",
@@ -287,9 +267,9 @@ describe("plugin authoring commands", () => {
   it("reports and retires a preceding host browser declaration through explicit authoring", async () => {
     const { root: rootDir, entry: entryPath } = sourceProject("browser-authoring");
     const packagePath = path.join(rootDir, "package.json");
-    const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const packageJson = readJson(rootDir, "package.json");
     packageJson.openclaw.controlUi = "./browser.ts";
-    fs.writeFileSync(packagePath, JSON.stringify(packageJson));
+    writeFixtureJsonSync(packagePath, packageJson);
     fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "current";');
     fs.mkdirSync(path.join(rootDir, "node_modules"));
     fs.symlinkSync(
@@ -297,24 +277,18 @@ describe("plugin authoring commands", () => {
       path.join(rootDir, "node_modules/esbuild"),
       "dir",
     );
-    fs.writeFileSync(
-      path.join(rootDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        channels: ["custom"],
-        controlUi: {
-          entry: "dist/control-ui/authored/index.js",
-          activation: "settings-only",
-          settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
-        },
-      }),
-    );
+    writeJsonFile(path.join(rootDir, "openclaw.plugin.json"), {
+      channels: ["custom"],
+      controlUi: {
+        entry: "dist/control-ui/authored/index.js",
+        activation: "settings-only",
+        settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+      },
+    });
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true });
     const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
-    fs.writeFileSync(
-      generatedPath,
-      JSON.stringify({ controlUi: { entry: "dist/control-ui/stale/index.js" } }),
-    );
+    writeFixtureJsonSync(generatedPath, { controlUi: { entry: "dist/control-ui/stale/index.js" } });
     interceptExit();
     silenceRuntime("error");
     await expect(
@@ -378,30 +352,37 @@ describe("plugin authoring commands", () => {
     expect(exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
   });
 
-  it.each(["validate", "build --check"] as const)(
-    "accepts reordered JSON object keys without rewriting files in %s",
-    async (command) => {
+  it.each([
+    ["validate", "JSON"],
+    ["build --check", "JSON"],
+    ["validate", "JSON5"],
+    ["build --check", "JSON5"],
+    ["build", "JSON5"],
+  ] as const)(
+    "%s accepts reordered %s metadata and preserves authored fields",
+    async (command, format) => {
       const { root: tmpDir, entry: entryPath } = sourceProject("reordered-json");
       await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
 
       const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+      const manifest = readJson(tmpDir, "openclaw.plugin.json") as Record<string, unknown>;
       const configSchema = manifest.configSchema as Record<string, unknown>;
-      fs.writeFileSync(
-        manifestPath,
-        JSON.stringify(
-          {
-            ...manifest,
-            configSchema: {
-              properties: configSchema.properties,
-              additionalProperties: configSchema.additionalProperties,
-              type: configSchema.type,
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      writeJsonFile(manifestPath, {
+        ...manifest,
+        uiHints: { token: { label: "Authored label" } },
+        configSchema: {
+          properties: configSchema.properties,
+          additionalProperties: configSchema.additionalProperties,
+          type: configSchema.type,
+        },
+      });
+      if (format === "JSON5") {
+        const authored = readText(tmpDir, "openclaw.plugin.json")
+          .replace("{", "{ // Authored native manifest\n")
+          .replace('"id":', "id:")
+          .replace(/\n\}$/, ",\n}");
+        fs.writeFileSync(manifestPath, authored);
+      }
       const packagePath = path.join(tmpDir, "package.json");
       const manifestBefore = fs.readFileSync(manifestPath, "utf8");
       const packageBefore = fs.readFileSync(packagePath, "utf8");
@@ -412,12 +393,24 @@ describe("plugin authoring commands", () => {
         await runPluginsValidateCommand({ root: tmpDir, entry: entryPath });
         expect(log).toHaveBeenCalledWith("Plugin reordered-json is valid.");
       } else {
-        await runPluginsBuildCommand({ root: tmpDir, entry: entryPath, check: true });
-        expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+        await runPluginsBuildCommand({
+          root: tmpDir,
+          entry: entryPath,
+          check: command !== "build",
+        });
+        if (command === "build --check") {
+          expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+        }
       }
       expect(exit).not.toHaveBeenCalled();
       expect(error).not.toHaveBeenCalled();
-      expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+      if (command === "build") {
+        expect(readJson(tmpDir, "openclaw.plugin.json").uiHints).toEqual({
+          token: { label: "Authored label" },
+        });
+      } else {
+        expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+      }
       expect(fs.readFileSync(packagePath, "utf8")).toBe(packageBefore);
     },
   );
@@ -503,38 +496,45 @@ describe("plugin authoring commands", () => {
   });
 
   it("reports missing entries with an author-facing path", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-missing-"));
+    const tmpDir = tempDirs.make("openclaw-plugin-missing-");
 
     await expect(
       loadToolPlugin({ rootDir: tmpDir, entryPath: path.join(tmpDir, "dist/index.js") }),
-    ).rejects.toThrow("plugin entry not found: ./dist/index.js");
+    ).rejects.toMatchObject({ humanOutput: "plugin entry not found: ./dist/index.js" });
   });
 
-  it("throws a user-friendly error when package.json is malformed JSON", async () => {
-    const { root: tmpDir, entry: entryPath } = sourceProject("bad-json");
-    const packagePath = path.join(tmpDir, "package.json");
-    fs.writeFileSync(packagePath, "{invalid json");
+  it.each(["{invalid json", "{ // package.json must remain strict JSON\n}"])(
+    "rejects non-JSON package metadata without rewriting it: %s",
+    async (raw) => {
+      const { root: tmpDir, entry: entryPath } = sourceProject("bad-json");
+      const packagePath = path.join(tmpDir, "package.json");
+      fs.writeFileSync(packagePath, raw);
 
-    await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
-      `Malformed JSON in ${packagePath}`,
-    );
-  });
+      await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+        `Malformed JSON in ${packagePath}`,
+      );
+      await expect(runPluginsValidateCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+        `Malformed JSON in ${packagePath}`,
+      );
+      expect(fs.readFileSync(packagePath, "utf8")).toBe(raw);
+    },
+  );
 
   it("finishes a build from an absolute root after the launch directory is removed", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-build-"));
+    const tmpDir = tempDirs.make("openclaw-plugin-deleted-cwd-build-");
     const packagePath = path.join(tmpDir, "package.json");
     const { entry: entryPath } = sourceProject("deleted-cwd-build", tmpDir, "deleted_cwd_echo");
     const originalCwd = process.cwd();
     let cwdRemoved = false;
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+    vi.spyOn(process, "cwd").mockImplementation(() => {
       if (cwdRemoved) {
         throw new Error("ENOENT: no such file or directory, uv_cwd");
       }
       return originalCwd;
     });
     const realOpen = fsp.open.bind(fsp);
-    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+    vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
       const handle = await realOpen(file, flags, mode);
       if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
         cwdRemoved = true;
@@ -542,19 +542,11 @@ describe("plugin authoring commands", () => {
       return handle;
     });
 
-    try {
-      await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
-
-      expect(fs.existsSync(path.join(tmpDir, "openclaw.plugin.json"))).toBe(true);
-      expect(log).toHaveBeenCalledWith(`Wrote ${path.join(tmpDir, "openclaw.plugin.json")}`);
-      expect(log).toHaveBeenCalledWith(`Updated ${packagePath}`);
-      expect(cwdRemoved).toBe(true);
-    } finally {
-      openSpy.mockRestore();
-      cwd.mockRestore();
-      log.mockRestore();
-      fs.rmSync(tmpDir, { force: true, recursive: true });
-    }
+    await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+    expect(fs.existsSync(path.join(tmpDir, "openclaw.plugin.json"))).toBe(true);
+    expect(log).toHaveBeenCalledWith(`Wrote ${path.join(tmpDir, "openclaw.plugin.json")}`);
+    expect(log).toHaveBeenCalledWith(`Updated ${packagePath}`);
+    expect(cwdRemoved).toBe(true);
   });
 
   it("builds and checks metadata through a symlink project root", async () => {
@@ -575,14 +567,10 @@ describe("plugin authoring commands", () => {
 
     try {
       await runPluginsBuildCommand(opts);
-      expect(
-        JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8")),
-      ).toMatchObject({
+      expect(readJson(projectDir, "package.json")).toMatchObject({
         openclaw: { extensions: ["./src/index.ts"] },
       });
-      expect(
-        JSON.parse(fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8")),
-      ).toMatchObject({
+      expect(readJson(projectDir, "openclaw.plugin.json")).toMatchObject({
         id: "symlink-root",
         contracts: { tools: ["symlink_root_echo"] },
       });
@@ -652,9 +640,9 @@ describe("plugin authoring commands", () => {
     const { root: tmpDir, entry: entryPath } = sourceProject("manifest-failure");
     const packagePath = path.join(tmpDir, "package.json");
     const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
-    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const packageManifest = readJson(tmpDir, "package.json");
     packageManifest.openclaw.extensions = [];
-    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    writeFixtureJsonSync(packagePath, packageManifest);
     const packageBefore = fs.readFileSync(packagePath);
     const manifestBefore = '{\n  "id": "previous"\n}\n';
     fs.writeFileSync(manifestPath, manifestBefore);
@@ -680,7 +668,7 @@ describe("plugin authoring commands", () => {
     expect(packagePublications).toBe(1);
     expect(manifestFailureInjected).toBe(true);
     expect(fs.readFileSync(packagePath)).not.toEqual(packageBefore);
-    expect(JSON.parse(fs.readFileSync(packagePath, "utf8"))).toMatchObject({
+    expect(readJson(tmpDir, "package.json")).toMatchObject({
       openclaw: { extensions: ["./src/index.ts"] },
     });
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
@@ -692,49 +680,46 @@ describe("plugin authoring commands", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it("rejects an invalid feature id without blocking a corrected retry", async () => {
+    const projectDir = path.join(tempDirs.make("openclaw-feature-invalid-id-"), "project");
+    const opts = { directory: projectDir, type: "feature" };
+    await expect(runPluginsInitCommand("Invalid_ID", opts)).rejects.toThrow("Feature plugin ids");
+    expect(fs.existsSync(projectDir)).toBe(false);
+    await runPluginsInitCommand("valid-feature", opts);
+    expect(readJson(projectDir, "openclaw.plugin.json").id).toBe("valid-feature");
+  });
+
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-init-"));
+    const tmpDir = tempDirs.make("openclaw-plugin-deleted-cwd-init-");
     const projectDir = path.join(tmpDir, "demo");
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+    vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("ENOENT: no such file or directory, uv_cwd");
     });
 
-    try {
-      await runPluginsInitCommand("demo", { directory: projectDir });
-
-      expect(fs.existsSync(path.join(projectDir, "package.json"))).toBe(true);
-      expect(log).toHaveBeenCalledWith(`Created ${projectDir}`);
-    } finally {
-      cwd.mockRestore();
-      log.mockRestore();
-      fs.rmSync(tmpDir, { force: true, recursive: true });
-    }
+    await runPluginsInitCommand("@acme/demo", { directory: projectDir });
+    expect(readJson(projectDir, "package.json").name).toBe("@acme/openclaw-plugin-demo");
+    expect(log).toHaveBeenCalledWith(`Created ${projectDir}`);
   });
 
   it("scaffolds a provider plugin project with ClawHub validation and release metadata", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-init-"));
-    const projectDir = path.join(tmpDir, "plugin-init-test");
+    const projectDir = path.join(tempDirs.make("openclaw-provider-init-"), "plugin-init-test");
 
-    await runPluginsInitCommand("plugin-init-test", {
+    await runPluginsInitCommand("@acme/plugin-init-test", {
       directory: projectDir,
       name: "Plugin Init Test",
       type: "provider",
     });
 
-    const packageManifest = JSON.parse(
-      fs.readFileSync(path.join(projectDir, "package.json"), "utf8"),
-    );
+    const packageManifest = readJson(projectDir, "package.json");
     expect(packageManifest).toMatchObject({
-      name: "openclaw-plugin-plugin-init-test",
+      name: "@acme/openclaw-plugin-plugin-init-test",
       scripts: {
         build: "tsc -p tsconfig.json",
         test: "vitest run --config ./vitest.config.ts",
         validate: "npm run build && clawhub package validate . --out .clawhub-validation",
       },
-      peerDependencies: {
-        openclaw: `>=${VERSION}`,
-      },
+      peerDependencies: { openclaw: `>=${VERSION}` },
       devDependencies: {
         clawhub: "latest",
         openclaw: "latest",
@@ -744,39 +729,26 @@ describe("plugin authoring commands", () => {
       openclaw: {
         extensions: ["./dist/index.js"],
         install: {
-          clawhubSpec: "clawhub:openclaw-plugin-plugin-init-test",
+          clawhubSpec: "clawhub:@acme/openclaw-plugin-plugin-init-test",
           defaultChoice: "clawhub",
           minHostVersion: `>=${VERSION}`,
         },
-        compat: {
-          pluginApi: `>=${VERSION}`,
-        },
-        build: {
-          openclawVersion: VERSION,
-        },
-        release: {
-          publishToClawHub: true,
-        },
+        compat: { pluginApi: `>=${VERSION}` },
+        build: { openclawVersion: VERSION },
+        release: { publishToClawHub: true },
       },
     });
     expect(packageManifest.scripts).not.toHaveProperty("plugin:build");
     expect(packageManifest.scripts).not.toHaveProperty("plugin:validate");
 
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8"),
-    );
+    const manifest = readJson(projectDir, "openclaw.plugin.json");
     expect(manifest).toMatchObject({
-      id: "plugin-init-test",
+      id: "@acme/plugin-init-test",
       name: "Plugin Init Test",
       version: "0.1.0",
-      providers: ["plugin-init-test"],
+      providers: ["@acme/plugin-init-test"],
       setup: {
-        providers: [
-          {
-            id: "plugin-init-test",
-            envVars: ["PLUGIN_INIT_TEST_API_KEY"],
-          },
-        ],
+        providers: [{ id: "@acme/plugin-init-test", envVars: ["ACME_PLUGIN_INIT_TEST_API_KEY"] }],
       },
       configSchema: {
         type: "object",
@@ -785,29 +757,22 @@ describe("plugin authoring commands", () => {
       },
     });
 
-    const indexSource = fs.readFileSync(path.join(projectDir, "src/index.ts"), "utf8");
+    const indexSource = readText(projectDir, "src/index.ts");
     expect(indexSource).toContain("definePluginEntry");
     expect(indexSource).toContain("api.registerProvider");
     for (const [, subpath] of indexSource.matchAll(/from "openclaw\/plugin-sdk\/([^"]+)"/g)) {
       expect(publicPluginSdkSubpaths).toContain(subpath);
     }
 
-    expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(
-      "OpenClawPluginApi",
-    );
-    expect(fs.readFileSync(path.join(projectDir, "vitest.config.ts"), "utf8")).toContain(
-      'include: ["src/**/*.test.ts"]',
-    );
-    const readme = fs.readFileSync(path.join(projectDir, "README.md"), "utf8");
+    expect(readText(projectDir, "src/index.test.ts")).toContain("OpenClawPluginApi");
+    expect(readText(projectDir, "vitest.config.ts")).toContain('include: ["src/**/*.test.ts"]');
+    const readme = readText(projectDir, "README.md");
     expect(readme).toContain("npm run validate");
     expect(readme).toContain("npm exec clawhub -- login");
     expect(readme).toContain("npm exec clawhub -- package publish .");
     expect(readme).toContain("npm exec clawhub -- package trusted-publisher set");
 
-    const workflow = fs.readFileSync(
-      path.join(projectDir, ".github/workflows/clawhub-publish.yml"),
-      "utf8",
-    );
+    const workflow = readText(projectDir, ".github/workflows/clawhub-publish.yml");
     expect(workflow).not.toContain("release:");
     expect(workflow).not.toContain("secrets: inherit");
     expect(workflow).toContain("workflow_dispatch:");

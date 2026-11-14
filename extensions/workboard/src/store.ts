@@ -5,6 +5,7 @@ import type {
   WorkboardDiagnostic,
   WorkboardExecution,
   WorkboardExecutionStatus,
+  WorkboardObservationOutcome,
   WorkboardLaunchState,
   WorkboardMetadata,
   WorkboardStaleState,
@@ -29,6 +30,7 @@ import {
   shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
 import { isWorkboardClaimReclaimable, secondsToDurationMs } from "./store-constants.js";
+import { appendEvidence, buildLifecycleObservation } from "./store-evidence.js";
 import type {
   WorkboardBulkInput,
   WorkboardDiagnosticsResult,
@@ -40,6 +42,7 @@ import type {
 import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 import { readCards } from "./store-read.js";
+import { finishRun } from "./store-status-write.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 export { WorkboardCardConflictError } from "./store-core.js";
@@ -155,28 +158,6 @@ function executionAssociationPatch(
   };
 }
 
-function lifecycleExecution(params: {
-  card: WorkboardCard;
-  association: WorkboardLifecycleAssociation;
-  status?: WorkboardExecutionStatus;
-  now: number;
-}): WorkboardExecution {
-  const existing = params.card.execution;
-  const runId = params.association.runId ?? existing?.runId;
-  return {
-    id: existing?.id ?? `${params.card.id}:agent-session`,
-    kind: "agent-session",
-    mode: existing?.mode ?? "autonomous",
-    status: params.status ?? existing?.status ?? "running",
-    ...(existing?.engine ? { engine: existing.engine } : {}),
-    ...(existing?.model ? { model: existing.model } : {}),
-    sessionKey: params.association.sessionKey,
-    ...(runId ? { runId } : {}),
-    startedAt: existing?.startedAt ?? params.card.startedAt ?? params.card.updatedAt,
-    updatedAt: params.now,
-  };
-}
-
 // Capability layers share persistence handles and the runtime's mutation ordering.
 export class WorkboardStore extends WorkboardNotificationStore {
   async prepareExecutionLaunch(
@@ -288,6 +269,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
       stale: WorkboardStaleState | undefined;
       now: number;
       association?: WorkboardLifecycleAssociation;
+      /** Terminal run outcome the session lifecycle reported; recorded as an observation. */
+      observedOutcome?: WorkboardObservationOutcome;
     },
   ): Promise<boolean> {
     return await this.enqueueMutation(async () => {
@@ -333,6 +316,23 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (!associationIsCurrent) {
           return undefined;
         }
+        const observation =
+          // Reports without a run ID cannot be tied to one run, so they record nothing.
+          input.observedOutcome && input.association?.runId
+            ? buildLifecycleObservation(
+                card,
+                {
+                  outcome: input.observedOutcome,
+                  sessionKey: input.association.sessionKey,
+                  runId: input.association.runId,
+                  observedAt: input.sourceUpdatedAt ?? input.now,
+                },
+                input.now,
+              )
+            : undefined;
+        if (observation) {
+          patch.ownedEvidence = appendEvidence(card.metadata?.automation?.evidence, [observation]);
+        }
         if (
           input.sourceUpdatedAt !== undefined &&
           shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
@@ -355,14 +355,23 @@ export class WorkboardStore extends WorkboardNotificationStore {
               card.execution.status !== input.executionStatus) ||
             Boolean(acceptedLaunch));
         if (input.association && associationNeedsUpdate) {
+          const existing = card.execution;
+          const runId = input.association.runId ?? existing?.runId;
+          const execution: WorkboardExecution = {
+            id: existing?.id ?? `${card.id}:agent-session`,
+            kind: "agent-session",
+            mode: existing?.mode ?? "autonomous",
+            status: input.executionStatus ?? existing?.status ?? "running",
+            ...(existing?.engine ? { engine: existing.engine } : {}),
+            ...(existing?.model ? { model: existing.model } : {}),
+            sessionKey: input.association.sessionKey,
+            ...(runId ? { runId } : {}),
+            startedAt: existing?.startedAt ?? card.startedAt ?? card.updatedAt,
+            updatedAt: input.now,
+          };
           const associationPatch = executionAssociationPatch(card, {
             ...input.association,
-            execution: lifecycleExecution({
-              card,
-              association: input.association,
-              status: input.executionStatus,
-              now: input.now,
-            }),
+            execution,
             ...(acceptedLaunch ? { launch: acceptedLaunch } : {}),
           });
           if (associationPatch) {
@@ -470,7 +479,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             const reason = timedOut
               ? "Run exceeded the card max runtime."
               : "Claim expired without a recent heartbeat.";
-            const finished = this.finishRun(latest, "blocked", now, reason);
+            const finished = finishRun(latest, "blocked", now, reason);
             latest = await this.updateCard(latest, {
               ...finished,
               metadata: {
@@ -641,8 +650,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return { card, workerContext: buildWorkerContext(card, relatedCards) };
   }
 
-  static openSqlite(workerModuleUrl: URL) {
-    const stores = createWorkboardSqliteStores({ workerModuleUrl });
+  static openSqlite(workerModuleUrl: URL, options?: { lazy?: boolean }) {
+    const stores = createWorkboardSqliteStores({ ...options, workerModuleUrl });
     return new WorkboardStore(stores.cards, stores);
   }
 }

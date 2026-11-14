@@ -3,14 +3,12 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import {
-  selectStoredGitHubIdentities,
-  selectUserProfileGitHubIdentities,
-} from "./user-profile-github-identity.js";
+import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   userProfileDisplaySelection,
   userProfilesDb,
   toUserProfile,
+  isUserProfileEmailAddress,
 } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileNotFoundError } from "./user-profiles-schema.js";
 
@@ -26,10 +24,7 @@ export function getUserProfileListItem(
   return profiles.find((candidate) => candidate.id === profile.mergedInto) ?? profile;
 }
 
-export function readUserProfileSnapshotSync(
-  options: OpenClawStateDatabaseOptions = {},
-  githubAccountIds?: readonly number[],
-) {
+export function readUserProfileSnapshotSync(options: OpenClawStateDatabaseOptions = {}) {
   ensureUserProfilesSchema(options);
   const database = openOpenClawStateDatabase(options);
   return runSqliteDeferredTransactionSync(
@@ -63,20 +58,11 @@ export function readUserProfileSnapshotSync(
       return {
         profiles: profiles.map((profile) =>
           Object.assign(toUserProfile(profile), {
-            emails: emailsByProfile.get(profile.id) ?? [],
+            emails: (emailsByProfile.get(profile.id) ?? []).filter(isUserProfileEmailAddress),
             githubIdentity: githubIdentities.get(profile.id) ?? null,
             hasAvatar: profile.has_avatar === 1,
           }),
         ),
-        ...(githubAccountIds
-          ? {
-              githubProfiles: [
-                ...selectStoredGitHubIdentities(database.db, undefined, githubAccountIds),
-              ].flatMap(([profileId, { accounts }]) =>
-                accounts.map(({ accountId }) => ({ accountId, profileId })),
-              ),
-            }
-          : {}),
       };
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },

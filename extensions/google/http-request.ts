@@ -9,11 +9,7 @@ import {
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./provider-policy.js";
 
-type GoogleGenerativeAiRequestOverrides = ProviderRequestTransportOverrides & {
-  allowPrivateNetwork?: boolean;
-};
-
-function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
+export function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
   const normalized = normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? DEFAULT_GOOGLE_API_BASE_URL;
   const url = URL.parse(normalized);
   if (!url) {
@@ -35,9 +31,11 @@ function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
 export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   apiKey: string;
   baseUrl?: string;
-  headers?: Record<string, string>;
-  request?: GoogleGenerativeAiRequestOverrides;
-  capability: "image" | "audio" | "video";
+  headers?: Parameters<typeof resolveProviderHttpRequestConfig>[0]["headers"];
+  request?: ProviderRequestTransportOverrides & {
+    allowPrivateNetwork?: boolean;
+  };
+  capability: "image" | "audio" | "video" | "other";
   transport: "http" | "media-understanding";
 }) {
   const baseUrl = resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl);

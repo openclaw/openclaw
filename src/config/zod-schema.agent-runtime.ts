@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   resolveExactExecModeFromPolicy,
   type ExecAsk,
@@ -39,70 +38,6 @@ import { sensitive } from "./zod-schema.sensitive.js";
 const AgentTtsConfigSchema = TtsConfigSchema.unwrap()
   .extend({ prefsPath: z.string().optional() })
   .strict()
-  .optional();
-
-export const HeartbeatSchema = z
-  .strictObject({
-    every: z.string().optional(),
-    activeHours: z
-      .strictObject({
-        start: z.string().optional(),
-        end: z.string().optional(),
-        timezone: z.string().optional(),
-      })
-      .optional(),
-    model: z.string().optional(),
-    session: z.string().optional(),
-    target: z.string().optional(),
-    directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
-    to: z.string().optional(),
-    accountId: z.string().optional(),
-    prompt: z.string().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    lightContext: z.boolean().optional(),
-    isolatedSession: z.boolean().optional(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.every) {
-      try {
-        parseDurationMs(val.every, { defaultUnit: "m" });
-      } catch {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["every"],
-          message: "invalid duration (use ms, s, m, h)",
-        });
-      }
-    }
-
-    const active = val.activeHours;
-    if (!active) {
-      return;
-    }
-    const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
-    for (const path of ["start", "end"] as const) {
-      const raw = active[path];
-      if (!raw) {
-        continue;
-      }
-      const match = timePattern.exec(raw);
-      let message: string | undefined;
-      if (!match) {
-        message = 'invalid time (use "HH:MM" 24h format)';
-      } else if (match[1] === "24" && match[2] !== "00") {
-        message = "invalid time (24:00 is the only allowed 24:xx value)";
-      } else if (match[1] === "24" && path === "start") {
-        message = "invalid time (start cannot be 24:00)";
-      }
-      if (message) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message,
-        });
-      }
-    }
-  })
   .optional();
 
 export const AgentContextLimitsSchema = z
@@ -285,8 +220,12 @@ function createAllowAlsoAllowConflictValidator(message: string) {
   };
 }
 
+const ExecModeSchema = z.enum(["deny", "allowlist", "ask", "auto", "full"]);
+
 const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
   profile: ToolProfileSchema,
+  /** Exec ceiling for turns on this provider/model; it can tighten, never loosen. */
+  exec: z.strictObject({ mode: ExecModeSchema.optional() }).optional(),
 }).superRefine(
   createAllowAlsoAllowConflictValidator(
     "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
@@ -304,7 +243,7 @@ const ToolExecApplyPatchSchema = z
     enabled: z.boolean().optional(),
     /**
      * Restrict apply_patch paths to the workspace directory.
-     * Default: true (safer; does not affect read/write/edit).
+     * Default: false on the host; explicit containment and required roots still apply.
      */
     workspaceOnly: z.boolean().optional(),
     /**
@@ -326,7 +265,7 @@ const ToolExecBaseShape = {
   /** Exec host routing (default: auto). */
   host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
-  mode: z.enum(["deny", "allowlist", "ask", "auto", "full"]).optional(),
+  mode: ExecModeSchema.optional(),
   /** Legacy exec security mode retained when no canonical mode can preserve policy. */
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   /** Legacy exec ask mode retained when no canonical mode can preserve policy. */
@@ -378,8 +317,8 @@ const ToolExecBaseShape = {
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit: z.boolean().optional(),
   /**
-   * Also emit success exit notifications when a backgrounded exec has no output.
-   * Default false to reduce context noise.
+   * Also wake the session when a backgrounded exec succeeds with no output.
+   * Default true, so every exit of a wake-armed command reports back.
    */
   notifyOnExitEmptySuccess: z.boolean().optional(),
   applyPatch: ToolExecApplyPatchSchema,
@@ -432,6 +371,15 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const ToolSearchSelectorSchema = z
+  .strictObject({
+    source: z.enum(["openclaw", "mcp", "client"]).optional(),
+    name: z.string().trim().min(1).optional(),
+  })
+  .refine((selector) => selector.source !== undefined || selector.name !== undefined, {
+    message: "Tool Search selectors must specify source, name, or both.",
+  });
+
 const ToolSearchSchema = z
   .union([
     z.boolean(),
@@ -440,6 +388,10 @@ const ToolSearchSchema = z
       enabled: z.boolean().optional(),
       /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
       mode: z.enum(["tools", "directory"]).optional(),
+      /** Presentation only: omitted includes all eligible tools; [] includes none. */
+      include: z.array(ToolSearchSelectorSchema).optional(),
+      /** Matching tools remain directly visible. Exclusion wins over inclusion. */
+      exclude: z.array(ToolSearchSelectorSchema).optional(),
       /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
       searchDefaultLimit: z.number().int().positive().optional(),
       /** Maximum search result count. Runtime clamps to 1..50. */
@@ -565,6 +517,13 @@ const ElevatedToolsSchema = z
   })
   .optional();
 
+const OpenClawToolConfigSchema = z
+  .strictObject({
+    /** Standing delegated administration grant; false requires exact human approval. */
+    autoApproveChanges: z.boolean().optional(),
+  })
+  .optional();
+
 const MessageToolConfigSchema = z
   .strictObject({
     crossContext: z
@@ -610,6 +569,7 @@ const AgentToolsSchema = z
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
+    openclaw: OpenClawToolConfigSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
     github: AgentGitHubToolIdentitySchema,
     /** Filesystem tool path guards. */
@@ -644,16 +604,38 @@ export const AgentEntrySchema = AgentEntryBaseSchema.extend({
   tts: AgentTtsConfigSchema,
   skillsLimits: AgentSkillsLimitsSchema,
   contextLimits: AgentContextLimitsSchema,
-  heartbeat: HeartbeatSchema,
   identity: IdentitySchema,
   groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
   sandbox: AgentSandboxSchema,
   tools: AgentToolsSchema,
 }).strict();
 
+const GatewayToolPolicyNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/^[a-zA-Z0-9_][a-zA-Z0-9_.:/-]*$/, "Use a concrete tool or action identity")
+  .refine((value) => !value.toLowerCase().startsWith("group:"), "Tool groups are not permitted");
+
+const GatewayToolPolicySchema = z.strictObject({
+  /** Required ceiling on model-visible Gateway tools. Empty means no tools. */
+  allow: z.array(GatewayToolPolicyNameSchema),
+  /** Action-bearing tools require an explicit list, including tools with a default action. */
+  actions: z.record(GatewayToolPolicyNameSchema, z.array(GatewayToolPolicyNameSchema)).optional(),
+  automations: z
+    .strictObject({
+      /** Model calls keep ordinary caller scope, even in administrator-started turns. */
+      scope: z.literal("caller").optional(),
+      /** Restricts model calls; direct human automation administration is unchanged. */
+      allowCommandJobs: z.boolean().optional(),
+    })
+    .optional(),
+});
+
 export const ToolsSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
+    gatewayPolicy: GatewayToolPolicySchema.optional(),
     web: ToolsWebSchema,
     /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */
     github: GitHubToolIdentitySchema,
@@ -700,6 +682,7 @@ export const ToolsSchema = z
     /** Elevated exec permissions for the host machine. */
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
+    openclaw: OpenClawToolConfigSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
     subagents: NestedToolPolicySchema,

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   alertCallArg,
   createTelegramDelivery,
@@ -14,6 +13,17 @@ const timeoutFailure = { status: "error", error: "timeout", provider: "anthropic
 const telegramRoute = { channel: "telegram", to: "19098680" };
 
 const { withFailureAlertCron } = setupFailureAlertSuite();
+
+it("passes an explicit failure thread to the delivery hook", () =>
+  withAlerts(async ({ addJob, runJob, sendCronFailureAlert }) => {
+    const job = await addJob("threaded failure", {
+      failureAlert: { ...telegramRoute, threadId: 42 },
+    });
+    await runJob(job, 1, timeoutFailure);
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ ...telegramRoute, threadId: 42 }),
+    );
+  }));
 type AlertParams = Parameters<typeof withFailureAlertCron>;
 type AlertContext = Parameters<AlertParams[1]>[0];
 type RunResult = NonNullable<AlertParams[0]["runResult"]>;
@@ -34,13 +44,9 @@ function skipped(
   };
 }
 
-function withAlerts(
-  run: (context: AlertCase) => Promise<void>,
-  options: Omit<AlertParams[0], "scheduler"> = {},
-) {
+function withAlerts(run: (context: AlertCase) => Promise<void>, options: AlertParams[0] = {}) {
   return withFailureAlertCron(
     {
-      scheduler: createTestGatewayScheduler(),
       failureAlert: { enabled: true, after: 1 },
       ...options,
     },
@@ -204,9 +210,9 @@ describe("CronService failure alerts", () => {
       },
     ));
 
-  it("keeps fallback events and immediate wakes on the failing job owner", () =>
+  it("keeps fallback session events on the failing job owner", () =>
     withAlerts(
-      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
+      async ({ cron, enqueueSessionEvent, requestHeartbeat, addJob }) => {
         const sessionKey = "agent:work:cron:failure-alert";
         const job = await addJob("work-owned failure", {
           delivery: undefined,
@@ -217,17 +223,16 @@ describe("CronService failure alerts", () => {
 
         await cron.run(job.id, "force");
 
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
+        expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
-          { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+          {
+            agentId: "work",
+            sessionKey,
+            contextKey: `cron:${job.id}:failure-alert`,
+            jobId: job.id,
+          },
         );
-        expect(requestHeartbeat).toHaveBeenCalledWith({
-          source: "notifications-event",
-          intent: "immediate",
-          reason: "wake",
-          agentId: "work",
-          sessionKey,
-        });
+        expect(requestHeartbeat).not.toHaveBeenCalled();
       },
       { useFallback: true },
     ));

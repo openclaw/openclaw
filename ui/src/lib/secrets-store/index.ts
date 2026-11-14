@@ -8,7 +8,10 @@ import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import { parseSecretStoreDotEnvText } from "../../../../src/secrets/store/dotenv.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSecretsStoreEnglish } from "../../i18n/locales/en-secrets-store.ts";
 import { formatUiError } from "../format-error.ts";
+
+registerSecretsStoreEnglish();
 
 export type SecretsStoreDraft = {
   name: string;
@@ -118,11 +121,10 @@ async function mutateAndReload(
   } catch (error) {
     mutationError = bulk
       ? new Error(
-          t("secretsStore.partial", {
+          `${t("secretsStore.partial", {
             saved: String(saved),
             total: String(mutation.entries.length),
-            error: formatUiError(error),
-          }),
+          })} ${t("secretsStore.partialFailure", { error: formatUiError(error) })}`,
         )
       : error;
   }

@@ -7,9 +7,12 @@ import {
 } from "../../app/update-confirmation.ts";
 import type { CustodianAlert } from "../../components/custodian-alert-contract.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function CustodianAlertCard(props: {
   alert: CustodianAlert;
@@ -41,7 +44,7 @@ export function CustodianAlertCard(props: {
           <button
             class="btn btn--sm primary custodian__alert-action"
             type="button"
-            title={updateDisabled() ? t("updates.adminRequired") : undefined}
+            title={updateDisabled() ? t("updates.adminRequiredTooltip") : undefined}
             disabled={updateDisabled()}
             onClick={() => {
               const target = action().target;

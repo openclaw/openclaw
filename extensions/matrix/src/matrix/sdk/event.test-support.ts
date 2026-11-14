@@ -21,21 +21,9 @@ type FakeMatrixEventParams = {
 export type MatrixEventDecryptor = (event: FakeMatrixEvent) => Promise<void>;
 
 export class FakeMatrixEvent extends EventEmitter {
-  private readonly roomId: string;
-  private readonly eventId: string;
-  private readonly sender: string;
-  private readonly encrypted: boolean;
-  private type: string;
-  private readonly ts: number;
-  private content: Record<string, unknown>;
+  private readonly data: FakeMatrixEventParams;
   private clearEvent?: { type: string; content: Record<string, unknown> };
-  private readonly stateKey?: string;
-  private readonly unsigned?: {
-    age?: number;
-    redacted_because?: unknown;
-  };
   private decryptionFailureReasonValue: DecryptionFailureCode | null;
-  private decryptionFailure: boolean;
   private decryptionPromise: Promise<void> | null = null;
   private decryptAttemptHandler?: (options?: { isRetry?: boolean }) => Promise<void> | void;
   readonly attemptDecryption = vi.fn(
@@ -46,80 +34,31 @@ export class FakeMatrixEvent extends EventEmitter {
 
   constructor(params: FakeMatrixEventParams) {
     super();
-    this.roomId = params.roomId;
-    this.eventId = params.eventId;
-    this.sender = params.sender;
-    this.encrypted = params.type === "m.room.encrypted";
-    this.type = params.type;
-    this.ts = params.ts;
-    this.content = params.content;
-    this.stateKey = params.stateKey;
-    this.unsigned = params.unsigned;
+    this.data = { ...params };
     this.decryptionFailureReasonValue = params.decryptionFailure
       ? (params.decryptionFailureReason ?? DecryptionFailureCode.UNKNOWN_ERROR)
       : null;
-    this.decryptionFailure = params.decryptionFailure === true;
   }
 
   get decryptionFailureReason(): DecryptionFailureCode | null {
     return this.decryptionFailureReasonValue;
   }
 
-  getRoomId(): string {
-    return this.roomId;
-  }
-
-  getId(): string {
-    return this.eventId;
-  }
-
-  getSender(): string {
-    return this.sender;
-  }
-
-  getType(): string {
-    return this.clearEvent?.type ?? this.type;
-  }
-
-  getTs(): number {
-    return this.ts;
-  }
-
-  getContent(): Record<string, unknown> {
-    return this.clearEvent?.content ?? this.content;
-  }
-
-  getOriginalContent(): Record<string, unknown> {
-    return this.getContent();
-  }
-
-  getWireContent(): Record<string, unknown> {
-    return this.content;
-  }
-
-  getUnsigned(): { age?: number; redacted_because?: unknown } {
-    return this.unsigned ?? {};
-  }
-
-  getStateKey(): string | undefined {
-    return this.stateKey;
-  }
-
-  getWireStateKey(): string | undefined {
-    return this.stateKey;
-  }
-
-  isDecryptionFailure(): boolean {
-    return this.decryptionFailure;
-  }
-
-  shouldAttemptDecryption(): boolean {
-    return this.encrypted && this.clearEvent === undefined;
-  }
-
-  getDecryptionPromise(): Promise<void> | null {
-    return this.decryptionPromise;
-  }
+  getRoomId = () => this.data.roomId;
+  getId = () => this.data.eventId;
+  getSender = () => this.data.sender;
+  getType = () => this.clearEvent?.type ?? this.data.type;
+  getTs = () => this.data.ts;
+  getContent = () => this.clearEvent?.content ?? this.data.content;
+  getOriginalContent = () => this.getContent();
+  getWireContent = () => this.data.content;
+  getUnsigned = (): NonNullable<FakeMatrixEventParams["unsigned"]> => this.data.unsigned ?? {};
+  getStateKey = () => this.data.stateKey;
+  getWireStateKey = () => this.data.stateKey;
+  isDecryptionFailure = () => this.decryptionFailureReasonValue !== null;
+  shouldAttemptDecryption = () =>
+    this.data.type === "m.room.encrypted" && this.clearEvent === undefined;
+  getDecryptionPromise = () => this.decryptionPromise;
 
   setDecryptionPromise(promise: Promise<void> | null): void {
     this.decryptionPromise = promise;
@@ -137,16 +76,13 @@ export class FakeMatrixEvent extends EventEmitter {
         body: `** Unable to decrypt: ${reason} **`,
       },
     };
-    this.decryptionFailure = true;
     this.decryptionFailureReasonValue ??= DecryptionFailureCode.MEGOLM_UNKNOWN_INBOUND_SESSION_ID;
     this.emit("decrypted", this, new Error(reason));
   }
 
   markDecrypted(params: { type: string; content: Record<string, unknown> }): void {
-    this.type = params.type;
-    this.content = params.content;
-    this.clearEvent = { type: params.type, content: params.content };
-    this.decryptionFailure = false;
+    Object.assign(this.data, params);
+    this.clearEvent = { ...params };
     this.decryptionFailureReasonValue = null;
   }
 }

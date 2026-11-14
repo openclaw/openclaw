@@ -80,7 +80,12 @@ it.each([
       provider: {
         baseUrl: baseUrl.trim(),
         api: "anthropic-messages",
-        models: [expect.objectContaining({ id: "MiniMax-M3", compat: { codeMode: "preferred" } })],
+        models: [
+          expect.objectContaining({
+            id: "MiniMax-M3",
+            compat: { codeMode: "preferred", supportsTemperature: false },
+          }),
+        ],
       },
       outcomes: [{ provider, profileId, status: "ready" }],
     });

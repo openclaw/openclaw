@@ -1,4 +1,8 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import {
+  asFiniteNumber,
+  floorPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,7 +26,6 @@ import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { normalizeContextTokenBudget } from "./utils.js";
 
 type NullableCompactionContextKey =
   | "sessionKey"
@@ -206,9 +209,7 @@ function hasBareConfiguredModelForProvider(params: {
       return true;
     }
   }
-  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(
-    ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
-  )?.[1];
+  const configuredProvider = findNormalizedProviderValue(params.cfg.models?.providers, providerKey);
   return (configuredProvider?.models ?? []).some(
     (entry) => normalizeLowercaseStringOrEmpty(entry?.id ?? "") === modelKey,
   );
@@ -254,7 +255,7 @@ export function resolveCompactionContextTokenBudget(params: {
 }) {
   // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
-    normalizeContextTokenBudget(
+    floorPositiveFiniteNumber(
       resolveContextWindowInfo({
         cfg: params.config,
         provider: params.provider,
@@ -268,8 +269,8 @@ export function resolveCompactionContextTokenBudget(params: {
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
   return Math.min(
-    normalizeContextTokenBudget(params.requestedTokenBudget) ??
-      normalizeContextTokenBudget(params.fallbackTokenBudget) ??
+    floorPositiveFiniteNumber(params.requestedTokenBudget) ??
+      floorPositiveFiniteNumber(params.fallbackTokenBudget) ??
       resolvedBudget,
     resolvedBudget,
   );

@@ -9,13 +9,11 @@ import { TIME_LABELS, type ActivityTimeFilter } from "./session-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
-type SessionActivityPulseProps = {
+export function renderSessionActivityPulse(props: {
   pulse: SessionActivityPulse;
   time: ActivityTimeFilter;
   options: { peopleIncomplete?: boolean };
-};
-
-export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
+}) {
   const chart = createMemo(() => {
     const formats: Record<ActivityTimeFilter, Intl.DateTimeFormatOptions> = {
       "24h": { hour: "numeric" },
@@ -54,7 +52,7 @@ export function renderSessionActivityPulse(props: SessionActivityPulseProps) {
                 <span
                   title={
                     key === "people" && props.options.peopleIncomplete
-                      ? t("activityFeed.partialHistory")
+                      ? t("activityFeed.partialHistoryTooltip")
                       : undefined
                   }
                 >

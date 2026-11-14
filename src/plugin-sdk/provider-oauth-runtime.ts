@@ -9,8 +9,17 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import type { Model } from "../llm/types.js";
 import { generatePkceVerifierChallenge } from "./oauth-utils.js";
 export { oauthErrorHtml, oauthSuccessHtml } from "../shared/oauth-page.js";
+export {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+  isRecoverableOAuthRefreshFailure,
+  readOAuthRefreshErrorReason,
+  type OAuthRefreshOutcome,
+  type OAuthRefreshErrorReason,
+} from "../shared/oauth-refresh-outcome.js";
 
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
+export { isFailedOAuthRefreshFence } from "../agents/auth-profiles/oauth-refresh-marker.js";
 export {
   decodeOpenAICodexJwtPayload,
   resolveOpenAICodexAuthIdentity,

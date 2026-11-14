@@ -71,26 +71,31 @@ export function createTypingController(params: {
     clearTimeout(typingTtlTimer);
     typingTtlTimer = undefined;
     typingLoop.stop();
+    sealed = true;
     // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
     // This fires only once (sealed prevents re-entry).
     if (active) {
-      onCleanup?.();
+      try {
+        onCleanup?.();
+      } catch (err) {
+        console.warn(`[typing] cleanup failed: ${String(err)}`);
+      }
     }
-    sealed = true;
   };
 
   const refreshTypingTtl = () => {
     if (sealed || typingIntervalMs <= 0) {
       return;
     }
-    clearTimeout(typingTtlTimer);
-    typingTtlTimer = setTimeout(() => {
-      if (!typingLoop.isRunning()) {
-        return;
-      }
-      log?.(`typing TTL reached (${typingTtlLabel}); stopping typing indicator`);
-      cleanup();
-    }, typingTtlMs);
+    typingTtlTimer =
+      typingTtlTimer?.refresh() ??
+      setTimeout(() => {
+        if (!typingLoop.isRunning()) {
+          return;
+        }
+        log?.(`typing TTL reached (${typingTtlLabel}); stopping typing indicator`);
+        cleanup();
+      }, typingTtlMs);
   };
 
   const isActive = () => active && !sealed;

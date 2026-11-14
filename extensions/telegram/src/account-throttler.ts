@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ApiError } from "grammy/types";
-import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -9,8 +9,12 @@ import {
   sleepWithAbort,
   waitForAbortSignal,
 } from "openclaw/plugin-sdk/runtime-env";
+import { TELEGRAM_SKIPPED_UPDATE_SUFFIX } from "./api-logging.js";
 import { apiThrottler } from "./bot.runtime.js";
-import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
+import {
+  createOwnedGrammyApiThrottler,
+  type OwnedGrammyApiThrottler,
+} from "./grammy-api-throttler.js";
 import { isTelegramRateLimitError, readTelegramRetryAfterMs } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
@@ -22,11 +26,17 @@ type TelegramApiSignal = Parameters<ApiThrottlerTransformer>[3];
 // owner: every call for the token waits for the deadline, non-replaceable calls
 // (final replies, deletes, reactions) retry within this budget, and replaceable
 // calls (stream previews, typing) yield instead of queueing behind the penalty.
+// The budget is wall-clock time from the call's start: queue and transport time
+// between 429s counts, so slow flooded attempts cannot stretch it.
 const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
 // Telegram 429s carry retry_after; a bare 429 gets one short fixed pause, with
 // no state carried into later responses.
 const FLOOD_PAUSE_WITHOUT_RETRY_AFTER_MS = 1_000;
 const floodLog = createSubsystemLogger("telegram/flood");
+// Mirrors grammy-api-throttler.ts: a retired token's limiter rejects new work loudly.
+const telegramThrottlerReleasedError = new Error(
+  "Telegram throttler for this token has been released",
+);
 type TelegramRequestScope = { replaceable?: true; assertCurrent?: () => void };
 const requestScopes = new AsyncLocalStorage<TelegramRequestScope>();
 
@@ -66,12 +76,12 @@ export function runAuthorizedTelegramRequest<T>(
 // Synthetic 429s for requests the limiter held back; they never reached Telegram.
 const unsentFloodResponses = new WeakSet<object>();
 
-function skippedFloodResponse(waitMs: number, reason: string): ApiError {
+function skippedFloodResponse(waitMs: number, reason: string, replaceable: boolean): ApiError {
   const retryAfter = Math.max(1, Math.ceil(waitMs / 1000));
   const response: ApiError = {
     ok: false,
     error_code: 429,
-    description: `Too Many Requests: retry after ${retryAfter} (${reason}; request not sent)`,
+    description: `Too Many Requests: retry after ${retryAfter} (${reason}${replaceable ? TELEGRAM_SKIPPED_UPDATE_SUFFIX : "; request not sent)"}`,
     parameters: { retry_after: retryAfter },
   };
   unsentFloodResponses.add(response);
@@ -88,14 +98,18 @@ function admitAtNetwork(
   scope: TelegramRequestScope | undefined,
   prev: TelegramApiCall,
 ): TelegramApiCall {
-  return async (method, payload, signal) => {
-    const waitMs = method === "getUpdates" ? 0 : gate.remainingMs();
-    if (waitMs > 0) {
-      return skippedFloodResponse(waitMs, "flood wait active");
-    }
-    scope?.assertCurrent?.();
-    return prev(method, payload, signal);
-  };
+  // Shared limiter queues inherit their first caller's context. Restore this
+  // request's owner before checking authority or starting transport work.
+  const runInContext = AsyncLocalStorage.snapshot();
+  return (method, payload, signal) =>
+    runInContext(async () => {
+      const waitMs = method === "getUpdates" ? 0 : gate.remainingMs();
+      if (waitMs > 0) {
+        return skippedFloodResponse(waitMs, "flood wait active", scope?.replaceable === true);
+      }
+      scope?.assertCurrent?.();
+      return prev(method, payload, signal);
+    });
 }
 
 class TelegramFloodGate {
@@ -147,19 +161,20 @@ function callThroughFloodGate(
     if (method === "getUpdates") {
       return prev(method, payload, signal);
     }
-    let waitedMs = 0;
+    const startedAtMs = Date.now();
     let flooded: ApiError | undefined;
     for (;;) {
       const waitMs = gate.remainingMs();
       if (waitMs > 0) {
         if (replaceable) {
-          return flooded ?? skippedFloodResponse(waitMs, "flood wait active");
+          return flooded ?? skippedFloodResponse(waitMs, "flood wait active", true);
         }
-        if (waitedMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
-          return flooded ?? skippedFloodResponse(waitMs, "flood wait exceeds delivery budget");
+        if (Date.now() - startedAtMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
+          return (
+            flooded ?? skippedFloodResponse(waitMs, "flood wait exceeds delivery budget", false)
+          );
         }
         await sleepForFloodGate(waitMs, signal);
-        waitedMs += waitMs;
         continue;
       }
       const closeGate = (retryAfterSeconds: number | undefined) => {
@@ -198,6 +213,8 @@ function callThroughFloodGate(
 type TelegramAccountThrottler = {
   transformer: ApiThrottlerTransformer;
   chatActions: ReturnType<typeof createTelegramSendChatActionHandler>;
+  /** Disconnects the token's Bottleneck limiters; the cache entry must already be dropped. */
+  dispose: () => Promise<void>;
 };
 type TelegramApiPayload = {
   chat_id?: unknown;
@@ -219,20 +236,43 @@ class GroupRequestScheduler {
   private running = false;
   private actionTail = Promise.resolve();
   private nextActionAtMs = 0;
+  private retiredReason: Error | null = null;
+  // Actions from enqueue until their request reaches the final network
+  // dispatch (queued behind a running predecessor, pacing, or authorization
+  // backoff): retirement rejects their callers immediately. A pacing or
+  // backoff wait still sleeping then finishes into the final dispatch guard,
+  // which throws instead of sending; that bounded one-shot timer (≤ 5 min) is
+  // the accepted leftover of not reaching into the caller's signal. An action
+  // whose transport I/O has already begun leaves this set so its request
+  // finishes.
+  private readonly pendingActions = new Set<{ reject: (err: unknown) => void }>();
 
   enqueueAction<T>(
-    run: () => Promise<T>,
+    run: (markDispatched: () => void) => Promise<T>,
     signal: Parameters<ApiThrottlerTransformer>[3],
   ): Promise<T> {
     const { controller, detach } = bridgeTelegramAbortSignal(signal);
+    if (this.retiredReason) {
+      detach();
+      return Promise.reject(this.retiredReason);
+    }
+    let rejectPending!: (err: unknown) => void;
+    const pending = new Promise<never>((_, reject) => {
+      rejectPending = reject;
+    });
+    const entry = { reject: rejectPending };
+    this.pendingActions.add(entry);
     const result = this.actionTail.then(async () => {
       controller.signal.throwIfAborted();
+      this.assertNotRetired();
       const waitMs = this.nextActionAtMs - Date.now();
       if (waitMs > 0) {
         await sleepWithAbort(waitMs, controller.signal);
       }
+      // Retirement can land during pacing; never dispatch afterwards.
+      this.assertNotRetired();
       try {
-        return await run();
+        return await run(() => this.pendingActions.delete(entry));
       } finally {
         // The final API guard can back off after this queue's wait.
         this.nextActionAtMs = Date.now() + 1_000;
@@ -244,13 +284,39 @@ class GroupRequestScheduler {
     );
     return Promise.race([
       result,
+      pending,
       waitForAbortSignal(controller.signal).then(() => {
         throw new DOMException("Chat action canceled", "AbortError");
       }),
     ]).finally(() => {
+      this.pendingActions.delete(entry);
       detach();
       controller.abort();
     });
+  }
+
+  /** Rejects new, queued, and not-yet-dispatching work once the owning account is retired. */
+  settleForRetirement(reason: Error): void {
+    if (this.retiredReason) {
+      return;
+    }
+    this.retiredReason = reason;
+    for (const request of this.pendingActions) {
+      request.reject(reason);
+    }
+    this.pendingActions.clear();
+    for (const queue of this.lanes.values()) {
+      for (const request of queue) {
+        request.reject(reason);
+      }
+    }
+    this.lanes.clear();
+  }
+
+  private assertNotRetired(): void {
+    if (this.retiredReason) {
+      throw this.retiredReason;
+    }
   }
 
   /** Holds priority for a reply until it settles, including its flood waits. */
@@ -268,6 +334,9 @@ class GroupRequestScheduler {
     run: () => Promise<T>,
     replaceable: { skip: () => T } | undefined,
   ): Promise<T> {
+    if (this.retiredReason) {
+      return Promise.reject(this.retiredReason);
+    }
     // Replaceable updates never queue behind pending replies; the next update carries their content.
     if (replaceable && this.pendingPriority > 0) {
       return Promise.resolve(replaceable.skip());
@@ -340,6 +409,26 @@ function readPayload(payload: unknown): TelegramApiPayload | undefined {
   return payload && typeof payload === "object" ? (payload as TelegramApiPayload) : undefined;
 }
 
+function readMessageDeliveryResult(
+  method: string,
+  result: unknown,
+): { messageThreadId: number | undefined } | undefined {
+  if (!method.startsWith("send") && !method.startsWith("copy") && !method.startsWith("forward")) {
+    return undefined;
+  }
+  const values = Array.isArray(result) ? result : [result];
+  for (const value of values) {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      parseStrictInteger(Reflect.get(value, "message_id")) !== undefined
+    ) {
+      return { messageThreadId: parseStrictInteger(Reflect.get(value, "message_thread_id")) };
+    }
+  }
+  return undefined;
+}
+
 function resolveGroupChatKey(payload: TelegramApiPayload): string | undefined {
   const chatId = parseStrictInteger(payload.chat_id);
   return chatId !== undefined && chatId < 0 ? String(chatId) : undefined;
@@ -359,16 +448,56 @@ function resolveForumLaneKey(payload: TelegramApiPayload): string {
   return "main";
 }
 
+// Test call sites inject a bare transformer; the production default returns an
+// owned throttler that can disconnect its Bottleneck timers for retired tokens.
+type CreatedAccountThrottler = ApiThrottlerTransformer | OwnedGrammyApiThrottler;
+
 function createTelegramAccountThrottler(
-  createThrottler: () => ApiThrottlerTransformer = apiThrottler,
+  createThrottler: () => CreatedAccountThrottler = createOwnedGrammyApiThrottler,
 ): TelegramAccountThrottler {
-  const baseThrottler = createThrottler();
+  const created = createThrottler();
+  const baseThrottler = typeof created === "function" ? created : created.transformer;
+  // Aborted when the token retires so pre-I/O chat-action backoffs settle
+  // before the shared limiter's shutdown starts waiting on executing jobs.
+  const retireController = new AbortController();
   const chatActions = createTelegramSendChatActionHandler({
     logger: (message) => logVerbose(`telegram: ${message}`),
-    minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
+    retirementSignal: retireController.signal,
+    retiredError: telegramThrottlerReleasedError,
   });
   const schedulersByChat = new Map<string, GroupRequestScheduler>();
+  let retired = false;
+  const dispose = async () => {
+    // Retirement is owner-level admission: a retired token configures no
+    // account, so new and queued work rejects and in-flight sends settle.
+    if (retired) {
+      return;
+    }
+    retired = true;
+    for (const scheduler of schedulersByChat.values()) {
+      scheduler.settleForRetirement(telegramThrottlerReleasedError);
+    }
+    // Terminate pre-I/O chat-action backoffs before stopping the shared
+    // limiters, whose shutdown waits for executing callbacks to finish.
+    retireController.abort();
+    if (typeof created !== "function") {
+      await created.dispose();
+    }
+  };
   const floodGate = new TelegramFloodGate();
+  // The shared final dispatch boundary: retirement lands during limiter queue
+  // waits, pacing, or the chat-action authorization backoff, so every request
+  // re-checks before its transport I/O begins. Requests whose I/O already
+  // started are untouched.
+  const finalDispatch =
+    (networkPrev: TelegramApiCall, onDispatch?: () => void): TelegramApiCall =>
+    (queuedMethod, queuedPayload, queuedSignal) => {
+      if (retired) {
+        throw telegramThrottlerReleasedError;
+      }
+      onDispatch?.();
+      return networkPrev(queuedMethod, queuedPayload, queuedSignal);
+    };
   const getScheduler = (groupChatKey: string) => {
     let scheduler = schedulersByChat.get(groupChatKey);
     if (!scheduler) {
@@ -385,7 +514,12 @@ function createTelegramAccountThrottler(
       if (!apiPayload || !groupChatKey) {
         return baseThrottler(
           (queuedMethod, queuedPayload, queuedSignal) =>
-            chatActions.apiTransformer(prev, queuedMethod, queuedPayload, queuedSignal),
+            chatActions.apiTransformer(
+              finalDispatch(prev),
+              queuedMethod,
+              queuedPayload,
+              queuedSignal,
+            ),
           method,
           payload,
           signal,
@@ -396,7 +530,13 @@ function createTelegramAccountThrottler(
       if (method === "sendChatAction") {
         // Ephemeral actions must not spend message reservoirs; the shared guard honors flood waits.
         return scheduler.enqueueAction(
-          () => chatActions.apiTransformer(prev, method, payload, signal),
+          (markDispatched) =>
+            chatActions.apiTransformer(
+              finalDispatch(prev, markDispatched),
+              method,
+              payload,
+              signal,
+            ),
           signal,
         );
       }
@@ -406,19 +546,21 @@ function createTelegramAccountThrottler(
         laneKey,
         () => baseThrottler(prev, method, payload, signal),
         replaceable
-          ? { skip: () => skippedFloodResponse(1_000, "yielded to a pending reply") }
+          ? { skip: () => skippedFloodResponse(1_000, "yielded to a pending reply", true) }
           : undefined,
       );
     };
 
   const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
+    if (retired) {
+      return Promise.reject(telegramThrottlerReleasedError);
+    }
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
-    const effect = captureEffectAuthority();
     const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
     const scope = replaceable ? { ...callerScope, replaceable: true as const } : callerScope;
     // Waiting and retry policy runs outside the queues; admission runs at the network edge.
-    const admitted = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
+    const admitted = admitAtNetwork(floodGate, scope, prev);
     const send = callThroughFloodGate(
       floodGate,
       replaceable,
@@ -427,16 +569,28 @@ function createTelegramAccountThrottler(
     );
     const apiPayload = readPayload(payload);
     const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
-    return replaceable || !groupChatKey
-      ? send(method, payload, signal)
-      : getScheduler(groupChatKey).withPriority(() => send(method, payload, signal));
+    const request =
+      replaceable || !groupChatKey
+        ? send(method, payload, signal)
+        : getScheduler(groupChatKey).withPriority(() => send(method, payload, signal));
+    return request.then((result) => {
+      const chatId = apiPayload?.chat_id;
+      const delivered = result.ok ? readMessageDeliveryResult(method, result.result) : undefined;
+      if (delivered && (typeof chatId === "number" || typeof chatId === "string")) {
+        chatActions.noteMessageDelivered(
+          chatId,
+          delivered.messageThreadId ?? parseStrictInteger(apiPayload?.message_thread_id),
+        );
+      }
+      return result;
+    });
   };
-  return { transformer, chatActions };
+  return { transformer, chatActions, dispose };
 }
 
 export function getOrCreateAccountThrottler(
   token: string,
-  createThrottler: () => ApiThrottlerTransformer = apiThrottler,
+  createThrottler: () => CreatedAccountThrottler = createOwnedGrammyApiThrottler,
 ): TelegramAccountThrottler {
   const throttlerByToken = resolveGlobalMap<string, TelegramAccountThrottler>(
     TELEGRAM_ACCOUNT_THROTTLERS_KEY,
@@ -447,4 +601,29 @@ export function getOrCreateAccountThrottler(
     throttlerByToken.set(token, throttler);
   }
   return throttler;
+}
+
+/**
+ * Releases the throttler of a retired bot token: drops the cache entry and
+ * disconnects its Bottleneck limiters, stopping their heartbeat timers. The
+ * caller must ensure no other configured account still uses the token.
+ * Returns false when the token has no cached throttler.
+ */
+export async function releaseAccountThrottler(token: string): Promise<boolean> {
+  const throttlerByToken = resolveGlobalMap<string, TelegramAccountThrottler>(
+    TELEGRAM_ACCOUNT_THROTTLERS_KEY,
+  );
+  const throttler = throttlerByToken.get(token);
+  if (!throttler) {
+    return false;
+  }
+  // Delete before disposing so a concurrent get-or-create never schedules work
+  // onto the limiters being disconnected.
+  throttlerByToken.delete(token);
+  try {
+    await throttler.dispose();
+  } catch (error) {
+    floodLog.warn(`failed to dispose Telegram account throttler: ${formatErrorMessage(error)}`);
+  }
+  return true;
 }

@@ -1,4 +1,4 @@
-export type ThreadBindingTargetKind = "subagent" | "acp";
+export type ThreadBindingTargetKind = "subagent" | "acp" | "session";
 
 export type ThreadBindingRecord = {
   accountId: string;
@@ -6,7 +6,7 @@ export type ThreadBindingRecord = {
   threadId: string;
   targetKind: ThreadBindingTargetKind;
   targetSessionKey: string;
-  agentId: string;
+  agentId?: string;
   label?: string;
   webhookId?: string;
   webhookToken?: string;
@@ -26,7 +26,6 @@ export type ThreadBindingManager = {
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
-  getBySessionKey: (targetSessionKey: string) => ThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => ThreadBindingRecord[];
   listBindings: () => ThreadBindingRecord[];
   touchThread: (params: {

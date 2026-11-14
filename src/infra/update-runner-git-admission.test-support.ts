@@ -11,6 +11,8 @@ import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+const write = (root: string, name: string, contents: string) =>
+  fs.writeFileSync(path.join(root, name), contents);
 
 export function createGitAdmissionFixture(
   relativeRemote = false,
@@ -40,12 +42,13 @@ export function createGitAdmissionFixture(
   git(source, "init", "-b", "main", `--object-format=${objectFormat}`);
   git(source, "config", "user.name", "Update fixture");
   git(source, "config", "user.email", "fixture@example.invalid");
-  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n");
-  fs.writeFileSync(path.join(source, "openclaw.mjs"), "export {};\n");
+  write(source, ".gitignore", "node_modules/\ndist/\n.artifacts/\n");
+  write(source, "openclaw.mjs", "export {};\n");
   const targets = new Map<string, Parameters<UpdateRunnerOptions["inspectGitTarget"]>[0]>();
   const commit = (version: string, agentSchema: number) => {
-    fs.writeFileSync(
-      path.join(source, "package.json"),
+    write(
+      source,
+      "package.json",
       JSON.stringify({
         name: "openclaw",
         version,
@@ -67,17 +70,14 @@ export function createGitAdmissionFixture(
   }
   if (partialClone) {
     git(source, "config", "uploadpack.allowFilter", "true");
-    git(
-      root,
-      "clone",
-      "--filter=blob:none",
-      ...(shallow ? ["--depth=2"] : []),
-      pathToFileURL(source).href,
-      install,
-    );
-  } else {
-    git(root, "clone", source, install);
   }
+  git(
+    root,
+    "clone",
+    ...(partialClone ? ["--filter=blob:none", ...(shallow ? ["--depth=2"] : [])] : []),
+    partialClone ? pathToFileURL(source).href : source,
+    install,
+  );
   git(install, "remote", "rename", "origin", "upstream.with.dots");
   if (relativeRemote) {
     git(install, "remote", "set-url", "upstream.with.dots", path.relative(install, source));
@@ -93,11 +93,8 @@ export function createGitAdmissionFixture(
       if (argv.includes("build")) {
         const dist = path.join(options.cwd!, "dist");
         fs.mkdirSync(path.join(dist, "control-ui"), { recursive: true });
-        fs.writeFileSync(
-          path.join(dist, "entry.js"),
-          "console.log(JSON.stringify(require('../package.json')));\n",
-        );
-        fs.writeFileSync(path.join(dist, "control-ui", "index.html"), "ready\n");
+        write(dist, "entry.js", "console.log(JSON.stringify(require('../package.json')));\n");
+        write(dist, "control-ui/index.html", "ready\n");
       }
       return { code: 0, stdout: argv.includes("--version") ? "12.1.0\n" : "", stderr: "" };
     }
@@ -136,8 +133,7 @@ export function createGitAdmissionFixture(
         },
         validateCandidate: async (candidateRoot) => {
           expect(mutationAdmitted).toBe(false);
-          const candidateSha = git(candidateRoot, "rev-parse", "HEAD");
-          expect(inspected.has(candidateSha)).toBe(true);
+          expect(inspected.has(git(candidateRoot, "rev-parse", "HEAD"))).toBe(true);
           expect(fs.statSync(path.join(candidateRoot, "dist", "entry.js")).isFile()).toBe(true);
           await options.validateCandidate?.(candidateRoot);
         },

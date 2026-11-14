@@ -1,7 +1,8 @@
 import type { TSchema } from "typebox";
+import { copyInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { copyInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import { copyAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
 function toolDefinitionMetadata<TParams extends TSchema>(
@@ -17,6 +18,7 @@ function toolDefinitionMetadata<TParams extends TSchema>(
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
+    interruptible: tool.interruptible,
     ...(tool.async === false ? { async: false as const } : {}),
   };
 }
@@ -35,6 +37,7 @@ export function wrapToolDefinition<
       definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
   };
   copyCodeModeControlToolIdentity(definition, tool);
+  copyAgentToolReplaySafety(definition, tool);
   return copyInternalToolExecutionPreparer(definition, tool);
 }
 
@@ -51,5 +54,6 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefiniti
       tool.execute(toolCallId, params, signal, onUpdate),
   };
   copyCodeModeControlToolIdentity(tool, definition);
+  copyAgentToolReplaySafety(tool, definition);
   return copyInternalToolExecutionPreparer(tool, definition);
 }

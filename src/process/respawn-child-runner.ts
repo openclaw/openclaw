@@ -1,10 +1,12 @@
 import childProcess from "node:child_process";
 import os from "node:os";
+import { isUpdateCommandArgv } from "../infra/cli-root-options.js";
+import {
+  RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
+  resolveLauncherStopTimeoutMs,
+} from "../infra/gateway-shutdown-budget.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 import { signalProcessTree } from "./kill-tree.js";
-
-const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
-const RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
 
 /** Complete only after child stdio and any failed-spawn diagnostics have settled. */
 export function runRespawnChildWithSignalBridge(params: {
@@ -27,6 +29,13 @@ export function runRespawnChildWithSignalBridge(params: {
 
   // Let the child honor forwarded signals first; then terminate it so the
   // wrapper process cannot stay alive indefinitely after the parent is signaled.
+  // Foreground Unix Gateways never respawn through this runner.
+  const signalExitGraceMs =
+    resolveLauncherStopTimeoutMs({
+      platform: process.platform,
+      foreground: false,
+      update: isUpdateCommandArgv(process.argv),
+    }) - RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;
   let firstForwardedSignal: NodeJS.Signals | undefined;
@@ -49,14 +58,6 @@ export function runRespawnChildWithSignalBridge(params: {
       // Best-effort shutdown fallback.
     }
   };
-  const requestChildTermination = (): void => {
-    signalChild("SIGTERM");
-    signalForceKillTimer = setTimeout(() => {
-      hardKillBackstopStarted = true;
-      signalChild("SIGKILL");
-    }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
-    signalForceKillTimer.unref?.();
-  };
   const scheduleParentExit = (signal: NodeJS.Signals): void => {
     if (childExited) {
       return;
@@ -66,8 +67,13 @@ export function runRespawnChildWithSignalBridge(params: {
       return;
     }
     signalExitTimer = setTimeout(() => {
-      requestChildTermination();
-    }, RESPAWN_SIGNAL_EXIT_GRACE_MS);
+      signalChild("SIGTERM");
+      signalForceKillTimer = setTimeout(() => {
+        hardKillBackstopStarted = true;
+        signalChild("SIGKILL");
+      }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
+      signalForceKillTimer.unref?.();
+    }, signalExitGraceMs);
     signalExitTimer.unref?.();
   };
 

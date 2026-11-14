@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import {
@@ -10,14 +11,12 @@ import {
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { EmbeddedStateLockHandle } from "../infra/embedded-state-lock.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
   applyExecConfigOverrides,
@@ -49,22 +48,6 @@ function normalizeCodeMode(
   throw new Error("--code-mode must be one of direct, auto, code.");
 }
 
-function normalizeTimeoutSeconds(value: string | undefined): string {
-  const raw = value ?? String(AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS);
-  if (parseStrictNonNegativeInteger(raw) === undefined) {
-    throw new Error("--timeout must be a non-negative integer in seconds.");
-  }
-  return raw;
-}
-
-function normalizeFallbacks(model: string | undefined, values: string[] | undefined): string[] {
-  const fallbacks = (values ?? []).map((value) => value.trim()).filter(Boolean);
-  if (fallbacks.length > 0 && !model?.trim()) {
-    throw new Error("--fallback requires --model so the primary model is explicit.");
-  }
-  return fallbacks;
-}
-
 async function requireDirectory(value: string, label: string): Promise<string> {
   const resolved = path.resolve(value);
   let stat;
@@ -79,46 +62,16 @@ async function requireDirectory(value: string, label: string): Promise<string> {
   return resolved;
 }
 
-function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () => void {
-  const previous = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-    OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
-  };
-  // The published runtime snapshot owns config while state/workspace paths are redirected.
-  process.env.OPENCLAW_STATE_DIR = params.stateDir;
-  delete process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
-}
-
-function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Omit --state-dir to use isolated temporary state, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
-}
-
 function isStructuredTimeoutError(error: unknown): boolean {
   if (findAgentRunTerminalOutcome(error)?.status === "timeout") {
     return true;
   }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
-    if (!candidate || typeof candidate !== "object") {
+    const record = asOptionalObjectRecord(candidate);
+    if (!record) {
       return false;
     }
-    const record = candidate as {
-      cause?: unknown;
-      code?: unknown;
-      name?: unknown;
-      reason?: unknown;
-    };
     if (
       record.name === "TimeoutError" ||
       record.code === "ETIMEDOUT" ||
@@ -129,38 +82,6 @@ function isStructuredTimeoutError(error: unknown): boolean {
     candidate = record.cause;
   }
   return false;
-}
-
-function errorEnvelope(error: unknown, sessionId: string): AgentExecEnvelope {
-  const status = isStructuredTimeoutError(error) ? "timeout" : "error";
-  return {
-    ok: false,
-    status,
-    final: "",
-    payloads: [],
-    model: null,
-    provider: null,
-    sessionId,
-    error: {
-      message: formatErrorMessage(error),
-      kind: status === "timeout" ? "timeout" : "exception",
-    },
-  };
-}
-
-function writeAgentExecOutput(
-  runtime: RuntimeEnv,
-  envelope: AgentExecEnvelope,
-  json: boolean,
-): void {
-  if (json) {
-    writeRuntimeJson(runtime, envelope);
-  } else if (envelope.final) {
-    writeRuntimeStdout(runtime, envelope.final);
-  }
-  if (!envelope.ok && envelope.error) {
-    runtime.error(envelope.error.message);
-  }
 }
 
 /** Run one isolated embedded agent turn and project its stable CLI result. */
@@ -190,26 +111,21 @@ export async function agentExecCommand(
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
-  let stopLocalAuditWriter: (() => Promise<void>) | undefined;
-  let stateLock: EmbeddedStateLockHandle | null | undefined;
   let temporaryDatabaseScope:
     | import("../state/openclaw-state-db-async-lifecycle.js").OpenClawDatabaseMaintenanceScope
     | undefined;
   let abortSignal = signal;
   let signalBridge:
-    | ReturnType<
-        (typeof import("../infra/embedded-state-lock.js"))["createEmbeddedStateSignalBridge"]
-      >
+    | ReturnType<(typeof import("../infra/process-signal-bridge.js"))["createProcessSignalBridge"]>
     | undefined;
   try {
     signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
     const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
-    const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-      await import("../infra/embedded-state-lock.js");
+    const { createProcessSignalBridge } = await import("../infra/process-signal-bridge.js");
     // Admit cancellation before creating state so signals unwind temporary runs too.
-    signalBridge = createEmbeddedStateSignalBridge();
+    signalBridge = createProcessSignalBridge();
     abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
@@ -248,14 +164,24 @@ export async function agentExecCommand(
       }).publish();
     }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    if (temporaryStateDir || opts.isolated) {
+      // Throwaway state must never create stores in the operator's PostgreSQL namespaces.
+      runConfig.database = { engine: "sqlite" };
+    }
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
     const pluginInstallContext = inheritInstalledPlugins
       ? await import("../plugins/install-root-context.js")
       : undefined;
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
-    const timeout = normalizeTimeoutSeconds(opts.timeout);
-    const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
+    const timeout = opts.timeout ?? String(AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS);
+    if (parseStrictNonNegativeInteger(timeout) === undefined) {
+      throw new Error("--timeout must be a non-negative integer in seconds.");
+    }
+    const fallbacks = (opts.fallback ?? []).map((value) => value.trim()).filter(Boolean);
+    if (fallbacks.length > 0 && !opts.model?.trim()) {
+      throw new Error("--fallback requires --model so the primary model is explicit.");
+    }
     const { resolveAgentDir, resolveAmbientOwnerAgentId } =
       await import("../agents/agent-scope-config.js");
     // Credentials follow the inherited agentDir, which runConfig strips for isolation.
@@ -285,7 +211,16 @@ export async function agentExecCommand(
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
-    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
+    const previous = {
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
+    };
+    // The published runtime snapshot owns config while state/workspace paths are redirected.
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    process.env.OPENCLAW_WORKSPACE_DIR = cwd;
+    restoreEnvironment = () => applyProcessEnvKeys(Object.keys(previous), previous);
     runtimePaths.pinRuntimePaths();
     if (temporaryStateDir) {
       const { createOpenClawDatabaseMaintenanceScope } =
@@ -293,12 +228,12 @@ export async function agentExecCommand(
       // Temporary runs own their resources without borrowing maintenance schema authority.
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
-    if (opts.stateDir) {
-      stateLock = await acquireEmbeddedStateLock({
-        signal: abortSignal,
-        formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
-      });
-    }
+    const [{ resolveDatabaseEngineSelection }, { installDatabaseEngineSelection }] =
+      await Promise.all([
+        import("../infra/database-engine/config.js"),
+        import("../infra/database-engine/context.js"),
+      ]);
+    installDatabaseEngineSelection(await resolveDatabaseEngineSelection(runConfig));
     // Publish in memory; a temporary config file would expose resolved provider keys to tools.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
     const [
@@ -334,8 +269,10 @@ export async function agentExecCommand(
           timeout,
           modelFallbacksOverride: fallbacks.length > 0 ? fallbacks : undefined,
           cleanupBundleMcpOnRunEnd: true,
+          cleanupMemoryOnRunEnd: Boolean(temporaryStateDir),
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
+          operatorDirectRoot: true,
           abortSignal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
@@ -360,6 +297,7 @@ export async function agentExecCommand(
             runWithPluginInstallRoots,
           );
     const run = async () => {
+      let stopLocalAuditWriter: (() => Promise<void>) | undefined;
       if (isExecutionIdentityCollectionEnabled(runConfig)) {
         try {
           stopLocalAuditWriter = (
@@ -369,15 +307,31 @@ export async function agentExecCommand(
           // Admission emits a bounded warning if the direct-process writer is unavailable.
         }
       }
-      return await toolBudget.run(() =>
-        withHostExecInheritedEnvOmitted(
-          listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
-          runWithAuthScope,
-        ),
-      );
+      try {
+        return await toolBudget.run(() =>
+          withHostExecInheritedEnvOmitted(
+            listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
+            runWithAuthScope,
+          ),
+        );
+      } finally {
+        await stopLocalAuditWriter?.().catch(() => undefined);
+      }
     };
+    const { runWithLocalStateOwner } = await import("../cli/local-state-owner.js");
+    // A caller's --state-dir is shared state: a running Gateway owns it.
     const result = await runtimeCleanup.run(() =>
-      temporaryDatabaseScope ? temporaryDatabaseScope.run(run) : run(),
+      temporaryDatabaseScope
+        ? temporaryDatabaseScope.run(run)
+        : runWithLocalStateOwner({
+            method: "agent exec --state-dir",
+            params: {},
+            target: "agent state",
+            onForeignOwner: "refuse",
+            onlineAlternative: "Omit --state-dir to use isolated temporary state.",
+            retainAfterUncertainCleanup: true,
+            runLocal: run,
+          }),
     );
     signal.throwIfAborted();
     if (!result) {
@@ -389,7 +343,20 @@ export async function agentExecCommand(
     }
     commandResult = resultForEnvelope(envelope);
   } catch (error) {
-    commandResult = resultForEnvelope(errorEnvelope(error, sessionId));
+    const status = isStructuredTimeoutError(error) ? "timeout" : "error";
+    commandResult = resultForEnvelope({
+      ok: false,
+      status,
+      final: "",
+      payloads: [],
+      model: null,
+      provider: null,
+      sessionId,
+      error: {
+        message: formatErrorMessage(error),
+        kind: status === "timeout" ? "timeout" : "exception",
+      },
+    });
   }
 
   let cleanupError: unknown =
@@ -401,10 +368,6 @@ export async function agentExecCommand(
   const recordCleanupError = (error: unknown) => {
     cleanupError = error;
   };
-  const stopAudit = async () => await stopLocalAuditWriter?.();
-  await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
-    () => undefined,
-  );
   // Delayed worker registration can outlive its lexical maintenance scope. Drain the
   // exact temporary owners before the scope closes and the filesystem root is removed.
   if (!cleanupError && temporaryStateDir) {
@@ -426,9 +389,6 @@ export async function agentExecCommand(
   }
   if (!cleanupError) {
     await temporaryDatabaseScope?.close().catch(recordCleanupError);
-  }
-  if (!cleanupError) {
-    await stateLock?.release().catch(recordCleanupError);
   }
   const runCleanupStep = (step: () => void) => {
     try {
@@ -478,6 +438,15 @@ export async function agentExecCommand(
     return commandResult;
   }
 
-  writeAgentExecOutput(runtime, commandResult.envelope, opts.json === true);
+  const envelope = commandResult.envelope;
+  const json = opts.json === true;
+  if (json) {
+    writeRuntimeJson(runtime, envelope);
+  } else if (envelope.final) {
+    writeRuntimeStdout(runtime, envelope.final);
+  }
+  if (!envelope.ok && envelope.error) {
+    runtime.error(envelope.error.message);
+  }
   return commandResult;
 }

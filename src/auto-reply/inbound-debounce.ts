@@ -5,7 +5,9 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { FollowupQueueDisposition } from "./get-reply-options.types.js";
 
 /** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
@@ -46,6 +48,7 @@ type InboundDebounceAdmissionLifecycleInput = {
   onAdoptionFinalizing?: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
   onAbandoned?: () => void | Promise<void>;
+  onDropped?: (reason: FollowupQueueDisposition) => void | Promise<void>;
 };
 
 /** Lifecycle shape passed to a channel dispatch so it can signal session-lane admission. */
@@ -58,6 +61,7 @@ type InboundDebounceAdmissionLifecycle = {
   onAdoptionFinalizing: () => void;
   onFailed?: (error: unknown) => Promise<void>;
   onAbandoned: () => Promise<void>;
+  onDropped?: (reason: FollowupQueueDisposition) => Promise<void>;
 };
 
 /**
@@ -100,25 +104,27 @@ function createInboundDebounceFlush(params: {
           }
         }
       : undefined,
-    onAbandoned: async () => {
-      await source?.onAbandoned?.();
-    },
+    onAbandoned: async () => source?.onAbandoned?.(),
+    onDropped: source?.onDropped
+      ? async (reason) => {
+          await source.onDropped?.(reason);
+        }
+      : undefined,
   };
-  let completion: Promise<void>;
-  try {
-    completion = params.dispatch(lifecycle);
-  } catch (error) {
-    completion = Promise.reject(toErrorObject(error, "Inbound debounce dispatch failed"));
-  }
-  // A failed dispatch must settle its source claim before releasing the keyed
-  // lane; an already-admitted turn owns its later completion failure.
-  completion = completion.then(markAdmitted).catch(async (error: unknown) => {
-    if (!admitted && lifecycle.onFailed) {
-      await Promise.allSettled([lifecycle.onFailed(error)]);
-    }
-    markAdmitted();
-    throw error;
-  });
+  // Adoption can release the HTTP request before dispatch reaches agent enqueue.
+  const completion = runWithGatewayIndependentRootWorkContinuation(
+    async () => params.dispatch(lifecycle),
+    "channel:inbound-dispatch",
+  )
+    .catch(async (error: unknown) => {
+      // Settle a failed source claim before releasing its keyed lane.
+      const failure = toErrorObject(error, "Inbound debounce dispatch failed");
+      if (!admitted && lifecycle.onFailed) {
+        await Promise.allSettled([lifecycle.onFailed(failure)]);
+      }
+      throw failure;
+    })
+    .finally(markAdmitted);
   return { admission, completion };
 }
 
@@ -184,7 +190,16 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const runFlush = async (items: T[]) => {
     let flush: InboundDebounceFlush;
     try {
-      flush = params.onFlush(items, createInboundDebounceFlush);
+      // SAFETY: Released plugins return PromiseLike<void>; current callbacks return lifecycle objects.
+      const result = params.onFlush(items, createInboundDebounceFlush) as
+        | InboundDebounceFlush
+        | PromiseLike<void>;
+      if ("then" in result) {
+        const completion = Promise.resolve(result);
+        flush = { admission: completion, completion };
+      } else {
+        flush = result;
+      }
     } catch (err) {
       reportFlushError(err, items);
       return;

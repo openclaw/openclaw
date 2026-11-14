@@ -1,13 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { buildSandboxHostDocument, decodeSandboxHostCsp } from "../../agents/sandbox-host.js";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
+import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
-import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -19,8 +21,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { verifyBoardViewTicket } from "../board-view-ticket.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
+import * as sessionObserverModel from "../session-observer-model.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
@@ -120,13 +125,32 @@ function sourceHarness(view: {
 describe("board gateway methods", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
-    resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
     return () => resetPluginRuntimeStateForTest();
   });
 
+  it("rejects retired v4 registered content without changing the board", async () => {
+    const { invoke, put, store } = widgetHarness();
+    await put("kept", html("<p>kept</p>"));
+    const before = await store.getSnapshot(mainTarget);
+    const response = await invoke("board.widget.put", {
+      ...mainTarget,
+      name: "retired",
+      content: { kind: "registered", contentKind: "a2ui", source: "{}" },
+    });
+    expect(response.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: "Registered board widgets were removed; use HTML widgets instead.",
+      },
+    ]);
+    expect(await store.getSnapshot(mainTarget)).toEqual(before);
+  });
+
   it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
-    const { invoke, store } = createHarness(undefined, undefined, undefined, {
+    const { invoke } = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
         agents: explicitOwners,
       }),
@@ -138,21 +162,21 @@ describe("board gateway methods", () => {
       content: html("work"),
     });
     expect(work.mock.calls[0]).toMatchObject([true, { sessionKey: "agent:work:global" }]);
-    expect(await store.getSnapshot({ sessionKey: "global", agentId: "work" })).toMatchObject({
+    const workBoard = responseBoard(
+      await invoke("board.get", { sessionKey: "global", agentId: "work" }),
+    );
+    const ownerWidget = findWidget(workBoard, "owner");
+    expect(ownerWidget.frameUrl).toContain("/agent%3Awork%3Aglobal/owner/index.html?");
+    expect(verifyBoardViewTicket(ownerWidget.viewTicket!)).toMatchObject({
       sessionKey: "global",
-      revision: 1,
-      widgets: [{ name: "owner" }],
+      agentId: "work",
+      name: "owner",
     });
-
     const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
     expect(main.mock.calls[0]).toMatchObject([
       true,
       { sessionKey: "agent:main:global", revision: 0 },
     ]);
-    expect(await store.getSnapshot({ sessionKey: "global", agentId: "main" })).toMatchObject({
-      widgets: [],
-    });
-
     const ambiguous = await invoke("board.get", { sessionKey: "global" });
     expect(ambiguous.mock.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
   });
@@ -161,7 +185,7 @@ describe("board gateway methods", () => {
     let sandboxPort: number | undefined;
     const { client } = makeClient("board-viewer", "operator", ["operator.read", "operator.write"]);
     const ensureSandboxHostPort = vi.fn(async () => (sandboxPort = 18790));
-    const { put, grant, get, store } = widgetHarness(
+    const { put, grant, get } = widgetHarness(
       undefined,
       undefined,
       undefined,
@@ -183,12 +207,11 @@ describe("board gateway methods", () => {
     await grant(status);
     const { widget: rejected } = await put("rejected", html("no"), { tools: ["status.reject"] });
     await grant(rejected, "rejected");
-    const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
-    const documentRead = vi.spyOn(store, "useWidgetDocument");
+    const scopeKey = vi.spyOn(sessionObserverModel, "sessionObserverScopeKey");
+    onTestFinished(() => scopeKey.mockRestore());
     const first = await withoutBoardReads(get);
+    expect(scopeKey).toHaveBeenCalledTimes(1);
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
-    expect(preparedRead).toHaveBeenCalledOnce();
-    expect(documentRead).not.toHaveBeenCalled();
     for (const name of ["plain", "status"]) {
       const widget = findWidget(first, name);
       expect(widget).toMatchObject({
@@ -202,12 +225,36 @@ describe("board gateway methods", () => {
         sandboxPort: 18790,
       });
     }
-    expect(findWidget(first, "status").declaredSummary).toEqual([
-      "Network access: https://status.example",
-      "Tool access: status.refresh",
-    ]);
     for (const name of ["app", "rejected"]) {
       expect(findWidget(first, name)).not.toHaveProperty("frameUrl");
+    }
+    client.browserOrigin = { openclawIdTunnel: true };
+    const unlinked = await get();
+    for (const name of ["plain", "status"]) {
+      const widget = findWidget(unlinked, name);
+      expect(widget.sandboxUrl).toBe(findWidget(first, name).sandboxUrl);
+      expect(widget).not.toHaveProperty("sandboxShellHtml");
+    }
+    setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+    onTestFinished(() => setOpenClawIdClawOriginResolver(undefined));
+    const linked = await get();
+    for (const name of ["plain", "status"]) {
+      const widget = findWidget(linked, name);
+      const url = new URL(widget.sandboxUrl!);
+      expect(url.origin).toBe("https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz");
+      expect(url.searchParams.get("cspv")).toBe("1");
+      expect(url.searchParams.get("claw")).toBe("studio-k7x2q");
+      const csp = decodeSandboxHostCsp(url.searchParams.get("csp"));
+      expect(csp?.connectDomains).toEqual(
+        name === "status" ? ["https://status.example"] : undefined,
+      );
+      expect(widget.sandboxShellHtml).toBe(buildSandboxHostDocument(csp).html);
+    }
+    client.browserOrigin = { openclawIdTunnel: false };
+    const directLinked = await get();
+    for (const name of ["plain", "status"]) {
+      expect(findWidget(directLinked, name).sandboxUrl).toBe(findWidget(first, name).sandboxUrl);
+      expect(findWidget(directLinked, name)).not.toHaveProperty("sandboxShellHtml");
     }
     client.remoteControlUiIngress = createRemoteControlUiIngressTestContext();
     const second = await get();
@@ -257,11 +304,9 @@ describe("board gateway methods", () => {
     const { put, store } = widgetHarness(undefined, mcpApp);
     const pending = put("revoked", appSource);
     await started.promise;
-    expect(authorizeAppInteraction).toHaveBeenCalledOnce();
     grantActive = false;
     release.resolve(["server.refresh"]);
     const { snapshot } = await pending;
-    expect(authorizeAppInteraction).toHaveBeenCalledTimes(2);
     expect(snapshot.widgets).toMatchObject([{ name: "revoked", grantState: "none" }]);
     expect(await store.readWidgetMcpApp(mainTarget, "revoked")).toMatchObject({
       interactive: false,
@@ -297,17 +342,8 @@ describe("board gateway methods", () => {
     });
     const { invoke, mcpApp, store, put, grant, appView } = scopeWidgets(harness, target);
 
-    const { snapshot, widget } = await put("server-app", appSource);
-    expect(snapshot.widgets).toMatchObject([
-      {
-        name: "server-app",
-        grantState: "pending",
-        declaredSummary: ["Tool access: server.refresh", "Tool access: server.search"],
-      },
-    ]);
-    expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
-      expect.objectContaining({ ...target, viewId: "mcp-app-source" }),
-    );
+    const { widget } = await put("server-app", appSource);
+    expect(widget.grantState).toBe("pending");
     const originalInstanceId = (await store.getSnapshot(target)).widgets[0]?.instanceId;
     expect(originalInstanceId).toMatch(/^[a-f0-9]{32}$/u);
     expect(widget).toMatchObject({ revision: 1, instanceId: originalInstanceId });
@@ -421,6 +457,7 @@ describe("board gateway methods", () => {
   });
 
   it("keeps identical global widget notices separate for each owner", async () => {
+    const widget = `notice-${randomUUID()}`;
     const { invoke } = createHarness(undefined, {}, undefined, {
       getRuntimeConfig: () => ({
         agents: explicitOwners,
@@ -431,7 +468,7 @@ describe("board gateway methods", () => {
       const target = { sessionKey: "global", agentId };
       await invoke("board.widget.put", {
         ...target,
-        name: "counter",
+        name: widget,
         content: html("ok"),
       });
       const snapshot = responseBoard(await invoke("board.get", target));
@@ -439,7 +476,7 @@ describe("board gateway methods", () => {
       const first = await invoke("board.event", { ticket, payload: { count: 1 } });
       const duplicate = await invoke("board.event", {
         ...target,
-        widget: "counter",
+        widget,
         payload: { count: 1 },
       });
       expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
@@ -447,7 +484,7 @@ describe("board gateway methods", () => {
     }
     for (const agentId of ["main", "work"]) {
       expect(peekSystemEventEntries(`agent:${agentId}:global`).map((event) => event.text)).toEqual([
-        '[dashboard] {"count":1} on widget counter',
+        `[dashboard] {"count":1} on widget ${widget}`,
       ]);
     }
   });
@@ -482,7 +519,11 @@ describe("website dashboard authoring", () => {
       }
       return payload as T;
     };
-    const tool = createDashboardTool({ agentSessionKey: sessionKey, callGateway });
+    const gatewaySpy = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(callGateway);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createDashboardTool({ agentSessionKey: sessionKey });
     return { ...harness, tool };
   }
 

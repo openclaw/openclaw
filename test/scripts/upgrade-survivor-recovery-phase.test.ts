@@ -181,23 +181,9 @@ repair_update_restart_auth
 });
 
 it.skipIf(process.platform === "win32").each([
-  {
-    mode: "auto-auth",
-    expected: [
-      "phase:assert-prepublish-recovery-requests",
-      "npm-assert:whatsapp:2026.10.11-first-hop.0",
-      "fixture-idle",
-    ],
-  },
-  {
-    mode: "manual",
-    expected: [
-      "phase:assert-prepublish-recovery-requests",
-      "npm-assert:whatsapp:2026.10.10-beta.3",
-      "fixture-idle",
-    ],
-  },
-])("asserts the plugin cohort selected by $mode restart recovery", ({ mode, expected }) => {
+  ["auto-auth", "2026.10.11-first-hop.0"],
+  ["manual", "2026.10.10-beta.3"],
+])("asserts the plugin cohort selected by %s restart recovery", (mode, version) => {
   const root = dirs.make("survivor-plugin-recovery-");
   const assertion = source.slice(
     source.indexOf("assert_prepublish_plugin_install() {"),
@@ -256,7 +242,11 @@ repair_fixture_plugin_consent
     { encoding: "utf8", timeout: 5_000 },
   );
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout.trim().split("\n")).toEqual(expected);
+  expect(result.stdout.trim().split("\n")).toEqual([
+    "phase:assert-prepublish-recovery-requests",
+    `npm-assert:whatsapp:${version}`,
+    "fixture-idle",
+  ]);
 });
 
 it.skipIf(process.platform === "win32").each([
@@ -337,7 +327,7 @@ openclaw_e2e_maybe_timeout() {
   esac
 }
 node() {
-  if [ "$1" = -e ]; then printf '1000'; return 0; fi
+  if [ "$1" = -e ] && [ "$2" = 'process.stdout.write(String(Date.now()))' ]; then printf '1000'; return 0; fi
   case "$2" in
     assert-successful-update-json)
       printf 'check\tassertion\n' >&3

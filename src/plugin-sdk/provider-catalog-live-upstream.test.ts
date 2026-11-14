@@ -1,4 +1,6 @@
 import { assert, beforeEach, expect, it, vi, type MockedFunction } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
 import { projectUpstreamProviderCatalogModel as projectUpstream } from "./provider-catalog-live-normalize.internal.js";
 import {
   clearLiveCatalogCacheForTests,
@@ -7,7 +9,10 @@ import {
   type UpstreamProviderCatalog,
   type UpstreamProviderCatalogModel,
 } from "./provider-catalog-live-runtime.js";
-import { listProviderCatalogSnapshotEntries } from "./provider-catalog-snapshot.internal.js";
+import {
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+} from "./provider-catalog-snapshot.internal.js";
 
 const endpoint = "https://models.opencode.ai/api.json";
 async function loadProvider(fetchGuard: LiveModelCatalogFetchGuard, providerId = "opencode") {
@@ -55,6 +60,33 @@ async function fetchedModel(
 
 beforeEach(() => clearLiveCatalogCacheForTests());
 
+it("retains a negative chat capability for models.dev-shaped audio output metadata", async () => {
+  const model = await fetchedModel({
+    id: "voice-v2",
+    modalities: { input: ["text"], output: ["audio"] },
+    limit: { context: 8192, output: 4096 },
+  });
+  expect(model).toMatchObject({ inference: { chat: false } });
+  assert(model);
+  const snapshot = new Map([[model.id, { model }]]);
+  expect(listProviderCatalogSnapshotEntries(snapshot)[0]?.inference?.chat).toBe(false);
+  expect(projectProviderCatalogSnapshotRows([{ id: model.id }], snapshot)[0]?.inference?.chat).toBe(
+    false,
+  );
+  const chat = project({
+    id: "chat",
+    modalities: { output: ["text"] },
+    limit: { context: 8192, output: 4096 },
+  });
+  assert(chat);
+  expect(
+    projectProviderCatalogSnapshotRows(
+      [{ id: chat.id, modalities: { output: ["audio"] } }],
+      new Map([[chat.id, { model: chat }]]),
+    )[0]?.inference?.chat,
+  ).toBe(false);
+});
+
 it("lazily shares one anonymous upstream metadata download across provider ids", async () => {
   const { fetchGuard, release } = buildFetchGuard({
     opencode: { id: "opencode", api: "https://opencode.ai/zen/v1", models: {} },
@@ -72,9 +104,10 @@ it("lazily shares one anonymous upstream metadata download across provider ids",
   expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
     url: endpoint,
     requireHttps: true,
-    timeoutMs: 15_000,
     auditContext: "upstream-provider-catalog-discovery",
   });
+  expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
+  expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(15_000);
   expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).get("authorization")).toBeNull();
   expect(release).toHaveBeenCalledTimes(1);
 });
@@ -105,7 +138,7 @@ it("projects pricing, reasoning, tools, and modalities from object tiers JSON", 
       reasoning: true,
       tool_call: true,
       reasoning_options: [{ type: "effort", values: ["low", "high", "high", false] }],
-      modalities: { input: ["text", "image", "video"] },
+      modalities: { input: ["text", "image", "video"], output: ["text"] },
       provider: { npm: "@ai-sdk/openai" },
       limit: { context: 1_000_000, input: 900_000, output: 128_000 },
       cost: { input: 2, output: 6, cache_read: 0.5, cache_write: 1, tiers: {} },
@@ -153,6 +186,7 @@ it.each([
     const model = project(
       {
         id: "reasoning-fixture",
+        modalities: { output: ["text"] },
         reasoning: true,
         limit: { context: 128_000, output: 8192 },
         reasoning_options: options,
@@ -179,6 +213,7 @@ it.each([
   async (npm, api, baseUrl) => {
     const model = await fetchedModel({
       id: "opaque-preview-id",
+      modalities: { output: ["text"] },
       name: "Opaque Preview",
       provider: { npm },
       limit: { context: 128_000, output: 8192 },
@@ -196,6 +231,7 @@ it("rejects upstream metadata that would redirect authenticated inference to ano
   const provider = makeProvider();
   const model = {
     id: "opaque-preview-id",
+    modalities: { output: ["text"] },
     name: "Opaque Preview",
     limit: { context: 128_000, output: 8192 },
   };
@@ -210,4 +246,52 @@ it("rejects upstream metadata that would redirect authenticated inference to ano
       "https://opencode.ai/zen/v1",
     ),
   ).toBeUndefined();
+});
+
+it.each([
+  [undefined, 180_000],
+  [2_000, 2_000],
+  [0, 180_000],
+])("caps a shared feed by its acquisition and explicit cap %s", async (timeoutMs, cap) => {
+  const { fetchGuard } = buildFetchGuard({ opencode: makeProvider() });
+  await withProviderCatalogDiscoveryBudget(180_000, () =>
+    getCachedUpstreamProviderCatalog({ endpoint, providerId: "opencode", timeoutMs, fetchGuard }),
+  );
+  const admitted = fetchGuard.mock.calls[0]?.[0].timeoutMs;
+  expect(admitted).toBeGreaterThan(cap - 1_000);
+  expect(admitted).toBeLessThanOrEqual(cap);
+});
+
+it("preserves a standalone feed's zero timer without sharing a finite pending load", async () => {
+  const unscoped = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const finite = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const fetchGuard = vi
+    .fn<LiveModelCatalogFetchGuard>()
+    .mockImplementationOnce(() => unscoped.promise)
+    .mockImplementationOnce(() => finite.promise);
+  const read = (timeoutMs: number) =>
+    getCachedUpstreamProviderCatalog({
+      endpoint,
+      providerId: "opencode",
+      timeoutMs,
+      fetchGuard,
+    });
+  const noTimer = read(0);
+  const bounded = read(5_000);
+  try {
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+    expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBe(0);
+    expect(fetchGuard.mock.calls[1]?.[0].timeoutMs).toBeGreaterThan(0);
+    expect(fetchGuard.mock.calls[1]?.[0].timeoutMs).toBeLessThanOrEqual(5_000);
+  } finally {
+    const response = () => ({
+      response: new Response(JSON.stringify({ opencode: makeProvider() })),
+      finalUrl: endpoint,
+      release: async () => undefined,
+    });
+    unscoped.resolve(response());
+    finite.resolve(response());
+  }
+  expect(await noTimer).toMatchObject({ id: "opencode" });
+  expect(await bounded).toMatchObject({ id: "opencode" });
 });

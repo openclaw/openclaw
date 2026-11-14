@@ -8,7 +8,7 @@ import {
   readMemory,
   failSessionActorMemoryPublication,
 } from "./session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import {
   addSessionSuggestionInWorker,

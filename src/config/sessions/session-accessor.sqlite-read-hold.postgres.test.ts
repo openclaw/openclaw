@@ -12,16 +12,14 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import {
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsSync,
-} from "./session-accessor.sqlite-read.js";
+import { readTranscriptExportSnapshotReadOnlySync } from "./session-accessor.sqlite-export-read.js";
+import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { prepareSessionMemoryEntries } from "./session-memory-entry.worker.js";
+import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
 
 const MIB = 1024 * 1024;
 const statements = channel("openclaw.database.statement");
@@ -88,9 +86,9 @@ describe.skipIf(!mixedAgentConnection)(
         options: scope,
       };
       // The batch reads synchronously before the first await.
-      let prepared: ReturnType<typeof prepareSessionMemoryEntries> | undefined;
+      let prepared: ReturnType<typeof collectSessionMemoryEntries> | undefined;
       withEngineStoreAdmission(() => {
-        prepared = prepareSessionMemoryEntries([entry]);
+        prepared = collectSessionMemoryEntries([entry]);
       });
       const [result] = await prepared!;
       expect(result && "entry" in result ? result.entry?.content : undefined).toContain("lobster");

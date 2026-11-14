@@ -25,6 +25,7 @@ type ExternalPluginLocalDistParams = {
   repoRoot?: string;
   env?: NodeJS.ProcessEnv;
   logLevel?: "silent" | "warn";
+  controlUiAssetsPrepared?: boolean;
 };
 
 /** Lists external first-party packages that need source-checkout dist output. */
@@ -49,6 +50,8 @@ export async function buildExternalPluginLocalDist(
   const startedAt = performance.now();
   const pluginDirs: string[] = [];
   const generatedAssets = listGeneratedExtensionAssetSources({ rootDir: repoRoot });
+  // Plugin graphs share most SDK and core sources; read each file once per run.
+  const sourceDigests = new Map<string, string>();
   const env = params.env ?? process.env;
   const cacheEnabled = env.OPENCLAW_BUILD_CACHE !== "0";
   const sharedSignature = cacheEnabled
@@ -137,6 +140,7 @@ export async function buildExternalPluginLocalDist(
           step.cache!.env,
           env,
           sharedSignature,
+          sourceDigests,
         );
       },
     };
@@ -170,6 +174,7 @@ export async function buildExternalPluginLocalDist(
     const result = await buildPluginNpmRuntime({
       repoRoot,
       packageDir,
+      controlUiAssetsPrepared: earlyAssets && params.controlUiAssetsPrepared,
       // Standalone package validation owns its existing bundler warnings; this
       // root build still surfaces errors and validates every emitted host import.
       logLevel: params.logLevel ?? "error",
@@ -193,6 +198,13 @@ export async function buildExternalPluginLocalDist(
       fs.rmdirSync(result.outDir);
     }
     if (cacheState) {
+      // The build may regenerate files in its own package; record their new bytes.
+      const packageRoot = `${path.resolve(repoRoot, packageDir)}${path.sep}`;
+      for (const file of sourceDigests.keys()) {
+        if (file.startsWith(packageRoot)) {
+          sourceDigests.delete(file);
+        }
+      }
       cacheState.signature = cacheParams.inputSignature(result.inputFiles);
       cacheState.consumedInputs = result.inputFiles;
       finalizeBuildStepCache(step, cacheState, cacheParams);
@@ -208,7 +220,9 @@ export async function buildExternalPluginLocalDist(
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const result = await buildExternalPluginLocalDist();
+    const result = await buildExternalPluginLocalDist({
+      controlUiAssetsPrepared: process.argv.includes("--control-ui-assets-prepared"),
+    });
     console.log(
       `[external-plugin-local-dist] built ${result.pluginDirs.length} plugins in ${Math.round(result.durationMs)}ms`,
     );

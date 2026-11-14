@@ -119,11 +119,13 @@ describe("canReactToSession", () => {
     expect(canReactToSession(snapshot(cap), { sharingRole, visibility }, options)).toBe(allowed);
   });
 
-  it("requires the advertised write action on a connected, active local session", () => {
+  it("requires the advertised write action for an admitted, active local session", () => {
     const session = { sharingRole: "owner" as const, visibility: "shared" as const };
     const current = snapshot();
+    const retired = createTestGatewayClient(() => ({}));
+    retired.retireOfflineRecoveryScope();
     for (const denied of [
-      { ...current, phase: "offline" as const },
+      { ...current, phase: "offline" as const, client: retired },
       { ...current, client: null },
       { ...current, hello: gatewayHelloForMethods([], ["operator.write"]) },
       { ...current, hello: gatewayHelloForMethods(["session.reactions.set"], ["operator.read"]) },
@@ -133,17 +135,9 @@ describe("canReactToSession", () => {
     expect(canReactToSession(current, session, { ...options, catalog: true })).toBe(false);
     expect(canReactToSession(current, session, { ...options, archived: true })).toBe(false);
     expect(canReactToSession(current, undefined, options)).toBe(false);
-    expect(
-      canReactToSession({ ...current, phase: "reconnecting" }, session, {
-        ...options,
-        allowDeferred: true,
-      }),
-    ).toBe(true);
-    expect(
-      canReactToSession({ ...current, phase: "stopped" }, session, {
-        ...options,
-        allowDeferred: true,
-      }),
-    ).toBe(false);
+    for (const phase of ["offline", "reconnecting"] as const) {
+      expect(canReactToSession({ ...current, phase }, session, options)).toBe(true);
+    }
+    expect(canReactToSession({ ...current, phase: "stopped" }, session, options)).toBe(false);
   });
 });

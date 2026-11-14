@@ -18,10 +18,27 @@ const enCodeBlocks = {
       jsonArrayItems: "Array ({count} items)",
       jsonObjectKeys: "Object ({count} keys)",
     },
+    mermaid: {
+      title: "Mermaid diagram",
+      options: "Diagram options",
+      diagram: "Show diagram",
+      source: "Show source",
+      copySource: "Copy source",
+      expand: "Expand diagram",
+      expandNamed: "Expand diagram: {title}",
+      rendering: "Rendering diagram…",
+      error: "Couldn’t render this diagram. Check the source or simplify it.",
+      rendererError:
+        "Couldn’t load or finish the Mermaid renderer. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
+      imageError: "Couldn’t display the diagram image. Reload the dashboard to try again.",
+    },
   },
 } satisfies TranslationMap;
 
 export const registerCodeBlocksEnglish = Object.assign(
-  () => Object.assign(en.chat.codeBlock, enCodeBlocks.chat.codeBlock),
+  () => {
+    Object.assign(en.chat.codeBlock, enCodeBlocks.chat.codeBlock);
+    Object.assign(en.chat.mermaid, enCodeBlocks.chat.mermaid);
+  },
   { catalog: enCodeBlocks },
 );

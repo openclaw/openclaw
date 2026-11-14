@@ -49,6 +49,9 @@ export class WorktreeRemovalLockError extends Error {
 
 export class SessionWorktreeSourceChangedError extends Error {}
 
+/** The id names no managed worktree record that the requested operation can act on. */
+export class WorktreeRecordNotFoundError extends Error {}
+
 export class SessionWorktreeLifecycleError extends Error {
   constructor(
     message: string,

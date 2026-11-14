@@ -25,7 +25,7 @@ ancestor declaration. A path with no declared ancestor is advanced by default.
 
 Dedicated deep references:
 
-- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
+- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and the Gateway-selected memory-slot owner's dreaming config (with `plugins.entries.memory-core.config.dreaming` retained for Memory CLI).
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog.
 - Owning channel/plugin pages for channel-specific command surfaces.
 
@@ -58,7 +58,7 @@ Per-channel config keys live in [Configuration - channels](/gateway/config-chann
 
 See [Configuration - agents](/gateway/config-agents) for:
 
-- `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
+- `agents.defaults.*` (workspace, model, thinking, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
 - `session.*` (session lifecycle, compaction, pruning)
 - `messages.*` (message delivery, TTS, markdown rendering)
@@ -219,7 +219,7 @@ Moved to [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Automations (`cron`)
 
-Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.failureAlert`.
+Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.delivery`, `cron.agents`, and `cron.creators`, `cron.failureAlert`.
 
 <a id="cronfailurealert"></a>
 

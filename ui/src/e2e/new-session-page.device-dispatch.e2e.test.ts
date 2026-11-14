@@ -1,8 +1,10 @@
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { deferRecoveryScopeHydration } from "./new-session-page.scenario.test-support.ts";
 import {
   pollAttribute,
   pollText,
@@ -194,9 +196,12 @@ suite.define(() => {
             placement: { state: "active", generation: 1 },
           },
           "sessions.describe": {
-            session: { placement: { state: "requested", generation: 1 } },
+            session: {
+              sessionId: `session:${sessionKey}`,
+              placement: { state: "requested", generation: 1 },
+            },
           },
-          "sessions.send": { runId: "run-device-dispatch", status: "started" },
+          "chat.send": { runId: "run-device-dispatch", status: "started" },
         },
       });
       await page.locator("#new-session-where-trigger").click();
@@ -219,9 +224,11 @@ suite.define(() => {
         agentId: "main",
         ...target,
       });
-      const send = await gateway.waitForRequest("sessions.send");
+      const send = await gateway.waitForRequest("chat.send");
       expect(send.params).toMatchObject({
-        key: sessionKey,
+        sessionKey,
+        sessionId: `session:${sessionKey}`,
+        expectedLeafEntryId: null,
         message: "run on the paired device",
       });
       const requests = await gateway.getRequests();
@@ -313,9 +320,7 @@ suite.define(() => {
             profiles: [],
           });
           await pollDisabled(start).toBe(true);
-          await pollAttribute(start.locator("xpath=.."), "content").toContain(
-            "No worker slots are available",
-          );
+          await expectBrowser(start).toHaveAccessibleDescription(/No session slots are available/);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           await page.clock.resume();
           await gateway.emitGatewayEvent("node.runnerInventory.changed", {
@@ -340,20 +345,7 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         if (preference.kind === "cloud") {
           // Recovery hydration must neither restart the catalog nor fall back to Local.
-          await page.addInitScript(() => {
-            const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
-            const delayed = new Promise<void>((resolve) => {
-              window.addEventListener("test-release-recovery-scope", () => resolve(), {
-                once: true,
-              });
-            });
-            crypto.subtle.digest = async (algorithm, data) => {
-              if (new TextDecoder().decode(data) === "e2e-device-token") {
-                await delayed;
-              }
-              return originalDigest(algorithm, data);
-            };
-          });
+          await page.addInitScript(deferRecoveryScopeHydration);
         }
 
         const sessionKey = "agent:main:restored-remote-destination";
@@ -370,8 +362,11 @@ suite.define(() => {
             "worktrees.branches": gitRepository,
             "sessions.create": { key: sessionKey },
             "sessions.list": createdSessionListResult(sessionKey),
-            "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-            "sessions.send": { runId: "run-restored-remote", status: "started" },
+            "sessions.dispatch": {
+              sessionId: `session:${sessionKey}`,
+              placement: { state: "active", generation: 1 },
+            },
+            "chat.send": { runId: "run-restored-remote", status: "started" },
           },
         });
         await pollAttribute(page.locator("#new-session-checkout-trigger"), "data-worktree").toBe(
@@ -387,9 +382,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
         const start = page.getByRole("button", { name: "Start session" });
         await pollDisabled(start).toBe(true);
-        await pollAttribute(start.locator("xpath=.."), "content").toContain(
-          "Restoring your last session setup",
-        );
+        await expectBrowser(start).toHaveAccessibleDescription(/Restoring your last session setup/);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await gateway.resolveDeferred("environments.list");
         const where = page.locator("#new-session-where-trigger");
@@ -412,14 +405,14 @@ suite.define(() => {
       ...rememberedTarget("device", "paired-runner"),
       status: "unavailable",
       availableSlots: 1,
-      reason: "Device unavailable",
+      reason: /Device unavailable/,
     },
     {
       name: "automatic device without worker capacity",
       ...rememberedTarget("auto-device"),
       status: "available",
       availableSlots: 0,
-      reason: "No worker slots are available",
+      reason: /No session slots are available/,
     },
   ])(
     "keeps a remembered $name blocked until the user explicitly switches to Local",
@@ -442,7 +435,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("run only where I choose");
         const start = page.getByRole("button", { name: "Start session" });
         await pollDisabled(start).toBe(true);
-        await pollAttribute(start.locator("xpath=.."), "content").toContain(reason);
+        await expectBrowser(start).toHaveAccessibleDescription(reason);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await where.click();
         const local = page.locator('[data-value="gateway"]');
@@ -486,10 +479,10 @@ suite.define(() => {
       await captureDeviceRuntimeUiProof(suite, page, "01-main-agent-paired-node-selected.png");
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "research", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "research", exact: true }).click();
       await pollText(agentPicker.locator(".agent-select__label")).toBe("research");
       await pollAttribute(where, "data-device-id").toBeNull();
-      await pollText(where.locator(".new-session-page__trigger-label")).toBe("Local");
+      await pollText(where.locator(".new-session-page__trigger-label")).toBe("This computer");
       await captureDeviceRuntimeUiProof(
         suite,
         page,
@@ -502,7 +495,7 @@ suite.define(() => {
       expect(create.params).toMatchObject({ agentId: "research", message });
       expect(create.params).not.toHaveProperty("worktree");
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 
@@ -516,8 +509,7 @@ suite.define(() => {
           operatorScopes: undefined,
           workspaceGit: false,
           methodResponses: {
-            "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-            "sessions.send": { runId: "run-device-recovery", status: "started" },
+            "chat.send": { runId: "run-device-recovery", status: "started" },
           },
         });
         await page.locator("#new-session-where-trigger").click();
@@ -553,14 +545,23 @@ suite.define(() => {
         await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
           params: { key: sessionKey, agentId: "main", ...target },
         });
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-        await gateway.resolveDeferred("sessions.dispatch");
-        await expect(gateway.waitForRequest("sessions.send")).resolves.toMatchObject({
-          params: { key: sessionKey, agentId: "main", message },
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.dispatch", {
+          sessionId: `session:${sessionKey}`,
+          placement: { state: "active", generation: 1 },
+        });
+        await expect(gateway.waitForRequest("chat.send")).resolves.toMatchObject({
+          params: {
+            sessionKey,
+            sessionId: `session:${sessionKey}`,
+            expectedLeafEntryId: null,
+            agentId: "main",
+            message,
+          },
         });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
           timeout: 30_000,
         });

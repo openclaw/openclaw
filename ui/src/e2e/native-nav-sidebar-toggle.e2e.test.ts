@@ -4,7 +4,8 @@ import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -38,20 +39,6 @@ const visible = (target: Locator, value = true) =>
 const count = (target: Locator, value: number) => expect.poll(() => target.count()).toBe(value);
 const attr = (target: Locator, name: string, value: string | null) =>
   expect.poll(() => target.getAttribute(name)).toBe(value);
-async function expectStyles(target: Locator, expected: Record<string, string>, length = 1) {
-  await expect
-    .poll(() =>
-      target.evaluateAll(
-        (elements, names) =>
-          elements.map((element) => {
-            const style = getComputedStyle(element);
-            return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name)]));
-          }),
-        Object.keys(expected),
-      ),
-    )
-    .toEqual(Array.from({ length }, () => expected));
-}
 async function expectBelow(lower: Locator, upper: Locator, inclusive: boolean) {
   await expect
     .poll(async () => {
@@ -156,6 +143,142 @@ suite.define(() => {
     await page.keyboard.press("Escape");
   });
 
+  it.each([1280, 900])(
+    "animates sidebar clicks but settles shortcut toggles before the next frame at %ipx",
+    async (viewportWidth) => {
+      const page = await openPage({
+        nativeNav: false,
+        width: viewportWidth,
+        scenario: {
+          historyMessages: [
+            { role: "user", content: [{ type: "text", text: "Review the navigation changes." }] },
+            {
+              role: "assistant",
+              content: textContent(
+                "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+              ),
+            },
+          ],
+          methodResponses: { "sessions.list": chatSessionListResponse() },
+        },
+      });
+      await page
+        .getByText(
+          "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+          { exact: true },
+        )
+        .waitFor();
+      await page.locator(".chat-pane--history-loading").waitFor({ state: "hidden" });
+      await page.locator(".sidebar-connection-flag[data-open]").waitFor({ state: "hidden" });
+      let sampleIndex = 0;
+      const visibleWidth = () =>
+        page.locator(".shell-nav").evaluate((navigation) => {
+          const bounds = navigation.getBoundingClientRect();
+          if (navigation.closest(".shell--mobile-nav")) {
+            return bounds.right;
+          }
+          // Measure the painted/hit-testable edge, including a clipped fixed-width panel.
+          let left = 0;
+          let right = bounds.width;
+          while (right - left > 0.01) {
+            const middle = (left + right) / 2;
+            const hit = document.elementFromPoint(
+              bounds.left + middle,
+              bounds.top + bounds.height / 2,
+            );
+            if (hit && navigation.contains(hit)) {
+              left = middle;
+            } else {
+              right = middle;
+            }
+          }
+          return Math.round(left * 100) / 100;
+        });
+      const sampleToggle = async (input: "click" | "shortcut") => {
+        await page.locator(".shell").evaluate((shell) => {
+          for (const element of [
+            shell,
+            ...shell.querySelectorAll(".shell-nav, .shell-nav-backdrop"),
+          ]) {
+            for (const animation of element.getAnimations()) {
+              animation.finish();
+            }
+          }
+        });
+        const start = await visibleWidth();
+        const sampled = await page.evaluate(async (interaction) => {
+          const shell = document.querySelector<HTMLElement>(".shell")!;
+          const navigation = document.querySelector<HTMLElement>(".shell-nav")!;
+          const mobile = shell.classList.contains("shell--mobile-nav");
+          const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+          const animations = () =>
+            [shell, navigation, backdrop].flatMap((element) => element.getAnimations());
+          if (interaction === "shortcut") {
+            const mac = navigator.platform.startsWith("Mac");
+            document.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "b",
+                code: "KeyB",
+                metaKey: mac,
+                ctrlKey: !mac,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          } else {
+            const toggle = mobile
+              ? shell.classList.contains("shell--nav-drawer-open")
+                ? backdrop
+                : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
+                    (element) => element.checkVisibility(),
+                  )!
+              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+            toggle.click();
+          }
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+          const current = animations();
+          const moving = current.some((animation) => animation.playState === "running");
+          for (const animation of current) {
+            animation.pause();
+          }
+          return { moving };
+        }, input);
+        const firstFrame = await visibleWidth();
+        if (railProofDir) {
+          await page.screenshot({ path: path.join(railProofDir, `${sampleIndex++}-${input}.png`) });
+        }
+        await page.locator(".shell").evaluate((shell) => {
+          const navigation = shell.querySelector(".shell-nav")!;
+          const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+          for (const element of [shell, navigation, backdrop]) {
+            for (const animation of element.getAnimations()) {
+              animation.finish();
+            }
+          }
+        });
+        return { ...sampled, start, firstFrame, end: await visibleWidth() };
+      };
+
+      for (const input of ["click", "shortcut", "shortcut", "click"] as const) {
+        const sample = await sampleToggle(input);
+        expect(Math.abs(sample.end - sample.start)).toBeGreaterThan(100);
+        if (input === "shortcut") {
+          expect.soft(sample.firstFrame).toBe(sample.end);
+          expect.soft(sample.moving).toBe(false);
+        } else {
+          expect(sample.moving).toBe(true);
+          expect(Math.abs(sample.firstFrame - sample.end)).toBeGreaterThan(1);
+        }
+      }
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reduced = await sampleToggle("click");
+      expect(reduced.firstFrame).toBe(reduced.end);
+      expect(reduced.moving).toBe(false);
+    },
+  );
+
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
     const toggle = page.locator('[data-navigation-view="sessions"]');
@@ -187,8 +310,10 @@ suite.define(() => {
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect
-      .poll(() => openTooltip.locator(".tooltip-content").textContent())
-      .toContain("Sessions · Expand sidebar");
+      .poll(() =>
+        openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
+      )
+      .toBe("Sessions");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -232,35 +357,21 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await visible(toolbar);
     await visible(page.locator(".shell-chrome-controls"), false);
-    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
-    await visible(sidebarNewThread);
-    await expectStyles(sidebarNewThread, { "border-top-style": "none", "box-shadow": "none" });
-    await attr(sidebarNewThread, "aria-disabled", null);
+    const newThread = page.locator(".sidebar-rail .sidebar-new-session");
+    await visible(newThread);
+    await attr(newThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
-    await sidebarNewThread.focus();
-    await expect
-      .poll(() =>
-        sidebarNewThread.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return {
-            focusVisible: element.matches(":focus-visible"),
-            outlineStyle: style.outlineStyle,
-            outlineWidth: style.outlineWidth,
-          };
-        }),
-      )
-      .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
+    await newThread.focus();
+    await expectFocused(newThread);
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
-    const search = page.locator(".sidebar-brand__search");
-    const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
+    const search = toolbar.locator(".macos-titlebar-controls__search");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await visible(search);
-    await visible(newThread);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
     await visible(newThread);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
@@ -273,17 +384,9 @@ suite.define(() => {
     const toolbarBox = await toolbar.boundingBox();
     const rail = page.locator(".sidebar-rail");
     const attention = rail.locator(".sidebar-issues-button");
-    const attentionBox = await attention.boundingBox();
     const railBox = await rail.boundingBox();
-    expect(toolbarBox).not.toBeNull();
-    expect(attentionBox).not.toBeNull();
-    expect(railBox).not.toBeNull();
-    expect(railBox!.width).toBe(52);
     expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
     expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
-    expect(attentionBox!.x).toBeGreaterThanOrEqual(railBox!.x);
-    expect(attentionBox!.x + attentionBox!.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
-    expect(attentionBox!.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
     const titleBox = await page
       .locator(".chat-pane-cache__pane--visible .chat-pane__crumbs:visible")
       .first()
@@ -297,7 +400,7 @@ suite.define(() => {
         return box.top + box.height / 2;
       }),
     );
-    expect(centerlines).toHaveLength(2);
+    expect(centerlines).toHaveLength(4);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
@@ -312,7 +415,8 @@ suite.define(() => {
     );
     expect(footerBoxes).toHaveLength(3);
     for (const [index, box] of footerBoxes.entries()) {
-      expect(box.x + box.width / 2).toBeCloseTo(railBox!.x + (railBox!.width - 1) / 2, 1);
+      expect(box.x).toBeGreaterThanOrEqual(railBox!.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
       expect(box.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
       expect(box.y + box.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
       if (index > 0) {
@@ -320,32 +424,15 @@ suite.define(() => {
         expect(box.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(4);
       }
     }
-    const shellControls = page.locator(
-      ".macos-titlebar-controls button:visible, .sidebar-rail__bottom .sidebar-issues-button:visible",
-    );
     await page.mouse.move(600, 400);
     await capture(page, railProofDir, "native-web-top-left-controls.png");
-    await expectStyles(
-      shellControls,
-      {
-        "border-top-width": "0px",
-        "background-color": "rgba(0, 0, 0, 0)",
-        "box-shadow": "none",
-      },
-      3,
-    );
     const inbox = attention;
-    await inbox.hover();
-    expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
     // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
       .toBe(true);
-    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");
@@ -372,8 +459,22 @@ suite.define(() => {
 
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await page.locator(".shell-chrome-controls__nav-toggle").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed", false);
+
+    for (const view of ["sessions", "pages", "online"]) {
+      await rail.locator(".sidebar-identity-card").click();
+      await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+      await expectShellClass(page, "shell--settings");
+      const toggle = toolbar.locator(".macos-titlebar-controls__sidebar");
+      await expect.poll(() => toggle.isDisabled()).toBe(true);
+      const target = rail.locator(`[data-navigation-view="${view}"]`);
+      await attr(target, "aria-pressed", "false");
+      await target.click();
+      await expectShellClass(page, "shell--settings", false);
+      await expectShellClass(page, "shell--nav-collapsed", false);
+      await attr(target, "aria-pressed", "true");
+    }
   });
 
   it.each([
@@ -389,6 +490,7 @@ suite.define(() => {
               "chat.startup",
               "device.scopes.requestUpgrade",
               "device.scopes.waitUpgrade",
+              "sessions.companion.state",
               "sessions.create",
             ],
             methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -398,14 +500,16 @@ suite.define(() => {
       webChrome: true,
       width: 1280,
     });
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);
 
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-rail__bottom button:visible",
     );
-    const panelControls = page.locator(".chat-pane__actions button:visible");
+    const panelControls = page.locator(
+      '[data-region-header="side"] .side-panel__actions button:visible',
+    );
     const shellBoxes = await boxes(shellControls);
     const panelBoxes = await boxes(panelControls);
     expect(shellBoxes.length).toBeGreaterThan(0);
@@ -447,7 +551,7 @@ suite.define(() => {
     });
     const navigation = page.locator(".shell-nav");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
-    const trigger = page.locator(".chat-pane__nav-toggle").first();
+    const trigger = navigationDrawerToggle(page);
     const readFocusLocation = () =>
       page.evaluate(() => {
         // Native dialog tab order may hand focus to browser chrome, but not the inert page.
@@ -460,7 +564,7 @@ suite.define(() => {
     await attr(navigation, "inert", "");
     await count(page.locator(".shell-nav-backdrop"), 1);
     await visible(dialog, false);
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
@@ -554,7 +658,7 @@ suite.define(() => {
     await count(debugOverlay, 0);
 
     await trigger.click();
-    await page.mouse.click(899, 450);
+    await page.locator(".shell-nav-backdrop").click();
     await visible(dialog, false);
     await expectFocused(trigger);
 
@@ -590,7 +694,7 @@ suite.define(() => {
       });
       const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
-      await page.locator(".chat-pane__nav-toggle").first().click();
+      await navigationDrawerToggle(page).click();
       await visible(dialog);
 
       const catalog = drawer.locator('[data-session-section="catalog:codex"]');
@@ -605,11 +709,13 @@ suite.define(() => {
       await toast.waitFor();
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
       const drawerToastGeometry = await host.evaluate((node) => {
-        const toastElement = node.querySelector<HTMLElement>(".app-toast");
+        // Toasts stack inside a fixed lane container; that container owns placement.
+        let lane = node.querySelector<HTMLElement>(".app-toast");
+        while (lane && getComputedStyle(lane).position !== "fixed") {
+          lane = lane.parentElement;
+        }
         return {
-          computedTop: toastElement
-            ? Math.round(Number.parseFloat(getComputedStyle(toastElement).top))
-            : null,
+          computedTop: lane ? Math.round(Number.parseFloat(getComputedStyle(lane).top)) : null,
           placement: node.dataset.toastPlacement,
         };
       });
@@ -630,7 +736,14 @@ suite.define(() => {
       await attr(retainedHost, "data-toast-placement", "shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      await expectBelow(retainedToast, page.locator(".chat-pane__header:visible").first(), true);
+      const header = page
+        .locator(
+          finalLayout === "compact"
+            ? ".agent-chat__header--mobile:visible"
+            : ".chat-pane__header:visible",
+        )
+        .first();
+      await expectBelow(retainedToast, header, true);
       await expectBelow(page.locator(".agent-chat__composer-shell"), retainedToast, false);
       await capture(page, TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`);
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();

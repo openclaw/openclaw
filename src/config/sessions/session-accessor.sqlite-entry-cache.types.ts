@@ -34,12 +34,13 @@ export type SessionSharingEntry = Pick<
 function selectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
+    clientCapabilities: entry.clientCapabilities,
     previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
+    templateInitialization: entry.templateInitialization,
     providerReview: entry.providerReview,
-    mainRestartRecovery: entry.mainRestartRecovery,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,
     skillLibrarySelections: entry.skillLibrarySelections,
@@ -48,14 +49,21 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
-    ...(entry.subagentRecovery
-      ? {
-          subagentRecovery: {
-            lastRunId: entry.subagentRecovery.lastRunId,
-            sessionLifecycleRunId: entry.subagentRecovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
+    sandboxMode: entry.sandboxMode,
+    execHost: entry.execHost,
+    execCwd: entry.execCwd,
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    subagentRole: entry.subagentRole,
+    subagentControlScope: entry.subagentControlScope,
+    completionOwnerSessionKey: entry.completionOwnerSessionKey,
+    inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
+    inheritedToolAllow: entry.inheritedToolAllow,
+    inheritedToolDeny: entry.inheritedToolDeny,
     archivedAt: entry.archivedAt,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
@@ -65,7 +73,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor,
-    owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,
+    owner: entry.owner,
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
@@ -107,12 +115,23 @@ export function createSessionEntryCreationOperation(): SessionEntryCreationOpera
 export function sessionSharingEntriesEqual(
   previous: InternalSessionEntry | undefined,
   current: InternalSessionEntry | undefined,
+  scope: "sharing" | "session-access" = "sharing",
 ): boolean {
   if (!previous || !current) {
     return false;
   }
   const { updatedAt: _previousUpdatedAt, ...before } = selectSessionSharingEntry(previous);
   const { updatedAt: _currentUpdatedAt, ...after } = selectSessionSharingEntry(current);
+  if (scope === "session-access") {
+    // A person's access does not depend on which run currently owns transcript writes.
+    const {
+      lifecycleRunId: _beforeRun,
+      activeWriterRunId: _beforeWriter,
+      ...beforeAccess
+    } = before;
+    const { lifecycleRunId: _afterRun, activeWriterRunId: _afterWriter, ...afterAccess } = after;
+    return isDeepStrictEqual(beforeAccess, afterAccess);
+  }
   return isDeepStrictEqual(before, after);
 }
 
@@ -148,6 +167,8 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Required patch response facts survive optional full-snapshot receipt bounding. */
+  patchDiffBaselines?: ReadonlyMap<string, NonNullable<SessionEntry["sessionDiffBaseline"]>>;
   conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
   transcriptInventoryUnchanged?: true;
@@ -241,6 +262,7 @@ export type PendingSessionEntryPublication = {
   sharingUnchanged: Set<string>;
   /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
   entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  fullEntryPostimages?: ReadonlyMap<string, SessionEntry>;
   /** An undefined value records a participant command with no projection change. */
   participantProjections?: ReadonlyMap<
     string,

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { hasErrnoCode } from "../infra/errno.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -18,7 +19,6 @@ import {
   createSdkHost,
   expectBytes,
   readText,
-  writeTree,
   type Artifact,
 } from "./plugin-generation-capture.test-support.js";
 import {
@@ -27,6 +27,7 @@ import {
 } from "./plugin-native-admission-state.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -123,7 +124,7 @@ it("records a native host mismatch while preserving unrelated channel accounts",
   });
 });
 
-it("validates overlapping hardlinked companion placements once per member, including recovery", async () => {
+it.each(["hardlink", "copy"] as const)("validates %s placements through recovery", async (kind) => {
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
     writeTree(root, {
@@ -143,6 +144,9 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       }
       symlink(target, link, type);
     });
+    if (kind === "copy") {
+      vi.spyOn(fs, "linkSync").mockImplementation((from, to) => fs.copyFileSync(from, to));
+    }
     const paths = vi.spyOn(fs, "realpathSync");
     const walks = (directory: string) =>
       paths.mock.calls.filter(
@@ -170,7 +174,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect.soft(walks(first.rootDir)).toBe(1);
       const successor = capture();
       expect.soft(walks(successor.rootDir)).toBe(1);
-      expect(nativeInode(successor, root)).toBe(nativeInode(first, root));
+      expect(nativeInode(successor, root) === nativeInode(first, root)).toBe(kind === "hardlink");
       paths.mockClear();
       successor.linkHost(hosts[1]!);
       expect.soft(walks(successor.rootDir)).toBe(1);
@@ -187,6 +191,9 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
       expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
       writeTree(replacement.rootDir, { "helper.dat": "damaged capture" });
+      expect(() => resources.keep(replacement.captureRecoverySource())).toThrow(
+        "Native plugin companions cannot be preserved",
+      );
       expect(() => replacement.linkHost(hosts[0]!)).toThrow(
         "Native plugin companions cannot be preserved",
       );
@@ -290,6 +297,59 @@ it.each([
     });
   },
 );
+
+it("captures native companions into state on another filesystem", async ({ skip }) => {
+  await withOpenClawTestState({ label: "native-cross-device" }, async (state) => {
+    const fixture = createFixture(state.path("image"), true);
+    let captureState: string | undefined;
+    for (const parent of ["/dev/shm", "/tmp", "/var/tmp"]) {
+      try {
+        if (fs.statSync(parent).dev !== fs.statSync(fixture.root).dev) {
+          captureState = fs.mkdtempSync(path.join(parent, "openclaw-native-state-"));
+          break;
+        }
+      } catch (error) {
+        if (
+          !["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EROFS"].some((code) =>
+            hasErrnoCode(error, code),
+          )
+        ) {
+          throw error;
+        }
+      }
+    }
+    if (!captureState) {
+      skip("requires a writable filesystem distinct from the plugin source");
+      return;
+    }
+    try {
+      fixture.index.installRecords = {
+        "fixture-package": { source: "archive", installPath: fixture.installRoot },
+      };
+      const companion = path.join(fixture.root, "README.md");
+      fs.writeFileSync(companion, "native companion sentinel");
+      await using resources = captureResources();
+      const cache = resources.cache();
+      const artifact = resources.keep(
+        withPluginCache(cache, () =>
+          withPluginSourceCaptureStorage({ stateDir: captureState, placement: "state" }, () => {
+            preparePluginNativeAdmissions(fixture.index, cache);
+            return capturePluginGenerationArtifact(fixture.root);
+          }),
+        ),
+      );
+      expect(fs.statSync(fixture.root).dev).not.toBe(fs.statSync(captureState).dev);
+      expectBytes(artifact.resolve(fixture.filename), fixture.bytes);
+      const captured = artifact.resolve(companion);
+      expect(readText(captured)).toBe("native companion sentinel");
+      expect(fs.statSync(captured).dev).toBe(fs.statSync(captureState).dev);
+      expect(fs.statSync(companion).nlink).toBe(1);
+      expect(fs.realpathSync(captured)).not.toBe(companion);
+    } finally {
+      fs.rmSync(captureState, { recursive: true, force: true });
+    }
+  });
+});
 
 it("keeps temporary native inspections from hardlinking rehearsal companions", async () => {
   await withOpenClawTestState({ label: "native-rehearsal-companions" }, async (state) => {

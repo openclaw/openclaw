@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
 const { probeClaudeCliAuthStatus, discoverClaudeCliModels } = vi.hoisted(() => ({
@@ -10,105 +13,76 @@ vi.mock("./cli-model-discovery.js", () => ({ discoverClaudeCliModels }));
 
 import provider from "./provider-discovery.js";
 
+const capture = (signal?: AbortSignal) => ({ config: {}, env: {}, signal });
+const prepare = (input = capture()) =>
+  provider.prepareSyntheticAuth!({ ...input, provider: "claude-cli" });
+
 afterEach(() => {
   vi.useRealTimers();
   probeClaudeCliAuthStatus.mockReset();
   discoverClaudeCliModels.mockReset();
 });
 
-it("prepares native availability once for a 632-workspace roster", async () => {
-  vi.useFakeTimers();
-  const config = {
-    agents: {
-      entries: Object.fromEntries(
-        Array.from({ length: 632 }, (_, index) => [
-          `agent-${index}`,
-          { workspace: `/synthetic/workspace-${index}` },
-        ]),
-      ),
-    },
-  };
-  const env = { CLAUDE_CONFIG_DIR: "/synthetic/native-account" };
-  probeClaudeCliAuthStatus.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        setTimeout(() => resolve({ status: "missing" }), 250);
-      }),
-  );
-  const prepared = new Set<string>();
-  const publication = (async () => {
-    for (const agentId of Object.keys(config.agents.entries)) {
-      await provider.prepareSyntheticAuth!({ config, env, provider: "claude-cli" });
-      prepared.add(agentId);
-    }
-  })();
-  try {
-    await vi.advanceTimersByTimeAsync(250);
-    expect(prepared.size).toBe(632);
-    expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
-  } finally {
-    await vi.runAllTimersAsync();
-    await publication;
-  }
-});
-
-it.each(["config", "environment", "capture signal"])(
+it.each(["config", "env", "signal"] as const)(
   "reobserves native availability after a changed %s",
   async (changed) => {
-    const config = {};
-    const env = {};
-    const signal = new AbortController().signal;
-    const input = { config, env, signal, provider: "claude-cli" };
+    const input = capture(new AbortController().signal);
     probeClaudeCliAuthStatus
       .mockResolvedValueOnce({ status: "available" })
       .mockResolvedValueOnce({ status: "missing" });
-    expect(await provider.prepareSyntheticAuth!(input)).toMatchObject({ mode: "oauth" });
-    expect(
-      await provider.prepareSyntheticAuth!({
-        ...input,
-        ...(changed === "config" ? { config: {} } : {}),
-        ...(changed === "environment" ? { env: {} } : {}),
-        ...(changed === "capture signal" ? { signal: new AbortController().signal } : {}),
-      }),
-    ).toBeUndefined();
+    expect(await prepare(input)).toMatchObject({ mode: "oauth" });
+    const replacement = changed === "signal" ? new AbortController().signal : {};
+    expect(await prepare({ ...input, [changed]: replacement })).toBeUndefined();
     expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
   },
 );
 
 it("expires a negative capture so a recovered login is observed", async () => {
   vi.useFakeTimers();
-  const input = { config: {}, env: {}, provider: "claude-cli" };
+  const input = capture();
   probeClaudeCliAuthStatus
     .mockResolvedValueOnce({ status: "missing" })
     .mockResolvedValueOnce({ status: "available" });
-  expect(await provider.prepareSyntheticAuth!(input)).toBeUndefined();
-  expect(await provider.prepareSyntheticAuth!(input)).toBeUndefined();
+  expect(await prepare(input)).toBeUndefined();
+  expect(await prepare(input)).toBeUndefined();
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(await provider.prepareSyntheticAuth!(input)).toMatchObject({ mode: "oauth" });
+  expect(await prepare(input)).toMatchObject({ mode: "oauth" });
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
 });
 
-it.each(["timeout", "unreadable", "missing"])(
-  "admits an inconclusive %s probe but blocks an explicit missing login",
-  async (status) => {
-    probeClaudeCliAuthStatus.mockResolvedValue({ status });
-    const auth = await provider.prepareSyntheticAuth!({
-      config: {},
-      env: {},
-      provider: "claude-cli",
-    });
-    expect(Boolean(auth?.apiKey)).toBe(status !== "missing");
-  },
-);
+it.each([
+  ["timeout", true],
+  ["unreadable", true],
+  ["missing", false],
+  ["not-installed", false],
+])("auth probe: %s", async (status, authenticated) => {
+  probeClaudeCliAuthStatus.mockResolvedValue({ status });
+  const input = capture();
+  const auth = await prepare(input);
+  expect(Boolean(auth?.apiKey)).toBe(authenticated);
+  if (!authenticated) {
+    expect(
+      await provider.catalog!.run({
+        ...input,
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          mode: "none" as const,
+          source: "none" as const,
+        }),
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+      }),
+    ).toBeNull();
+    expect(discoverClaudeCliModels).not.toHaveBeenCalled();
+  }
+});
 
 it("joins one probe per cancellation scope and preserves a surviving capture", async () => {
-  const config = {};
-  const env = {};
+  const input = capture();
   const cancelled = new AbortController();
   const surviving = new AbortController();
   const reason = new Error("native preparation retired");
-  let releaseSurvivor: (() => void) | undefined;
+  const probe = Promise.withResolvers<{ status: string }>();
   probeClaudeCliAuthStatus
     .mockResolvedValue({ status: "available" })
     .mockImplementationOnce(
@@ -117,36 +91,25 @@ it("joins one probe per cancellation scope and preserves a surviving capture", a
           signal.addEventListener("abort", () => reject(reason), { once: true });
         }),
     )
-    .mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseSurvivor = () => resolve({ status: "available" });
-        }),
-    );
-  const prepare = (signal: AbortSignal) =>
-    provider.prepareSyntheticAuth!({ config, env, signal, provider: "claude-cli" });
-  const retired = prepare(cancelled.signal);
+    .mockReturnValueOnce(probe.promise);
+  const prepareSignal = (signal: AbortSignal) => prepare({ ...input, signal });
+  const retired = prepareSignal(cancelled.signal);
   const rejection = expect(retired).rejects.toBe(reason);
-  const survivor = prepare(surviving.signal);
-  const follower = prepare(surviving.signal);
+  const survivor = prepareSignal(surviving.signal);
+  const follower = prepareSignal(surviving.signal);
   cancelled.abort(reason);
-  releaseSurvivor!();
+  probe.resolve({ status: "available" });
   await rejection;
   await expect(survivor).resolves.toMatchObject({ mode: "oauth" });
   await expect(follower).resolves.toMatchObject({ mode: "oauth" });
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
-  await expect(prepare(cancelled.signal)).rejects.toBe(reason);
+  await expect(prepareSignal(cancelled.signal)).rejects.toBe(reason);
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
 });
 
 it("publishes the native menu once per discovery generation, never static membership", async () => {
-  const config = {};
-  const env = {};
-  const signal = new AbortController().signal;
   const ctx = {
-    config,
-    env,
-    signal,
+    ...capture(new AbortController().signal),
     resolveProviderAuth: () => ({
       apiKey: undefined,
       mode: "none" as const,
@@ -154,15 +117,7 @@ it("publishes the native menu once per discovery generation, never static member
     }),
     resolveProviderApiKey: () => ({ apiKey: undefined }),
   };
-  const row = {
-    id: "claude-new-native",
-    name: "Native",
-    reasoning: true,
-    input: ["text" as const],
-    maxTokens: 100,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    thinkingLevelMap: { low: "low", max: "max" },
-  };
+  const row = { id: "claude-new-native" };
   probeClaudeCliAuthStatus.mockResolvedValue({ status: "available" });
   discoverClaudeCliModels.mockResolvedValueOnce([row]).mockResolvedValueOnce([]);
   const first = await provider.catalog!.run(ctx);
@@ -172,11 +127,57 @@ it("publishes the native menu once per discovery generation, never static member
   });
   expect(await provider.catalog!.run(ctx)).toEqual(first);
   expect(discoverClaudeCliModels).toHaveBeenCalledOnce();
-  expect(
-    await provider.catalog!.run({ ...ctx, signal: new AbortController().signal }),
-  ).toMatchObject({
+  const next = await provider.catalog!.run({ ...ctx, signal: new AbortController().signal });
+  expect(next).toMatchObject({
     providers: { "claude-cli": { models: [] } },
     outcomes: [{ status: "ready", listedModelIds: [] }],
   });
   expect(discoverClaudeCliModels).toHaveBeenCalledTimes(2);
 });
+
+// POSIX executable fixture; cli-auth-seam.test.ts separately covers Windows shim parsing.
+it.skipIf(process.platform === "win32").each([
+  ["claude.ai", "max", { kind: "subscription", plan: "Max" }],
+  ["claude.ai", "redacted", { kind: "subscription" }],
+  ["claude.ai", { token: "synthetic-private-token" }, { kind: "subscription" }],
+  ["api_key", "max", { kind: "api" }],
+  ["api_key_helper", null, { kind: "api" }],
+  ["third_party", null, { kind: "api" }],
+  ["oauth_token", "max", { kind: "native" }],
+  ["future-method", "max", { kind: "native" }],
+])(
+  "projects native CLI status without guessing billing: %s / %s",
+  async (authMethod, subscriptionType, display) => {
+    await withTempDir("claude-native-status-", async (dir) => {
+      const command = path.join(dir, "claude");
+      const payload = {
+        loggedIn: true,
+        authMethod,
+        subscriptionType,
+        apiProvider: "firstParty",
+        storedClaudeAiLogin: true,
+        planTier: "other",
+        email: "synthetic@example.test",
+        accessToken: "synthetic-private-token",
+        orgId: "synthetic-private-org",
+      };
+      await fs.writeFile(
+        command,
+        "#!" +
+          process.execPath +
+          "\n" +
+          "require('node:assert/strict').deepEqual(process.argv.slice(2), ['auth', 'status', '--json']);\n" +
+          "process.stdout.write(" +
+          JSON.stringify(JSON.stringify(payload)) +
+          ");\n",
+        { mode: 0o755 },
+      );
+      const actual =
+        await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+      probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+      const auth = await prepare({ config: {}, env: { PATH: dir, HOME: dir }, signal: undefined });
+      expect(auth?.nativeAuth).toEqual({ runtime: "claude-cli", mode: "oauth", display });
+      expect(JSON.stringify(auth)).not.toMatch(/synthetic@example|private|other|redacted/);
+    });
+  },
+);

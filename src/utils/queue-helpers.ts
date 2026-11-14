@@ -9,12 +9,6 @@ type QueueSummaryState = {
   summaryLines: string[];
 };
 
-type QueueState<T> = QueueSummaryState & {
-  items: T[];
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-};
-
 /** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(state: QueueSummaryState): string | undefined {
   if (state.droppedCount <= 0) {
@@ -32,38 +26,6 @@ export function previewQueueSummaryPrompt(state: QueueSummaryState): string | un
   return lines.join("\n");
 }
 
-/** Apply runtime queue settings while preserving previous values for omitted fields. */
-export function applyQueueRuntimeSettings<TMode extends string>(params: {
-  target: {
-    mode: TMode;
-    debounceMs: number;
-    cap: number;
-    dropPolicy: QueueDropPolicy;
-  };
-  settings: {
-    mode: TMode;
-    debounceMs?: number;
-    cap?: number;
-    dropPolicy?: QueueDropPolicy;
-  };
-}): void {
-  params.target.mode = params.settings.mode;
-  params.target.debounceMs =
-    typeof params.settings.debounceMs === "number"
-      ? Math.max(0, params.settings.debounceMs)
-      : params.target.debounceMs;
-  params.target.cap =
-    typeof params.settings.cap === "number" && params.settings.cap > 0
-      ? Math.floor(params.settings.cap)
-      : params.target.cap;
-  params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
-}
-
-function buildQueueSummaryLine(text: string): string {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  return cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`;
-}
-
 /** Count identities that are still pending in the queue, excluding active deliveries. */
 export function countPendingQueueItems<T>(items: readonly T[], inFlight?: ReadonlySet<T>): number {
   if (!inFlight || inFlight.size === 0) {
@@ -74,7 +36,11 @@ export function countPendingQueueItems<T>(items: readonly T[], inFlight?: Readon
 
 /** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
-  queue: QueueState<T>;
+  queue: QueueSummaryState & {
+    items: T[];
+    cap: number;
+    dropPolicy: QueueDropPolicy;
+  };
   summarize: (item: T) => string;
   onDrop?: (items: T[]) => void;
   onSummaryElide?: (lines: string[]) => void;
@@ -117,7 +83,10 @@ export function applyQueueDropPolicy<T>(params: {
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {
       params.queue.droppedCount += 1;
-      params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
+      const cleaned = params.summarize(item).replace(/\s+/g, " ").trim();
+      params.queue.summaryLines.push(
+        cleaned.length <= 160 ? cleaned : `${truncateUtf16Safe(cleaned, 159).trimEnd()}…`,
+      );
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const summaryLines = params.queue.summaryLines;
@@ -163,17 +132,13 @@ export async function waitForQueueDebounce(
   }
 }
 
-/** Render a collect prompt from queued items and optional overflow summary. */
+/** Render a collect prompt from queued items. */
 export function buildCollectPrompt<T>(params: {
   title: string;
   items: T[];
-  summary?: string;
   renderItem: (item: T, index: number) => string;
 }): string {
   const blocks: string[] = [params.title];
-  if (params.summary) {
-    blocks.push(params.summary);
-  }
   params.items.forEach((item, idx) => {
     blocks.push(params.renderItem(item, idx));
   });

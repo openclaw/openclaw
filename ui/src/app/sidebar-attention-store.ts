@@ -1,4 +1,4 @@
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
   resolveSidebarAttentionKey,
@@ -8,6 +8,7 @@ import {
 import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -16,6 +17,7 @@ import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
   gateway: ApplicationGateway;
+  config: Pick<ApplicationConfigCapability, "current" | "subscribe">;
   agentSelection: AgentSelectionCapability;
   agents: AgentCapability;
   overlays: ApplicationOverlays;
@@ -28,6 +30,7 @@ export type SidebarAttentionStoreOwner = {
   readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
+  refreshOpenClawId(): void;
   dispose(): void;
 };
 
@@ -39,14 +42,9 @@ type SidebarAttentionStoreOwnerConstructor = new (
 export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
 
 export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let owner: SidebarAttentionStoreOwner | null = null;
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
-  // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
+  // Retire dismissals even when no Inbox presenter is mounted, such as mobile Settings.
   const synchronizeScopeUpgradeDismissal = () => {
     const snapshot = sources.gateway.snapshot;
     const scopes = snapshot.hello?.auth?.scopes;
@@ -67,13 +65,16 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
       return owner?.entries ?? [];
     },
     activate(Owner: SidebarAttentionStoreOwnerConstructor) {
-      owner ??= new Owner(sources, publish);
+      owner ??= new Owner(sources, listeners.publish);
       return owner.mentions;
+    },
+    refreshOpenClawId() {
+      owner?.refreshOpenClawId();
     },
     dismiss(dismissal: SidebarAttentionDismissal) {
       owner?.dismiss(dismissal);
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       stopGateway();
       stopScopeUpgrade();

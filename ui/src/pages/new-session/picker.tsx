@@ -1,8 +1,16 @@
 import type { JSX } from "@solidjs/web";
-import { onCleanup } from "solid-js";
+import { Errored, For, Loading, onSettled } from "solid-js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createScrollStateRef } from "../../lib/reactive/scroll-state.ts";
+import { createPickerNavigation, PickerNavigation } from "./picker-navigation.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 export function SessionPicker(props: {
@@ -17,19 +25,26 @@ export function SessionPicker(props: {
   > & { [name: `data-${string}`]: string | undefined };
   params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
+  lazy?: boolean;
+  onBeforeShow?: (event: Event) => void;
   onAfterHide?: () => void;
   ref?: (handle: PopoverHandle) => void;
 }) {
+  const navigation = props.kind === "checkout" ? null : createPickerNavigation();
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   let cleanup: (() => void) | undefined;
-  onCleanup(() => cleanup?.());
+  onSettled(() => () => cleanup?.());
   return (
     <>
       <span
         class={[
           "new-session-page__select",
-          { "new-session-page__select--where": props.kind === "where" },
+          {
+            "new-session-page__select--where": props.kind === "where",
+            "new-session-page__select--project": props.kind === "project",
+            "new-session-page__select--checkout": props.kind === "checkout",
+          },
         ]}
       >
         <button
@@ -61,21 +76,13 @@ export function SessionPicker(props: {
               <span class="new-session-page__trigger-summary">{props.summary}</span>
             </>
           ) : undefined}
-          <span
-            class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-            aria-hidden="true"
-          >
-            <Icon name="chevronDown" />
-          </span>
-          <span
-            class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-            aria-hidden="true"
-          >
-            <Icon name="chevronsUpDown" />
-          </span>
+          <Icon name="chevronsUpDown" class="new-session-page__picker-chevron" />
         </button>
       </span>
       <Popover
+        sameRoot
+        lazy={props.lazy}
+        onBeforeShow={props.onBeforeShow}
         id={`new-session-${props.kind}-popover`}
         label={props.label}
         anchor={trigger}
@@ -87,6 +94,9 @@ export function SessionPicker(props: {
         open={props.params.place.browser.popoverOpen(props.kind)}
         placement="bottom-start"
         onOpenChange={(open) => {
+          if (!open) {
+            navigation?.clear();
+          }
           const callbacks = props.params.place.browser.popoverCallbacks(props.kind);
           callbacks[open ? "onPopoverShow" : "onPopoverHide"]();
         }}
@@ -118,8 +128,93 @@ export function SessionPicker(props: {
           props.ref?.(handle);
         }}
       >
-        {props.children}
+        <div class="new-session-page__picker-panel">
+          <Errored
+            fallback={(error, retry) => (
+              <PickerLoadError
+                error={error()}
+                retry={retry}
+                isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
+              />
+            )}
+          >
+            <Loading fallback={<PickerSkeleton />}>
+              <PickerNavigation value={navigation}>{props.children}</PickerNavigation>
+            </Loading>
+          </Errored>
+        </div>
       </Popover>
     </>
+  );
+}
+
+function PickerLoadError(props: { error: unknown; retry: () => void; isOpen: () => boolean }) {
+  let active = true;
+  onSettled(() => () => {
+    active = false;
+  });
+  const retry = async () => {
+    const stale = isStaleChunkImportError(props.error);
+    const reloading =
+      stale &&
+      (await retryStaleChunkReloadWhenReachable({
+        canReload: () => active && props.isOpen(),
+      }));
+    if (active && props.isOpen() && !reloading) {
+      props.retry();
+    }
+  };
+  return (
+    <LazyViewError
+      error={props.error}
+      stale={isStaleChunkImportError(props.error)}
+      onRetry={() => void retry()}
+      inline
+    />
+  );
+}
+
+export function createPickerScrollRef(presented: () => boolean, content: () => unknown) {
+  return createScrollStateRef(
+    (element, state) => {
+      element.toggleAttribute("data-fade-start", !state.atStart);
+      element.toggleAttribute("data-fade-end", !state.atEnd);
+    },
+    { presented, content },
+  );
+}
+
+/** Shared geometry for pending controls and pending panel rows. */
+export function PickerSkeleton(props: { tray?: boolean; checkout?: boolean; section?: string }) {
+  return (
+    <div
+      class={[
+        "new-session-page__skeletons",
+        {
+          "new-session-page__skeletons--tray": props.tray,
+          "new-session-page__environment-skeletons": Boolean(props.section),
+        },
+      ]}
+      data-section={props.section}
+    >
+      <span class="sr-only" role="status">
+        {t("common.loading")}
+      </span>
+      <For
+        each={props.tray ? (props.checkout ? [112, 84, 72] : [112, 84]) : [148, 116, 132]}
+        keyed={(width) => width}
+      >
+        {(width, index) => (
+          <span
+            class="new-session-page__skeleton-row"
+            aria-hidden="true"
+            style={{ "animation-delay": `${index() * 90}ms` }}
+          >
+            <span class="new-session-page__skeleton-icon" />
+            <span class="new-session-page__skeleton-bar" style={{ width: `${width()}px` }} />
+          </span>
+        )}
+      </For>
+    </div>
   );
 }

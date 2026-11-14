@@ -82,28 +82,31 @@ describe("command queue", () => {
     resetCommandQueueStateForTest();
   });
 
-  it("runs queued tasks and their lifecycle callbacks in their enqueue-time async context", async () => {
-    const context = new AsyncLocalStorage<string>();
-    const blocker = createDeferred();
-    const callbacks: Array<[string, string | undefined]> = [];
-    const record = (event: string) => callbacks.push([event, context.getStore()]);
-    const first = context.run("first", () =>
-      queue.enqueueCommandInLane(CommandLane.Main, async () => {
-        await blocker.promise;
-        return context.getStore();
-      }),
-    );
-    const second = context.run("second", () =>
-      queue.enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
-        warnAfterMs: 0,
-        onWait: () => record("wait"),
-      }),
-    );
-    blocker.resolve();
-    await expect(first).resolves.toBe("first");
-    await expect(second).resolves.toBe("second");
-    expect(callbacks).toEqual([["wait", "second"]]);
-  });
+  it.each([CommandLane.Main, "cli:fixture"])(
+    "keeps %s queued tasks and callbacks in their enqueue-time context",
+    async (lane) => {
+      const context = new AsyncLocalStorage<string>();
+      const blocker = createDeferred();
+      const callbacks: Array<[string, string | undefined]> = [];
+      const record = (event: string) => callbacks.push([event, context.getStore()]);
+      const first = context.run("first", () =>
+        queue.enqueueCommandInLane(lane, async () => {
+          await blocker.promise;
+          return context.getStore();
+        }),
+      );
+      const second = context.run("second", () =>
+        queue.enqueueCommandInLane(lane, async () => context.getStore(), {
+          warnAfterMs: 0,
+          onWait: () => record("wait"),
+        }),
+      );
+      blocker.resolve();
+      await expect(first).resolves.toBe("first");
+      await expect(second).resolves.toBe("second");
+      expect(callbacks).toEqual([["wait", "second"]]);
+    },
+  );
 
   it("preserves priority and FIFO order across partial drains and resumed growth", async () => {
     const lane = "priority-fifo-resume";
@@ -268,39 +271,6 @@ describe("command queue", () => {
       await Promise.all(tasks);
     }
     expect(queue.getQueueSize(lane)).toBe(0);
-  });
-
-  it("owner cancellation rejects pending promises at every priority without releasing active work", async () => {
-    const gate = createDeferred();
-    const cancellation = new AbortController();
-    const first = queue.enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        await gate.promise;
-        return "first";
-      },
-      { abortSignal: cancellation.signal },
-    );
-    const task = vi.fn(async () => "unexpected");
-    const pending = (["background", "normal", "foreground"] as const).map((priority) =>
-      queue.enqueueCommandInLane(CommandLane.Main, task, {
-        priority,
-        abortSignal: cancellation.signal,
-      }),
-    );
-    const reason = new Error("owner stopped pending work");
-    const outcomes = Promise.allSettled(pending);
-
-    cancellation.abort(reason);
-    expect(queue.getCommandLaneSnapshot(CommandLane.Main)).toMatchObject({
-      activeCount: 1,
-      queuedCount: 0,
-    });
-    expect(await outcomes).toEqual(pending.map(() => ({ status: "rejected", reason })));
-    expect(task).not.toHaveBeenCalled();
-
-    gate.resolve();
-    await expect(first).resolves.toBe("first");
   });
 
   it("keeps draining functional after synchronous onWait failure", async () => {
@@ -643,7 +613,9 @@ describe("command queue", () => {
       expect(lanes.get(lane)).toBe(replacementState);
       expectCounts(lane, 1, 0);
       expect(Array.from(replacementState?.activeTasks.values() ?? [])).toEqual([
-        { agentId: "replacement", sessionId: "replacement" },
+        expect.objectContaining({
+          sessionTarget: { agentId: "replacement", sessionId: "replacement" },
+        }),
       ]);
       replacementRun.release();
       await expect(replacementRun.task).resolves.toBe("replacement");

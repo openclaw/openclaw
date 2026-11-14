@@ -10,14 +10,12 @@ import { resolveAuthorizedComponentInteraction } from "./agent-components-guild-
 import type { AgentComponentContext } from "./agent-components.types.js";
 
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionResolver = typeof questionGatewayRuntime.resolveOption;
-
-function createQuestionButton(ctx: {
+export function createDiscordQuestionButton(params: {
   cfg: ResolveQuestionParams["cfg"];
   accountId: string;
-  resolveQuestion: QuestionResolver;
-  authorizeQuestion: (interaction: BaseComponentInteraction) => Promise<boolean>;
+  authContext?: AgentComponentContext;
 }): BaseMessageInteractiveComponent {
+  const authContext = params.authContext ?? { cfg: params.cfg, accountId: params.accountId };
   return {
     type: ComponentType.Button,
     customId: "ocq:id=seed;i=0",
@@ -27,7 +25,15 @@ function createQuestionButton(ctx: {
         await interaction.reply({ content: "This question is no longer valid.", ephemeral: true });
         return;
       }
-      if (!(await ctx.authorizeQuestion(interaction))) {
+      if (
+        !(await resolveAuthorizedComponentInteraction({
+          ctx: authContext,
+          interaction,
+          label: "discord question",
+          componentLabel: "button",
+          unauthorizedReply: "You are not authorized to answer this question.",
+        }))
+      ) {
         return;
       }
       try {
@@ -37,12 +43,12 @@ function createQuestionButton(ctx: {
       }
       let content: string;
       try {
-        const result = await ctx.resolveQuestion({
-          cfg: ctx.cfg,
+        const result = await questionGatewayRuntime.resolveOption({
+          cfg: params.cfg,
           questionId: callback.questionId,
           optionIndex: callback.optionIndex,
           senderId: interaction.userId,
-          clientDisplayName: `Discord question (${ctx.accountId})`,
+          clientDisplayName: `Discord question (${params.accountId})`,
         });
         content =
           result.status === "answered"
@@ -62,31 +68,4 @@ function createQuestionButton(ctx: {
       }
     },
   };
-}
-
-export function createDiscordQuestionButton(params: {
-  cfg: ResolveQuestionParams["cfg"];
-  accountId: string;
-  authContext?: AgentComponentContext;
-  authorizeQuestion?: (interaction: BaseComponentInteraction) => Promise<boolean>;
-  resolveQuestion?: QuestionResolver;
-}): BaseMessageInteractiveComponent {
-  const authContext = params.authContext ?? { cfg: params.cfg, accountId: params.accountId };
-  return createQuestionButton({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    resolveQuestion: params.resolveQuestion ?? questionGatewayRuntime.resolveOption,
-    authorizeQuestion:
-      params.authorizeQuestion ??
-      (async (interaction) =>
-        Boolean(
-          await resolveAuthorizedComponentInteraction({
-            ctx: authContext,
-            interaction,
-            label: "discord question",
-            componentLabel: "button",
-            unauthorizedReply: "You are not authorized to answer this question.",
-          }),
-        )),
-  });
 }

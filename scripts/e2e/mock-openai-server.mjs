@@ -1,6 +1,6 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
@@ -26,6 +26,8 @@ const port =
 const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+// Benchmark timing only: arrival and close times, never request content.
+const timingLog = process.env.MOCK_TIMING_LOG;
 // Absolute record ordinal, stamped at the producer: consumers expose a bounded
 // tail of the log, so entries must carry their own position. The server starts
 // once per run, so the counter spans the whole session.
@@ -211,7 +213,23 @@ function readResponseEntry(value, label) {
   if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
     throw new Error(`${label} text is invalid`);
   }
-  return { text: value.text, chunkDelayMs };
+  if (value.toolCall === undefined) {
+    return { text: value.text, chunkDelayMs };
+  }
+  // Chat Completions only: stream this tool call first, then `text` once the tool result arrives.
+  const { name, arguments: args, argumentChunkChars } = value.toolCall ?? {};
+  if (
+    typeof name !== "string" ||
+    !name ||
+    !args ||
+    typeof args !== "object" ||
+    Array.isArray(args) ||
+    (argumentChunkChars !== undefined &&
+      (!Number.isSafeInteger(argumentChunkChars) || argumentChunkChars < 1))
+  ) {
+    throw new Error(`${label} toolCall is invalid`);
+  }
+  return { text: value.text, chunkDelayMs, toolCall: { name, args, argumentChunkChars } };
 }
 
 function readResponseControl() {
@@ -562,7 +580,14 @@ function writeChatCompletion(res, stream, text = successMarker) {
 }
 
 /** Streams assistant content, then a tool call, in one chat-completions turn. */
-function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) {
+function writeChatCompletionPreambleToolCall(
+  res,
+  stream,
+  preamble,
+  name,
+  args,
+  argumentChunkChars = Number.POSITIVE_INFINITY,
+) {
   const serialized = JSON.stringify(args);
   const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
   if (!stream) {
@@ -579,16 +604,29 @@ function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) 
     );
     return;
   }
+  // Real providers stream arguments a few characters per chunk; the first chunk opens the call.
+  const argumentChunks = [];
+  for (let index = 0; index < serialized.length; index += argumentChunkChars) {
+    argumentChunks.push(serialized.slice(index, index + argumentChunkChars));
+  }
   writeChatCompletionChunks(res, [
     { delta: { role: "assistant", content: "" } },
     ...splitResponseText(preamble).map((content) => ({ delta: { content } })),
     {
       delta: {
         tool_calls: [
-          { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+          {
+            index: 0,
+            id: callId,
+            type: "function",
+            function: { name, arguments: argumentChunks[0] ?? "" },
+          },
         ],
       },
     },
+    ...argumentChunks.slice(1).map((chunk) => ({
+      delta: { tool_calls: [{ index: 0, function: { arguments: chunk } }] },
+    })),
     { delta: {}, finish_reason: "tool_calls" },
   ]);
 }
@@ -808,6 +846,15 @@ const server = http.createServer((req, res) => {
               : "other";
     requests.ingress[route] += 1;
     const scriptedRoute = route === "responses" || route === "chatCompletions";
+    if (timingLog && scriptedRoute) {
+      const receivedAtMs = Date.now();
+      res.once("close", () => {
+        appendFileSync(
+          timingLog,
+          `${JSON.stringify({ route, receivedAtMs, closedAtMs: Date.now() })}\n`,
+        );
+      });
+    }
     // Reserve before body reads or hold waits so concurrent turns consume the script
     // in arrival order. The explicit version survives hold-only control rewrites.
     const controlSelection = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
@@ -908,9 +955,8 @@ const server = http.createServer((req, res) => {
     }
 
     if (route === "chatCompletions") {
-      // Progress-draft proof needs assistant content followed by a tool call in
-      // one streamed turn: the completions transport tags that leading text as
-      // commentary, which channels render as the draft status headline.
+      // This unphased completions fixture proves tool progress and finalization.
+      // Commentary proof uses the Responses fixture's explicit commentary phase.
       if (!selectedResponse && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
         const toolTurnDone = hasCurrentTurnToolOutput(messages);
@@ -931,6 +977,21 @@ const server = http.createServer((req, res) => {
         requests.selections.automaticText += 1;
         await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
+        return;
+      }
+      const toolCall = selectedResponse?.response.toolCall;
+      if (
+        toolCall &&
+        !hasCurrentTurnToolOutput(Array.isArray(body.messages) ? body.messages : [])
+      ) {
+        writeChatCompletionPreambleToolCall(
+          res,
+          body.stream !== false,
+          "",
+          toolCall.name,
+          toolCall.args,
+          toolCall.argumentChunkChars,
+        );
         return;
       }
       if (!selectedResponse) {

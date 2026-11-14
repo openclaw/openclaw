@@ -23,8 +23,9 @@ import {
   readClaimsFromStores,
   prepareComparisonClaimsFromStores,
   storesHaveLegacyAgentSessionKey,
+  readDeferredLegacyMainSessionInspection,
 } from "./legacy-main-session-key-scan.js";
-import { claimsMatch, restoreColdSessionClaims } from "./legacy-main-session-migration-claims.js";
+import { claimsMatch } from "./legacy-main-session-migration-claims.js";
 import {
   processIdenticalClaims,
   describeIdenticalClaims,
@@ -32,6 +33,7 @@ import {
   samePhysicalStore,
   warningForDivergence,
 } from "./legacy-main-session-migration-operations.js";
+import { restoreColdSessionClaims } from "./legacy-main-session-migration-restore.js";
 import type {
   LegacyMainSessionMigrationMode,
   LegacyMainSessionMigrationOutcome,
@@ -378,6 +380,17 @@ async function migrateLegacyMainSessionKeysInternal(
     mainKey,
     warnings: [] as string[],
   };
+  if (mode === "detect" && (arming.armed || arming.reason === "owner-unresolved")) {
+    const deferred = readDeferredLegacyMainSessionInspection({
+      env,
+      legacyAgentId,
+      mainKey,
+      ...(arming.armed ? { ownerAgentId: arming.ownerAgentId } : {}),
+    });
+    if (deferred) {
+      return deferred;
+    }
+  }
   if (!arming.armed) {
     if (arming.reason === "owner-unresolved") {
       // Owner guidance is useful only when legacy rows may exist; unreadable or JSON
@@ -387,7 +400,7 @@ async function migrateLegacyMainSessionKeysInternal(
         const resolved = withEngineStoreAdmission(() =>
           resolvePhysicalStores({ cfg, env, legacyAgentId, mode }),
         );
-        base.warnings.push(...resolved.warnings);
+        base.warnings = resolved.warnings;
         rowsMayExist =
           resolved.unreadable.length > 0 ||
           resolved.jsonPaths.length > 0 ||

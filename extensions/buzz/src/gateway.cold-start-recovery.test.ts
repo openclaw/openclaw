@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, matchFilter, type Event, type Filter } from "nostr-tools";
 import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -11,6 +11,7 @@ import {
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -26,35 +27,9 @@ const relayMocks = vi.hoisted(() => ({
   dropSubscriptionReason: undefined as string | undefined,
 }));
 
-function matchesRelayFilter(event: Event, filter: Filter): boolean {
-  if (filter.kinds && !filter.kinds.includes(event.kind)) {
-    return false;
-  }
-  if (filter.authors && !filter.authors.includes(event.pubkey)) {
-    return false;
-  }
-  for (const [key, values] of Object.entries(filter)) {
-    if (!key.startsWith("#") || !Array.isArray(values)) {
-      continue;
-    }
-    const tagName = key.slice(1);
-    const tagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1] ?? "");
-    if (!tagValues.some((value) => (values as string[]).includes(value))) {
-      return false;
-    }
-  }
-  if (filter.since !== undefined && event.created_at < filter.since) {
-    return false;
-  }
-  if (filter.until !== undefined && event.created_at > filter.until) {
-    return false;
-  }
-  return true;
-}
-
 function selectRelayEvents(filter: Filter): Event[] {
   const matched = relayMocks.storedEvents
-    .filter((event) => matchesRelayFilter(event, filter))
+    .filter((event) => matchFilter(filter, event))
     .toSorted((left, right) => right.created_at - left.created_at);
   return filter.limit === undefined ? matched : matched.slice(0, filter.limit);
 }
@@ -121,6 +96,13 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
 }));
 
+// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
+// most of waitForSettled's budget before the reconnect even starts.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
+
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
@@ -158,15 +140,8 @@ function advanceSeconds(seconds: number): void {
 }
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
-  let settle = () => {};
-  let fail = (_error: Error) => {};
-  gates.set(
-    text,
-    new Promise<void>((resolve, reject) => {
-      settle = resolve;
-      fail = reject;
-    }),
-  );
+  const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
+  gates.set(text, promise);
   return { settle, fail };
 }
 
@@ -320,12 +295,7 @@ beforeEach(() => {
         createPluginStateKeyedStoreForTests<T>("buzz", options),
     },
   } as never);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      Response.json({ self: RELAY_PUBLIC_KEY, software: "https://github.com/block/buzz" }),
-    ),
-  );
+  vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
 });
 
 afterEach(async () => {

@@ -3,6 +3,7 @@
  * This handler is called before built-in command handlers.
  */
 
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -11,11 +12,18 @@ import {
   executePluginCommandDispatch,
   matchPluginCommandInvocation,
   PLUGIN_COMMAND_DISPATCH,
+  pluginCommandResultContinuesAgent,
+  takeContinuedPluginCommandResult,
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
+import { createPluginRequesterModels } from "../../plugins/requester-models.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+
+const CONSUMED_PLUGIN_COMMAND = Object.freeze({ kind: "non-plugin" as const });
 
 /**
  * Handle plugin-registered commands.
@@ -31,6 +39,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
   const planned = (params.opts as PluginCommandExecutionReplyOptions | undefined)?.[
     PLUGIN_COMMAND_DISPATCH
   ];
+  if (planned === CONSUMED_PLUGIN_COMMAND) {
+    // The turn's plugin command already ran and continued; it still owns this command body.
+    return { shouldContinue: true };
+  }
   if (planned?.kind === "non-plugin") {
     return null;
   }
@@ -65,52 +77,109 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
       }
     : undefined;
 
-  const result = await executePluginCommandDispatch(dispatch, {
+  const invocation = {
     ...buildPluginCommandContext(params),
     sessionId: targetSessionEntry?.sessionId,
     sessionTarget,
     sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody: command.commandBodyNormalized,
-    ...(sessionTarget
-      ? {
-          runtimeContext: {
-            compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
-              if (!params.command.isAuthorizedSender) {
-                return { compacted: false, reason: "compaction requires authorization" };
-              }
-              const compaction = await handleCompactCommand(
-                {
-                  ...params,
-                  command: { ...params.command, commandBodyNormalized: "/compact" },
-                  commandInvocationSignal: invocationSignal,
-                  compactionSessionEntry: targetSessionEntry,
-                  opts: {
-                    ...params.opts,
-                    abortSignal:
-                      invocationSignal && params.opts?.abortSignal
-                        ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
-                        : (invocationSignal ?? params.opts?.abortSignal),
-                  },
-                },
-                true,
-                assertOwnerCurrent,
-              );
-              return (
-                compaction?.sessionCompaction ?? {
-                  compacted: false,
-                  reason: "compaction unavailable",
+  };
+  const execute = async (
+    createSubagents?: import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory,
+  ) =>
+    await executePluginCommandDispatch(dispatch, {
+      ...invocation,
+      ...(sessionTarget
+        ? {
+            runtimeContext: {
+              createSubagents,
+              createModels: ({ signal, assertCurrent }) =>
+                createPluginRequesterModels({
+                  config: cfg,
+                  agentId: targetAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: targetSessionEntry?.sessionId,
+                  authority: params.opts?.operatorAuthority,
+                  signal: params.opts?.abortSignal
+                    ? AbortSignal.any([signal, params.opts.abortSignal])
+                    : signal,
+                  assertCurrent,
+                }),
+              compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
+                if (!params.command.isAuthorizedSender) {
+                  return { compacted: false, reason: "compaction requires authorization" };
                 }
-              );
+                const compaction = await handleCompactCommand(
+                  {
+                    ...params,
+                    command: { ...params.command, commandBodyNormalized: "/compact" },
+                    commandInvocationSignal: invocationSignal,
+                    compactionSessionEntry: targetSessionEntry,
+                    opts: {
+                      ...params.opts,
+                      abortSignal:
+                        invocationSignal && params.opts?.abortSignal
+                          ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
+                          : (invocationSignal ?? params.opts?.abortSignal),
+                    },
+                  },
+                  true,
+                  assertOwnerCurrent,
+                );
+                return (
+                  compaction?.sessionCompaction ?? {
+                    compacted: false,
+                    reason: "compaction unavailable",
+                  }
+                );
+              },
             },
+          }
+        : {}),
+    });
+  const withNative = params.opts?.withCommandNativeSubagents;
+  // A native channel surface already ran this dispatch and is handing its continuation over;
+  // it is re-authorized against this turn's current requester facts before the agent runs.
+  const result =
+    (await takeContinuedPluginCommandResult(dispatch, invocation)) ??
+    (withNative && targetSessionEntry?.sessionId
+      ? await withNative(
+          {
+            agentId: targetAgentId,
+            sessionKey: params.sessionKey,
+            entry: targetSessionEntry,
+            storePath: sessionTarget?.storePath,
+            commandBody: command.commandBodyNormalized,
           },
-        }
-      : {}),
-  });
-  const { continueAgent, ...reply } = result;
+          execute,
+        )
+      : await execute());
+  const { continueAgent: continuation, suppressReply, ...reply } = result;
+  const prompt = typeof continuation === "object" ? continuation?.prompt : undefined;
+  const continueAgent = pluginCommandResultContinuesAgent(result);
+  if (prompt !== undefined) {
+    // Same rewrite core command sugar uses: this turn's text becomes the prompt everywhere.
+    applyCommandTextToParams(params, prompt);
+  }
+  if (continueAgent && params.opts) {
+    // This turn's plugin command already ran; later command passes of the turn must not run it again.
+    Object.assign(params.opts, { [PLUGIN_COMMAND_DISPATCH]: CONSUMED_PLUGIN_COMMAND });
+  }
+  if (suppressReply === true) {
+    // The handler already delivered its own response; a turn that requires a result still records it missing.
+    const runState = resolveReplyOperationRunState(params.opts);
+    if (runState && !continueAgent && runState.replyCompletion?.outcome !== "blocked") {
+      runState.replyCompletion = resolveReplyCompletion(
+        runState.replyCompletion?.expectation ?? "optional",
+        "silent",
+      );
+    }
+    return { shouldContinue: continueAgent, reply: undefined };
+  }
 
   return {
-    shouldContinue: continueAgent === true,
+    shouldContinue: continueAgent,
     reply: Object.keys(reply).length > 0 ? reply : undefined,
   };
 };

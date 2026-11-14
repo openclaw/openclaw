@@ -20,8 +20,14 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import { assertReadableSharedGitHubPublication } from "./github-publication-receipt.js";
-import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-publication-read.worker.js";
-import { terminalRepositoryGitHubPublication } from "./github-repository-publication-store.js";
+import {
+  listRepositoryGitHubPublicationsInDatabase,
+  readRepositoryGitHubPublicationInputInDatabase,
+} from "./github-repository-publication-read.worker.js";
+import {
+  terminalRepositoryGitHubPublication,
+  retryableRepositoryGitHubPublication,
+} from "./github-repository-publication-store.js";
 import {
   checkRepositoryGitHubPublication as checked,
   repositoryGitHubPublicationDigest,
@@ -252,18 +258,9 @@ export function writeRepositoryGitHubPublicationInDatabase(
   instanceId: string,
   executionId: string,
   values: Partial<RepositoryGitHubPublicationRow>,
-  requireAction: boolean,
-  authority: { assertCustody: () => void; assertCurrent: () => void },
 ) {
   const { db } = database;
   // The execution CAS retains result custody after workspace admission ends.
-  if (requireAction) {
-    authority.assertCustody();
-    authority.assertCurrent();
-    if (!row.checkpoint_ref || !row.checkpoint_digest || !row.workspace_tree) {
-      throw new Error("GitHub publication requires its accepted checkpoint.");
-    }
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -306,10 +303,51 @@ export function writeRepositoryGitHubPublicationInDatabase(
   if (!updated) {
     throw new Error("GitHub publication execution is no longer current.");
   }
-  if (requireAction) {
-    authority.assertCustody();
-    authority.assertCurrent();
+  return changed(db, updated);
+}
+
+export function reopenRepositoryGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: RepositoryGitHubPublicationRow,
+  assertCurrent: () => void,
+): RepositoryGitHubPublicationRow {
+  const { db } = database;
+  assertCurrent();
+  const current = readRepositoryGitHubPublicationInDatabase(db, row.request_id);
+  if (
+    !current ||
+    current.request_digest !== row.request_digest ||
+    !retryableRepositoryGitHubPublication(
+      current,
+      current.error_code === "unavailable"
+        ? undefined
+        : readRepositoryGitHubPublicationInputInDatabase(db, { row: current }),
+    )
+  ) {
+    throw new Error("GitHub publication is not eligible for retry.");
   }
+  const updated = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .updateTable(table)
+      .set({
+        status: "requested",
+        gateway_instance_id: null,
+        execution_id: null,
+        error_code: null,
+        next_action: null,
+        reported_at_ms: null,
+        updated_at_ms: Date.now(),
+      })
+      .where("request_id", "=", current.request_id)
+      .where("request_digest", "=", current.request_digest)
+      .where("status", "=", "failed")
+      .returningAll(),
+  );
+  if (!updated) {
+    throw new Error("GitHub publication retry ownership changed.");
+  }
+  assertCurrent();
   return changed(db, updated);
 }
 

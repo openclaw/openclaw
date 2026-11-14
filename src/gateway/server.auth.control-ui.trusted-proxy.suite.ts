@@ -12,7 +12,6 @@ import {
   openWs,
   readConnectChallengeNonce,
   rpcReq,
-  testState,
   TRUSTED_PROXY_CONTROL_UI_HEADERS,
 } from "./server.auth.test-helpers.js";
 
@@ -70,29 +69,7 @@ export function registerControlUiTrustedProxySuite(): void {
   const withTrustedProxyControlUiServer = async (
     run: (port: number) => Promise<void>,
   ): Promise<void> => {
-    const { replaceConfigFile } = await import("../config/config.js");
-    testState.gatewayAuth = undefined;
-    testState.gatewayControlUi = {
-      ...testState.gatewayControlUi,
-      allowedOrigins: ["https://localhost"],
-    };
-    await replaceConfigFile({
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          },
-          trustedProxies: ["127.0.0.1"],
-          controlUi: { allowedOrigins: ["https://localhost"] },
-        },
-      },
-      afterWrite: { mode: "auto" },
-    });
+    await configureTrustedProxyControlUiAuth({ allowLoopback: true });
     await withControlUiGatewayServer(async ({ port }) => await run(port));
   };
 
@@ -146,7 +123,7 @@ export function registerControlUiTrustedProxySuite(): void {
         expect(payload?.auth?.scopes).toEqual([]);
         expect(payload?.auth?.deviceToken).toBeUndefined();
 
-        const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        const admin = await rpcReq(ws, "exec.approvals.get", {});
         expect(admin.ok).toBe(false);
         expect(admin.error?.message ?? "").toContain("missing scope");
       } finally {
@@ -195,7 +172,7 @@ export function registerControlUiTrustedProxySuite(): void {
         expect(payload?.auth?.scopes).toEqual(["operator.read"]);
         expect(payload?.auth?.deviceToken).toBeUndefined();
 
-        const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        const admin = await rpcReq(ws, "exec.approvals.get", {});
         expect(admin.ok).toBe(false);
         expect(admin.error?.message ?? "").toContain("missing scope");
 

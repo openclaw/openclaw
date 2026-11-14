@@ -5,7 +5,6 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
-import { displayAction, MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon: string;
@@ -16,6 +15,10 @@ type ToolDisplayConfig = {
   fallback: ToolDisplaySpec;
   tools: Record<string, ToolDisplaySpec>;
 };
+
+function displayAction(label: string, detailKeys?: string[]) {
+  return detailKeys === undefined ? { label } : { label, detailKeys };
+}
 
 function displayTool(icon: string, title: string, detailKeys?: string[]): ToolDisplaySpec {
   return detailKeys === undefined ? { icon, title } : { icon, title, detailKeys };
@@ -138,7 +141,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       icon: "monitorSmartphone",
       title: "Nodes",
       actions: {
-        status: displayAction("status"),
+        status: { ...displayAction("status"), progress: { label: "List nodes", detailKeys: [] } },
+        invoke: {
+          label: "invoke",
+          detailKeys: ["invokeCommand", "node", "nodeId"],
+          progress: {
+            label: "Invoke node operation",
+            detailKeys: ["invokeCommand", "node", "nodeId"],
+          },
+        },
         describe: displayAction("describe", ["node", "nodeId"]),
         pending: displayAction("pending"),
         approve: displayAction("approve", ["requestId"]),
@@ -193,6 +204,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     suggest_task: displayTool("spark", "Suggest Task", ["title", "tldr", "cwd"]),
     dismiss_task: displayTool("trash", "Dismiss Task", ["task_id", "reason"]),
     skill_workshop: displayTool("wrench", "Skill Workshop", ["action", "name", "proposal_id"]),
+    skill_library: displayTool("wrench", "Skill Library", ["action", "name", "skill_id"]),
     openclaw: displayTool("claw", "OpenClaw", ["action", "path", "model"]),
     gateway: displayTool("plug", "Gateway", ["action", "path"]),
     plugins: displayTool("puzzle", "Plugins", ["action", "pluginId", "packageName", "query"]),
@@ -239,17 +251,22 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       "conversationRef",
       "timeoutSeconds",
     ]),
-    sessions_send: displayTool("send", "Session Send", [
-      "label",
-      "sessionKey",
-      "agentId",
-      "timeoutSeconds",
-    ]),
-    sessions_history: displayTool("fileText", "Session History", [
-      "sessionKey",
-      "limit",
-      "includeTools",
-    ]),
+    knowledge_record: {
+      ...displayTool("fileText", "Knowledge Record"),
+      progress: { label: "Read knowledge record", detailKeys: [] },
+    },
+    knowledge_remember: {
+      ...displayTool("brain", "Knowledge Remember"),
+      progress: { label: "Remember knowledge", detailKeys: [] },
+    },
+    sessions_send: {
+      ...displayTool("send", "Session Send", ["label", "sessionKey", "agentId", "timeoutSeconds"]),
+      progress: { label: "Send to session", detailKeys: ["label"], referenceKey: "sessionKey" },
+    },
+    sessions_history: {
+      ...displayTool("fileText", "Session History", ["sessionKey", "limit", "includeTools"]),
+      progress: { label: "Read session history", detailKeys: [], referenceKey: "sessionKey" },
+    },
     sessions_search: displayTool("search", "Session Search", ["query", "sessionKey", "limit"]),
     transcripts: {
       icon: "mic",
@@ -276,15 +293,18 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         summarize: displayAction("summarize", ["sessionId"]),
       },
     },
-    sessions_spawn: displayTool("bot", "Sub-agent", [
-      "label",
-      "taskName",
-      "agentId",
-      "model",
-      "thinking",
-      "runTimeoutSeconds",
-      "cleanup",
-    ]),
+    sessions_spawn: {
+      ...displayTool("bot", "Sub-agent", [
+        "label",
+        "taskName",
+        "agentId",
+        "model",
+        "thinking",
+        "runTimeoutSeconds",
+        "cleanup",
+      ]),
+      progress: { label: "Start subagent", detailKeys: ["label"] },
+    },
     agents_wait: displayTool("clock", "Wait for Agents", ["ids", "timeoutSeconds"]),
     structured_output: displayTool("fileText", "Structured Output", ["result"]),
     subagents: {
@@ -292,8 +312,14 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Subagents",
       actions: {
         list: displayAction("list", ["recentMinutes"]),
-        kill: displayAction("kill", ["target"]),
-        steer: displayAction("steer", ["target"]),
+        kill: {
+          ...displayAction("kill", ["target"]),
+          progress: { label: "Stop subagent", detailKeys: ["target"], referenceKey: "target" },
+        },
+        steer: {
+          ...displayAction("steer", ["target"]),
+          progress: { label: "Send to subagent", detailKeys: ["target"], referenceKey: "target" },
+        },
       },
     },
     agents_list: displayTool("users", "Agents", []),
@@ -305,7 +331,44 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     web_fetch: displayTool("globe", "Web Fetch", ["url", "extractMode", "maxChars"]),
     code_execution: displayTool("braces", "Code Execution", ["task"]),
     decision_evaluate: displayTool("shieldCheck", "Decision Evaluation", []),
-    message: MESSAGE_TOOL_DISPLAY_SPEC,
+    /** Display metadata for the transport-neutral message action surface. */
+    message: {
+      icon: "mail",
+      title: "Message",
+      actions: {
+        send: displayAction("send", ["provider", "to", "media", "replyTo", "threadId"]),
+        poll: displayAction("poll", ["provider", "to", "pollQuestion"]),
+        react: displayAction("react", ["provider", "to", "messageId", "emoji", "remove"]),
+        reactions: displayAction("reactions", ["provider", "to", "messageId", "limit"]),
+        read: displayAction("read", ["provider", "to", "limit"]),
+        edit: displayAction("edit", ["provider", "to", "messageId"]),
+        delete: displayAction("delete", ["provider", "to", "messageId"]),
+        pin: displayAction("pin", ["provider", "to", "messageId"]),
+        unpin: displayAction("unpin", ["provider", "to", "messageId"]),
+        "list-pins": displayAction("list pins", ["provider", "to"]),
+        permissions: displayAction("permissions", ["provider", "channelId", "to"]),
+        "thread-create": displayAction("thread create", ["provider", "channelId", "threadName"]),
+        "thread-list": displayAction("thread list", ["provider", "guildId", "channelId"]),
+        "thread-reply": displayAction("thread reply", ["provider", "channelId", "messageId"]),
+        search: displayAction("search", ["provider", "guildId", "query"]),
+        sticker: displayAction("sticker", ["provider", "to", "stickerId"]),
+        "member-info": displayAction("member", ["provider", "guildId", "userId"]),
+        "role-info": displayAction("roles", ["provider", "guildId"]),
+        "emoji-list": displayAction("emoji list", ["provider", "guildId"]),
+        "emoji-upload": displayAction("emoji upload", ["provider", "guildId", "emojiName"]),
+        "sticker-upload": displayAction("sticker upload", ["provider", "guildId", "stickerName"]),
+        "role-add": displayAction("role add", ["provider", "guildId", "userId", "roleId"]),
+        "role-remove": displayAction("role remove", ["provider", "guildId", "userId", "roleId"]),
+        "channel-info": displayAction("channel", ["provider", "channelId"]),
+        "channel-list": displayAction("channels", ["provider", "guildId"]),
+        "voice-status": displayAction("voice", ["provider", "guildId", "userId"]),
+        "event-list": displayAction("events", ["provider", "guildId"]),
+        "event-create": displayAction("event create", ["provider", "guildId", "eventName"]),
+        timeout: displayAction("timeout", ["provider", "guildId", "userId"]),
+        kick: displayAction("kick", ["provider", "guildId", "userId"]),
+        ban: displayAction("ban", ["provider", "guildId", "userId"]),
+      },
+    } satisfies ToolDisplaySpec,
     apply_patch: displayTool("fileDiff", "Apply Patch", []),
     // Historical transcripts retain the old name. This display-only entry
     // preserves their presentation without restoring a runtime tool alias.

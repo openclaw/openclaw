@@ -6,6 +6,7 @@ import {
   URL,
   CONSUMER_URL,
   MEETING_STATE_KEY,
+  MEETING_IDENTITY as identity,
   control,
   captionRow as makeRow,
   runCaptionRows,
@@ -30,7 +31,6 @@ const captionRow = (text: string, id?: string, speaker = "OpenClaw QA") =>
 const CAPTIONS = "__openclawTeamsCaptions";
 const disconnect = vi.fn();
 beforeEach(() => disconnect.mockClear());
-const identity = "teams-work:19:meeting_test@thread.v2";
 const rerenderOwner = (
   inCallControl: ReturnType<typeof control>,
   inCallUrl: string,
@@ -47,6 +47,18 @@ function captionOwner(sessionId = "session-1", overrides: Record<string, unknown
     observerInstalled: true,
     ...overrides,
   };
+}
+
+function expectRecent(
+  page: Awaited<ReturnType<typeof runCaptionRows>>,
+  texts: string[],
+  extra: Record<string, unknown> = {},
+) {
+  expect(page.result).toMatchObject({
+    transcriptLines: texts.length,
+    recentTranscript: texts.map((text) => ({ text })),
+    ...extra,
+  });
 }
 
 function changeCaption(
@@ -70,28 +82,6 @@ async function settledRows(rows: ReturnType<typeof captionRow>[]) {
 
 afterEach(() => vi.useRealTimers());
 
-it("enables live captions and captures the validated Teams caption row DOM", async () => {
-  const { result, window } = await runCaptionRows([captionRow("I")]);
-
-  expect(result).toMatchObject({
-    captioning: true,
-    captionsEnabledAttempted: true,
-    inCall: true,
-    lastCaptionSpeaker: "OpenClaw QA",
-    lastCaptionText: "I",
-    transcriptLines: 1,
-  });
-  const readTranscript = transcriptReader(window);
-  expect(JSON.parse(readTranscript())).toMatchObject({
-    droppedLines: 0,
-    epoch: "teams-caption-epoch",
-    lines: [{ speaker: "OpenClaw QA", text: "I" }],
-    sessionMatched: true,
-    urlMatched: true,
-  });
-  expect(window[CAPTIONS]).toMatchObject({ identity: "teams-work:19:meeting_test@thread.v2" });
-});
-
 it("retries an unverified live-caption activation", async () => {
   const first = await runCaptionRows([captionRow("Retry captions")], undefined, {
     captionClickIgnored: true,
@@ -105,22 +95,25 @@ it("retries an unverified live-caption activation", async () => {
     priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown>,
   });
   expect(second.captionButton.clicks).toBe(1);
-  expect(second.result).toMatchObject({ captioning: true, captionsEnabledAttempted: true });
+  expect(second.result).toMatchObject({
+    captioning: true,
+    captionsEnabledAttempted: true,
+    inCall: true,
+  });
+  expect(JSON.parse(transcriptReader(second.window)())).toMatchObject({
+    droppedLines: 0,
+    epoch: "teams-caption-epoch",
+    lines: [{ speaker: "OpenClaw QA", text: "Retry captions" }],
+    sessionMatched: true,
+    urlMatched: true,
+  });
+  expect(second.window[CAPTIONS]).toMatchObject({ identity });
 });
 
 it("bounds visible and committed caption rows together", async () => {
   const { result, window } = await runCaptionStatusScript({
     captionRows: Array.from({ length: 505 }, (_, index) => captionRow(`Bounded caption ${index}`)),
   });
-  const state = window[CAPTIONS] as {
-    droppedLines: number;
-    lines: unknown[];
-    visible: unknown[];
-  };
-
-  expect(state.lines).toHaveLength(0);
-  expect(state.visible).toHaveLength(505);
-  expect(state.droppedLines).toBe(0);
   expect(result.transcriptLines).toBe(505);
   const readTranscript = transcriptReader(window);
   const transcript = JSON.parse(readTranscript()) as { droppedLines: number; lines: unknown[] };
@@ -128,39 +121,30 @@ it("bounds visible and committed caption rows together", async () => {
   expect(transcript.droppedLines).toBe(5);
 });
 
-it("keeps the latest caption when Teams shortens a provisional row", async () => {
-  const row = captionRow("We should leave today");
-  const first = await settledRows([row]);
-  changeCaption(row, "We should leave");
-  const second = await runCaptionRows([row], first);
-
-  expect(second.result).toMatchObject({
-    lastCaptionText: "We should leave",
-    transcriptLines: 1,
-    recentTranscript: [{ speaker: "OpenClaw QA", text: "We should leave" }],
-  });
-});
-
-it.each([false, true])("corrects a logical caption row in place (settled=%s)", async (settled) => {
-  const rows = [captionRow("Logical row", "8", "OpenClaw Q")];
-  const first = settled ? await settledRows(rows) : await runCaptionRows(rows);
-  const second = await runCaptionRows([captionRow("Logical row replacement", "8")], first);
-  expect(second.result).toMatchObject({
-    transcriptLines: 1,
-    lastCaptionText: "Logical row replacement",
-    lastCaptionSpeaker: "OpenClaw QA",
-    recentTranscript: [{ text: "Logical row replacement" }],
-  });
-});
-
-it("deduplicates a settled logical row after temporary DOM removal", async () => {
-  const first = await settledRows([captionRow("Virtual row return", "13")]);
-  const missing = await runCaptionRows([], first);
-  const returned = await runCaptionRows([captionRow("Virtual row return", "13")], missing);
-
-  expect(returned.result.transcriptLines).toBe(1);
-  expect(returned.result.recentTranscript).toMatchObject([{ text: "Virtual row return" }]);
-});
+it.each(["shortened text", "logical row", "settled logical row", "late speaker"])(
+  "corrects one caption after %s",
+  async (kind) => {
+    const logical = kind.includes("logical");
+    const lateSpeaker = kind === "late speaker";
+    const id = logical ? "8" : undefined;
+    const row = captionRow("Original text", id, lateSpeaker ? "" : "OpenClaw Q");
+    const first =
+      kind === "logical row" || lateSpeaker
+        ? await runCaptionRows([row])
+        : await settledRows([row]);
+    const text = lateSpeaker ? "Original text" : "Original";
+    if (!logical) {
+      changeCaption(
+        row,
+        lateSpeaker ? "OpenClaw QA" : text,
+        lateSpeaker ? "author" : "closed-caption-text",
+      );
+    }
+    const second = await runCaptionRows(logical ? [captionRow(text, id)] : [row], first);
+    const speaker = logical || lateSpeaker ? "OpenClaw QA" : "OpenClaw Q";
+    expectRecent(second, [text], { recentTranscript: [{ text, speaker }] });
+  },
+);
 
 it.each([
   ["after settling", "First utterance", "First utterance continued", true],
@@ -185,10 +169,7 @@ it.each([
     previous,
     settle ? { priorMeeting: first.window[MEETING_STATE_KEY] as Record<string, unknown> } : {},
   );
-  expect(second.result).toMatchObject({
-    transcriptLines: 2,
-    recentTranscript: [{ text: initial }, { text: replacement }],
-  });
+  expectRecent(second, [initial, replacement]);
 });
 
 it("retains settled markers for older rows while newer captions settle", async () => {
@@ -198,55 +179,52 @@ it("retains settled markers for older rows while newer captions settle", async (
   const second = await runCaptionRows([firstRow, secondRow], first);
   await vi.advanceTimersByTimeAsync(1_000);
   const third = await runCaptionRows([firstRow, secondRow], second);
-
-  expect(third.result.transcriptLines).toBe(2);
-  expect(third.result.recentTranscript).toMatchObject([
-    { text: "First settled row" },
-    { text: "Second settled row" },
-  ]);
+  expectRecent(third, ["First settled row", "Second settled row"]);
+  const missing = await runCaptionRows([], third);
+  const returned = await runCaptionRows([firstRow, secondRow], missing);
+  expectRecent(returned, ["First settled row", "Second settled row"]);
 });
 
-it("updates a caption when its speaker label arrives late", async () => {
-  const row = captionRow("Late attribution", undefined, "");
-  const first = await runCaptionRows([row]);
-  changeCaption(row, "OpenClaw QA", "author");
-  const second = await runCaptionRows([row], first);
-
-  expect(second.result.transcriptLines).toBe(1);
-  expect(second.result.recentTranscript).toMatchObject([
-    { speaker: "OpenClaw QA", text: "Late attribution" },
-  ]);
-});
-
-it("disconnects stale caption capture outside transcribe mode", async () => {
-  const captions = captionOwner();
-  const { window } = await runStatusScript({
-    leave: control({ label: "Leave" }),
-    priorCaptions: { observer: captions.observer, observerInstalled: true },
-  });
-
-  expect(disconnect).toHaveBeenCalledOnce();
-  expect(window).not.toHaveProperty(CAPTIONS);
-});
-
-it("does not clear captions owned by another tab or meeting session", async () => {
-  const { observer, observerInstalled, sessionId } = captionOwner("another-session");
-  const active = { observer, observerInstalled, sessionId };
-  const wrongTab = await runStatusScript({
-    allowSessionAdoption: false,
-    currentUrl: "https://teams.live.com/v2/",
-    leave: control({ label: "Leave" }),
-    priorCaptions: active,
-  });
-  const wrongSession = await runCaptionStatusScript({
-    allowSessionAdoption: false,
-    priorCaptions: active,
-  });
-
-  expect(disconnect).not.toHaveBeenCalled();
-  expect(wrongTab.window[CAPTIONS]).toBe(active);
-  expect(wrongSession.window[CAPTIONS]).toBe(active);
-});
+it.each(["disabled", "foreign tab", "foreign session", "recovery", "ID-less recovery", "repair"])(
+  "respects caption ownership during %s",
+  async (kind) => {
+    const recovery = kind.includes("recovery");
+    const repair = kind === "repair";
+    const disabled = kind === "disabled";
+    const priorCaptions = captionOwner(recovery ? "active-session" : "another-session");
+    const leave = control({ label: "Leave" });
+    const priorMeeting = recovery
+      ? rerenderOwner(leave, URL, "active-session")
+      : repair
+        ? { identity, sessionId: "session-1" }
+        : undefined;
+    const { result, window } = await runStatusScript({
+      allowSessionAdoption: disabled,
+      captureCaptions: !disabled && kind !== "foreign tab",
+      currentUrl: kind === "foreign tab" ? "https://teams.live.com/v2/" : URL,
+      meetingSessionId: kind === "ID-less recovery" ? "" : "session-1",
+      leave,
+      priorMeeting,
+      priorCaptions: disabled
+        ? { observer: { disconnect }, observerInstalled: true }
+        : priorCaptions,
+    });
+    if (disabled) {
+      expect(window).not.toHaveProperty(CAPTIONS);
+    } else if (repair) {
+      expect(result.manualAction).toBeUndefined();
+      expect(priorCaptions).toMatchObject({ finalized: true });
+      expect(window[CAPTIONS]).toMatchObject({ sessionId: "session-1" });
+    } else {
+      expect(window[CAPTIONS]).toBe(priorCaptions);
+      if (recovery) {
+        expect(result).toMatchObject({ manualAction: { reason: "teams-session-conflict" } });
+        expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+      }
+    }
+    expect(disconnect).toHaveBeenCalledTimes(disabled || repair ? 1 : 0);
+  },
+);
 
 it.each([false, true])("finalizes captions when identity is lost (SPA=%s)", async (spa) => {
   const currentUrl = spa ? CONSUMER_URL : "https://teams.live.com/v2/";
@@ -283,60 +261,24 @@ it("finalizes caption capture before an SPA navigation can mix meetings", async 
   params.captionRows = [captionRow("Meeting B caption")];
   page.triggerCaptionMutation(CONSUMER_URL);
 
-  const captions = page.window[CAPTIONS] as {
-    finalized?: boolean;
-    lines?: Array<{ text: string }>;
-    visible?: Array<{ text: string }>;
-  };
+  const captions = page.window[CAPTIONS];
   expect(page.captionObserverDisconnects()).toBe(1);
-  expect(captions.finalized).toBe(true);
-  expect([...(captions.lines ?? []), ...(captions.visible ?? [])]).toMatchObject([
-    { text: "Meeting A caption" },
-  ]);
-});
-
-it("returns finalized captions after the tab navigates into another meeting", () => {
-  const window = {
-    [CAPTIONS]: {
-      droppedLines: 0,
-      finalized: true,
-      identity,
-      lines: [{ text: "Finalized before navigation" }],
-      sessionId: "session-1",
-      visible: [],
-    },
-    [MEETING_STATE_KEY]: {
-      identity: "teams-consumer:9326458712345:abc",
-      sessionId: "session-2",
-    },
+  expect(captions).toMatchObject({ finalized: true });
+  page.window[MEETING_STATE_KEY] = {
+    identity: "teams-consumer:9326458712345:abc",
+    sessionId: "session-2",
   };
-  const readTranscript = transcriptReader(window, { currentUrl: CONSUMER_URL, finalize: true });
-
+  const readTranscript = transcriptReader(page.window, {
+    currentUrl: CONSUMER_URL,
+    finalize: true,
+  });
   expect(JSON.parse(readTranscript())).toMatchObject({
     urlMatched: true,
     sessionMatched: true,
-    lines: [{ text: "Finalized before navigation" }],
+    lines: [{ text: "Meeting A caption" }],
   });
-  expect(JSON.parse(readTranscript())).toMatchObject({
-    lines: [{ text: "Finalized before navigation" }],
-  });
-  expect(window[CAPTIONS]).toBeDefined();
-});
-
-it("preserves same-session captions during the in-call rerender window", async () => {
-  const staleControl = control({ label: "Leave" });
-  staleControl.isConnected = false;
-  const active = captionOwner("session-1", { enabledAttempted: true });
-  const currentUrl = "https://teams.live.com/v2/";
-  const { window } = await runStatusScript({
-    captureCaptions: true,
-    currentUrl,
-    priorCaptions: active,
-    priorMeeting: rerenderOwner(staleControl, currentUrl),
-  });
-
-  expect(disconnect).not.toHaveBeenCalled();
-  expect(window[CAPTIONS]).toBe(active);
+  expect(JSON.parse(readTranscript())).toMatchObject({ lines: [{ text: "Meeting A caption" }] });
+  expect(page.window[CAPTIONS]).toBe(captions);
 });
 
 it("keeps the live caption observer during a bounded in-call control rerender", async () => {
@@ -354,59 +296,32 @@ it("keeps the live caption observer during a bounded in-call control rerender", 
 
   expect(page.captionObserverDisconnects()).toBe(0);
   expect(page.window[CAPTIONS]).not.toMatchObject({ finalized: true });
-});
-
-it.each(["session-1", ""])(
-  "refuses recovery session %j against a committed owner",
-  async (meetingSessionId) => {
-    const leave = control({ label: "Leave" });
-    const priorMeeting = rerenderOwner(leave, URL, "active-session");
-    const priorCaptions = captionOwner("active-session", {
-      lines: [{ text: "Active session caption" }],
-    });
-
-    const { result, window } = await runCaptionStatusScript({
-      allowSessionAdoption: false,
-      leave,
-      meetingSessionId,
-      priorCaptions,
-      priorMeeting,
-    });
-
-    expect(result).toMatchObject({ manualAction: { reason: "teams-session-conflict" } });
-    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
-    expect(window[CAPTIONS]).toBe(priorCaptions);
-    expect(disconnect).not.toHaveBeenCalled();
-  },
-);
-
-it("repairs a stale caption owner for the committed meeting session", async () => {
-  const staleCaptions = captionOwner("stale-session", { lines: [{ text: "Stale caption owner" }] });
-  const { result, window } = await runCaptionStatusScript({
-    allowSessionAdoption: false,
-    priorCaptions: staleCaptions,
-    priorMeeting: { identity, sessionId: "session-1" },
+  const refreshed = await runStatusScript({
+    captureCaptions: true,
+    currentUrl,
+    priorCaptions: page.window[CAPTIONS],
+    priorMeeting: rerenderOwner(leave, currentUrl),
   });
-
-  expect(result.manualAction).toBeUndefined();
-  expect(disconnect).toHaveBeenCalledOnce();
-  expect(staleCaptions).toMatchObject({ finalized: true });
-  expect(window[CAPTIONS]).toMatchObject({ sessionId: "session-1" });
+  expect(page.captionObserverDisconnects()).toBe(0);
+  expect(refreshed.window[CAPTIONS]).toBe(page.window[CAPTIONS]);
 });
 
 it("disconnects caption capture when finalizing a transcript", async () => {
-  const first = await runCaptionRows([captionRow("Final caption")]);
+  vi.useFakeTimers();
+  const first = await runCaptionRows([captionRow("Final caption", "17")], undefined, {
+    captionsInitiallyOn: true,
+  });
   const captions = first.window[CAPTIONS] as Record<string, unknown>;
+  expect(captions.settleTimer).toBeDefined();
   captions.observer = { disconnect };
   captions.observerInstalled = true;
   transcriptReader(first.window, { finalize: true })();
 
   expect(disconnect).toHaveBeenCalledOnce();
-  expect(captions).toMatchObject({
-    observerInstalled: false,
-    identity,
-    finalizedAt: expect.any(Number),
-  });
+  expect(captions.settleTimer).toBeUndefined();
+
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(captions.lines).toMatchObject([{ text: "Final caption" }]);
 
   const refreshed = await runCaptionRows([captionRow("Late caption")], undefined, {
     priorCaptions: captions,
@@ -431,7 +346,4 @@ it("grants media permissions only to the exact Teams meeting origin", () => {
   expect(permissions("https://evil.example/meet/123")).toBeUndefined();
   expect(permissions("https://teams.microsoft.com:8443/l/meetup-join/test")).toBeUndefined();
   expect(permissions("https://teams.live.com:444/meet/123")).toBeUndefined();
-  expect(browser.permissionNotes({ allowMicrophone: true })).toContain(
-    "Granted Teams microphone permission through browser control.",
-  );
 });

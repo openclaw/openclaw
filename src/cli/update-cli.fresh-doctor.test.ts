@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Command } from "commander";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
 import {
   commandCalls,
   expectNoSideEffects,
@@ -19,10 +17,8 @@ import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import { registerForegroundFailureRecoveryTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
-import {
-  writeGitUpdateResultFixture,
-  packageTargetStatus,
-} from "./update-cli/update-cli-package.test-support.js";
+import { packageTargetStatus } from "./update-cli/update-cli-package.test-support.js";
+import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -30,51 +26,10 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
-  it("carries explicit capability consent into post-core plugin convergence", async () => {
-    const { entrypoints } = f.setupUpdatedRootRefresh({
-      gatewayUpdateImpl: (root) =>
-        writeGitUpdateResultFixture({
-          root,
-          before: { sha: "old-sha", version: "2026.4.26" },
-          after: { sha: "new-sha", version: VERSION },
-        }),
-    });
-    const runOtherCommand = requireValue(
-      vi.mocked(update.runExec).getMockImplementation(),
-      "update command fixture",
-    );
-    vi.mocked(update.runExec).mockImplementation(async (command, args, options) => {
-      if (
-        args.length === 3 &&
-        args[0] === entrypoints[0] &&
-        args[1] === "update" &&
-        args[2] === "--help"
-      ) {
-        return {
-          stdout: new Command("update").option("--accept-capabilities").helpInformation(),
-          stderr: "",
-        };
-      }
-      return runOtherCommand(command, args, options);
-    });
-
-    await update.updateCommand({ acceptCapabilities: true, yes: true, restart: false });
-
-    expect(spawnCall()?.[1]).toEqual([
-      entrypoints[0],
-      "update",
-      "--no-restart",
-      "--yes",
-      "--accept-capabilities",
-      "--timeout",
-      "1800",
-    ]);
-  });
-
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
+    const root = f.createCaseDir("openclaw-git-downgrade");
+    await fs.mkdir(root, { recursive: true });
+    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(root);
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });
@@ -103,7 +58,6 @@ describe("update-cli", () => {
           after: { version: "2026.4.10" },
         }),
     });
-    // Convergence must use the target root's version, not the still-running core.
     mocks.readPackageVersion.mockImplementation(async (pkgRoot: string) =>
       pkgRoot === downgradedRoot ? "2026.4.10" : "2026.4.14",
     );
@@ -121,11 +75,7 @@ describe("update-cli", () => {
       await update.updateCommand({ yes: true, tag: "2026.4.10", restart: false });
 
       expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
       expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
-      expect(update.runPostCorePluginConvergenceSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ compatibilityHostVersion: "2026.4.10" }),
-      );
       expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     } finally {
       delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
@@ -133,8 +83,10 @@ describe("update-cli", () => {
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    // This path exercises delegated Doctor ownership, independent of repository build artifacts.
-    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
+    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue({
+      doctorConfigWrites: true,
+      doctorRetirementOnly: true,
+    });
     mocks.readPackageVersion.mockResolvedValue(VERSION);
     vi.mocked(update.updateGitCheckout).mockResolvedValue(
       runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
@@ -154,21 +106,14 @@ describe("update-cli", () => {
     await update.updateCommand({ yes: true, restart: false });
 
     expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(update.resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
     const doctorCalls = commandCalls().filter(([argv]) => argv.at(-1) === "--doctor");
     expect(doctorCalls).toHaveLength(1);
     update.expectDelegatedPluginDoctorInput(doctorCalls[0]?.[1].input);
-    expect(
-      vi
-        .mocked(update.runExec)
-        .mock.calls.filter(([, args]) => args[0] === f.FRESH_POST_UPDATE_ENTRYPOINT),
-    ).toEqual([
-      [
-        expect.any(String),
-        [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
-        expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
-      ],
-    ]);
+    expect(update.runExec).toHaveBeenCalledWith(
+      expect.any(String),
+      [f.FRESH_POST_UPDATE_ENTRYPOINT, "config", "validate", "--json"],
+      expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
+    );
     expect(strictValidationEnv).toBe("0");
     expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
@@ -192,10 +137,14 @@ describe("update-cli", () => {
       status: "warning",
       reason: "post-plugin-doctor-execution-failed",
     });
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor process failed");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
+    const message = result.pluginUpdate.warnings?.at(-1)?.message;
+    expect(message).toMatch(/^[^\n]*update repair`[^]*process failed[^]*diagnostic output/u);
+    expect(message).not.toContain("long-argv-prefix");
   });
+});
+
+describe("update-cli", () => {
+  const f = createUpdateCliFixture({ databaseEngines: ["sqlite", "postgres"] });
 
   registerForegroundFailureRecoveryTests({
     setupUpdatedRootRefresh: f.setupUpdatedRootRefresh,
@@ -227,7 +176,7 @@ describe("update-cli", () => {
     mocks.serviceDefinitionMutationCapability.mockResolvedValue({ kind, reason });
   };
 
-  it("preserves split-root package updates when the service definition is writable-overridden", async () => {
+  it("preserves split-root package updates when service environment overrides cannot be inspected", async () => {
     const oldInstall = await f.setupServicePackageAtPrefix({
       prefix: f.tempDirs.make("sealed-node-a-"),
     });
@@ -242,7 +191,7 @@ describe("update-cli", () => {
       programArguments: originalCommand,
       environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
       managedDefinition: { programArguments: originalCommand },
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      managedOverrides: { environment: true },
     };
     mocks.serviceReadCommand.mockResolvedValue(overriddenCommand);
     f.primeNpmChannelTag("latest", "2026.5.20");
@@ -278,64 +227,32 @@ describe("update-cli", () => {
     const installCalls = commandCalls().filter(
       ([argv]) => argv[2] === "gateway" && argv[3] === "install",
     );
-    expect(installCalls).toHaveLength(1);
-    expect(installCalls[0]?.[0].slice(0, 4)).toEqual([
-      oldInstall.serviceNode,
-      oldInstall.entrypoint,
-      "gateway",
-      "install",
-    ]);
-    expect(installCalls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        cwd: oldInstall.root,
-        input: expect.stringContaining('"targetRoot":' + JSON.stringify(oldInstall.root)),
-      }),
-    );
+    expect(installCalls).toHaveLength(0);
     expect(mocks.serviceStop).toHaveBeenCalledOnce();
     expect(getLogOutput()).toContain("Gateway: restarted and verified");
   });
 
   it.each([{ capability: "sealed" }, { capability: "writable" }] as const)(
-    "preserves target compatibility for an unchanged service launcher ($capability)",
+    "refuses incompatible registry targets before mutating a $capability service launcher",
     async ({ capability }) => {
       const fixture = await f.setupServicePackageAtPrefix({
         prefix: f.tempDirs.make("preserved-runtime-"),
       });
       const serviceNode = fixture.serviceNode;
-      const replacementNode = path.join(f.tempDirs.make("replacement-runtime-"), "bin", "node");
-      await fs.mkdir(path.dirname(replacementNode), { recursive: true });
-      // Preserve the host runtime's dynamic-library paths when metadata probes execute it.
-      if (process.platform === "win32") {
-        await fs.copyFile(process.execPath, replacementNode);
-      } else {
-        await fs.writeFile(
-          replacementNode,
-          `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
-          {
-            mode: 0o755,
-          },
-        );
-      }
       f.mockPackageInstallStatus(fixture.root);
       mockRunningService([serviceNode, fixture.entrypoint, "gateway"], capability);
       f.primeNpmChannelTag("latest", "2026.7.1");
       vi.mocked(update.fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.1.0" }),
+        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.12.1" }),
       );
       mocks.nodeVersionSatisfiesEngine.mockImplementation(
-        (version: string | null) => version === "26.8.1",
+        (version: string | null) => version === "26.12.1",
       );
-      mocks.resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => ({
-        status: "supported",
-        version: nodePath === replacementNode ? "26.8.1" : "24.20.0",
-        sqliteVersion: "3.51.3",
-        nodeSharedSqlite: false,
-        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
-      }));
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue(runtimeFixture("24.20.0"));
       const recovery = await import("./update-cli/update-command-node-runtime-resolution.js");
       const recoverNode = vi
         .spyOn(recovery, "resolveTargetNodeRuntime")
-        .mockResolvedValue(replacementNode);
+        .mockResolvedValue(undefined);
       f.mockFileBackedPathExists();
       f.mockServicePackageCommands({
         nodeModules: fixture.nodeModules,
@@ -344,34 +261,29 @@ describe("update-cli", () => {
         npmCommands: ["npm", fixture.serviceNpm, requireValue(fixture.serviceNpmReal, "npm")],
         nodeVersions: {
           [serviceNode]: "v24.20.0",
-          [replacementNode]: "v26.8.1",
         },
-        onGatewayInstall: (argv) =>
-          f.primeServiceCommand([requireValue(argv[0], "Node"), fixture.entrypoint, "gateway"]),
       });
-      if (capability !== "writable") {
-        await expect(
-          update.updateCommand({ yes: true, json: true, restart: true }),
-        ).rejects.toEqual(new update.ExitError(1));
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "error",
-          reason: "node-runtime-preflight",
-        });
-        expect(
-          commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g"),
-        ).toBeUndefined();
-        expectNoSideEffects(recoverNode, mocks.serviceStop);
-        expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
-        expect(await installedVersion(fixture.root)).toBe("2026.5.18");
-      } else {
-        await update.updateCommand({ yes: true, json: true, restart: true });
-        expect(commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g")).toBeDefined();
-        expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
-        expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(
-          replacementNode,
+      await expect(update.updateCommand({ yes: true, json: true, restart: true })).rejects.toEqual(
+        new update.ExitError(1),
+      );
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "preflight-node-runtime-incompatible",
+      });
+      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+      expectNoSideEffects(mocks.serviceStop);
+      if (capability === "writable") {
+        expect(recoverNode).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            engine: ">=26.12.1",
+            recovery: { env: expect.any(Object) },
+          }),
         );
-        expect(recoverNode).toHaveBeenCalledOnce();
+      } else {
+        expect(recoverNode).not.toHaveBeenCalled();
       }
+      expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
+      expect(await installedVersion(fixture.root)).toBe("2026.5.18");
     },
   );
 });

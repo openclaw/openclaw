@@ -1,7 +1,7 @@
 // Combines agent config and workspace identity files for Control UI display.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   loadAgentIdentityFromWorkspaceAsync,
@@ -22,13 +22,12 @@ import {
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
   emoji: 16,
 } as const;
-type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
-
 type AssistantIdentity = {
   name: string;
   avatar: string;
@@ -52,6 +51,7 @@ const preparedIdentities = new WeakMap<
     string,
     {
       file: AgentIdentityFile | null;
+      entryName?: string;
       name?: string;
       emoji?: string;
       avatar?: string;
@@ -66,7 +66,7 @@ export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
 };
 
 function normalizeIdentityValue(
-  field: AssistantIdentityField,
+  field: keyof typeof ASSISTANT_IDENTITY_LIMITS,
   value: string | undefined,
 ): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -154,11 +154,13 @@ export async function resolveAssistantIdentity(
 ): Promise<ResolvedAssistantIdentity> {
   const agentId = resolveAssistantAgentId(params.cfg, params.agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
+  const entry = resolveAgentEntry(params.cfg, agentId);
+  const entryName = entry?.name;
   const {
     name: configuredName,
     emoji: configuredEmoji,
     avatar: configuredAvatar,
-  } = resolveAgentIdentity(params.cfg, agentId) ?? {};
+  } = entry?.identity ?? {};
   const agentName = normalizeIdentityValue("name", configuredName);
   const agentAvatar =
     normalizeAvatarValue(configuredAvatar) ?? normalizeAvatarValue(configuredEmoji);
@@ -168,16 +170,13 @@ export async function resolveAssistantIdentity(
     workspaceDir && (!agentName || !agentAvatar || !agentEmoji)
       ? await loadAgentIdentityFromWorkspaceAsync(workspaceDir)
       : null;
-  let prepared = preparedIdentities.get(params.cfg);
-  if (!prepared) {
-    prepared = new Map();
-    preparedIdentities.set(params.cfg, prepared);
-  }
+  const prepared = getOrCreateWeakOwnerMap(preparedIdentities, params.cfg);
   const key = JSON.stringify([agentId, workspaceDir]);
   const cached = prepared.get(key);
   if (
     cached &&
     cached.file === fileIdentity &&
+    cached.entryName === entryName &&
     cached.name === configuredName &&
     cached.emoji === configuredEmoji &&
     cached.avatar === configuredAvatar
@@ -188,11 +187,15 @@ export async function resolveAssistantIdentity(
   }
 
   const fileName = normalizeIdentityValue("name", fileIdentity?.name);
+  // Template Add and interactive `agents add` record only the display `name` agents.list shows.
+  const displayName = normalizeIdentityValue("name", entryName);
   const resolvedName: [string, AssistantIdentityNameSource] | undefined = agentName
     ? [agentName, "agent"]
     : fileName
       ? [fileName, "workspace"]
-      : undefined;
+      : displayName
+        ? [displayName, "agent"]
+        : undefined;
   const [name, nameSource] = resolvedName ?? [DEFAULT_ASSISTANT_IDENTITY.name, "default"];
 
   const avatarCandidates = [
@@ -213,6 +216,7 @@ export async function resolveAssistantIdentity(
   const identity = { agentId, name, nameSource, avatar, emoji };
   prepared.set(key, {
     file: fileIdentity,
+    entryName,
     name: configuredName,
     emoji: configuredEmoji,
     avatar: configuredAvatar,

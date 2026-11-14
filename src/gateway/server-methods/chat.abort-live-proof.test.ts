@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core";
 import { afterAll, expect, it } from "vitest";
-import { writeOpenAiResponsesSse } from "../../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -88,28 +88,11 @@ it(
             response.writeHead(204).end();
             return;
           }
-          const message = {
-            type: "message",
-            id: "pr132123-proof-reply",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: REPLY_TEXT, annotations: [] }],
-          };
-          writeOpenAiResponsesSse(response, [
-            {
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...message, status: "in_progress", content: [] },
-            },
-            { type: "response.output_item.done", output_index: 0, item: message },
-            {
-              type: "response.completed",
-              response: {
-                status: "completed",
-                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-              },
-            },
-          ]);
+          writeOpenAiResponsesText(response, {
+            text: REPLY_TEXT,
+            messageId: "pr132123-proof-reply",
+            responseId: "pr132123-proof-response",
+          });
         })().catch((error: unknown) => response.destroy(error as Error));
       });
       const providerUrl = await listenProvider(providerServer);

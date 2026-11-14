@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectRootPackageExcludedExtensionDirs } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { vitestWorkerRuntimeAssets } from "../scripts/lib/vitest-worker-declarations.mts";
+import { vitestWorkerRuntimeAssets } from "../scripts/lib/package-root-modules.mts";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
@@ -16,7 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
 const describeLive = isLiveTestEnabled() && openAiApiKey.length > 0 ? describe : describe.skip;
 
-describeLive("agent exec Codex runtime with environment authentication", () => {
+describeLive("agent exec clean-install Code Mode with environment authentication", () => {
   it("starts without configuration and completes dependent filesystem calls", async () => {
     const root = tempDirs.make("openclaw-agent-exec-code-mode-live-");
     const home = path.join(root, "home");
@@ -113,8 +113,8 @@ describeLive("agent exec Codex runtime with environment authentication", () => {
       status: "ok",
       provider: "openai",
       model: "gpt-5.6-luna",
-      // OpenClaw Code Mode is not the Codex harness's tool surface.
-      codeModeEngaged: false,
+      // The clean install falls back to OpenClaw; this model prefers Code Mode.
+      codeModeEngaged: true,
       final: "DONE",
     });
     expect(result.toolSummary?.tools).toEqual(expect.arrayContaining(["read", "write"]));

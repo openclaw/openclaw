@@ -1,4 +1,11 @@
-import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingProviderMetadata,
+} from "../../packages/media-understanding-common/src/types.js";
+import {
+  isRecord,
+  omitUndefinedFields,
+} from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -23,11 +30,10 @@ import type {
   PluginManifestDangerousConfigFlag,
   PluginManifestDecisionModel,
   PluginManifestMcpServer,
-  PluginManifestMediaUnderstandingCapability,
-  PluginManifestMediaUnderstandingProviderMetadata,
   PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestProviderBaseUrlGuard,
+  PluginManifestProviderEndpoint,
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
   PluginManifestToolMetadata,
@@ -112,6 +118,37 @@ export function normalizeManifestDecisionModels(
     const capabilities = normalizeDecisionCapabilities(entry.capabilities);
     seen.add(ref);
     return { provider, id, name, ...(capabilities ? { capabilities } : {}) };
+  });
+}
+
+export function normalizeManifestProviderEndpoints(
+  value: unknown,
+): PluginManifestProviderEndpoint[] | undefined {
+  return normalizeManifestObjectList(value, (rawEndpoint) => {
+    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
+    if (!endpointClass) {
+      return undefined;
+    }
+    const hosts = normalizeOptionalTrimmedStringList(rawEndpoint.hosts)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const hostSuffixes = normalizeOptionalTrimmedStringList(rawEndpoint.hostSuffixes)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const baseUrls = normalizeOptionalTrimmedStringList(rawEndpoint.baseUrls);
+    if (!hosts && !hostSuffixes && !baseUrls) {
+      return undefined;
+    }
+    return omitUndefinedFields({
+      endpointClass,
+      hosts,
+      hostSuffixes,
+      baseUrls,
+      googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion),
+      googleVertexRegionHostSuffix: normalizeOptionalString(
+        rawEndpoint.googleVertexRegionHostSuffix,
+      )?.toLowerCase(),
+    });
   });
 }
 
@@ -223,20 +260,18 @@ export function normalizeManifestTranscriptSources(
   });
 }
 
-function isMediaUnderstandingCapability(
-  value: string,
-): value is PluginManifestMediaUnderstandingCapability {
+function isMediaUnderstandingCapability(value: string): value is MediaUnderstandingCapability {
   return value === "image" || value === "audio" || value === "video";
 }
 
 function normalizeMediaUnderstandingRecord<T>(
   value: unknown,
   normalizeValue: (value: unknown) => T | undefined,
-): Partial<Record<PluginManifestMediaUnderstandingCapability, T>> | undefined {
+): Partial<Record<MediaUnderstandingCapability, T>> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const normalized: Partial<Record<PluginManifestMediaUnderstandingCapability, T>> = {};
+  const normalized: Partial<Record<MediaUnderstandingCapability, T>> = {};
   for (const [rawKey, rawValue] of Object.entries(value)) {
     if (!isMediaUnderstandingCapability(rawKey)) {
       continue;
@@ -251,7 +286,7 @@ function normalizeMediaUnderstandingRecord<T>(
 
 function normalizeMediaUnderstandingCapabilities(
   value: unknown,
-): PluginManifestMediaUnderstandingCapability[] | undefined {
+): MediaUnderstandingCapability[] | undefined {
   const values = normalizeTrimmedStringList(value).filter(isMediaUnderstandingCapability);
   return values.length > 0 ? values : undefined;
 }
@@ -263,7 +298,7 @@ function normalizeMediaUnderstandingNativeDocumentInputs(value: unknown): Array<
 
 function normalizeMediaUnderstandingDocumentModels(
   value: unknown,
-): PluginManifestMediaUnderstandingProviderMetadata["documentModels"] | undefined {
+): MediaUnderstandingProviderMetadata["documentModels"] | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -280,7 +315,7 @@ function normalizeMediaUnderstandingDocumentModels(
 
 export function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
-): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
+): Record<string, MediaUnderstandingProviderMetadata> | undefined {
   return normalizeNamedMetadataRecord(value, (rawMetadata) =>
     optionalManifestFields({
       capabilities: normalizeMediaUnderstandingCapabilities(rawMetadata.capabilities),
@@ -318,21 +353,6 @@ function normalizeProviderBaseUrlGuard(
   };
 }
 
-function normalizeCapabilityProviderAuthSignals(
-  value: unknown,
-): PluginManifestCapabilityProviderAuthSignal[] | undefined {
-  return normalizeManifestObjectList(value, (rawSignal) => {
-    const provider = normalizeOptionalString(rawSignal.provider);
-    if (!provider) {
-      return undefined;
-    }
-    return omitUndefinedManifestFields({
-      provider,
-      providerBaseUrl: normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl),
-    });
-  });
-}
-
 function normalizeCapabilityProviderModeConfigSignal(
   value: unknown,
 ): PluginManifestCapabilityProviderModeConfigSignal | undefined {
@@ -347,38 +367,47 @@ function normalizeCapabilityProviderModeConfigSignal(
   });
 }
 
-function normalizeCapabilityProviderConfigSignals(
-  value: unknown,
-): PluginManifestCapabilityProviderConfigSignal[] | undefined {
-  return normalizeManifestObjectList(value, (rawSignal) => {
-    const rootPath = normalizeOptionalString(rawSignal.rootPath);
-    if (!rootPath) {
-      return undefined;
-    }
-    const required = normalizeOptionalTrimmedStringList(rawSignal.required);
-    const requiredAny = normalizeOptionalTrimmedStringList(rawSignal.requiredAny);
-    const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
-    return required || requiredAny || mode
-      ? omitUndefinedManifestFields({
-          rootPath,
-          overlayPath: normalizeOptionalString(rawSignal.overlayPath),
-          overlayMapPath: normalizeOptionalString(rawSignal.overlayMapPath),
-          required,
-          requiredAny,
-          mode,
-        })
-      : undefined;
-  });
-}
-
 function normalizeCapabilityProviderMetadataEntry(
   rawMetadata: Record<string, unknown>,
 ): PluginManifestCapabilityProviderMetadata | undefined {
   return optionalManifestFields<PluginManifestCapabilityProviderMetadata>({
     aliases: normalizeOptionalTrimmedStringList(rawMetadata.aliases),
     authProviders: normalizeOptionalTrimmedStringList(rawMetadata.authProviders),
-    authSignals: normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals),
-    configSignals: normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals),
+    authSignals: normalizeManifestObjectList<PluginManifestCapabilityProviderAuthSignal>(
+      rawMetadata.authSignals,
+      (rawSignal) => {
+        const provider = normalizeOptionalString(rawSignal.provider);
+        if (!provider) {
+          return undefined;
+        }
+        return omitUndefinedFields({
+          provider,
+          providerBaseUrl: normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl),
+        });
+      },
+    ),
+    configSignals: normalizeManifestObjectList<PluginManifestCapabilityProviderConfigSignal>(
+      rawMetadata.configSignals,
+      (rawSignal) => {
+        const rootPath = normalizeOptionalString(rawSignal.rootPath);
+        if (!rootPath) {
+          return undefined;
+        }
+        const required = normalizeOptionalTrimmedStringList(rawSignal.required);
+        const requiredAny = normalizeOptionalTrimmedStringList(rawSignal.requiredAny);
+        const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
+        return required || requiredAny || mode
+          ? omitUndefinedFields({
+              rootPath,
+              overlayPath: normalizeOptionalString(rawSignal.overlayPath),
+              overlayMapPath: normalizeOptionalString(rawSignal.overlayMapPath),
+              required,
+              requiredAny,
+              mode,
+            })
+          : undefined;
+      },
+    ),
     referenceAudioInputs: rawMetadata.referenceAudioInputs === true ? true : undefined,
   });
 }
@@ -440,36 +469,6 @@ function isManifestConfigLiteral(value: unknown): value is PluginManifestConfigL
   );
 }
 
-function normalizeManifestDangerousConfigFlags(
-  value: unknown,
-): PluginManifestDangerousConfigFlag[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    const pathValue = normalizeOptionalString(entry.path) ?? "";
-    return pathValue && isManifestConfigLiteral(entry.equals)
-      ? { path: pathValue, equals: entry.equals }
-      : undefined;
-  });
-}
-
-function normalizeManifestSecretInputPaths(
-  value: unknown,
-): PluginManifestSecretInputPath[] | undefined {
-  return normalizeManifestObjectList(value, (entry) => {
-    const pathLocal = normalizeOptionalString(entry.path) ?? "";
-    if (!pathLocal) {
-      return undefined;
-    }
-    const expected = entry.expected === "string" ? entry.expected : undefined;
-    const ownerKind =
-      entry.ownerKind === "capability" || entry.ownerKind === "route" ? entry.ownerKind : undefined;
-    return {
-      path: pathLocal,
-      ...(expected ? { expected } : {}),
-      ...(ownerKind ? { ownerKind } : {}),
-    };
-  });
-}
-
 export function normalizeManifestConfigContracts(
   value: unknown,
 ): PluginManifestConfigContracts | undefined {
@@ -479,9 +478,32 @@ export function normalizeManifestConfigContracts(
   const compatibilityMigrationPaths = normalizeTrimmedStringList(value.compatibilityMigrationPaths);
   const compatibilityRuntimePaths = normalizeTrimmedStringList(value.compatibilityRuntimePaths);
   const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
-  const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
+  const dangerousFlags = normalizeManifestObjectList<PluginManifestDangerousConfigFlag>(
+    value.dangerousFlags,
+    (entry) => {
+      const pathValue = normalizeOptionalString(entry.path) ?? "";
+      return pathValue && isManifestConfigLiteral(entry.equals)
+        ? { path: pathValue, equals: entry.equals }
+        : undefined;
+    },
+  );
   const secretInputPaths = rawSecretInputs
-    ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
+    ? normalizeManifestObjectList<PluginManifestSecretInputPath>(rawSecretInputs.paths, (entry) => {
+        const pathLocal = normalizeOptionalString(entry.path) ?? "";
+        if (!pathLocal) {
+          return undefined;
+        }
+        const expected = entry.expected === "string" ? entry.expected : undefined;
+        const ownerKind =
+          entry.ownerKind === "capability" || entry.ownerKind === "route"
+            ? entry.ownerKind
+            : undefined;
+        return {
+          path: pathLocal,
+          ...(expected ? { expected } : {}),
+          ...(ownerKind ? { ownerKind } : {}),
+        };
+      })
     : undefined;
   const secretInputs = secretInputPaths
     ? ({
@@ -501,16 +523,7 @@ export function normalizeManifestConfigContracts(
 }
 
 /** Only fresh field projections belong here; never mutate the authored manifest. */
-export function omitUndefinedManifestFields<T extends object>(fields: T): T {
-  for (const key in fields) {
-    if (fields[key] === undefined) {
-      delete fields[key];
-    }
-  }
-  return fields;
-}
-
 export function optionalManifestFields<T extends object>(fields: T): T | undefined {
-  omitUndefinedManifestFields(fields);
+  omitUndefinedFields(fields);
   return Object.keys(fields).length > 0 ? fields : undefined;
 }

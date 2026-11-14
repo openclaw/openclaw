@@ -1,36 +1,19 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "../../state/openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
 import { readCronScratchSnapshotInDatabase } from "../scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
-import { resolveCronJobsStorePath } from "./paths.js";
+import { resolveCronStoreKeyInDatabase } from "./paths.js";
 import { readCronQuarantinedJobsInDatabase } from "./quarantine.kernel.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "./run-receipt-read.js";
 
 type CronStateReadCommand = Extract<OpenClawStateReadCommand, { type: `cron.${string}` }>;
 
-export function isCronStateReadCommand(
-  command: OpenClawStateReadCommand,
-): command is CronStateReadCommand {
-  switch (command.type) {
-    case "cron.currentReceipt":
-    case "cron.scratch":
-    case "cron.jobNames":
-    case "cron.quarantine":
-      return true;
-    default:
-      return false;
-  }
-}
-
 /** Runs Cron queries inside the shared reader's admitted native frame. */
 export function readCronStateCommandInDatabase(
   db: EngineConnection,
   command: CronStateReadCommand,
-): Extract<OpenClawStateReadResult, { type: `cron.${string}` }> {
+) {
   switch (command.type) {
     case "cron.currentReceipt":
       return {
@@ -45,7 +28,7 @@ export function readCronStateCommandInDatabase(
     case "cron.jobNames": {
       const storeKey =
         command.storePath ??
-        resolveCronJobsStorePath(undefined, getSqliteWorkerStateContext().environment);
+        resolveCronStoreKeyInDatabase(db, undefined, getSqliteWorkerStateContext().environment);
       return {
         type: command.type,
         storeKey,

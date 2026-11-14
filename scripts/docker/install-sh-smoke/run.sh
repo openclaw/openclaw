@@ -298,7 +298,21 @@ for (const pid of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))
 for (const root of [path.join(os.homedir(), ".config/systemd"), path.join(os.homedir(), ".local/share/systemd"), "/etc/systemd", "/run/systemd", "/usr/local/lib/systemd", "/usr/lib/systemd", "/lib/systemd"]) {
   let entries;
   try {
-    entries = fs.readdirSync(root, { recursive: true, withFileTypes: true });
+    // Runs against historical installed releases, before current SDK helpers exist.
+    // Explicit systemd roots may be aliases; never descend through discovered links.
+    entries = [];
+    const pending = [{ directory: root, depth: 0 }];
+    while (pending.length) {
+      const { directory, depth } = pending.pop();
+      const handle = fs.opendirSync(directory);
+      try {
+        for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+          if (entries.length >= 100000 || depth >= 64) fail("systemd directory scan limit exceeded");
+          entries.push(entry);
+          if (entry.isDirectory()) pending.push({ directory: path.join(directory, entry.name), depth: depth + 1 });
+        }
+      } finally { handle.closeSync(); }
+    }
   } catch (error) {
     if (error.code === "ENOENT") continue;
     throw error;
@@ -505,7 +519,10 @@ if (noOp && !legacySameVersionApply) {
       !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
     throw new Error("already-current update changed or omitted installed build identity");
   }
-  if (steps.length !== 1) {
+  const allowedNoOpSteps = new Set(["package-install", "global update", "recovery-artifact-cleanup"]);
+  const cleanupSteps = steps.filter((step) => step?.name === "recovery-artifact-cleanup");
+  if (cleanupSteps.length > 1 || cleanupSteps.some((step) => Number(step.exitCode ?? 1) !== 0) ||
+      steps.some((step) => !allowedNoOpSteps.has(step?.name))) {
     throw new Error("already-current update performed unexpected activation or maintenance steps");
   }
   console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");

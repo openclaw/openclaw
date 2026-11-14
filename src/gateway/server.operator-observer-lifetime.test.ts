@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -20,6 +21,7 @@ import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import * as approvalStore from "./operator-approval-store.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import * as restartResume from "./session-restart-resume.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   connectOk,
@@ -35,22 +37,14 @@ afterEach(() => {
 });
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-type ObserverGateway = Awaited<ReturnType<typeof startObserverGateway>>;
+type ObserverGateway = {
+  gateway: GatewayHarness;
+  admin: WebSocket;
+  questionManager: NonNullable<GatewayRequestContext["questionManager"]>;
+  upgrades: NonNullable<GatewayRequestContext["scopeUpgradeCoordinator"]>;
+};
 
 async function withObserverGateway(run: (started: ObserverGateway) => Promise<void>) {
-  const started = await startObserverGateway();
-  try {
-    await run(started);
-  } finally {
-    started.admin.terminate();
-    await started.upgrades.close();
-    started.questionManager.close();
-    await started.gateway.server.close({ drainTimeoutMs: 0 });
-    resetTestPluginRegistry();
-  }
-}
-
-async function startObserverGateway() {
   const captured = createDeferredCore<GatewayRequestContext>();
   const registry = createEmptyPluginRegistry();
   registry.gatewayHandlers["test.observer-context"] = ({ context, respond }) => {
@@ -67,6 +61,7 @@ async function startObserverGateway() {
   setTestPluginRegistry(registry);
   let gateway: GatewayHarness | undefined;
   let admin: WebSocket | undefined;
+  let owners: Pick<ObserverGateway, "questionManager" | "upgrades"> | undefined;
   try {
     gateway = await createGatewaySuiteHarness({ serverOptions: { bind: "loopback" } });
     await gateway.server.startupSettled;
@@ -74,15 +69,17 @@ async function startObserverGateway() {
     await connectOk(admin, { scopes: ["operator.admin"] });
     expect((await rpcReq(admin, "test.observer-context", {})).ok).toBe(true);
     const { questionManager, scopeUpgradeCoordinator } = await captured.promise;
-    if (!questionManager || !scopeUpgradeCoordinator) {
-      throw new Error("Gateway observer owners were not initialized");
-    }
-    return { gateway, admin, questionManager, upgrades: scopeUpgradeCoordinator };
-  } catch (error) {
+    owners = {
+      questionManager: expectDefined(questionManager, "Gateway question owner"),
+      upgrades: expectDefined(scopeUpgradeCoordinator, "Gateway scope-upgrade owner"),
+    };
+    await run({ gateway, admin, ...owners });
+  } finally {
     admin?.terminate();
+    await owners?.upgrades.close();
+    owners?.questionManager.close();
     await gateway?.server.close({ drainTimeoutMs: 0 });
     resetTestPluginRegistry();
-    throw error;
   }
 }
 
@@ -124,10 +121,7 @@ async function requestPendingUpgrade(started: ObserverGateway, name: string) {
       scopes: ["operator.read", "operator.write"],
     });
     expect(registration.ok).toBe(true);
-    const requestId = registration.payload?.requestId;
-    if (!requestId) {
-      throw new Error("Scope upgrade did not return a request id");
-    }
+    const requestId = expectDefined(registration.payload?.requestId, "Scope upgrade request id");
     return { ws, requestId, deviceId: paired.deviceId };
   } catch (error) {
     ws.terminate();
@@ -152,6 +146,18 @@ async function proveObserverLifetime(
     const { admin, gateway, questionManager: questions, upgrades } = started;
     const entered = createDeferredCore();
     const releaseRead = createDeferredCore();
+    const markerEntered = createDeferredCore();
+    const releaseMarker = createDeferredCore();
+    if (mode === "queued-wake") {
+      const persistMarkers = restartResume.persistRunningSessionsForRestart;
+      vi.spyOn(restartResume, "persistRunningSessionsForRestart").mockImplementation(
+        async (params) => {
+          markerEntered.resolve();
+          await releaseMarker.promise;
+          await persistMarkers(params);
+        },
+      );
+    }
     const readPending = devicePairing.getPendingDevicePairing;
     const readPaired = devicePairing.getPairedDevice;
     const reads: Promise<unknown>[] = [];
@@ -184,6 +190,7 @@ async function proveObserverLifetime(
       );
     };
     const unblock = () => {
+      releaseMarker.resolve();
       releaseRead.resolve();
       if (question) {
         questions.close();
@@ -213,10 +220,7 @@ async function proveObserverLifetime(
           ],
         });
         expect(registration.ok).toBe(true);
-        if (!registration.payload?.id) {
-          throw new Error("Question request did not return an id");
-        }
-        id = registration.payload.id;
+        id = expectDefined(registration.payload?.id, "Question request id");
         ws = admin;
         const originalWait = questions.waitAnswer.bind(questions);
         vi.spyOn(questions, "waitAnswer").mockImplementation((...args) => {
@@ -322,6 +326,17 @@ async function proveObserverLifetime(
           // Preserve failure-path cleanup if public close returns before the held read.
           releaseRead.resolve();
         });
+      if (mode === "queued-wake") {
+        await markerEntered.promise;
+        await nextTurn();
+        expect(postCloseReads).toBe(0);
+        await expect(observed).resolves.toMatchObject({
+          status: "rejected",
+          reason: { name: "AbortError" },
+        });
+        expect(atClose).toBeUndefined();
+        releaseMarker.resolve();
+      }
       if (expectHeldWork) {
         await expectHeldWork(closing);
         expect(atClose).toBeUndefined();

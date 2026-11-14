@@ -16,6 +16,8 @@ import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.
 import {
   PREPARATION_KEY,
   PROJECT_KEY,
+  PRESENCE_REPOSITORY as repository,
+  presenceDemand as persistedDemand,
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
@@ -25,19 +27,6 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 
 const fixture = usePreparedPoolFixture();
 afterEach(clearRuntimeConfigSnapshot);
-const repository: RepositoryWorkerProjectSnapshot = {
-  key: PROJECT_KEY,
-  baseCommit: "d".repeat(40),
-  source: {
-    kind: "repository",
-    url: "https://github.com/acme/private-repo.git",
-    repositoryId: "R_acme_private_repo",
-    owner: {
-      agent: { agentId: "main", provenance: null },
-      identity: { source: "anonymous" },
-    },
-  },
-};
 
 const projectReserves = (key: string) =>
   fixture
@@ -48,16 +37,6 @@ const stored = (records: WorkerEnvironmentRecord[]) =>
 const environmentIds = (records: WorkerEnvironmentRecord[]) =>
   records.map((record) => record.environmentId);
 
-const persistedDemand = (): PreparedPoolPresenceDemand => ({
-  revision: 1,
-  profileId: "development",
-  requestedRef: "main",
-  preparationKey: PREPARATION_KEY,
-  project: repository,
-  lastPresentAtMs: 1_000,
-  retireAtMs: null,
-});
-
 function presencePool(
   initial?: PreparedPoolPresenceDemand,
   executionMode: "worker-turn" | "remote-exec" = "remote-exec",
@@ -65,6 +44,7 @@ function presencePool(
 ) {
   let persisted = initial;
   let currentRepository = repository;
+  let preparationKey = PREPARATION_KEY;
   let sourceEnabled = true;
   const write = vi.fn<NonNullable<PoolOptions["presenceDemandStore"]>["write"]>(
     async (value, assertCurrent) => {
@@ -77,8 +57,6 @@ function presencePool(
   fixture.developmentProfile.readyWorkers = 3;
   const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async (_profileId, options) => {
     const project = options.projectRepository ?? currentRepository;
-    const preparationKey =
-      project.baseCommit === repository.baseCommit ? PREPARATION_KEY : "e".repeat(64);
     const { executionMode: _defaultExecutionMode, ...profile } = fixture.profile(
       PROJECT_KEY,
       preparationKey,
@@ -112,6 +90,9 @@ function presencePool(
     setRepository: (project: RepositoryWorkerProjectSnapshot) => {
       currentRepository = project;
     },
+    setPreparationKey: (key: string) => {
+      preparationKey = key;
+    },
     disableSource: () => {
       sourceEnabled = false;
     },
@@ -121,8 +102,7 @@ function presencePool(
 it.each(["admission", "effect"] as const)(
   "fences presence %s before a held policy response closes the last browser",
   async (boundary) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const { entered, release } = fixture.gate();
     const effect = vi.fn();
     let hold = false;
     const presence = presencePool(undefined, "worker-turn", {
@@ -241,15 +221,13 @@ it("cleans unrelated expiry and refills a healthy sibling before held presence a
   await fixture.attachSeed("healthy-source", { projectKey: healthyKey });
   fixture.nowMs = 2_000;
   fixture.config.cloudWorkers!.preparedPool!.maxTotal = 8;
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const { entered, release } = fixture.gate();
   const prepare = presence.prepareIntent.getMockImplementation()!;
   presence.prepareIntent.mockClear();
   const expectSingleAdmission = () =>
     expect(
       presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
     ).toHaveLength(1);
-  fixture.releases.push(() => release.resolve());
   presence.prepareIntent.mockImplementation(async (_profileId, options) => {
     if (options.projectPath) {
       return fixture.intent(healthyKey);
@@ -328,9 +306,23 @@ it.each(["changed", "removed"])(
   },
 );
 
-it("refreshes main with live reserves, retires only unused old workers, and claims the new generation", async () => {
-  // Old activation demand is still valid when the ref refreshes. It must not
-  // keep unused A reserves occupying capacity for the newly selected B.
+it("retains ready reserves when presence resolves a newer commit with compatible preparation", async () => {
+  const presence = presencePool(undefined, "worker-turn");
+  await presence.owner.setHumanPresence(true);
+  const ready = await fixture.readyReserves();
+  const nextRepository = { ...repository, baseCommit: "f".repeat(40) };
+  presence.setRepository(nextRepository);
+  fixture.nowMs = 61_000;
+
+  await fixture.schedule(presence.owner);
+
+  expect(presence.read()?.project.baseCommit).toBe(nextRepository.baseCommit);
+  expect(fixture.reserves().map((record) => record.environmentId)).toEqual(environmentIds(ready));
+  expect(stored(ready).every((record) => record?.destroyRequestedAtMs === null)).toBe(true);
+});
+
+it("retires unused incompatible reserves after a recipe change and claims the new generation", async () => {
+  // Old activation demand cannot retain reserves after preparation compatibility changes.
   fixture.provider.resolvePreparedIdleTimeoutMs = () => 300_000;
   const presence = presencePool(undefined, "worker-turn");
   await presence.owner.setHumanPresence(true);
@@ -345,6 +337,7 @@ it("refreshes main with live reserves, retires only unused old workers, and clai
   expect(stored(old.slice(1)).every((record) => record?.destroyRequestedAtMs === null)).toBe(true);
 
   fixture.nowMs = 61_000;
+  presence.setPreparationKey("e".repeat(64));
   await fixture.schedule(presence.owner);
   expect(presence.read()).toMatchObject({
     project: { baseCommit: nextRepository.baseCommit },
@@ -385,6 +378,7 @@ it("refreshes main with live reserves, retires only unused old workers, and clai
     preparation: { consumedAtMs: 61_000 },
   });
   expect(environmentIds(presence.owner.candidates(intent))).not.toContain(claimed.environmentId);
+  presence.setPreparationKey(PREPARATION_KEY);
   const staleIntent = await presence.prepareIntent("development", {
     projectRepository: repository,
   });

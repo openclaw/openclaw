@@ -4,7 +4,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
 import { readSessionIdentitySnapshot } from "./session-accessor.sqlite-entry-store.js";
 import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type {
   SessionMessageCutCandidate,
@@ -15,25 +15,18 @@ import { runSessionNativeBindingTransaction } from "./session-native-binding.wor
 import type { SessionForkMessageCutCommit } from "./session-parent-fork.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
-export function commitSessionMessageCut(
-  input: SessionMessageCutCommit,
-  context: AgentWorkerOperationContext,
-) {
-  return commitMessageCut(input, context);
-}
-
 export function commitSessionForkMessageCut(
   input: SessionForkMessageCutCommit,
   context: AgentWorkerOperationContext,
 ) {
-  return commitMessageCut(
+  return commitSessionMessageCut(
     { agentId: input.agentId, intent: input.intent },
     context,
     input.sourceRepositoryWorkspaceId,
   );
 }
 
-function commitMessageCut(
+export function commitSessionMessageCut(
   input: Omit<SessionMessageCutCommit, "intent"> & { intent: SessionMessageCutIntent },
   context: AgentWorkerOperationContext,
   sourceRepositoryWorkspaceId?: string,

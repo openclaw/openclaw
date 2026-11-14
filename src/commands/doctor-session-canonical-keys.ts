@@ -22,6 +22,7 @@ import {
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
 import { preserveCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -407,18 +408,22 @@ async function repairCanonicalSessionGroup(
         (candidate) => candidate.entry.sessionId === sessionId,
       );
       const [destinationEvents, sourceEvents] = await Promise.all([
-        loadTranscriptEvents({
-          agentId: destinationCollision?.agentId ?? destination.agentId,
-          sessionId,
-          sessionKey: destinationCollision?.sessionKey ?? winner.canonicalKey,
-          storePath: destinationCollision?.storePath ?? destination.storePath,
-        }),
-        loadTranscriptEvents({
-          agentId: winner.agentId,
-          sessionId,
-          sessionKey: winner.sessionKey,
-          storePath: winner.storePath,
-        }),
+        withSessionTranscriptHydrationCaller("doctor", () =>
+          loadTranscriptEvents({
+            agentId: destinationCollision?.agentId ?? destination.agentId,
+            sessionId,
+            sessionKey: destinationCollision?.sessionKey ?? winner.canonicalKey,
+            storePath: destinationCollision?.storePath ?? destination.storePath,
+          }),
+        ),
+        withSessionTranscriptHydrationCaller("doctor", () =>
+          loadTranscriptEvents({
+            agentId: winner.agentId,
+            sessionId,
+            sessionKey: winner.sessionKey,
+            storePath: winner.storePath,
+          }),
+        ),
       ]);
       const destinationContent = serializeJsonlLines(
         destinationEvents.map((event) => JSON.stringify(event)),
@@ -435,7 +440,6 @@ async function repairCanonicalSessionGroup(
       writeTranscriptArchive({
         archiveDirectory,
         content: destinationContent,
-        reason: "deleted",
         sessionId,
       });
       archivedDirectories.add(archiveDirectory);

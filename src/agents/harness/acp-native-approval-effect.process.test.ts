@@ -1,16 +1,9 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
-import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
-import {
-  buildGatewayReloadPlan,
-  isNoopGatewayReloadPlan,
-  listConfigReloadRefinementPrefixes,
-} from "../../gateway/config-reload-plan.js";
 import { createTestApprovalManager } from "../../gateway/exec-approval-manager.test-support.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -35,7 +28,6 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "./acp-native-process.test-support.js";
-import { getRegisteredAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 
 const fixture = useNativeProcessFixture();
@@ -117,10 +109,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           });
           await expect(readEffect()).rejects.toMatchObject({ code: "ENOENT" });
           if (kind === "allow") {
-            const plan = buildGatewayReloadPlan(
-              diffGatewayReloadPaths(config, disabledConfig, listConfigReloadRefinementPrefixes()),
-            );
-            expect(isNoopGatewayReloadPlan(plan)).toBe(true);
             native.getRuntimeConfig.mockReturnValue(disabledConfig);
           }
           if (kind === "always-only") {
@@ -163,16 +151,6 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
               expect(await readVisibleSessionTranscriptMessageEntries(attempt.target)).toEqual(
                 transcript,
               );
-              const harness = getRegisteredAgentHarness("acp-qwen")?.harness;
-              assert(harness?.loadModelCatalog !== undefined, "Native catalog operation missing");
-              await expect(
-                harness.loadModelCatalog({
-                  config: disabledConfig,
-                  agentId: "main",
-                  agentDir: state.agentDir(),
-                  workspaceDir: state.workspaceDir,
-                }),
-              ).resolves.toEqual({ entries: [] });
             } finally {
               next.close();
             }

@@ -46,6 +46,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import type { IMessageProbe } from "./probe.js";
+import { registerIMessageSendStatus } from "./send-status.js";
 import { imessageSetupContract } from "./setup-core.js";
 import {
   createIMessagePluginBase,
@@ -260,28 +261,6 @@ async function resolveIMessageConversationTarget(params: {
   };
 }
 
-async function resolveIMessageOutboundSessionRoute(
-  params: Parameters<typeof resolveIMessageConversationTarget>[0] & { agentId: string },
-) {
-  const target = await resolveIMessageConversationTarget(params);
-  if (!target) {
-    return null;
-  }
-  const { accountId, ...route } = target;
-  const baseSessionKey = buildOutboundBaseSessionKey({
-    ...params,
-    accountId,
-    channel: "imessage",
-    peer: route.peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    ...route,
-    chatType: route.peer.kind,
-  };
-}
-
 export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2> =
   createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2>({
     base: {
@@ -336,7 +315,25 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
         inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
-        resolveOutboundSessionRoute: resolveIMessageOutboundSessionRoute,
+        resolveOutboundSessionRoute: async (params) => {
+          const target = await resolveIMessageConversationTarget(params);
+          if (!target) {
+            return null;
+          }
+          const { accountId, ...route } = target;
+          const baseSessionKey = buildOutboundBaseSessionKey({
+            ...params,
+            accountId,
+            channel: "imessage",
+            peer: route.peer,
+          });
+          return {
+            sessionKey: baseSessionKey,
+            baseSessionKey,
+            ...route,
+            chatType: route.peer.kind,
+          };
+        },
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
           hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
@@ -403,9 +400,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             cfg: ctx.cfg,
             accountId: ctx.accountId,
           });
+          const sendStatus = registerIMessageSendStatus(ctx);
           try {
             return await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx);
           } finally {
+            sendStatus?.dispose();
             conversationBindings.stop();
           }
         },

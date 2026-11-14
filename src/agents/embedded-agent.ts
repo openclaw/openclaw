@@ -9,7 +9,6 @@ export type {
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  preemptAndDrainEmbeddedHeartbeatRun,
   compactEmbeddedAgentSession,
   isEmbeddedAgentRunHandleActive,
   resolveActiveEmbeddedRunSessionIdBySessionFile,

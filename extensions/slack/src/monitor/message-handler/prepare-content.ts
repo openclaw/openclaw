@@ -11,13 +11,6 @@ import { resolveSlackMessageText } from "../block-text.js";
 import type { SlackMediaResult } from "../media-types.js";
 import type { SlackThreadStarter } from "../thread.js";
 
-type SlackResolvedMessageContent = {
-  rawBody: string;
-  effectiveDirectMedia: SlackMediaResult[] | null;
-  commandSourceText: string;
-  mentionStripPatterns: string[];
-};
-
 const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
 const SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE = 20;
 const SLACK_USER_MENTION_RE = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
@@ -56,7 +49,6 @@ function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[
     if (!text) {
       continue;
     }
-    SLACK_USER_MENTION_RE.lastIndex = 0;
     for (const match of text.matchAll(SLACK_USER_MENTION_RE)) {
       const userId = match[1];
       if (userId) {
@@ -74,25 +66,10 @@ function renderSlackUserMentions(
   if (!text || renderedMentions.size === 0) {
     return text;
   }
-  SLACK_USER_MENTION_RE.lastIndex = 0;
   return text.replace(SLACK_USER_MENTION_RE, (full, userId: string) => {
     const rendered = renderedMentions.get(userId);
     return rendered ?? full;
   });
-}
-
-function filterInheritedParentFiles(params: {
-  files: SlackFile[] | undefined;
-  isThreadReply: boolean;
-  threadStarter: SlackThreadStarter | null;
-}): SlackFile[] | undefined {
-  const { files, isThreadReply, threadStarter } = params;
-  if (!isThreadReply || !files?.length || !threadStarter?.files?.length) {
-    return files;
-  }
-  const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
-  const filtered = files.filter((file) => !file.id || !starterFileIds.has(file.id));
-  return filtered.length > 0 ? filtered : undefined;
 }
 
 export async function resolveSlackMessageContent(params: {
@@ -104,15 +81,15 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
-}): Promise<SlackResolvedMessageContent | null> {
-  const ownFiles = filterInheritedParentFiles({
-    files: params.message.files,
-    isThreadReply: params.isThreadReply,
-    threadStarter: params.threadStarter,
-  });
+}) {
+  let ownFiles = params.message.files;
+  const { isThreadReply, threadStarter } = params;
+  if (isThreadReply && ownFiles?.length && threadStarter?.files?.length) {
+    const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
+    const filtered = ownFiles.filter((file) => !file.id || !starterFileIds.has(file.id));
+    ownFiles = filtered.length > 0 ? filtered : undefined;
+  }
 
   const attachmentContent =
     ownFiles?.length || params.message.attachments?.length
@@ -123,8 +100,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            abortSignal: params.abortSignal,
-            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )

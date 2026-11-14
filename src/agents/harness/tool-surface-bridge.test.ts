@@ -1,26 +1,27 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as logger from "../../logger.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
-import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
+import {
+  finalizeAgentToolAvailability,
+  gateAgentToolExecution,
+} from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
-import {
-  TOOL_CALL_RAW_TOOL_NAME,
-  createToolSearchTools,
-  buildToolSchemaDirectoryPrompt,
-} from "../tool-search.js";
+import { TOOL_CALL_RAW_TOOL_NAME, createToolSearchTools } from "../tool-search.js";
 import { prepareAgentToolSurfacePresentation } from "../tool-surface-plan.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
+import { createAgentHarnessPromptToolPolicy } from "./prompt-tool-policy.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./tool-surface-bridge.js";
 
 type RuntimeOptions = Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0];
@@ -58,6 +59,8 @@ function searchTools(runtime: ReturnType<typeof rawRuntime>, withExecutor = fals
   });
 }
 const toolNames = (items: ReturnType<typeof tools>) => items.map((tool) => tool.name);
+const catalogNames = (runtime: ReturnType<typeof rawRuntime>) =>
+  runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name);
 const searchControlNames = ["tool_search", "tool_describe", "dispatch_action"];
 const getTool = (items: ReturnType<typeof tools>, name: string) =>
   expectDefined(
@@ -83,9 +86,148 @@ afterEach(() => {
     runtime.cleanup();
   }
   clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
 });
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each(["code-mode", "tool-search"] as const)(
+    "does not count a hidden catalog behind execution-denied %s controls",
+    async (mode) => {
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const codeMode = mode === "code-mode";
+      const runtime = createRuntime({
+        tools: { codeMode, toolSearch: codeMode ? false : { enabled: true, mode: "tools" } },
+      });
+      const catalog = Array.from({ length: 65 }, (_, index) => createStubTool(`hidden_${index}`));
+      const surface = runtime.compactTools(catalog);
+      const deniedControls = surface.tools.map((tool) =>
+        gateAgentToolExecution(tool, "outside requester authority"),
+      );
+      for (const control of deniedControls) {
+        expect((await control.execute("denied-control", {})).details).toMatchObject({
+          gated: true,
+        });
+      }
+      const policy = createAgentHarnessPromptToolPolicy({
+        tools: deniedControls,
+        catalogRef: runtime.toolSearchCatalogRef,
+        codeModeControlsEnabled: codeMode,
+        diagnosticIdentity: { sessionKey: `agent:main:denied-controls-${mode}` },
+      });
+      const applied = policy.apply();
+      expect(warn).not.toHaveBeenCalled();
+      // Diagnostic reachability must not alter stable offered definitions or prompt policy.
+      expect(applied.tools.map((tool) => tool.name)).toEqual(
+        surface.tools.map((tool) => tool.name),
+      );
+      expect(applied.callableToolNames).toContain("hidden_64");
+      expect(runtime.toolSearchCatalogRef?.current?.entries).toHaveLength(65);
+    },
+  );
+
+  it.each(["direct", "code-mode", "tool-search"] as const)(
+    "warns once per session/catalog above 64 effective tools (%s)",
+    (mode) => {
+      const codeMode = mode === "code-mode";
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode,
+          toolSearch: mode === "tool-search" ? { enabled: true, mode: "tools" } : false,
+        },
+      };
+      const sessionKey = `agent:main:large-catalog-${mode}`;
+      const catalog = Array.from({ length: 65 }, (_, index) =>
+        createStubTool(index === 0 ? "read" : `catalog_${index}`),
+      );
+      const compact = (key: string, selected = catalog) => {
+        const surface = createRuntime(config, { sessionKey: key }).compactTools(selected);
+        surface.promptToolPolicy.apply();
+        return surface;
+      };
+      compact(sessionKey, catalog.slice(0, 64));
+      compact(sessionKey, [
+        ...catalog.slice(0, 64),
+        gateAgentToolExecution(catalog[64]!, "not authorized"),
+      ]);
+      const restricted = createRuntime(config, { sessionKey }).compactTools(catalog);
+      expect(warn).not.toHaveBeenCalled();
+      restricted.promptToolPolicy.apply({
+        toolsAllow: catalog.slice(0, 64).map((tool) => tool.name),
+      });
+      expect(warn).not.toHaveBeenCalled();
+      const surface = compact(sessionKey);
+      expect(surface.tools).toHaveLength(codeMode ? 2 : mode === "tool-search" ? 4 : 65);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("catalog contains 65 tools"));
+      expect(warn).toHaveBeenLastCalledWith(
+        expect.stringContaining("not the provider-advertised tool count"),
+      );
+      compact(sessionKey, catalog.toReversed());
+      expect(warn).toHaveBeenCalledTimes(1);
+      compact(sessionKey, [...catalog.slice(0, 64), createStubTool("replacement")]);
+      compact(`${sessionKey}-other`);
+      expect(warn).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each(["tools", "directory"] as const)(
+    "preserves selectors across shared harness and worker %s projections",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: false,
+          toolSearch: {
+            mode,
+            include: [{ source: "mcp" }],
+            exclude: [{ name: "remote_frequent" }],
+          },
+        },
+      };
+      const configuredSearch = structuredClone(config.tools?.toolSearch);
+      const presentation = preparePresentation({ config });
+      for (const supportsDeferredToolCalls of [true, false]) {
+        const runtime = rawRuntime({
+          presentation: structuredClone(presentation),
+          supportsDeferredToolCalls,
+        });
+        const remote = tools(["remote_deferred", "remote_frequent"]);
+        for (const target of remote) {
+          setPluginToolMeta(target, { pluginId: "bundle-mcp", optional: false });
+        }
+        const surface = runtime.compactTools([...tools(["native_direct"]), ...remote], {
+          prepared: { preserveToolNames: [] },
+        });
+        expect(toolNames(surface.tools)).toEqual([
+          ...searchControlNames,
+          "native_direct",
+          "remote_frequent",
+        ]);
+        expect(catalogNames(runtime)).toEqual(["remote_deferred"]);
+        const policy = surface.promptToolPolicy.apply();
+        expect(policy.callableToolNames).toEqual(
+          expect.arrayContaining(["native_direct", "remote_frequent", "remote_deferred"]),
+        );
+        expect(policy.toolSchemaDirectoryPrompt).not.toContain("native_direct");
+        expect(policy.toolSchemaDirectoryPrompt).toContain(
+          mode === "directory" && supportsDeferredToolCalls
+            ? "Call a unique deferred tool name directly"
+            : "Deferred names are not directly callable",
+        );
+      }
+      expect(config.tools?.toolSearch).toEqual(configuredSearch);
+    },
+  );
+
+  it("ignores Tool Search selectors when independent Code Mode is engaged", () => {
+    const runtime = createRuntime({
+      tools: { codeMode: true, toolSearch: { include: [], exclude: [{ name: "*" }] } },
+    });
+    const surface = runtime.compactTools(tools(["read", "native_target"]));
+    expect(toolNames(surface.tools)).toEqual(["exec", "wait"]);
+    expect(catalogNames(runtime)).toEqual(["native_target", "read"]);
+  });
+
   it.each([
     ["automatic Code Mode", "auto", true, false, ["exec", "wait", "fixture_direct"]],
     ["direct tools", false, false, false, ["fixture_read", "fixture_direct"]],
@@ -149,28 +291,11 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     const { toolSchemaDirectoryPrompt: restricted } = policy.apply({
       toolsAllow: ["fixture_allowed"],
     });
-    expect(restricted).toBe(
-      buildToolSchemaDirectoryPrompt(
-        { config: runtime.config, catalogRef: runtime.toolSearchCatalogRef },
-        { contextTokenBudget: 8_000 },
-      ),
-    );
     expect(restricted).toContain("fixture_allowed");
     expect(restricted).not.toContain("fixture_denied");
     expect(expectDefined(restricted, "restricted directory").length).toBeLessThanOrEqual(800);
     expect(policy.apply({ toolsAllow: [] }).toolSchemaDirectoryPrompt).toBeUndefined();
     expect(policy.apply().toolSchemaDirectoryPrompt).toBe(full);
-  });
-
-  it("uses structured calls without deferred dispatch support", () => {
-    const config: OpenClawConfig = { tools: { toolSearch: { mode: "directory" } } };
-    const runtime = createRuntime(config, { supportsDeferredToolCalls: false });
-    const surface = runtime.compactTools([...searchTools(runtime), ...tools(["fixture_hidden"])]);
-    const guidance = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
-    expect(runtime.plan.toolSearchConfig.mode).toBe("tools");
-    expect(guidance?.includes("Call a unique deferred tool name directly")).toBe(false);
-    expect(guidance?.includes("Deferred names are not directly callable")).toBe(true);
-    expect(config.tools?.toolSearch).toEqual({ mode: "directory" });
   });
 
   it("keeps overlapping allowlists callable through the code surface", () => {
@@ -196,8 +321,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     expect(toolSchemaDirectoryPrompt).toContain("- web_search ");
     expect(toolSchemaDirectoryPrompt).not.toContain("- web_fetch ");
     expect(toolSchemaDirectoryPrompt).not.toContain("- memory_search ");
-    expect(runtime.codeModeControlsEnabled).toBe(true);
-    expect(runtime.toolSearchControlsEnabled).toBe(false);
   });
 
   it("keeps browser callable through automatic Tool Search for message-tool-only replies with lean disabled", async () => {
@@ -367,13 +490,11 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     expect(restored.callableToolNames).toEqual(names);
   });
 
-  it.each([
-    { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
-  ])("keeps $name directly visible in Code Mode", (delivery) => {
+  it("keeps message-only delivery directly visible in Code Mode", () => {
     const runtime = configuredRuntime({
       config: { tools: { codeMode: true } },
       executeTool: async () => ({ content: [], details: {} }),
-      ...delivery,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
 
     expect(

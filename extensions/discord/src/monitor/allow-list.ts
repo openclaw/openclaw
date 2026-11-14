@@ -85,8 +85,10 @@ export function normalizeDiscordSlug(value: string) {
 }
 
 export function normalizeDiscordDisplaySlug(value: string) {
+  // Emoji presentation selectors and the keycap mark are marks, but not part of the name.
   return normalizeLowercaseStringOrEmpty(value)
     .normalize("NFC")
+    .replace(/[\uFE0E\uFE0F\u20E3]/g, "")
     .replace(/^#/, "")
     .replace(/[\s_]+/g, "-")
     .replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")
@@ -489,19 +491,15 @@ export function shouldEmitDiscordReactionNotification(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
   memberRoleIds?: string[];
-  allowlist?: string[];
   allowNameMatching?: boolean;
 }) {
   const mode = params.mode ?? "own";
   if (mode === "off") {
     return false;
   }
-  const accessGuildInfo =
-    params.guildInfo ??
-    (params.allowlist ? ({ users: params.allowlist } satisfies DiscordGuildEntryResolved) : null);
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig: params.channelConfig,
-    guildInfo: accessGuildInfo,
+    guildInfo: params.guildInfo,
     memberRoleIds: params.memberRoleIds ?? [],
     sender: {
       id: params.userId,

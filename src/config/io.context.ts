@@ -129,7 +129,6 @@ export function createConfigIoContext(
     applyConfigEnvVars(cfg, deps.env);
     if (shouldLoadShellEnv(cfg, deps.env)) {
       loadShellEnvFallback({
-        enabled: true,
         env: deps.env,
         expectedKeys: resolveShellEnvExpectedKeys(deps.env, cfg),
         logger: deps.logger,

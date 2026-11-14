@@ -1,6 +1,11 @@
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import {
+  monotonicDeadlineAfter,
+  monotonicNow,
+  remainingMonotonicMs,
+} from "../shared/monotonic-time.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
@@ -93,7 +98,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     return stop("aborted", "Invalid repair budget.");
   }
   const budget = parsedBudget.data;
-  const deadline = Date.now() + budget.wallClockMs;
+  const deadline = monotonicDeadlineAfter(budget.wallClockMs);
   const wall = new AbortController();
   const timer = setTimeout(() => wall.abort(new Error("wall-clock-budget")), budget.wallClockMs);
   const signal = params.signal ? AbortSignal.any([wall.signal, params.signal]) : wall.signal;
@@ -123,7 +128,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     assertCurrent();
     const baselineScore = finalValidation.score;
     const selected = await runtime.withUpdateRepairEnvironment(params.target, () =>
-      runtime.prepareUpdateRepairInference(signal, Math.max(1, deadline - Date.now())),
+      runtime.prepareUpdateRepairInference(signal, Math.max(1, remainingMonotonicMs(deadline))),
     );
     assertCurrent();
     if (!selected.ok) {
@@ -132,8 +137,9 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     const { route, modelFallbacks } = selected;
     params.onEvent?.({ type: "route-selected", model: route.model, provider: route.provider });
     assertCurrent();
-    const started = Date.now();
-    const timeoutMs = Math.min(budget.perTurnMs, deadline - started);
+    const started = monotonicNow();
+    // Preserve whole-millisecond expiration at the turn boundary.
+    const timeoutMs = Math.min(budget.perTurnMs, Math.floor(remainingMonotonicMs(deadline)));
     if (timeoutMs <= 0) {
       return stop("aborted", "wall-clock-budget");
     }
@@ -176,7 +182,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       turn: 1,
       model: outcome.model,
       provider: outcome.provider,
-      durationMs: Date.now() - started,
+      durationMs: monotonicNow() - started,
       toolCalls: outcome.toolCalls,
       summary: outcome.summary,
       validation: {

@@ -1,5 +1,6 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   createPluginCache,
@@ -7,7 +8,6 @@ import {
   type PluginCache,
 } from "../../plugins/plugin-cache.js";
 import { pinConfigDir } from "../../utils.js";
-import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
   resolvePluginSkillRoots,
   resolvePluginSkillRootsFromContributions,
@@ -33,13 +33,7 @@ import type {
 } from "./discovery-worker-contract.js";
 
 function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
-  for (const [key, value] of Object.entries(environment)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+  applyProcessEnvKeys(Object.keys(environment), environment);
   pinConfigDir();
 }
 
@@ -62,11 +56,12 @@ function resolveInputPlan(input: SkillsSourcePlanInput, cache: PluginCache = cre
     return resolveWorkspaceSkillSourcePlan(input.workspaceDir, {
       ...options,
       pluginSkillRoots,
+      ...(input.agentSkillsDirs ? { agentSkillsDirs: input.agentSkillsDirs } : {}),
     });
   });
 }
 
-serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
+serveWorkerTasks<SkillsDiscoveryOutput>(async (input, channel) => {
   // SAFETY: This private worker only receives the discovery owner's typed requests.
   const request = input as SkillsDiscoveryInput;
   channel?.consumeInput();
@@ -76,10 +71,21 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   }
   if (request.kind === "project") {
     applyEnvironment(request.environment);
-    return { kind: "project", snapshot: buildSkillSnapshotProjection(request.input) };
+    const { resolvedSkills, discoverySkills, ...snapshot } = buildSkillSnapshotProjection(
+      request.input,
+    );
+    // Return selection, not another resident copy of the caller's parsed catalog.
+    const indices = new Map(request.input.eligible.map((entry, index) => [entry.skill, index]));
+    return {
+      kind: "project",
+      snapshot,
+      resolvedIndices: resolvedSkills!.map((skill) => indices.get(skill)!),
+      discoveryIndices: discoverySkills!.map((skill) => indices.get(skill)!),
+    };
   }
   if (request.kind === "status") {
     applyEnvironment(request.environment);
+    const { readWorkspaceSkillStatusFacts } = await import("../discovery/status-files.js");
     return { kind: "status", facts: readWorkspaceSkillStatusFacts(request.input) };
   }
   if (request.path === undefined) {
@@ -97,63 +103,64 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
     plans.set(key, plan);
     return plan;
   };
-  return {
-    kind: "scan",
-    results: request.requests.map(({ key, environment, selection }) => {
-      applyEnvironment(environment);
-      const resolvedPlan =
-        selection.kind === "planned"
+  const results: Extract<SkillsDiscoveryOutput, { kind: "scan" }>["results"] = [];
+  // Each read must finish before the next workspace replaces process.env.
+  for (const { key, environment, selection } of request.requests) {
+    applyEnvironment(environment);
+    const resolvedPlan =
+      selection.kind === "planned"
+        ? selectPlan(selection.plan.input)
+        : selection.plan
           ? selectPlan(selection.plan.input)
-          : selection.plan
-            ? selectPlan(selection.plan.input)
-            : selection.request.sourcePlan;
-      const sourceRequest = {
-        ...selection.request,
-        sourcePlan:
-          selection.kind === "selected" && selection.plan?.scope === "gateway"
-            ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
-            : resolvedPlan,
-      };
-      const environmentKey = JSON.stringify(environment);
-      let batch = sourceReads.get(environmentKey);
-      if (!batch) {
-        batch = new Map();
-        sourceReads.set(environmentKey, batch);
+          : selection.request.sourcePlan;
+    const sourceRequest = {
+      ...selection.request,
+      sourcePlan:
+        selection.kind === "selected" && selection.plan?.scope === "gateway"
+          ? splitSkillSourcePlan(resolvedPlan).gatewayPlan
+          : resolvedPlan,
+    };
+    const environmentKey = JSON.stringify(environment);
+    let batch = sourceReads.get(environmentKey);
+    if (!batch) {
+      batch = new Map();
+      sourceReads.set(environmentKey, batch);
+    }
+    const sources = await readWorkspaceSkillSources(sourceRequest, batch);
+    // Fingerprints need precedence winners, not collision diagnostics.
+    const entries = mergeSkillRecords(sources.entries, key, false);
+    appendLowerPrecedenceSkillRecords(
+      entries,
+      mergeSkillRecords(sources.executionEntries, key, false),
+      () => {},
+    );
+    // Generated plugin links are shared outputs; watch their canonical sources instead.
+    const watchDirectories = new Set([
+      ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
+      ...(sourceRequest.executionWorkspaceDir
+        ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
+            (root) => root.dir,
+          )
+        : []),
+    ]);
+    const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
+    // Workspace entries retain configured paths; watch their admitted physical targets.
+    for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
+      const target = tryRealpath(skill.baseDir);
+      if (
+        target &&
+        !physicalRoots.some((directory) => directory && isPathInside(directory, target))
+      ) {
+        watchDirectories.add(target);
       }
-      const sources = readWorkspaceSkillSources(sourceRequest, batch);
-      const entries = mergeSkillRecords(sources.entries, key, []);
-      appendLowerPrecedenceSkillRecords(
-        entries,
-        mergeSkillRecords(sources.executionEntries, key, []),
-        () => {},
-      );
-      // Generated plugin links are shared outputs; watch their canonical sources instead.
-      const watchDirectories = new Set([
-        ...sourceRequest.sourcePlan.roots.map((root) => root.dir),
-        ...(sourceRequest.executionWorkspaceDir
-          ? resolveWorkspaceSkillDirectories(sourceRequest.executionWorkspaceDir).map(
-              (root) => root.dir,
-            )
-          : []),
-      ]);
-      const physicalRoots = [...watchDirectories].map((directory) => tryRealpath(directory));
-      // Workspace entries retain configured paths; watch their admitted physical targets.
-      for (const { skill } of [...sources.entries, ...sources.executionEntries]) {
-        const target = tryRealpath(skill.baseDir);
-        if (
-          target &&
-          !physicalRoots.some((directory) => directory && isPathInside(directory, target))
-        ) {
-          watchDirectories.add(target);
-        }
-      }
-      return {
-        key,
-        sources,
-        watchDirectories: [...watchDirectories],
-        plan: selection.plan ? resolvedPlan : undefined,
-        fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
-      };
-    }),
-  };
+    }
+    results.push({
+      key,
+      sources,
+      watchDirectories: [...watchDirectories],
+      plan: selection.plan ? resolvedPlan : undefined,
+      fingerprint: sha256Hex(JSON.stringify([entries, sources.runtime])),
+    });
+  }
+  return { kind: "scan", results };
 });

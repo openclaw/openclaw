@@ -298,7 +298,8 @@ it.each([
   });
   if (entry.kind === "graph") {
     expect(printed.markdown).toContain("OpenClaw update failed");
-    expectContains(report.body, ["EACCES", "ECONNRESET", "Transport failed", "Connection refused"]);
+    expectContains(report.body, ["EACCES", "ECONNRESET", "Connection refused"]);
+    expect(report.body).not.toContain("Transport failed");
   } else {
     expectContains(report.body, [
       "Failed phase: target-resolution",
@@ -307,8 +308,9 @@ it.each([
       "Update action: CLI command: openclaw update",
       "Installation method: npm-global",
       entry.metadata === "constructor" ? "(Error)" : "TypeError",
-      "Target response was invalid",
+      "[redacted-diagnostic]",
     ]);
+    expect(report.body).not.toContain("Target response was invalid");
     if (!entry.metadata) {
       expect(report.body).toContain("src/cli/update-cli/shared.ts:101:9");
     }
@@ -338,6 +340,50 @@ it.each([
   ["registry lookup error", "target-registry-metadata", /registry/i, registryFailure],
   ["existing profile lookup error", "target-registry-metadata", /registry/i, registryFailure],
   ["missing exact version", "target-version-resolution", /version/i, { version: null }],
+  [
+    "unpublished npm version",
+    "target-version-resolution",
+    /version/i,
+    {
+      stdout: "",
+      stderr: [
+        "npm error code E404",
+        "npm error 404 No match found for version 2026.9.2",
+        "npm error 404 Note that you can also install from a",
+        "npm error 404 tarball, folder, http url, or git url.",
+        "npm error A complete log of this run can be found in: /tmp/npm-debug.log",
+      ].join("\n"),
+      summary: "No match found for version 2026.9.2",
+    },
+  ],
+  ...(
+    [
+      ["E404", "No match found for version 2026.9.2", "target-version-resolution"],
+      ["ETARGET", "No matching version found for openclaw@2026.9.2.", "target-version-resolution"],
+      ["E404", "Package openclaw is not in this registry", "target-registry-metadata"],
+      ["E401", "Unable to authenticate", "target-registry-metadata"],
+      ["E403", "Access to this package is forbidden", "target-registry-metadata"],
+      ["ENOTFOUND", "Could not resolve the registry host", "target-registry-metadata"],
+    ] as const
+  ).map(
+    ([npmCode, summary, code]) =>
+      [
+        `npm JSON ${npmCode}: ${summary}`,
+        code,
+        code === "target-version-resolution" ? /version/i : /registry/i,
+        {
+          stdout: JSON.stringify({ error: { code: npmCode, summary, detail: "" } }, null, 2),
+          stderr: "npm warn Unrelated npm configuration warning",
+          summary,
+        },
+      ] as const,
+  ),
+  [
+    "registry HTTP 404",
+    "target-registry-metadata",
+    /registry/i,
+    { version: null, error: "HTTP 404" },
+  ],
   ["mismatched exact version", "target-version-resolution", /version/i, { version: "2026.9.1" }],
   [
     "missing target schema metadata",
@@ -353,10 +399,18 @@ it.each([
     if (existingProfile) {
       openOpenClawStateDatabase();
     }
-    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-      ...targetMetadata,
-      ...overrides,
-    });
+    if ("stdout" in overrides) {
+      vi.mocked(shared.resolveTargetVersion).mockRestore();
+      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockRestore();
+      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue(
+        createCommandResult({ code: 1, stdout: overrides.stdout, stderr: overrides.stderr }),
+      );
+    } else {
+      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
+        ...targetMetadata,
+        ...overrides,
+      });
+    }
     if (code === "target-registry-dist-tag") {
       vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({
         tag: "latest",
@@ -368,6 +422,22 @@ it.each([
       ...(code === "target-registry-dist-tag" ? { channel: "stable" } : { tag: "2026.9.2" }),
       yes: true,
     });
+    if ("stdout" in overrides) {
+      expect(exec.runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+        [
+          "npm",
+          "view",
+          "openclaw@2026.9.2",
+          "version",
+          "engines.node",
+          "openclaw.schemaVersions",
+          "--json",
+          "--global",
+        ],
+        expect.objectContaining({ cwd: process.cwd() }),
+      );
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(overrides.summary));
+    }
     const metadataFailure = expect.objectContaining({
       name: "target-metadata-preflight",
       exitCode: 1,
@@ -409,10 +479,10 @@ it.each([
   },
 );
 
-it("preserves update status after target policy admission failure for an existing profile", async () => {
+it.each(["main", "MAIN", "Main", "openclaw@MAIN"])("preserves status for %s", async (tag) => {
   openOpenClawStateDatabase();
   vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue("bun");
-  const result = await rejectUpdate({ tag: "main", yes: true });
+  const result = await rejectUpdate({ tag, yes: true });
   expect(result).toMatchObject({
     status: "error",
     mode: "bun",

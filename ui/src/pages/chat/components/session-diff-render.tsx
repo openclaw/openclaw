@@ -4,15 +4,21 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   DiffBlock,
   DiffFoldToggle,
   DiffFoldPlaceholder,
   type DiffPresentation,
 } from "./chat-diff-render.solid.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 function SplitSide(props: {
   line: DiffLine | undefined;

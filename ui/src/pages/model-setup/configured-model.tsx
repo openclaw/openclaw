@@ -1,14 +1,15 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createMemo } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
-import {
-  providerDisplayLabel,
-  providerIdFromModelRef,
-} from "../../components/provider-icon-data.ts";
+import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import {
+  ModelProviderIcon,
+  useProviderDisplayLabel,
+} from "../../lib/reactive/provider-presentation.tsx";
 import { activationTargetId, type ModelSetupActivationState } from "./state.ts";
 import type { ModelSetupViewProps } from "./view-types.ts";
 
@@ -39,9 +40,7 @@ export function ConfiguredUtilityModel(
   return (
     <Show when={modelRef()}>
       <section class="settings-section model-setup__utility">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.utility.configured")}</h2>
-        </div>
+        <SettingsSectionHeader title={t("modelSetup.utility.configured")} />
         <div class="model-setup__row">
           <div class="model-setup__row-main">
             <strong>{modelRef()}</strong>
@@ -124,6 +123,7 @@ const VERIFICATION_BUTTON_LABELS = {
 export function ConfiguredModel(
   props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
 ): JSX.Element {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const configuredRef = createMemo(() => props.result.configuredModel!);
   const canContinue = () =>
     props.firstRun && props.result.setupComplete && props.activation.phase !== "success";
@@ -132,7 +132,7 @@ export function ConfiguredModel(
   const displayRef = createMemo(() =>
     props.verify.phase === "ok" ? props.verify.modelRef : configuredRef(),
   );
-  const providerId = createMemo(() => providerIdFromModelRef(displayRef()));
+  const providerId = () => providerIdFromModelRef(displayRef());
   const configuredCandidate = createMemo(() =>
     displayRef() === configuredRef()
       ? props.result.candidates.find(
@@ -145,7 +145,7 @@ export function ConfiguredModel(
     const id = providerId();
     return id ? providerDisplayLabel(id) : displayRef();
   };
-  const description = createMemo(() => {
+  const description = () => {
     const name = displayRef().slice(displayRef().indexOf("/") + 1);
     const detail = configuredCandidate()?.detail.trim();
     return !detail || configuredCandidate()?.kind === "existing-model"
@@ -153,17 +153,15 @@ export function ConfiguredModel(
       : detail.toLowerCase().includes(name.toLowerCase())
         ? detail
         : `${name} · ${detail}`;
-  });
+  };
 
   return (
     <section class="settings-section model-setup__current" data-verify-phase={props.verify.phase}>
-      <div class="settings-section__header">
-        <h2>{t("modelSetup.verify.title")}</h2>
-      </div>
+      <SettingsSectionHeader title={t("modelSetup.verify.title")} />
       <div class="model-setup__row">
         <div class="model-setup__provider-copy">
           <Show when={providerId()} keyed>
-            {(id) => <ProviderBrandIcon provider={id} class="model-setup__icon" />}
+            {(id) => <ModelProviderIcon provider={id} class="model-setup__icon" />}
           </Show>
           <div class="model-setup__current-copy">
             <strong>{providerLabel()}</strong>

@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
-import {
-  isSessionHistoryWorkerCold,
-  prewarmSessionHistoryWorker,
-} from "../config/sessions/session-transcript-worker-runtime.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -17,19 +13,10 @@ const log = createSubsystemLogger("gateway");
 export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
   options: {
-    onlyIfCold?: boolean;
-    includeMaintenance?: boolean;
     isCancelled?: () => boolean;
   } = {},
 ): Promise<void> {
   try {
-    if (
-      options.onlyIfCold &&
-      !isSessionHistoryWorkerCold() &&
-      (!options.includeMaintenance || !isSessionHistoryWorkerCold(maintenanceLane))
-    ) {
-      return;
-    }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
       if (options.isCancelled?.()) {
         return;
@@ -50,11 +37,7 @@ export async function prewarmGatewaySessionHistory(
           },
         );
         if (exists && !options.isCancelled?.()) {
-          const target = { ...database, agentId: database.agentId ?? agentId };
-          await prewarmSessionHistoryWorker(target);
-          if (options.includeMaintenance && !options.isCancelled?.()) {
-            await prewarmSessionHistoryWorker(target, maintenanceLane);
-          }
+          await prewarmSessionHistoryWorker({ ...database, agentId: database.agentId ?? agentId });
         }
       } catch (error) {
         log.debug(`Session history prewarm failed for ${agentId}: ${String(error)}`);

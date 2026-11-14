@@ -27,18 +27,21 @@ const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
   "unread",
 ]);
 
-/**
- * A patch that carries nothing but the read acknowledgement itself (plus its
- * compare-and-swap preconditions). Shared with the patch projection owner, which
- * must not age the session row for a read.
- */
-export function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+export function isReadMarkerOnly(patch: { unread?: boolean }): boolean {
   return (
-    patch.unread === false &&
+    typeof patch.unread === "boolean" &&
     Object.entries(patch).every(
       ([key, value]) => value === undefined || CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS.has(key),
     )
   );
+}
+
+/**
+ * A patch that carries nothing but the read acknowledgement itself (plus its
+ * compare-and-swap preconditions).
+ */
+function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+  return patch.unread === false && isReadMarkerOnly(patch);
 }
 
 export function validateSessionUnreadAck(

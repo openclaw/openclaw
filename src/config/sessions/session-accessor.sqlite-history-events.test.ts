@@ -1,5 +1,5 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -7,7 +7,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import { appendTranscriptEvent } from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
 import {
@@ -16,6 +16,10 @@ import {
 } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
+  historyMessage,
+  historyActivity,
+  clearHistoryNavigation,
+  persistHistory,
   readSessionTranscriptHistoryEventCount,
   insertSyntheticHistory,
   readSessionTranscriptHistoryEvents,
@@ -26,15 +30,6 @@ import {
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
-
-function messageEvent(
-  id: string,
-  parentId: string | null,
-  role: "user" | "assistant",
-  content: string,
-) {
-  return { type: "message", id, parentId, message: { role, content } };
-}
 
 function message(
   id: string,
@@ -82,8 +77,8 @@ describe("SQLite transcript history events", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  const persist = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
-    persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+  const persist = (messages: Parameters<typeof persistHistory>[1]) =>
+    persistHistory(scope, messages);
   const anchor = (messageId: string, maxMessages = 10) =>
     readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
   const openDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
@@ -122,10 +117,7 @@ describe("SQLite transcript history events", () => {
 
     await persist([message("after-empty", null, "user", "new")]);
     const delta = readTranscriptDisplayDelta(scope, { cursor: empty.deltaCursor });
-    expect(delta.kind).toBe("page");
-    if (delta.kind !== "page") {
-      throw new Error("missing appended history delta");
-    }
+    assert(delta.kind === "page", "missing appended history delta");
     expect(delta.events.map(historyEventId)).toContain("after-empty");
     expectEmptyDelta(delta.cursor, "after-empty");
 
@@ -135,12 +127,12 @@ describe("SQLite transcript history events", () => {
     expect(otherEmpty).toMatchObject({ events: [], totalMessages: 0 });
     expect(otherEmpty.deltaCursor).toBeUndefined();
     expect(readTranscriptDisplayDelta(other)).toEqual({ kind: "missing" });
-    await persistSessionTranscriptTurn(other, {
-      messages: ["other-first", "other-middle", "other-last"].map((eventId, index, ids) =>
+    await persistHistory(
+      other,
+      ["other-first", "other-middle", "other-last"].map((eventId, index, ids) =>
         message(eventId, index === 0 ? null : ids[index - 1]!, "user", eventId),
       ),
-      touchSessionEntry: false,
-    });
+    );
     expect(
       readRecentSessionTranscriptHistoryEvents(other, limits).events.map(historyEventId),
     ).toEqual(["other-first", "other-middle", "other-last"]);
@@ -191,32 +183,19 @@ describe("SQLite transcript history events", () => {
           return {
             eventId: id,
             parentId: startOrder === 0 ? "wait" : "first",
-            message: createNestedToolActivity({
-              runId: "run",
-              scopeId: "attempt",
+            message: historyActivity({
               afterEntryId,
               startOrder,
               parentToolCallId: "exec",
               toolCallId: id,
-              toolName: "read",
-              input: {},
               result: { content: [{ type: "text", text: "done" }] },
-              isError: false,
-              startedAt: 1,
-              timestamp: 2,
             }),
           };
         }),
       ]);
       runOpenClawAgentWriteTransaction(
         (database) => {
-          database.db
-            .prepare(`UPDATE transcript_events
-          SET navigation_type = NULL, navigation_custom_type = NULL,
-              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-              navigation_last_custom_type = NULL, navigation_valid = 1
-          WHERE session_id = ?`)
-            .run(scope.sessionId);
+          clearHistoryNavigation(database, scope.sessionId);
           if (legacy) {
             database.db
               .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
@@ -227,11 +206,7 @@ describe("SQLite transcript history events", () => {
       );
       const raw = readTranscriptRawDelta(scope);
       const delta = readTranscriptDisplayDelta(scope);
-      expect(raw.kind).toBe("page");
-      expect(delta.kind).toBe("page");
-      if (raw.kind !== "page" || delta.kind !== "page") {
-        throw new Error("missing transcript page");
-      }
+      assert(raw.kind === "page" && delta.kind === "page", "missing transcript page");
       const rawSeq = new Map(raw.events.map((row) => [historyEventId(row), row.seq]));
       const history = readSessionTranscriptHistoryEvents(scope);
       expectEvents(history, ["exec", "notice", "wait", "first", "later"], [1, 2, 3, 4, 5]);
@@ -270,10 +245,7 @@ describe("SQLite transcript history events", () => {
       expect(delta.serializedBytes).toBe(raw.serializedBytes);
       expect(delta.events.map(({ event, seq }) => ({ event, seq }))).toEqual(raw.events);
       const blocked = readTranscriptDisplayDelta(scope, { maxBytes: 1 });
-      expect(blocked.kind).toBe("page");
-      if (blocked.kind !== "page") {
-        throw new Error("missing byte-blocked transcript page");
-      }
+      assert(blocked.kind === "page", "missing byte-blocked transcript page");
       expect(blocked).toMatchObject({
         activeLeafEntryId: "later",
         events: [],
@@ -336,9 +308,9 @@ describe("SQLite transcript history events", () => {
     const events = [
       { type: "session", version: 3, id: scope.sessionId },
       oldNotice,
-      messageEvent("kept-user", "old-notice", "user", "retained prompt"),
+      historyMessage("kept-user", "old-notice", "retained prompt"),
       { ...oldNotice, id: "shallow-notice", parentId: "kept-user", details: {} },
-      messageEvent("kept-assistant", "shallow-notice", "assistant", "retained reply"),
+      historyMessage("kept-assistant", "shallow-notice", "retained reply", "assistant"),
       boundary("reset", "reset", "kept-assistant", {
         firstKeptEntryId: "kept-user",
         reason: "new",
@@ -543,29 +515,19 @@ describe("SQLite transcript history events", () => {
     expect(firstWindow).toMatchObject({ found: true, totalMessages: 4 });
     const firstIds = ["before-user", "before-assistant", "before-tool", "first-reset"];
     expectEvents(firstWindow.events, firstIds);
-    for (const [messageId, maxMessages, ids, seqs, offset, hasOverreadContext] of [
-      ["before-user", 1, ["before-user"], [1], 3, false],
-      [
-        "before-assistant",
-        2,
-        ["before-user", "before-assistant", "before-tool"],
-        [1, 2, 3],
-        1,
-        true,
-      ],
-      [
-        "before-tool",
-        3,
-        ["before-user", "before-assistant", "before-tool", "first-reset"],
-        [1, 2, 3, 4],
-        0,
-        true,
-      ],
-      ["first-reset", 1, ["before-tool", "first-reset"], [3, 4], 0, true],
+    for (const [messageId, maxMessages, seqs, offset, hasOverreadContext] of [
+      ["before-user", 1, [1], 3, false],
+      ["before-assistant", 2, [1, 2, 3], 1, true],
+      ["before-tool", 3, [1, 2, 3, 4], 0, true],
+      ["first-reset", 1, [3, 4], 0, true],
     ] as const) {
       const page = readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
       expect(page).toMatchObject({ found: true, totalMessages: 4, offset, hasOverreadContext });
-      expectEvents(page.events, ids, seqs);
+      expectEvents(
+        page.events,
+        seqs.map((seq) => firstIds[seq - 1]!),
+        seqs,
+      );
     }
     expectEvents(anchor("first-reset").events, firstIds);
 

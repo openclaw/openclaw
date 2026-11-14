@@ -1,11 +1,8 @@
 import { asOptionalObjectRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
-  normalizeHeartbeatToolResponse,
-} from "../auto-reply/heartbeat-tool-response.js";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -39,7 +36,6 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
-import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
@@ -64,6 +60,7 @@ import {
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
   emitToolActivityEvent,
+  finalizeToolActivity,
   isExecToolName,
   toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
@@ -93,6 +90,7 @@ import {
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
+import { successfulToolUsage } from "./tool-usage.js";
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
@@ -101,6 +99,7 @@ export async function prepareToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
   readResult: () => unknown,
+  nestedToolUsageId?: string | null,
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
@@ -183,7 +182,7 @@ export async function prepareToolExecutionEnd(
     toolCallId,
     ...(startData?.parentToolCallId ? { parentToolCallId: startData.parentToolCallId } : {}),
     meta,
-    replaySafe: callSummary.replaySafe,
+    replaySafe: !executionStarted || callSummary.replaySafe,
     isError: observerIsError,
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
@@ -239,6 +238,19 @@ export async function prepareToolExecutionEnd(
         }
       : {}),
   });
+  const toolUsageId = nestedToolUsageId === undefined ? startData?.toolUsageId : nestedToolUsageId;
+  if (
+    ctx.params.toolUsageRecorder &&
+    toolUsageId &&
+    (trackedExecutionStarted ?? evt.executionStarted) === true &&
+    successfulToolUsage({
+      isError: observerIsError,
+      result,
+      executionStarted: terminal.executionStarted,
+    })
+  ) {
+    ctx.params.toolUsageRecorder.record(toolUsageId);
+  }
   ctx.state.lastToolError = terminal.lastToolError;
   const terminalErrorStatus = terminal.executionStarted ? "failed" : "blocked";
   const toolErrorSummary = ctx.state.lastToolError
@@ -396,27 +408,19 @@ export async function prepareToolExecutionEnd(
   ) {
     ctx.state.successfulCronAdds += 1;
   }
-  if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
-    const response = normalizeHeartbeatToolResponse(resultRecord?.details);
-    if (response) {
-      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
-      ctx.state.heartbeatToolResponse = response;
-      if (isFirstHeartbeatResponse) {
-        runBestEffortCallback({
-          label: "heartbeat tool response",
-          log: ctx.log,
-          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
-        });
-      }
-    }
-  }
-
   const planUpdate =
     !isToolError && toolName === "progress_card"
       ? projectProgressCardChannelUpdate(startArgs)
       : undefined;
   const endedAt = Date.now();
   const execDetails = readExecToolDetails(sanitizedResult);
+  // A routine check has no activity bubble, but errors and approval requests still surface.
+  const hideFromChannelProgress =
+    explicitHideFromChannelProgress ||
+    (readAutomationDisplayState(runId) !== "ordinary" &&
+      !isToolError &&
+      execDetails?.status !== "approval-pending" &&
+      execDetails?.status !== "approval-unavailable");
   const itemData = {
     ...projectAgentToolActivity({
       toolCallId,
@@ -426,7 +430,7 @@ export async function prepareToolExecutionEnd(
       meta,
       result: sanitizedResult,
       status: isToolError ? terminalErrorStatus : "completed",
-      hideFromChannelProgress: explicitHideFromChannelProgress,
+      hideFromChannelProgress,
     }),
     startedAt: startData?.startTime,
     endedAt,
@@ -435,7 +439,6 @@ export async function prepareToolExecutionEnd(
   // Activity acceptance can suppress presentation, but the tool has settled.
   ctx.state.itemActiveIds.delete(itemData.itemId);
   ctx.state.itemCompletedCount += 1;
-  const hideFromChannelProgress = explicitHideFromChannelProgress;
   const createResultData = () => ({
     phase: "result",
     name: toolName,
@@ -454,7 +457,7 @@ export async function prepareToolExecutionEnd(
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: startArgs,
+      params: adjustedArgs === undefined ? startArgs : structuredClone(startArgs),
       runId,
       toolCallId,
       result: sanitizedResult,
@@ -508,6 +511,9 @@ export async function prepareToolExecutionEnd(
       stream: "tool",
       data: createResultData(),
     });
+
+    ctx.state.toolActivityPresentation.complete(terminalMeta);
+    finalizeToolActivity(ctx);
 
     if (isExecToolName(toolName)) {
       const commandItemId = buildCommandItemId(toolCallId);

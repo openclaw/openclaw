@@ -9,6 +9,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptIndexStatus } from "../config/sessions/session-transcript-projection-writer.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSqliteDatabaseScopedWriteToken } from "../infra/sqlite-database-admission.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -19,7 +20,7 @@ import * as publications from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { progressCardStore } from "./progress-card-store.js";
-import { createProgressCardHandlers } from "./server-methods/progress-card.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
@@ -61,7 +62,7 @@ it.each([false, true])(
     await withCardSession(custom, async (cfg) => {
       const target = { agentId: "main", path: cfg.session?.store };
       const db = openOpenClawAgentDatabase(target).db;
-      const handlers = createProgressCardHandlers();
+      const handlers = progressCardHandlers;
       const broadcast = vi.fn();
       const invoke = async (params: unknown) => {
         const respond = vi.fn<RespondFn>();
@@ -83,12 +84,20 @@ it.each([false, true])(
           markdown: "First",
           plan: [{ step: "Persist", status: "in_progress" }],
         });
+        // First-use DDL may invalidate receipts; warm card-only mutations must not.
+        const sessionToken = () =>
+          readSqliteDatabaseScopedWriteToken(db, [sessionKey, "agent:main:unrelated"]);
+        const before = sessionToken();
+        expect(before).toBeDefined();
         await tool.execute("replace", { markdown: "Second" });
+        expect(sessionToken()).toBe(before);
         expect(await invoke({ sessionKey, expectedRevision: 1 })).toMatchObject({
           card: { revision: 2, markdown: "Second" },
         });
         expect(await invoke({ sessionKey, expectedRevision: 2 })).toEqual({ card: null });
+        expect(sessionToken()).toBe(before);
         await tool.execute("recreate", { plan: [{ step: "Done", status: "completed" }] });
+        expect(sessionToken()).toBe(before);
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();

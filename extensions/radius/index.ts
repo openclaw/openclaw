@@ -118,16 +118,10 @@ export default defineSingleProviderPluginEntry({
       const model = catalog.models.find((entry) => entry.id === ctx.modelId);
       return model
         ? {
-            id: model.id,
-            name: model.name,
+            ...model,
             provider: "radius",
             api: "pi-messages",
             baseUrl: catalog.baseUrl,
-            reasoning: model.reasoning,
-            input: model.input,
-            cost: model.cost,
-            contextWindow: model.contextWindow,
-            maxTokens: model.maxTokens,
             thinkingLevelMap: model.thinkingLevelMap,
           }
         : undefined;

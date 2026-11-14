@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
+import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 import type { BackupManifest } from "../commands/backup-verify-manifest.js";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
@@ -14,6 +16,7 @@ import {
 } from "./client-credential-readiness.js";
 import {
   readClientCredentialFileIdentity,
+  parseClientCredentialReceipt,
   type ClientCredentialFileIdentity,
 } from "./client-credential-receipt.js";
 import type { ClientCredentialRehearsalBinding } from "./client-credential-restore-contract.js";
@@ -22,6 +25,122 @@ import { readEngineAnchor } from "./database-engine/open.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
+
+const portBindingSchema = z.strictObject({
+  localFile: z.strictObject({
+    path: z.string(),
+    dev: z.string().regex(/^\d+$/),
+    ino: z.string().regex(/^\d+$/),
+  }),
+  receipt: z.string(),
+});
+
+function portSharedIdentity(snapshotPath: string, sharedPath: string) {
+  using database = openNodeSqliteDatabase(snapshotPath, { readOnly: true, readBigInts: true });
+  const anchor = readEngineAnchor(database)?.[0];
+  if (anchor) {
+    if (typeof anchor.store_id !== "string") {
+      throw new Error("Database port PostgreSQL identity is missing.");
+    }
+    return { engine: "postgres" as const, identity: anchor.store_id };
+  }
+  const createdAt = database // sqlite-allow-raw -- Port binds the verified image's immutable shared-store identity.
+    .prepare("SELECT created_at FROM schema_meta WHERE meta_key='primary'")
+    .get()?.created_at;
+  if (typeof createdAt !== "bigint") {
+    throw new Error("Database port shared identity is missing.");
+  }
+  return { engine: "sqlite" as const, identity: `${sharedPath}:${createdAt}` };
+}
+
+export class PortClientCredentialMismatchError extends Error {}
+
+/** Capture only receipt metadata; credential rows remain in their existing local owner. */
+export function capturePortClientCredentialBinding(options: {
+  env: NodeJS.ProcessEnv;
+  sourcePath: string;
+  sourceFile: ClientCredentialFileIdentity;
+}): z.infer<typeof portBindingSchema> | null {
+  using owner = openClientCredentialCustody(options.env, { migration: true });
+  if (!owner) {
+    return null;
+  }
+  const stored = readClientCredentialReceipt(owner.database);
+  const identity = portSharedIdentity(options.sourcePath, options.sourceFile.path);
+  if (
+    stored?.phase !== "complete" ||
+    !isDeepStrictEqual(stored.receipt.sharedFile, options.sourceFile) ||
+    (stored.receipt.source &&
+      (stored.receipt.source.kind !== "canonical" ||
+        stored.receipt.source.engine !== identity.engine ||
+        stored.receipt.source.identity !== identity.identity))
+  ) {
+    throw new PortClientCredentialMismatchError(
+      "Database port credentials do not match the captured shared database.",
+    );
+  }
+  const localFile = readClientCredentialFileIdentity(owner.path);
+  if (!localFile) {
+    throw new Error("Database port local credentials disappeared.");
+  }
+  return { localFile, receipt: JSON.stringify(stored.receipt) };
+}
+
+/** Called after durable port completion, when recovery can resume but cannot roll back. */
+export function rebindPortedClientCredentials(options: {
+  env: NodeJS.ProcessEnv;
+  binding: unknown;
+  sharedPath: string;
+  sqliteSnapshotPath: string;
+  engine: "sqlite" | "postgres";
+  storeId: string;
+  assertCurrent: () => void;
+}): void {
+  const binding = portBindingSchema.nullable().parse(options.binding);
+  using owner = openClientCredentialCustody(options.env, { migration: true });
+  if (!binding && !owner) {
+    return;
+  }
+  if (
+    !binding ||
+    !owner ||
+    !isDeepStrictEqual(readClientCredentialFileIdentity(owner.path), binding.localFile)
+  ) {
+    throw new Error("Database port local credentials no longer match their capture.");
+  }
+  const original = {
+    phase: "complete" as const,
+    receipt: parseClientCredentialReceipt(binding.receipt),
+  };
+  const sharedFile = readClientCredentialFileIdentity(options.sharedPath);
+  const identity = portSharedIdentity(options.sharedPath, options.sharedPath);
+  const expectedIdentity =
+    options.engine === "postgres"
+      ? options.storeId
+      : portSharedIdentity(options.sqliteSnapshotPath, options.sharedPath).identity;
+  if (!sharedFile || identity.engine !== options.engine || identity.identity !== expectedIdentity) {
+    throw new Error("Database port target does not match its verified shared identity.");
+  }
+  const replacement = {
+    ...original,
+    receipt: {
+      ...original.receipt,
+      sharedFile,
+      source: original.receipt.source ? { ...original.receipt.source, ...identity } : null,
+    },
+  };
+  owner.transaction(() => {
+    const stored = readClientCredentialReceipt(owner.database);
+    if (isDeepStrictEqual(stored, replacement)) {
+      return;
+    }
+    if (!isDeepStrictEqual(stored, original)) {
+      throw new Error("Database port credential receipt no longer matches its capture.");
+    }
+    options.assertCurrent();
+    writeClientCredentialReceipt(owner.database, replacement.receipt, "complete");
+  });
+}
 
 /** Doctor supplies the original identity only after a verified byte-identical rewrite. */
 export function rebindRewrittenClientCredentials(options: {
@@ -69,6 +188,7 @@ function prepareMatchedReceipt(options: {
   originalSharedFile?: ClientCredentialFileIdentity;
   postgresStoreId?: string;
   postgresExportDirectory?: string;
+  postgresCompanion?: { storeId: string; namespace: string };
   projectPostgresToSqlite?: boolean;
   preserveCopiedPhase?: boolean;
 }) {
@@ -94,40 +214,51 @@ function prepareMatchedReceipt(options: {
     using database = openNodeSqliteDatabase(options.sharedPath, { readOnly: true });
     const anchor = readEngineAnchor(database)?.[0];
     if (anchor) {
-      if (!options.postgresExportDirectory) {
-        throw new Error("Restored client credentials are missing their PostgreSQL capture.");
-      }
-      using capturedAnchor = openNodeSqliteDatabase(
-        path.join(options.postgresExportDirectory, "anchor.sqlite"),
-        { readOnly: true },
-      );
-      const captured = readEngineAnchor(capturedAnchor)?.[0];
-      if (
-        (options.postgresStoreId && options.postgresStoreId !== anchor.store_id) ||
-        captured?.store_id !== anchor.store_id ||
-        captured?.schema !== anchor.schema ||
-        (source && (source.engine !== "postgres" || source.identity !== anchor.store_id))
-      ) {
-        throw new Error("Restored client credentials have a different PostgreSQL identity.");
-      }
-      using image = openNodeSqliteDatabase(
-        path.join(options.postgresExportDirectory, "database.sqlite"),
-        { readOnly: true },
-      );
-      if (readStateSchemaContentVersion(image) < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
-        return null;
-      }
-      if (options.projectPostgresToSqlite && source) {
-        const createdAt = image // sqlite-allow-raw -- Private rehearsal projects the verified export's immutable store identity.
-          .prepare("SELECT created_at FROM schema_meta WHERE meta_key='primary'")
-          .get()?.created_at;
-        source.engine = "sqlite";
-        source.identity = `${options.restoredSharedPath}:${String(createdAt)}`;
+      if (options.postgresCompanion) {
+        if (
+          anchor.engine !== "postgres" ||
+          anchor.store_id !== options.postgresCompanion.storeId ||
+          anchor.schema !== options.postgresCompanion.namespace ||
+          (source && (source.engine !== "postgres" || source.identity !== anchor.store_id))
+        ) {
+          throw new Error("Restored client credentials have a different PostgreSQL identity.");
+        }
+      } else {
+        if (!options.postgresExportDirectory) {
+          throw new Error("Restored client credentials are missing their PostgreSQL capture.");
+        }
+        using capturedAnchor = openNodeSqliteDatabase(
+          path.join(options.postgresExportDirectory, "anchor.sqlite"),
+          { readOnly: true },
+        );
+        const captured = readEngineAnchor(capturedAnchor)?.[0];
+        if (
+          (options.postgresStoreId && options.postgresStoreId !== anchor.store_id) ||
+          captured?.store_id !== anchor.store_id ||
+          captured?.schema !== anchor.schema ||
+          (source && (source.engine !== "postgres" || source.identity !== anchor.store_id))
+        ) {
+          throw new Error("Restored client credentials have a different PostgreSQL identity.");
+        }
+        using image = openNodeSqliteDatabase(
+          path.join(options.postgresExportDirectory, "database.sqlite"),
+          { readOnly: true },
+        );
+        if (readStateSchemaContentVersion(image) < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
+          return null;
+        }
+        if (options.projectPostgresToSqlite && source) {
+          const createdAt = image // sqlite-allow-raw -- Private rehearsal projects the verified export's immutable store identity.
+            .prepare("SELECT created_at FROM schema_meta WHERE meta_key='primary'")
+            .get()?.created_at;
+          source.engine = "sqlite";
+          source.identity = `${options.restoredSharedPath}:${String(createdAt)}`;
+        }
       }
       // A fresh binding has no migration source. Its verified shared/local capture
       // still belongs together; the restore owner alone may replace the inode witness.
     } else {
-      if (options.postgresStoreId) {
+      if (options.postgresStoreId || options.postgresCompanion) {
         throw new Error("Restored client credentials are missing their PostgreSQL anchor.");
       }
       // A restored predecessor owns its rows; its ignored local orphan remains fenced.
@@ -231,8 +362,14 @@ export function prepareRestoredClientCredentials(options: {
     originalSharedPath: manifest.paths?.sharedDatabaseSourcePath ?? shared.sourcePath,
     originalStateRoot: manifest.paths?.stateDir ?? state.sourcePath,
     restoredSharedPath: sharedPath,
-    // The export is nested beneath this manifest-declared global snapshot.
-    postgresExportDirectory: `${sharedPath}.postgres`,
+    // A companion preserves its exact live namespace; ordinary backups carry an export.
+    ...(manifest.profile === "local-companion"
+      ? {
+          postgresCompanion: manifest.postgresAnchors?.find(
+            (anchor) => anchor.sourcePath === shared.sourcePath,
+          ),
+        }
+      : { postgresExportDirectory: `${sharedPath}.postgres` }),
   });
   if (receipt) {
     return () => publishRestoredReceipt(receipt, sharedPath, env);

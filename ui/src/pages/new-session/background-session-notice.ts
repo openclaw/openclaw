@@ -8,10 +8,14 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -22,106 +26,37 @@ import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-no
 
 const RETRY_DELAY_MS = 1_000;
 
-async function notifyWhenBackgroundSessionEnds(params: {
-  agentId: string;
-  client: GatewayBrowserClient;
-  context: ApplicationContext;
-  key: string;
-  runId: string;
-  isCurrentOwner: () => boolean;
-}): Promise<void> {
-  let result: Partial<AgentWaitResult> | undefined;
-  while (!result) {
-    try {
-      const observed = await params.client.request<Partial<AgentWaitResult>>(
-        "agent.wait",
-        { runId: params.runId, timeoutMs: 30_000 },
-        { timeoutMs: null },
-      );
-      if (params.context.gateway.snapshot.client !== params.client) {
-        return;
-      }
-      const observationalTimeout =
-        observed.status === "timeout" &&
-        observed.endedAt === undefined &&
-        !observed.error &&
-        !observed.stopReason &&
-        observed.providerStarted !== true;
-      if (observed.status === "pending" || observed.pendingError === true) {
-        await sleepWithAbort(RETRY_DELAY_MS);
-      } else if (observationalTimeout) {
-        // Startup display errors can mean unconfirmed delivery, not a failed run.
-        const initialTurn = params.context.placementStartup.get(params.key)?.initialTurn;
-        if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === params.runId) {
-          result = { status: "error", error: initialTurn.sendError };
-        } else {
-          // A wait deadline is not a run outcome, even after startup custody retires.
-          await sleepWithAbort(RETRY_DELAY_MS);
-        }
-      } else {
-        result = observed;
-      }
-    } catch {
-      const gateway = params.context.gateway.snapshot;
-      const reconnecting =
-        gateway.phase === "connecting" ||
-        gateway.phase === "starting" ||
-        gateway.phase === "reconnecting";
-      if (gateway.client !== params.client || !reconnecting) {
-        return;
-      }
-      await sleepWithAbort(RETRY_DELAY_MS);
-    }
-  }
-
-  if (!params.isCurrentOwner()) {
+/** Both launchers use the same accepted-session notice and recovery destination. */
+export function showBackgroundSessionCreated(
+  readContext: () => ApplicationContext | undefined,
+  result: SessionCreateOutcome & { agentId: string },
+  onOpen?: () => void,
+) {
+  const context = readContext();
+  if (!context) {
     return;
   }
-  const gateway = params.context.gateway.snapshot;
-  if (uiSessionEventMatches(gateway, params.key, params.agentId)) {
-    return;
-  }
-  const row = params.context.sessions.state.result?.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, params.key),
-  );
-  const status =
-    result.status === "ok"
-      ? t("sessionsView.statusDone")
-      : result.status === "timeout"
-        ? t("sessionsView.statusTimeout")
-        : result.stopReason === "rpc"
-          ? t("sessionsView.statusKilled")
-          : t("sessionsView.statusFailed");
-  const nativeTarget = sessionNavigationTarget({
-    face: "chat",
-    sessionKey: params.key,
-    fallbackAgentId: params.agentId,
-    exactKey: true,
-  });
-  params.context.nativeNotifications?.backgroundSessionCompleted({
-    runId: params.runId,
-    path: nativeTarget.options.pathname,
-    ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
-  });
-  const agent = params.context.agents.state.agentsList?.agents.find(
-    (entry) => entry.id === params.agentId,
-  ) ?? { id: params.agentId };
-  const identity = params.context.agentIdentity.get(params.agentId);
+  registerCommandPaletteEnglish();
+  const isCurrentOwner = captureSessionNoticeOwner(context);
+  const message =
+    result.initialRun.status === "rejected"
+      ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
+      : t(
+          result.initialRun.status === "started"
+            ? "palette.sessionStarted"
+            : "palette.sessionCreated",
+        );
   showToast({
-    fifo: true,
-    avatar: {
-      id: params.agentId,
-      name: normalizeAgentTargetLabel(agent, identity),
-      avatar: resolveAgentAvatarUrl(agent, identity),
-      textAvatar: resolveAgentTextAvatar(agent, identity),
-    },
-    message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
+    message,
+    dedupeKey: `session-create:${result.agentId}:${result.key}`,
+    severity: result.initialRun.status === "rejected" ? "error" : "success",
     actionLabel: t("sessionsView.openSession"),
     onAction: () => {
-      if (!params.isCurrentOwner()) {
+      if (readContext() !== context || !isCurrentOwner()) {
         return;
       }
-      openSessionNoticeTarget(params.context, params.key, params.agentId);
+      openSessionNoticeTarget(context, result.key, result.agentId);
+      onOpen?.();
     },
   });
 }
@@ -142,14 +77,121 @@ export function prepareBackgroundSessionCompletion(params: {
     if (!normalizedRunId) {
       return true;
     }
-    void notifyWhenBackgroundSessionEnds({
-      agentId: params.agentId,
-      client: params.client,
-      context: params.context,
-      key,
-      runId: normalizedRunId,
-      isCurrentOwner,
-    });
+    const { agentId, client, context } = params;
+    void (async () => {
+      let result: Partial<AgentWaitResult> | undefined;
+      while (!result) {
+        try {
+          const observed = await client.request<Partial<AgentWaitResult>>(
+            "agent.wait",
+            { runId: normalizedRunId, timeoutMs: 30_000 },
+            { timeoutMs: null },
+          );
+          if (context.gateway.snapshot.client !== client) {
+            return;
+          }
+          const observationalTimeout =
+            observed.status === "timeout" &&
+            observed.endedAt === undefined &&
+            !observed.error &&
+            !observed.stopReason &&
+            observed.providerStarted !== true;
+          if (observed.status === "pending" || observed.pendingError === true) {
+            await sleepWithAbort(RETRY_DELAY_MS);
+          } else if (observationalTimeout) {
+            // Pending startup delivery is not a failed run.
+            const initialTurn = context.placementStartup.get(key)?.initialTurn;
+            if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === normalizedRunId) {
+              result = { status: "error", error: initialTurn.sendError };
+            } else {
+              // A wait deadline is not a run outcome, even after startup custody retires.
+              await sleepWithAbort(RETRY_DELAY_MS);
+            }
+          } else {
+            result = observed;
+          }
+        } catch {
+          const gateway = context.gateway.snapshot;
+          const reconnecting =
+            gateway.phase === "connecting" ||
+            gateway.phase === "starting" ||
+            gateway.phase === "reconnecting";
+          if (gateway.client !== client || !reconnecting) {
+            return;
+          }
+          await sleepWithAbort(RETRY_DELAY_MS);
+        }
+      }
+
+      if (!isCurrentOwner()) {
+        return;
+      }
+      const gateway = context.gateway.snapshot;
+      if (uiSessionEventMatches(gateway, key, agentId)) {
+        return;
+      }
+      const row = context.sessions.state.result?.sessions.find((session) =>
+        areUiSessionKeysEquivalent(session.key, key),
+      );
+      // A finished run needs no label; any other outcome names itself in one muted word.
+      const status =
+        result.status === "ok"
+          ? undefined
+          : result.status === "timeout"
+            ? t("sessionsView.statusTimeout")
+            : result.stopReason === "rpc"
+              ? t("chat.handoffSessionStatus.stopped")
+              : t("sessionsView.statusFailed");
+      const nativeTarget = sessionNavigationTarget({
+        face: "chat",
+        sessionKey: key,
+        fallbackAgentId: agentId,
+        exactKey: true,
+      });
+      context.nativeNotifications?.backgroundSessionCompleted({
+        runId: normalizedRunId,
+        path: nativeTarget.options.pathname,
+        ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
+      });
+      const agent = context.agents.state.agentsList?.agents.find(
+        (entry) => entry.id === agentId,
+      ) ?? { id: agentId };
+      const identity = context.agentIdentity.get(agentId);
+      showToast({
+        severity:
+          result.status === "ok"
+            ? "success"
+            : result.status === "timeout"
+              ? "error"
+              : result.stopReason === "rpc"
+                ? undefined
+                : "error",
+        placement: "top-right",
+        avatar: {
+          id: agentId,
+          name: normalizeAgentTargetLabel(agent, identity),
+          avatar: resolveAgentAvatarUrl(agent, identity),
+          textAvatar: resolveAgentTextAvatar(agent, identity),
+        },
+        message: resolveSessionDisplayName(key, row),
+        description: status,
+        actionLabel: t("sessionsView.openSession"),
+        actionHref: sessionNavigationTarget({ context, face: "chat", sessionKey: key, agentId })
+          .href,
+        onAction: (event) => {
+          if (!isCurrentOwner()) {
+            event?.preventDefault();
+            return;
+          }
+          const open = () => openSessionNoticeTarget(context, key, agentId);
+          if (!event) {
+            open();
+          } else if (event.type === "click") {
+            handleNavigationClick(event, open);
+          }
+        },
+      });
+    })();
     return true;
   };
 }

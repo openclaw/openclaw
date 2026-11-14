@@ -16,6 +16,7 @@ import {
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
@@ -42,6 +43,8 @@ export function candidatePublicationFixture(
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
+    protectedTag?: boolean;
+    publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
@@ -63,7 +66,7 @@ export function candidatePublicationFixture(
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   const selection: PublicationSelection = {
-    route: "normal",
+    route: options.publicationRoute ?? "normal",
     npmDistTag: "beta",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
@@ -83,7 +86,7 @@ export function candidatePublicationFixture(
     run_release_soak: "false",
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
-  const admission = admissionFixture(true, {
+  const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
     candidateSha: q,
     transportRef: branch,
@@ -312,12 +315,15 @@ export function candidatePublicationFixture(
         runGh: admission.runGh,
         downloadArchive: admission.archive,
       }),
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority(repository, producer);
+    },
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
     getWorkflowSource: () => workflowSource,
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
-    getRunView: (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
+    getRunView: async (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),
     getRunAttempt: (id: string, attempt: number) => {
       if (attempt !== 1) {

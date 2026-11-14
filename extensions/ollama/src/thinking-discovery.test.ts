@@ -7,6 +7,7 @@ import type {
 import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 import { ollamaProviderDiscovery } from "../provider-discovery.js";
 import { resolveThinkingProfile } from "../provider-policy-api.js";
 import { toDynamicOllamaModel } from "./provider-models.js";
@@ -128,11 +129,8 @@ describe("Ollama discovered thinking contracts", () => {
       compat: { supportsTools: false },
     };
     const model = await fixture.discover("ollama", {
+      ...createModel("manual-mandatory-thinking:latest", settings.name, { reasoning: true }),
       ...settings,
-      id: "manual-mandatory-thinking:latest",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     });
     expect(model).toMatchObject({ ...settings, parameterCount: 70_000_000_000 });
     await sendThinking(model, "off", "high");

@@ -16,7 +16,12 @@ if (!testRoot) {
 }
 const topLevelDescriptorRoot = path.relative(process.cwd(), topLevelRoot);
 const testDescriptorRoot = path.relative(process.cwd(), testRoot);
-const config = path.resolve("test/vitest/vitest.ui-browser.config.ts");
+const browser = process.argv[5] ?? "chromium";
+const config = path.resolve(
+  browser === "webkit"
+    ? "test/vitest/vitest.ui-browser-webkit.config.ts"
+    : "test/vitest/vitest.ui-browser.config.ts",
+);
 const reports = [];
 for (const options of [
   { config },
@@ -26,7 +31,7 @@ for (const options of [
 ]) {
   const ctx = await createVitest({
     ...options,
-    project: ["chromium"],
+    project: browser === "chromium" ? [browser, "chromium-mock-registry"] : [browser],
     watch: false,
     reporters: [],
     configLoader: "runner",
@@ -37,6 +42,7 @@ for (const options of [
     reports.push({
       projects: ctx.projects.map((project) => ({
         name: project.name,
+        isolate: project.config.isolate,
         root: project.config.root,
         viteRoot: project.vite.config.root,
         setupFiles: project.config.setupFiles,

@@ -20,10 +20,13 @@ import {
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
 import type { MemoryRecallData, MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
-import type { MemoryKeywordWorkerQuery } from "./manager-search-types.js";
+import type {
+  ExactPathSpecificity,
+  MemoryKeywordWorkerQuery,
+  MemoryKeywordWorkerResult,
+} from "./manager-search-types.js";
 import { searchVector } from "./manager-search-vector.js";
-import { prepareExactPathMatcher, type ExactPathSpecificity } from "./manager-search.js";
-import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
+import { prepareExactPathMatcher } from "./manager-search.js";
 import {
   applyRetrievalRanking,
   prepareActiveProjectKeys,
@@ -141,7 +144,10 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
         // Automatic recall runs before the model. Keep repair admitted for teardown
         // without holding the reply; unclassified sources stay excluded.
         void this.withManagerOperation(() =>
-          this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
+          this.syncAdmitted(
+            { reason: "search" },
+            { allowEmbeddingBootstrapFallback: true, background: true },
+          ),
         ).catch((err: unknown) => {
           log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
         });

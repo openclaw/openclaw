@@ -22,6 +22,7 @@ export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for ope
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
   "Save, improve, archive, and restore your learned skills.";
+export const SKILL_LIBRARY_TOOL_DISPLAY_SUMMARY = "Author skills in the personal library";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
@@ -103,12 +104,12 @@ export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptio
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(options?: { allowThreadTargets?: boolean }): string {
   return [
-    "Run a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access.",
-    "A session identifies model context, not an external address. A peer reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message.",
+    "Send a message to a permitted session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. Explicit per-agent send destinations can permit messaging without transcript access.",
+    "A session identifies model context, not an external address. When a new turn starts, its reply reaches you once: inline when available, otherwise as a later inter-session input. Continue with another sessions_send; post to channels with message.",
     SESSIONS_SEND_RESULT_GUIDANCE,
-    "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. With timeoutSeconds:0, your own running child is steered into its active run (admission only, no separate completion turn; use mode:followup for one); other sessions use ordinary message delivery. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup starts a separate turn without steering or resuming a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
+    "Omit mode to automatically continue your paused native child task; returns runId/taskRunId with task-owned completion instead of an inline wait or watch. Ordinary peer sends start a separate turn. A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue. An idle recipient or a default self-send starts a new turn; timeoutSeconds bounds waiting for the separately admitted turn’s reply. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work. mode:followup always starts a separate turn and preserves its independent reply; it does not resume a paused task. mode:resume requires a paused native child task and rejects watch:true and positive timeoutSeconds.",
     `${options?.allowThreadTargets ? "" : "Thread chats rejected: target parent channel. "}Missing configured-agent main created. status "no_reply" is terminal, so do not wait for another reply.`,
-    "A timeoutSeconds:0 followup to your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
+    "A timeoutSeconds:0 send that starts a new turn for your existing native child gives this turn a completion to await with sessions_yield, even while queued. watch:true requires status visibility and additionally reports later target-session changes; on a steer it can claim the child's existing pending completion.",
   ].join(" ");
 }
 
@@ -132,6 +133,8 @@ export function describeSessionsSpawnTool(options?: {
   swarmEnabled?: boolean;
   sessionToolsVisibility?: SessionVisibilityScope;
   spawnRestricted?: boolean;
+  /** Requester-specific target guidance; tool descriptions survive Codex schema compaction. */
+  agentIdGuidance?: string;
 }): string {
   // Callers that resolve the effective visibility get it rendered as fact;
   // without it the copy must keep the "default" hedge instead of asserting the effective scope.
@@ -142,20 +145,24 @@ export function describeSessionsSpawnTool(options?: {
     options?.acpAvailable === false
       ? 'Spawn child session; default `runtime="subagent"`.'
       : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
+  // Keep the base sentence verbatim: the agents_list availability rewrite matches it.
+  const agentIdTargets = options?.agentIdGuidance
+    ? ` \`agentId\` targets: ${options.agentIdGuidance}`
+    : "";
   return [
     runtimeDescription,
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
-    "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
+    `\`agentId\` targets a configured agent; \`model\` overrides its model; \`cleanup\` delete|keep hidden child session; \`sandbox\` inherit|require.${agentIdTargets}`,
     "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
-    "Native hidden or visible children support `worktree=true` with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden `projectId` requires `worktree=true`; name/base always require it. Preparation is asynchronous; the first turn waits for the managed checkout. Hidden `cleanup=delete` uses session snapshot/removal; `keep` retains it. ACP does not support managed-worktree parameters. `group`, `projectGitUrl`, and cloud profiles require `visible=true`.",
+    "Native hidden or visible children support `worktree=true` with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden `projectId` requires `worktree=true`; name/base always require it. Preparation is asynchronous; the first turn waits for the managed checkout. Hidden `cleanup=delete` uses session snapshot/removal; `keep` retains it. ACP does not support managed-worktree parameters. `group`, `projectGitUrl`, cloud profiles, and paired devices require `visible=true`.",
     '`visible=true`: durable visible supervised child session. Use when the user needs to revisit or steer delegated child work; an explicit request for a new independent session is not child delegation. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling except for configured deny-only `delegateToolsTo` grants (not tool arguments); select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
-    'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally.',
+    'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile; `{kind:"device",deviceId}` selects one paired device by node ID. Both require `visible=true` and `worktree=true`. Placement creates first, dispatches, then starts the task; an unavailable or incompatible target fails, retains the child for inspection, and never falls back locally.',
     visibilityLine,
     ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
     "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
-    ...(options?.acpAvailable === false
+    ...(options?.acpAvailable === false || options?.agentIdGuidance
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
@@ -174,16 +181,26 @@ export function describeSessionStatusTool(): string {
   ].join(" ");
 }
 
-/** Describes the ask_user tool and its decision-only use policy. */
+export function describeRequiredHumanActionTool(callableName: string): string {
+  return [
+    `Use ${callableName} with requiredAction only for an observed external prerequisite, such as browser sign-in, that the human can complete while this run waits.`,
+    "Do not invent approval or manual prerequisites for already authorized work. An inactive Goal stops automatic pursuit, not the current user-requested turn; continue executable work within its actual permissions without requiring Goal Resume. Never wait in ask_user for a native session control that requires this run to end; if that control is genuinely needed, explain it and finish the turn first.",
+    "Give the specific observed blocker and supported instructions; an optional verified URL opens separately from the completion answer. Reuse existing approval or native permission cards when available; never add another approval prompt, invent a remediation, request credentials in chat, or hide an incorrect denial.",
+    "requiredAction parks the original task and returns ready_to_verify, not success or authorization: re-observe the original target and continue from recorded progress only after the actual prerequisite is satisfied. action_unresolved means stop dependent work, report the blocker, and wait for a new user instruction; never use best-judgment fallback or repeat the handoff.",
+  ].join(" ");
+}
+
+/** Decisions and required manual steps share the attributed human wait. */
 export function describeAskUserTool(): string {
   return [
     "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
-    "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
+    "For questions, ask only about decisions genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
+    describeRequiredHumanActionTool("ask_user"),
     "Ask exactly one question per call unless several answers must be submitted together; one single-select question uses native controls on supported messaging channels.",
     "Put every selectable choice in `options`, never only in the question text. Put the recommended option first and suffix its label with ` (Recommended)`.",
     "Use `multiSelect` only when the user may choose several options at once; otherwise omit it.",
     "Do not include an Other option; free text is added automatically.",
-    "If the result is no_answer, continue with best judgment.",
+    "For ordinary questions only, no_answer means continue with best judgment.",
   ].join(" ");
 }
 

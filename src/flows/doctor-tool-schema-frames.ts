@@ -6,11 +6,10 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { findModelInCatalog } from "../agents/model-catalog.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
-import { resolveDoctorPrimaryModelRef } from "../commands/doctor/shared/primary-model-ref.js";
 import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -68,9 +67,11 @@ export async function prepareDoctorToolSchemaFrames(
     const agentDir = resolveAgentDir(cfg, agentId, env);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId, env);
     const prepare = async () => {
-      const modelRef = standalone
-        ? resolveDoctorPrimaryModelRef(cfg, agent?.model)
-        : resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: true });
+      const modelRef = resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+        allowPluginNormalization: !standalone,
+      });
       let model: ProviderRuntimeModel;
       if (standalone) {
         const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");

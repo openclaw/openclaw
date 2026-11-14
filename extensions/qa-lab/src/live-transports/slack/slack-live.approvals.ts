@@ -16,7 +16,6 @@ import {
   type SlackQaScenarioContext,
   type SlackQaScenarioMetadata,
   type SlackAuthIdentity,
-  type SlackApprovalArtifact,
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import {
@@ -100,7 +99,6 @@ export async function waitForSlackApprovalMessage(
         continue;
       }
       return {
-        actionValues,
         ...(params.state === "pending"
           ? {
               approvalId:
@@ -199,7 +197,7 @@ export async function completeSlackApprovalScenario(params: {
     channelId: observation.channelId,
     scenarioId: observation.scenarioId,
   };
-  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
+  await writeSlackApprovalCheckpoint({
     ...checkpoint,
     message: pending.message,
     observedAt: pending.observedAt,
@@ -218,7 +216,7 @@ export async function completeSlackApprovalScenario(params: {
     state: "resolved",
     messageTs: pending.message.ts,
   });
-  const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
+  await writeSlackApprovalCheckpoint({
     ...checkpoint,
     decision: observation.decision,
     message: resolved.message,
@@ -227,23 +225,6 @@ export async function completeSlackApprovalScenario(params: {
   });
   const responseObservedAt = new Date(resolved.observedAt);
   return {
-    artifact: {
-      approvalId,
-      approvalKind: observation.approvalKind,
-      channelId: observation.channelId,
-      decision: observation.decision,
-      pendingActionValues: pending.actionValues,
-      pendingCheckpointPath: pendingCheckpoint?.checkpointPath,
-      pendingMessageTs: pending.message.ts,
-      pendingScreenshotPath: pendingCheckpoint?.screenshotPath,
-      pendingText: pending.message.text,
-      resolvedActionValues: resolved.actionValues,
-      resolvedCheckpointPath: resolvedCheckpoint?.checkpointPath,
-      resolvedMessageTs: resolved.message.ts,
-      resolvedScreenshotPath: resolvedCheckpoint?.screenshotPath,
-      resolvedText: resolved.message.text,
-      threadTs: pending.message.thread_ts,
-    } satisfies SlackApprovalArtifact,
     requestStartedAt,
     responseObservedAt,
     rttMs: responseObservedAt.getTime() - requestStartedAt.getTime(),

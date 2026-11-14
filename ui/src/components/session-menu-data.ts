@@ -24,3 +24,16 @@ export function sessionMenuDataFromRow(
     categoryClearReturnsToGroups: false,
   };
 }
+
+export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
+  label: "",
+  sessionId: null,
+  pinned: false,
+  unread: false,
+  archived: false,
+  snoozedUntil: null,
+  category: null,
+  icon: null,
+  color: null,
+  categoryClearReturnsToGroups: false,
+};

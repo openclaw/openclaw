@@ -63,11 +63,7 @@ function expectPrompt(response: Awaited<ReturnType<typeof handlers.dispatch>>, t
 
 function questionInteraction(context: Record<string, unknown> = questionContext) {
   return {
-    payload: {
-      channel_id: "chan-1",
-      post_id: "post-1",
-      user_id: "user-1",
-    },
+    payload: { channel_id: "chan-1", post_id: "post-1", user_id: "user-1" },
     userName: "ada",
     actionId: "question-1",
     actionName: "production",
@@ -100,9 +96,12 @@ it("submits the clicked option to the question Gateway and retires the prompt", 
     { questionId: QUESTION_ID, optionIndex: 1, senderId: "user-1" },
     { senderId: "user-1", channelId: "chan-1", hasControlCommand: false },
   ]);
-  expect(response?.ephemeral_text).toBe("Answer submitted.");
-  expect(response?.update?.props).toEqual({
-    attachments: [{ text: "✓ **production** selected by @ada" }],
+  expect(response).toEqual({
+    ephemeral_text: "Answer submitted.",
+    update: {
+      message: "Which environment?",
+      props: { attachments: [{ text: "✓ **production** selected by @ada" }] },
+    },
   });
   expect(picker).not.toHaveBeenCalled();
   expect(authorizeMock).toHaveBeenCalledTimes(1);
@@ -141,10 +140,7 @@ it("refuses a click whose access is lost while the Gateway read is in flight", a
 
 it.each(["terminal", "gateway failure"] as const)("keeps the prompt after %s", async (state) => {
   if (state === "terminal") {
-    resolveOptionMock.mockResolvedValue({
-      status: "already-terminal",
-      reason: "already-terminal",
-    });
+    resolveOptionMock.mockResolvedValue({ status: "already-terminal", reason: "already-terminal" });
   } else {
     resolveOptionMock.mockRejectedValue(new Error("gateway down"));
   }

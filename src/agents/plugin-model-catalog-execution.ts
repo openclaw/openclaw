@@ -5,6 +5,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { getArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -18,7 +19,6 @@ import {
   type OpenClawAgentSqliteWorkerStore,
 } from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -131,15 +131,13 @@ export async function loadPersistedPluginModelCatalogs(
     assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
-  let unregisterRoot: (() => void) | undefined;
   try {
-    unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-      admission: root.admission,
-      close,
-    });
+    const inspection = getArtifactPreservingSqliteRead(options.path);
     reading = readPluginModelCatalogsInWorker(
       {
         ...options,
+        path: inspection?.canonicalPath ?? options.path,
+        expectedIdentity: inspection,
         env: { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) },
         pluginIds: pluginIds && [...pluginIds],
       },
@@ -149,7 +147,6 @@ export async function loadPersistedPluginModelCatalogs(
     assertCurrent();
     return catalogs;
   } finally {
-    unregisterRoot?.();
     unregisterAgent();
   }
 }

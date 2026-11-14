@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
+import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
+import { readInstalledSkill, searchInstalledSkills } from "../../agents/installed-skill-catalog.js";
+import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync, createPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
-import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -67,8 +69,8 @@ const write = (dir: string, name: string, description: string, body?: string) =>
   writeSkill({ dir: path.join(dir, name), name, description, body });
 const resolveSnapshot = (params: Parameters<typeof resolveReusableWorkspaceSkillSnapshot>[0]) =>
   withWorkspaceHome(params.workspaceDir, () => resolveReusableWorkspaceSkillSnapshot(params));
-const resolveRuntime = (params: Parameters<typeof resolveEmbeddedRunSkillEntries>[0]) =>
-  withWorkspaceHome(params.workspaceDir, () => resolveEmbeddedRunSkillEntries(params));
+const resolveRuntime = (params: Parameters<typeof prepareRuntimeSkillEntries>[0]) =>
+  withWorkspaceHome(params.skillsAnchorWorkspace, () => prepareRuntimeSkillEntries(params));
 
 async function createMultiRootFixture() {
   const agentWorkspaceDir = await fixtureSuite.createCaseDir("agent-workspace");
@@ -103,6 +105,43 @@ async function createMultiRootFixture() {
 }
 
 describe("buildSkillSnapshot", () => {
+  it("offers bundled template creation to the model for ordinary requests", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("template-creation");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { allowBundled: ["create-template"] } },
+    });
+
+    expect(snapshot.prompt).toContain("<name>create-template</name>");
+  });
+
+  it("discovers and reads the bundled creative workflow for ordinary design requests", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("creative-project");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { load: { watch: false } } },
+    });
+    const installed = prepareInstalledSkillCatalog({ snapshot, workspaceDir });
+
+    for (const query of [
+      "Rebrand our community using the existing project artwork and reference posters",
+      "Design social-media assets and a launch poster from our visual identity",
+    ]) {
+      const found = await searchInstalledSkills(installed, query, 3);
+      expect(
+        found.skills.map((skill) => skill.name),
+        query,
+      ).toContain("creative-project");
+    }
+
+    const location = path.resolve("skills/creative-project/SKILL.md");
+    expect(await readInstalledSkill(installed, "creative-project")).toEqual({
+      name: "creative-project",
+      location,
+      content: await fs.readFile(location, "utf8"),
+    });
+  });
+
   it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     for (const name of CUSTODIAN_SKILL_NAMES) {
@@ -154,7 +193,7 @@ describe("buildSkillSnapshot", () => {
       const coldSnapshot = { ...snapshot, ...(stale ? { promptFormatVersion: 0 } : {}) };
       delete coldSnapshot.resolvedSkills;
       const fallback = await resolveRuntime({
-        workspaceDir: agentWorkspaceDir,
+        skillsAnchorWorkspace: agentWorkspaceDir,
         config: { plugins: { enabled: false } },
         skillsSnapshot: coldSnapshot,
         executionWorkspaceDir,
@@ -223,11 +262,11 @@ describe("buildSkillSnapshot", () => {
         delete skillsSnapshot.resolvedSkills;
       }
       const runtime = await resolveRuntime({
-        workspaceDir,
+        skillsAnchorWorkspace: workspaceDir,
         executionWorkspaceDir,
         config: { plugins: { enabled: false } },
         skillsSnapshot,
-        workspaceOnly: true,
+        sandbox: { enabled: true, skillsWorkspaceDir: workspaceDir },
       });
       const entries = await runtime.loadSkillEntries();
       expect(entries.map((entry) => entry.skill.name)).toEqual(["middle"]);
@@ -266,10 +305,10 @@ describe("buildSkillSnapshot", () => {
     expect(next.snapshot.prompt).toContain("Updated instructions");
     expect(next.snapshot.resolvedSkills?.[0]?.filePath).toBe(path.join(skillDir, "SKILL.md"));
     const sandbox = await resolveRuntime({
-      workspaceDir: agentWorkspaceDir,
+      skillsAnchorWorkspace: agentWorkspaceDir,
       executionWorkspaceDir,
       config: { plugins: { enabled: false } },
-      workspaceOnly: true,
+      sandbox: { enabled: true },
     });
     expect(sandbox.skillEntries).toEqual([]);
   });

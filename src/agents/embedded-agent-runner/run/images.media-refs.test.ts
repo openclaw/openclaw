@@ -228,14 +228,21 @@ describe("fact-carried image references", () => {
     expect(result.images).toEqual([image()]);
   });
 
-  it("hydrates sandbox-staged inbound media URIs", async () => {
+  it("hydrates sandbox-staged paths while retaining the inbound media identity", async () => {
     const sandboxRoot = tempDirs.make("openclaw-native-image-sbx-uri-");
     const mediaId = "telegram-photo.png";
     await writeImage(sandboxRoot, `media/inbound/${mediaId}`);
 
     const result = await loadImages({
       prompt: "",
-      media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
+      media: [
+        {
+          path: `media/inbound/${mediaId}`,
+          url: `media://inbound/${mediaId}`,
+          staged: true,
+          contentType: "image/png",
+        },
+      ],
       workspaceDir: sandboxRoot,
       workspaceOnly: true,
       sandbox: sandboxAt(sandboxRoot),
@@ -243,15 +250,19 @@ describe("fact-carried image references", () => {
     expect(result.images[0]).toMatchObject(image());
   });
 
-  it("rejects encoded traversal claim-check facts", async () => {
-    const result = await loadImages({
-      prompt: "legacy ticket is carried structurally",
-      media: [{ url: "media://inbound/%2e%2e%2fsecret.png", contentType: "image/png" }],
-      workspaceDir: "/tmp",
-    });
+  it.each([false, true])(
+    "rejects encoded traversal claim-check facts (sandbox=%s)",
+    async (sandboxed) => {
+      const result = await loadImages({
+        prompt: "legacy ticket is carried structurally",
+        media: [{ url: "media://inbound/%2e%2e%2fsecret.png", contentType: "image/png" }],
+        workspaceDir: "/tmp",
+        sandbox: sandboxed ? sandboxAt("/tmp") : undefined,
+      });
 
-    expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
-  });
+      expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
+    },
+  );
 
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
@@ -304,5 +315,47 @@ describe("fact-carried image references", () => {
     });
 
     expect(result).toMatchObject({ failedMediaCount: 0, images: [{ data: TINY_PNG_BASE64 }] });
+  });
+
+  it("keeps a recorded inline image when only its managed staged copy is suppressed", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-staged-inline-");
+    const stagedPath =
+      "media/inbound/openclaw-staged-abc/input-photo---22222222-2222-2222-2222-222222222222.png";
+    const mediaUri = "media://inbound/photo---22222222-2222-2222-2222-222222222222.png";
+    await writeImage(sandboxRoot, stagedPath);
+    const load = (media?: Parameters<typeof loadImages>[0]["media"]) =>
+      loadImages({
+        prompt: "inspect",
+        media,
+        existingImages: [image()],
+        imageOrder: ["inline"],
+        userTurnTranscriptRecorder: {
+          resolveMessage: async () =>
+            ({
+              role: "user",
+              content: "inspect",
+              __openclaw: {
+                media: [{ url: mediaUri, contentType: "image/png", kind: "image" }],
+                mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+              },
+            }) as never,
+        },
+        workspaceDir: sandboxRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(sandboxRoot),
+      });
+
+    expect(await load()).toMatchObject({ failedMediaCount: 0, images: [image()] });
+    expect(
+      await load([
+        {
+          path: stagedPath,
+          url: mediaUri,
+          contentType: "image/png",
+          staged: true,
+          hydrationSuppressed: true,
+        },
+      ]),
+    ).toMatchObject({ failedMediaCount: 0, images: [image()] });
   });
 });

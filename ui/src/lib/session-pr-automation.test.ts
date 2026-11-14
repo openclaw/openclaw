@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { beforeEach, expect, it, vi } from "vitest";
 import { CronAddParamsSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
+import { SESSION_PR_AUTO_FIX_TRIGGER } from "../../../src/shared/session-pr-auto-fix.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import {
@@ -68,8 +69,6 @@ function expectList(call: number, params: Record<string, unknown>) {
   );
 }
 
-const recipe = (option: CiAutomationOption, overrides: Partial<CiAutomationTarget> = {}) =>
-  jobSpec({ ...target, ...overrides }, option);
 const declarationKey = (overrides: Partial<CiAutomationTarget> = {}) =>
   declarationKeyFor({ ...target, ...overrides }, "autoMerge");
 
@@ -80,11 +79,11 @@ it.each([target.sessionId, "replacement"])(
     const merge = job("autoMerge", { enabled: false });
     const ignored = [
       job("autoMerge", {
-        ...recipe("autoMerge", { number: 43 }),
+        ...jobSpec({ ...target, number: 43 }, "autoMerge"),
         id: "other-pr",
       }),
       job("autoArchive", {
-        ...recipe("autoArchive", { sessionId: "old-incarnation" }),
+        ...jobSpec({ ...target, sessionId: "old-incarnation" }, "autoArchive"),
       }),
       job("autoFix", { declarationKey: "daily-briefing" }),
     ];
@@ -130,19 +129,10 @@ it.each([
 
 it("creates the selected declarative job and keeps its returned identity", async () => {
   const created = job("autoArchive");
-  request.mockResolvedValueOnce({ created: true, job: created });
-  expect(await set("autoArchive", true)).toEqual(created);
-  expect(request).toHaveBeenCalledExactlyOnceWith(
-    "cron.add",
-    expect.objectContaining({
-      agentId: "main",
-      sessionKey: target.sessionKey,
-      sessionTarget: "isolated",
-      owner: { agentId: "main", sessionKey: target.sessionKey },
-      enabled: true,
-      payload: { kind: "agentTurn", message: expect.stringContaining(target.sessionId) },
-    }),
-  );
+  const warning = "Protected actions require a restartable operator grant";
+  request.mockResolvedValueOnce({ created: true, job: created, warning });
+  expect(await set("autoArchive", true)).toEqual({ job: created, warning });
+  expect(request).toHaveBeenCalledExactlyOnceWith("cron.add", jobSpec(target, "autoArchive"));
 });
 
 it.each(["autoFix", "autoMerge"] as const)(
@@ -152,7 +142,7 @@ it.each(["autoFix", "autoMerge"] as const)(
     const resetTarget = { ...target, sessionId: "replacement" };
     const disabled = { ...current, enabled: false, configRevision: "revision-2" };
     request.mockResolvedValueOnce(disabled);
-    expect(await set(option, false, current, resetTarget)).toEqual(disabled);
+    expect(await set(option, false, current, resetTarget)).toEqual({ job: disabled });
     expect(request).toHaveBeenCalledExactlyOnceWith("cron.update", {
       id: current.id,
       expectedConfigRevision: "revision-1",
@@ -163,6 +153,25 @@ it.each(["autoFix", "autoMerge"] as const)(
     expect(request).toHaveBeenCalledTimes(2);
   },
 );
+
+it("explicitly enables a legacy Auto-fix with the current native condition and unchanged prose", async () => {
+  const current = job("autoFix", {
+    enabled: false,
+    trigger: undefined,
+    payload: { kind: "agentTurn", message: "Keep the reviewed task scope" },
+  });
+  request.mockResolvedValueOnce(page([current]));
+  expect((await load()).autoFix).toEqual(current);
+  const trigger = { script: SESSION_PR_AUTO_FIX_TRIGGER };
+  const enabled = { ...current, enabled: true, trigger };
+  request.mockResolvedValueOnce(enabled);
+  expect(await set("autoFix", true, current)).toEqual({ job: enabled });
+  expect(request).toHaveBeenLastCalledWith("cron.update", {
+    id: current.id,
+    expectedConfigRevision: current.configRevision,
+    patch: { enabled: true, trigger },
+  });
+});
 
 it("never creates a disabled row or retries an uncertain mutation", async () => {
   expect(await set("autoMerge", false)).toBeUndefined();
@@ -186,9 +195,10 @@ it("bounds declaration keys and separates every ownership dimension and action",
   ];
   const prefixes = [prefix, ...variants.map(declarationKey)];
   expect(new Set(prefixes).size).toBe(prefixes.length);
-  const keys = CI_AUTOMATION_OPTIONS.map((option) =>
-    recipe(option, { sessionKey: "long-session:".repeat(200) }),
-  ).map((spec) => spec.declarationKey);
+  const keys = CI_AUTOMATION_OPTIONS.map(
+    (option) =>
+      jobSpec({ ...target, sessionKey: "long-session:".repeat(200) }, option).declarationKey,
+  );
   expect(new Set(keys).size).toBe(3);
   for (const key of keys) {
     expect(key).toMatch(/^session-pr:v1:[a-f0-9]{64}:auto(?:Fix|Merge|Archive)$/u);

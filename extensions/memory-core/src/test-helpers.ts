@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -8,12 +9,17 @@ import {
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  prepareAgentDatabaseStartupVerification,
+  readOpenClawDatabaseQuarantineFailure,
+  verifyAgentDatabaseStartupIntegrity,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, beforeAll, vi } from "vitest";
+import { afterAll, beforeAll, expect, vi } from "vitest";
 import { consolidateMemory } from "./dreaming-consolidation.js";
 import { readDailyIngestionState, readSessionIngestionState } from "./dreaming-ingestion-state.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
@@ -35,11 +41,42 @@ import {
 } from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import { readPhaseSignalStore, readShortTermStore } from "./short-term-promotion-store.js";
-import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
+import type { PromotionCandidate, ShortTermLockEntry } from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function createPromotionCandidateForTest(
+  params: Pick<PromotionCandidate, "path" | "snippet"> & Partial<PromotionCandidate>,
+): PromotionCandidate {
+  return {
+    key: `memory:${params.path}:1:1`,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    recallCount: 3,
+    signalCount: 3,
+    avgScore: 0.95,
+    maxScore: 0.95,
+    uniqueQueries: 2,
+    firstRecalledAt: "2026-04-01T00:00:00.000Z",
+    lastRecalledAt: "2026-04-02T00:00:00.000Z",
+    ageDays: 0,
+    score: 0.95,
+    recallDays: ["2026-04-01", "2026-04-02"],
+    conceptTags: [],
+    components: {
+      frequency: 1,
+      relevance: 1,
+      diversity: 1,
+      recency: 1,
+      consolidation: 1,
+      conceptual: 1,
+    },
+    ...params,
+  };
+}
 
 export function readMemoryForgetTombstonesForTest(params: { agentId: string }) {
   const { db } = openOpenClawAgentDatabase(params);
@@ -68,10 +105,40 @@ export function seedMemoryForgetTombstones(
   return recordMemorySessionTombstonesInDatabase(db, params);
 }
 
-export async function seedMemoryIndexWithOrphanedProvenance(
-  env: NodeJS.ProcessEnv,
-): Promise<string> {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+export async function verifyMemoryDatabaseCorruptionForTest(pathname: string): Promise<void> {
+  // Replaced files cannot reuse the original connection's clean integrity receipt.
+  const replacementPath = `${pathname}.replacement`;
+  await fs.copyFile(pathname, replacementPath);
+  await fs.rename(replacementPath, pathname);
+  const env = { ...process.env };
+  const controller = new AbortController();
+  openOpenClawStateDatabase({ env });
+  // A failed synchronous FULL open only latches locally; startup publishes durable quarantine.
+  const verification = prepareAgentDatabaseStartupVerification(
+    { agentId: "main", paths: [pathname], env, signal: controller.signal },
+    {
+      isCurrent: () => !controller.signal.aborted,
+      verifyIntegrity: verifyAgentDatabaseStartupIntegrity,
+    },
+    createPermitPool(1),
+  );
+  try {
+    expect(verification).toBeDefined();
+    await verification!.verify();
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", pathname, { env, fresh: true }),
+    ).toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringContaining("foreign_key_check"),
+    });
+  } finally {
+    verification?.revoke();
+    controller.abort();
+  }
+}
+
+export async function seedMemoryIndexWithOrphanedProvenance(): Promise<string> {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
   database.db.exec(`
     PRAGMA foreign_keys = OFF;
     INSERT INTO memory_index_chunks (
@@ -86,11 +153,14 @@ export async function seedMemoryIndexWithOrphanedProvenance(
     DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
     PRAGMA foreign_keys = ON;
   `);
-  closeOpenClawAgentDatabasesForTest();
-  // Replaced files cannot reuse the original connection's clean integrity receipt.
-  const replacementPath = `${database.path}.replacement`;
-  await fs.copyFile(database.path, replacementPath);
-  await fs.rename(replacementPath, database.path);
+  expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([
+    expect.objectContaining({
+      table: "memory_index_chunk_provenance",
+      parent: "memory_index_chunks",
+    }),
+  ]);
+  await closeOpenClawAgentDatabasesAsync();
+  await verifyMemoryDatabaseCorruptionForTest(database.path);
   return database.path;
 }
 
@@ -170,9 +240,6 @@ export const shortTermTestState = {
     writeRawShortTermStore(workspaceDir, raw, "phase"),
   async writeShortTermLock(workspaceDir: string, entry: ShortTermLockEntry) {
     await shortTermLocks().register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
-  },
-  async deleteShortTermLock(workspaceDir: string) {
-    await shortTermLocks().delete(memoryCoreWorkspaceStateKey(workspaceDir));
   },
 };
 

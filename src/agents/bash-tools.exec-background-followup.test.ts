@@ -148,7 +148,7 @@ async function completion(signal: AbortSignal) {
 }
 
 function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
-  return createExecTool({
+  const tool = createExecTool({
     config,
     ...fullGatewayExec,
     sessionKey,
@@ -157,7 +157,91 @@ function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
     allowBackground: true,
     ...overrides,
   });
+  return (callId: string, script: string) =>
+    tool.execute(callId, {
+      command: nodeCommand(script),
+      background: true,
+    });
 }
+
+test.each([
+  { label: "explicit background", args: { background: true } },
+  { label: "elapsed yield window", args: { yieldMs: 10 } },
+  { label: "disabled timeout", args: { background: true, timeoutSeconds: 0 } },
+])("provides a usable structured follow-up route after $label", async ({ label, args }) => {
+  const directory = await fs.realpath(
+    await fs.mkdtemp(path.join(state.workspaceDir, "exec-followup-")),
+  );
+  const releasePath = path.join(directory, "release");
+  const scopeKey = `agent:main:followup-${label}`;
+  const exec = createExecTool({
+    config,
+    ...fullGatewayExec,
+    allowBackground: true,
+    notifyOnExit: false,
+    timeoutSec: 5,
+    scopeKey,
+  });
+  const processTool = createProcessTool({ scopeKey });
+  // A parent-owned file releases the child only after the background result is observed.
+  const command = nodeCommand(
+    `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+     const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("FOLLOWUP_COMPLETE"); } };
+     const watcher = fs.watch(${JSON.stringify(directory)}, finish); finish();`,
+  );
+  try {
+    const requestedAt = Date.now();
+    const started = await exec.execute("followup-start", { command, ...args });
+    expect(started.details.status).toBe("running");
+    if (started.details.status !== "running") {
+      throw new Error("Expected a background process handle");
+    }
+    const deadlineAtMs = started.details.deadlineAtMs;
+    if (args.timeoutSeconds === 0) {
+      expect(deadlineAtMs).toBeUndefined();
+      expect(started.content).not.toContainEqual({
+        type: "text",
+        text: expect.stringContaining("times out in"),
+      });
+    } else {
+      if (deadlineAtMs === undefined) {
+        throw new Error("Expected the actual process timeout deadline");
+      }
+      expect(deadlineAtMs).toBeGreaterThanOrEqual(requestedAt + 4_999);
+      expect(deadlineAtMs).toBeLessThanOrEqual(Date.now() + 5_001);
+      expect(started.content).toContainEqual({
+        type: "text",
+        text: expect.stringMatching(/\), times out in [1-5]s\. /),
+      });
+    }
+    expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
+    const followUp = started.details.followUp;
+    expect(followUp).toContain("poll");
+    if (!followUp) {
+      throw new Error("Expected a structured follow-up route");
+    }
+    expect(started.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining(followUp),
+    });
+
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(scopeKey);
+    const completed = await processTool.execute("followup-poll", {
+      action: "poll",
+      sessionId: started.details.sessionId,
+    });
+    expect(completed.details).toMatchObject({
+      status: "completed",
+      sessionId: started.details.sessionId,
+      aggregated: "FOLLOWUP_COMPLETE",
+    });
+  } finally {
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(scopeKey);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("does not advertise detached continuation when process is unavailable", async () => {
   const exec = createExecTool({
@@ -220,12 +304,13 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     const exec = backgroundExec(sessionKey, { agentId: "main" });
     try {
       const start = async () => {
-        const started = await exec.execute("cron-followup", {
-          command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
-          background: true,
-        });
-        const { sessionId: processSessionId } = runningSession(started.details);
+        const started = await exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")');
+        const { sessionId: processSessionId, followUp } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
+        if (cron) {
+          expect(followUp).toContain("collect it before ending the turn");
+          expect(followUp).not.toContain("end this turn now");
+        }
         if (scenario === "queued cron") {
           const receipt = expectDefined(receipts[0], "queued cron completion receipt");
           expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
@@ -293,11 +378,41 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
         action: "log",
         sessionId: processSessionId,
       });
-      expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: "CRON_EXEC_DONE\n\nProcess exited with code 0.",
+      });
     } finally {
       unsubscribe();
       release();
     }
+  },
+);
+
+test.for([
+  { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
+  { label: "no run", runId: undefined, expected: {} },
+])(
+  "names the $label in the completion wake provenance",
+  async ({ runId, expected }, { signal }) => {
+    const sessionKey = `agent:main:dashboard:wake-provenance-${runId ?? "none"}`;
+    await seedOrigin(sessionKey);
+    const started = await backgroundExec(sessionKey, { agentId: "main", runId })(
+      "wake-provenance",
+      'process.stdout.write("WAKE_PROVENANCE_DONE")',
+    );
+    runningSession(started.details);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    const [params] = expectDefined(model.mock.calls[0], "completion turn");
+    expect(params.prompt).toContain("WAKE_PROVENANCE_DONE");
+    // The wake stays a non-owner internal turn; only the origin fact is added.
+    expect(params.senderIsOwner).not.toBe(true);
+    expect(params.inputProvenance).toStrictEqual({
+      kind: "internal_system",
+      sourceTool: "exec",
+      ...expected,
+    });
   },
 );
 
@@ -315,10 +430,10 @@ test("starts and notifies when identity enrichment fails, then resolves child id
     if (recovered) {
       await seedOrigin(sessionKey, "agent:main:main");
     }
-    const started = await exec.execute("notification-possible", {
-      command: nodeCommand('process.stdout.write("EXEC_STARTED"); process.exitCode = 1'),
-      background: true,
-    });
+    const started = await exec(
+      "notification-possible",
+      'process.stdout.write("EXEC_STARTED"); process.exitCode = 1',
+    );
     const { sessionId } = runningSession(started.details);
     await withinTest(waitForExecScope(sessionKey), signal);
     if (!recovered) {
@@ -331,6 +446,87 @@ test("starts and notifies when identity enrichment fails, then resolves child id
       sessionId,
     });
     expectCompleted(result.details, "EXEC_STARTED", 1);
+  }
+});
+
+function waitForRelease(release: string) {
+  return `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const done = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("WAITER_DONE"); } }; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, done); done();`;
+}
+
+test("tells a woken conversation to end its wait and names its other running commands", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:waiters";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const release = path.join(state.workspaceDir, "release-waiters");
+  try {
+    const first = runningSession((await exec("first-waiter", waitForRelease(release))).details);
+    // Every exit wakes by default, so the waiter need not print its result.
+    expect(first.followUp).toContain(
+      "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn now; do not poll it or start another command for the same result.",
+    );
+    expect(first.followUp).toContain("run one command that loops until it holds");
+    expect(first.followUp).not.toContain("Also running");
+    // A second waiter in the same turn sees the first; the turn-start snapshot cannot.
+    const second = runningSession((await exec("second-waiter", waitForRelease(release))).details);
+    expect(second.followUp).toContain(`Also running in this conversation: ${first.sessionId} (`);
+    const idle = await createProcessTool({ scopeKey: sessionKey }).execute("idle-poll", {
+      action: "poll",
+      sessionId: first.sessionId,
+    });
+    expect(idle.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("end this turn instead of polling."),
+    });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("wakes a dashboard conversation on silent success, with exit, duration and a bounded tail", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:silent-waiter";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const [script, expected] of [
+    ["void 0", /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/],
+    [
+      'process.stdout.write("x".repeat(3000) + "TAIL_END")',
+      /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars \(process log has the rest\):\nx{1992}TAIL_END$/,
+    ],
+  ] as const) {
+    await exec("silent-waiter", script);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
+  }
+});
+
+test("does not promise a hidden subagent an exit wake", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:hidden-waiter";
+  await seedOrigin(sessionKey, "agent:main:main");
+  const release = path.join(state.workspaceDir, "release-hidden-waiter");
+  try {
+    const started = runningSession(
+      (await backgroundExec(sessionKey, { agentId: "main" })("hidden", waitForRelease(release)))
+        .details,
+    );
+    expect(started.followUp).toContain("poll with a timeout");
+    expect(started.followUp).not.toContain("wakes this conversation");
+    const idle = await createProcessTool({ scopeKey: sessionKey }).execute("idle-poll", {
+      action: "poll",
+      sessionId: started.sessionId,
+    });
+    expect(idle.details).toMatchObject({
+      followUp: expect.stringContaining("poll with a timeout"),
+    });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
   }
 });
 
@@ -363,18 +559,15 @@ test("reports manual collection after destination capture fails, then recovers o
     const release = path.join(state.workspaceDir, `release-${recovered}`);
     const child = `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); } }); if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); }`;
     try {
-      const started = await exec.execute("capture-failure", {
-        command: nodeCommand(child),
-        background: true,
-      });
+      const started = await exec("capture-failure", child);
       expect(faults).toBe(1);
       const handle = runningSession(started.details);
       const followUp = expectDefined(handle.followUp, "background continuation guidance");
       expect(followUp).toContain(
-        recovered ? "wake this conversation automatically" : "poll with a timeout",
+        recovered ? "Its exit wakes this conversation with the result" : "poll with a timeout",
       );
       if (!recovered) {
-        expect(followUp).not.toContain("wake this conversation automatically");
+        expect(followUp).not.toContain("wakes this conversation");
       }
       expect(started.content).toContainEqual({
         type: "text",
@@ -446,18 +639,6 @@ test.for(["completed", "revoked", "missing"] as const)(
       scopes: ["operator.admin"],
       assertCurrent() {},
     });
-    const adminExecution = expectDefined(
-      preparePluginToolExecutionCapabilities({ authority: admin, config, agentId: "main" })(
-        () => {},
-      ).modelExecution,
-      "admin reviewer capability",
-    );
-    await expect(
-      adminExecution.run(
-        { model: "mock-openai/admin-only", explicit: true },
-        async ({ model: selectedModel }) => selectedModel,
-      ),
-    ).resolves.toBe("mock-openai/admin-only");
     const enqueueFromAdmin = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority: admin },
       () =>
@@ -480,12 +661,6 @@ test.for(["completed", "revoked", "missing"] as const)(
         assertInvocationCurrent() {},
       });
     const original = scenario === "missing" ? undefined : authority;
-    const initial = preparePluginToolExecutionCapabilities({
-      authority: original,
-      config,
-      agentId: "main",
-    })(() => {});
-    expect(Boolean(constructReview(initial))).toBe(scenario !== "missing");
     const reached = createDeferredCore<PluginToolExecutionCapabilities>();
     const proceed = createDeferredCore();
     model.mockImplementation(async (params) => {
@@ -514,10 +689,10 @@ test.for(["completed", "revoked", "missing"] as const)(
       const started = await withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey, operatorAuthority: original },
         () =>
-          backgroundExec(sessionKey, { agentId: "main" }).execute("guest-command", {
-            command: nodeCommand('process.stdout.write("GUEST_COMMAND_DONE")'),
-            background: true,
-          }),
+          backgroundExec(sessionKey, { agentId: "main" })(
+            "guest-command",
+            'process.stdout.write("GUEST_COMMAND_DONE")',
+          ),
       );
       runningSession(started.details);
       references--;

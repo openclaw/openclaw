@@ -106,7 +106,6 @@ export type BuildRunPlanDeps = {
   collectProviderApiKeysImpl?: (provider: string) => Promise<unknown[]> | unknown[];
   getProviderEnvVarsImpl?: (provider: string) => Promise<string[]> | string[];
   loadShellEnvFallbackImpl?: (params: {
-    enabled: true;
     env: NodeJS.ProcessEnv;
     expectedKeys: string[];
     logger: { warn: (message: string) => void };
@@ -196,7 +195,6 @@ async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {
-  enabled: true;
   env: NodeJS.ProcessEnv;
   expectedKeys: string[];
   logger: { warn: (message: string) => void };
@@ -444,7 +442,6 @@ export async function buildRunPlan(
   ];
   if (expectedKeys.length) {
     await (deps.loadShellEnvFallbackImpl ?? loadShellEnvFallbackForLiveMedia)({
-      enabled: true,
       env: process.env,
       expectedKeys,
       logger: { warn: (message: string) => console.warn(message) },

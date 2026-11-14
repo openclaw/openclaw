@@ -1,3 +1,5 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+
 const TOKEN_RATE_LIMIT = 10;
 const TOKEN_GLOBAL_RATE_LIMIT = 60;
 const TOKEN_RATE_WINDOW_MS = 60_000;
@@ -15,10 +17,7 @@ export class TokenRateLimiter {
     const allowed = active.length < TOKEN_RATE_LIMIT;
     if (allowed) {
       if (!this.attempts.has(key) && this.attempts.size >= TOKEN_RATE_MAX_KEYS) {
-        const oldestKey = this.attempts.keys().next().value;
-        if (typeof oldestKey === "string") {
-          this.attempts.delete(oldestKey);
-        }
+        pruneMapToMaxSize(this.attempts, TOKEN_RATE_MAX_KEYS - 1);
       }
       active.push(now);
     }

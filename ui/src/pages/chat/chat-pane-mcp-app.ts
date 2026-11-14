@@ -1,10 +1,14 @@
 import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import {
+  MCP_APP_OPEN_EVENT,
+  type McpAppOpenEventDetail,
+  type McpAppOpenDetail,
+} from "../../components/mcp-app-launch.ts";
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
-} from "../../components/mcp-app-resources.tsx";
+} from "../../components/mcp-app-resource-mention.ts";
 import {
   WIDGET_PROMPT_EVENT,
   MCP_APP_CONTEXT_EVENT,
@@ -17,6 +21,7 @@ import {
 } from "../../components/mcp-app-security.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
+import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { mcpAppMessageInput } from "../../lib/mcp-app-message.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -36,7 +41,8 @@ import {
   chatAttachmentBatchBytes,
 } from "./components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
-import type { ChatComposerScope } from "./composer-persistence.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
+import type { SessionWorkspacePreview } from "./components/chat-sidebar-content-types.ts";
 
 registerMcpAppEnglish();
 
@@ -49,7 +55,7 @@ declare global {
     [MCP_APP_MESSAGE_EVENT]: CustomEvent<McpAppMessageEventDetail>;
     [MCP_APP_FILE_OPEN_EVENT]: CustomEvent<McpAppFileOpenEventDetail>;
     [MCP_APP_CONTEXT_EVENT]: CustomEvent<McpAppContextEventDetail>;
-    [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenDetail>;
+    [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenEventDetail>;
   }
 }
 
@@ -63,6 +69,13 @@ type ChatPaneMcpAppState = ChatComposerScope &
     | "hello"
     | "handleSendChat"
     | "handleOpenSidebar"
+    | "handleCloseSidebar"
+    | "sessionWorkspaceState"
+    | "connectionEpoch"
+    | "sessions"
+    | "client"
+    | "connected"
+    | "sidebarContent"
   >;
 
 /** Read at delivery, not subscription time: retained panes can change presentation/connection. */
@@ -74,7 +87,8 @@ export type ChatPaneMcpAppOwner = {
   launch?: McpAppOpenDetail;
   replaceAttachments: (attachments: ChatPaneMcpAppState["chatAttachments"]) => void;
   /** Captures this state; the workspace owner still owns file admission and rendering. */
-  openFile: (path: string) => void;
+  openFile: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
+  openAppPanel?: () => void;
 };
 
 /** Create inside the mounted pane's Solid owner. */
@@ -84,6 +98,7 @@ export function createChatPaneMcpApps(options: {
 }): () => void {
   let disposed = false;
   let openedLaunch: McpAppOpenDetail | undefined;
+  const retirementListeners = new Set<() => void>();
   function syncLaunch(): void {
     const owner = options.current();
     const launch = owner?.launch;
@@ -105,6 +120,35 @@ export function createChatPaneMcpApps(options: {
       kind: "mcp-app",
       title: launch.entrypoint.title,
       launch,
+      observeRetirement(retire) {
+        const workspace = sessionWorkspaceForHost(owner.state);
+        const check = () => {
+          const current = workspace.state;
+          const content = current?.previews.find(
+            (entry) => entry.id === current.activePreviewId,
+          )?.content;
+          if (
+            disposed ||
+            current?.sessionKey !== owner.state.sessionKey ||
+            current?.connectionEpoch !== owner.state.connectionEpoch ||
+            content?.kind !== "mcp-app" ||
+            content.launch !== launch ||
+            owner.context.gateway.snapshot.client !== launch.owner ||
+            owner.context.gateway.snapshot.phase !== "connected"
+          ) {
+            retire();
+          }
+        };
+        retirementListeners.add(retire);
+        const stopWorkspace = workspace.subscribe(check);
+        const stopGateway = owner.context.gateway.subscribe(check);
+        check();
+        return () => {
+          retirementListeners.delete(retire);
+          stopWorkspace();
+          stopGateway();
+        };
+      },
       fileTab: {
         id: `mcp-app:${launch.serverName}/${launch.entrypoint.toolName}:${launch.settings ? "settings" : "app"}${fileSuffix}`,
         label: launch.entrypoint.title,
@@ -231,7 +275,7 @@ export function createChatPaneMcpApps(options: {
     }
     const detail = event.detail;
     event.preventDefault();
-    owner.openFile(detail.path);
+    void owner.openFile(detail.path);
     detail.respond(true);
   }
 
@@ -261,17 +305,23 @@ export function createChatPaneMcpApps(options: {
     });
   }
 
-  function receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
+  function receiveOpen(event: CustomEvent<McpAppOpenEventDetail>): void {
     const owner = presentedEventOwner(event);
     const detail = event.detail;
-    if (!owner || detail.owner !== owner.context.gateway.snapshot.client) {
+    if (!owner) {
       return;
     }
-    event.preventDefault();
-    openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    if ("present" in detail) {
+      event.preventDefault();
+      detail.present(owner);
+    } else if (detail.owner === owner.context.gateway.snapshot.client) {
+      event.preventDefault();
+      openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    }
   }
 
   // Pane-local listeners keep split-view prompts with their iframe.
+
   const element = options.element;
   const stopEvents = [
     listen(element, MCP_APP_RESOURCE_MENTION_EVENT, { handleEvent: receiveResourceMention }),
@@ -283,6 +333,9 @@ export function createChatPaneMcpApps(options: {
   ];
   onCleanup(() => {
     disposed = true;
+    for (const retire of retirementListeners) {
+      retire();
+    }
     stopEvents.forEach((stop) => stop());
   });
   return syncLaunch;

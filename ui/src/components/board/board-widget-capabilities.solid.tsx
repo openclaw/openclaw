@@ -1,9 +1,24 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../tooltip.ts";
+
+registerEnglishCatalog(registerBoardEnglish);
+
+function describeQueries(widget: BoardWidget) {
+  return (widget.declared?.queries ?? []).map((query) =>
+    t("board.widget.queryCapability", {
+      name: query.name,
+      selectors: Object.entries(query.params)
+        .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+        .join("; "),
+      fields: query.fields.join(", "),
+    }),
+  );
+}
 
 export function BoardPendingCapabilities(props: {
   widget: BoardWidget;
@@ -16,6 +31,7 @@ export function BoardPendingCapabilities(props: {
       [
         ["board.widget.networkAccess", props.widget.declared?.netOrigins ?? []],
         ["board.widget.hostTools", props.widget.declared?.tools ?? []],
+        ["board.widget.dataQueries", describeQueries(props.widget)],
       ] as const,
   );
   return (
@@ -92,6 +108,7 @@ export function BoardGrantedCapabilities(props: {
     ...(props.widget.declared?.tools ?? []).map((tool) =>
       t("board.widget.toolCapability", { capability: tool }),
     ),
+    ...describeQueries(props.widget),
   ]);
   return (
     <Show when={props.widget.grantState === "granted" && capabilities().length > 0}>
@@ -99,11 +116,16 @@ export function BoardGrantedCapabilities(props: {
         when={props.presentation === "details"}
         fallback={
           <openclaw-tooltip
+            open-on-click
             prop:content={`${t("board.widget.activeCapabilities")}\n${capabilities().join("\n")}`}
           >
-            <span class="board-widget__capabilities" data-test-id="board-capabilities-granted">
+            <button
+              type="button"
+              class="board-widget__capabilities"
+              data-test-id="board-capabilities-granted"
+            >
               {t("board.widget.granted")}
-            </span>
+            </button>
           </openclaw-tooltip>
         }
       >

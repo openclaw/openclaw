@@ -88,7 +88,6 @@ export function createTwitchIngress(options: {
   runtime: { error?: (message: string) => void };
   deliver: (message: TwitchChatMessage, lifecycle: TwitchIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<TwitchIngressPayload>;
-  pollIntervalMs?: number;
 }) {
   const queue =
     options.queue ??
@@ -118,7 +117,7 @@ export function createTwitchIngress(options: {
         bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
       ),
     deferredClaims: "manual",
-    pollIntervalMs: options.pollIntervalMs ?? TWITCH_INGRESS_DRAIN_INTERVAL_MS,
+    pollIntervalMs: TWITCH_INGRESS_DRAIN_INTERVAL_MS,
     // Twitch IRC does not replay PRIVMSG lines; these 1k tombstones only guard local crashes.
     retention: {
       completedMaxEntries: 1_000,

@@ -67,6 +67,30 @@ characters, must use HTTP or HTTPS, cannot include credentials, and cannot
 contain control or invisible characters. Invalid URLs produce a visible
 explanation and an explicit decline.
 
+When the current turn can execute OpenClaw's `ask_user`, OpenClaw disables
+Codex's duplicate blocking `request_user_input` by default because its normal
+mode restriction rejects Default-mode questions. A retained tool declaration
+alone does not count as a callable tool. Explicit native opt-ins through
+`tools.experimental_request_user_input.enabled` or
+`features.default_mode_request_user_input` remain honored, including authored
+native configuration. Start, resume, and fork share this policy; changes refresh
+loaded thread configuration. Native async questions and MCP elicitations are
+unaffected.
+
+Ordinary managed sessions use fixed Default mode without the native mode
+announcement or transition boilerplate. Their collaboration guidance mentions
+`request_user_input` only when the tool is enabled and Default-mode questions
+are allowed. Enabling tool registration alone does not make it usable in Default
+mode. OpenClaw's `ask_user` retains its own tool contract; native question rules
+are not transferred to it.
+
+The managed guidance preserves autonomous execution, genuinely required input,
+and approval boundaries. It uses thread developer instructions so model-catalogue
+overrides cannot restore disabled-tool guidance and compaction retains the current
+policy. Managed resume handoffs explicitly supersede earlier mode instructions
+without rewriting history. Native-supervised forks and modes, specialized cron and
+side-question policies keep their existing owners.
+
 Codex `request_user_input` and ordinary MCP elicitations share one per-turn
 interactive queue. The Control UI renders each non-secret Gateway question, and
 a single choice uses typed channel buttons when the channel supports them.

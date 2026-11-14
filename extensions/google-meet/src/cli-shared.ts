@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   callGatewayFromCli,
   isGatewayClientRequestError,
@@ -107,7 +108,7 @@ type GoogleMeetGatewayMethod =
   | "googlemeet.testListen"
   | "googlemeet.testSpeech";
 
-type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
+type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
@@ -303,20 +304,25 @@ export async function callGoogleMeetGateway(params: {
   payload?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<GoogleMeetGatewayCallResult> {
+  // Ctrl+C or SIGTERM cancels reads only; an interrupted read never falls back or prints.
+  const signal =
+    params.method === "googlemeet.status" || params.method === "googlemeet.transcript"
+      ? getAsyncWorkSignal()
+      : undefined;
   try {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
-    return {
-      ok: true,
-      payload: await callGatewayFromCli(
-        params.method,
-        { json: true, timeout: String(timeoutMs) },
-        params.payload,
-        { progress: false },
-      ),
-    };
+    const payload = await callGatewayFromCli(
+      params.method,
+      { json: true, timeout: String(timeoutMs) },
+      params.payload,
+      { progress: false, ...(signal ? { signal } : {}) },
+    );
+    signal?.throwIfAborted();
+    return { ok: true, payload };
   } catch (err) {
+    signal?.throwIfAborted();
     if (isGatewayUnavailableForLocalFallback(err, params.method)) {
-      return { ok: false, error: err };
+      return { ok: false };
     }
     throw err;
   }

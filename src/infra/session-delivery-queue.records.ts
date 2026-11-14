@@ -47,41 +47,57 @@ export type SessionDeliveryRequesterBinding = Readonly<{
   lifecycleRevision: string | null;
 }>;
 
-/** Payload variants that can be replayed by session delivery recovery. */
+type ProducedSessionDeliveryPayload = {
+  sessionKey: string;
+  /** Legacy inference text is readable but never executed by the delivery queue. */
+  message?: string;
+  messageId: string;
+  expectedSessionId?: string;
+  requesterBinding?: SessionDeliveryRequesterBinding;
+  route?: SessionDeliveryRoute;
+  deliveryContext?: SessionDeliveryContext;
+  inputProvenance?: InputProvenance;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  expectedMediaUrls?: string[];
+  expectedMediaAttachments?: Record<string, ReplyMediaAttachment>;
+  preparedMediaBlocks?: Record<string, Array<Record<string, unknown>>>;
+  suppressTextDelivery?: true;
+  idempotencyKey?: string;
+  owner?: SessionDeliveryOwnerReference;
+} & SessionDeliveryRetryPolicy;
+
+/** Held candidates use an inert kind so older binaries neither send nor execute them. */
 export type QueuedSessionDeliveryPayload =
   | ({
       kind: "systemEvent";
       sessionKey: string;
-      /** Preserves ownership when a durable event targets the literal global session. */
       agentId?: string;
       text: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
     } & SessionDeliveryRetryPolicy)
+  | ({ kind: "agentTurn"; reviewedTaskId?: string } & ProducedSessionDeliveryPayload)
   | ({
-      kind: "agentTurn";
-      sessionKey: string;
-      message: string;
-      messageId: string;
-      expectedSessionId?: string;
-      requesterBinding?: SessionDeliveryRequesterBinding;
-      route?: SessionDeliveryRoute;
-      deliveryContext?: SessionDeliveryContext;
-      inputProvenance?: InputProvenance;
-      sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-      expectedMediaUrls?: string[];
-      expectedMediaAttachments?: Record<string, ReplyMediaAttachment>;
-      preparedMediaBlocks?: Record<string, Array<Record<string, unknown>>>;
-      suppressTextDelivery?: true;
-      idempotencyKey?: string;
-      owner?: SessionDeliveryOwnerReference;
-    } & SessionDeliveryRetryPolicy);
+      kind: "mediaCandidate";
+      taskId: string;
+      disposition: "review_pending" | "superseded";
+      /** Original generation details, including any sandbox inspection references; never inference input. */
+      inspectionContext?: string;
+    } & ProducedSessionDeliveryPayload);
+
+export type SessionDeliveryCandidateMedia = {
+  expectedMediaUrls: string[];
+  expectedMediaAttachments?: Extract<
+    QueuedSessionDeliveryPayload,
+    { kind: "agentTurn" }
+  >["expectedMediaAttachments"];
+};
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   id: string;
   enqueuedAt: number;
+  /** Legacy attempt suffix preserves transcript idempotency for produced media. */
   agentRunAttempt?: number;
-  lastChargedAgentRunAttempt?: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
@@ -91,6 +107,11 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   availableAt?: number;
   retainOnFailure?: true;
 };
+
+/** Old queued inference remains readable but cannot launch work after restart. */
+export function isProducedSessionDelivery(entry: QueuedSessionDelivery): boolean {
+  return entry.kind === "agentTurn" && (entry.expectedMediaUrls?.length ?? 0) > 0;
+}
 
 export function prepareClaimedSessionDelivery(
   params: QueuedSessionDeliveryPayload,
@@ -136,18 +157,6 @@ function buildEntryId(idempotencyKey?: string): string {
     return generateSecureUuid();
   }
   return sha256Hex(idempotencyKey);
-}
-
-export function prepareSessionDelivery(
-  params: QueuedSessionDeliveryPayload,
-): QueuedSessionDelivery {
-  return {
-    ...params,
-    ...(params.completionRetention === "permanent" ? { retainOnFailure: true as const } : {}),
-    id: buildEntryId(params.idempotencyKey),
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-  };
 }
 
 /** Signals that a delivered result still needs durable settlement finalization. */

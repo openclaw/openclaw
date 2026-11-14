@@ -1,11 +1,14 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
 import type { IncomingMessage } from "node:http";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -30,30 +33,36 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import { resolveRuntimeServiceBuildId } from "../../../version.js";
 import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import {
   getRemoteControlUiIngressContext,
   hasCurrentRemoteControlUiIngress,
 } from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
-import { formatForLog } from "../../ws-log.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
 
-function hasCredential(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 export function isStartupNodeConnect(connectParams: ConnectParams): boolean {
   return connectParams.role === "node" && connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+}
+
+export function claimsWorkerConnectionIdentity(value: unknown): boolean {
+  const connect = asOptionalObjectRecord(value);
+  if (connect?.role === "worker") {
+    return true;
+  }
+  const client = asOptionalObjectRecord(connect?.client);
+  return client?.id === GATEWAY_CLIENT_IDS.WORKER || client?.mode === GATEWAY_CLIENT_MODES.WORKER;
 }
 
 /** Exact first-connect shape emitted by `openclaw connect` for a setup-code node. */
@@ -66,12 +75,12 @@ export function isStartupNodeBootstrapConnect(connectParams: ConnectParams): boo
     Array.isArray(connectParams.scopes) &&
     connectParams.scopes.length === 0 &&
     Boolean(device?.id.trim() && device.publicKey.trim()) &&
-    hasCredential(auth?.bootstrapToken) &&
-    !hasCredential(auth?.token) &&
-    !hasCredential(auth?.deviceToken) &&
-    !hasCredential(auth?.password) &&
-    !hasCredential(auth?.approvalRuntimeToken) &&
-    !hasCredential(auth?.agentRuntimeIdentityToken)
+    hasNonEmptyString(auth?.bootstrapToken) &&
+    !hasNonEmptyString(auth?.token) &&
+    !hasNonEmptyString(auth?.deviceToken) &&
+    !hasNonEmptyString(auth?.password) &&
+    !hasNonEmptyString(auth?.approvalRuntimeToken) &&
+    !hasNonEmptyString(auth?.agentRuntimeIdentityToken)
   );
 }
 
@@ -170,6 +179,10 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  const principal = state.authResult.openclawId;
+  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    return { kind: "auth" };
+  }
   if (context.browserOrigin) {
     const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
     if (!originCheck.ok) {
@@ -219,10 +232,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   } = context;
 
   const isNodeClient = isStartupNodeConnect(connectParams);
-  const startupPending = isStartupPending?.() === true;
-  // Node enrollment is an awaited startup dependency: authenticated node admission
-  // must complete while ordinary methods and other clients remain startup-gated.
-  if (startupPending && !isNodeClient) {
+  const startupPending = isNodeClient && isStartupPending?.() === true;
+  // Operator hello needs prepared auth and request snapshots, not autonomous recovery.
+  // Nodes retain their stricter startup enrollment policy until sidecars are ready.
+  if (context.handler.isConnectPending?.() && !isNodeClient) {
     await rejectGatewayStartupConnect(context);
     return undefined;
   }
@@ -249,15 +262,26 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
     });
     logWsControl.warn(
-      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
+      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatPeerTextForLog(clientLabel)} ${connectParams.client.mode} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatPeerTextForLog(connectParams.client.instanceId ?? "n/a")}`,
     );
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
+      retryable: false,
       details: {
         code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
         clientMinProtocol: minProtocol,
         clientMaxProtocol: maxProtocol,
         expectedProtocol: PROTOCOL_VERSION,
         minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        minProtocol: isNodeClient
+          ? MIN_NODE_PROTOCOL_VERSION
+          : connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE
+            ? MIN_PROBE_PROTOCOL_VERSION
+            : PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        gatewayBuildId: resolveRuntimeServiceBuildId(),
+        ...(connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
+          ? { reloadRequired: true }
+          : {}),
       },
     });
     close(1002, "protocol mismatch");

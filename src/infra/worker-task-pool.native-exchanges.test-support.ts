@@ -10,7 +10,7 @@ import {
   createWorkerNativeSectionState,
 } from "@openclaw/worker-runtime/worker";
 import { createDeferredCore } from "../shared/deferred.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
+import { createOwnedWorkerTaskPool, WorkerTaskPool } from "./worker-task-pool.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 type Input =
@@ -20,9 +20,19 @@ type Input =
       beforeRequest?: boolean;
       blockResponse?: boolean;
     }
-  | { kind: "echo"; value: number };
+  | { kind: "echo"; value: number }
+  | { kind: "progress"; gate: SharedArrayBuffer; callbacks: boolean; fail: boolean };
 type Result = { threadId: number; value?: number };
-export type NativeExchangeScenario = "close" | "before-request" | "reply-race" | "stale-reply";
+const scenarios = [
+  "close",
+  "before-request",
+  "reply-race",
+  "stale-reply",
+  "progress-reply",
+  "progress-callbacks",
+  "progress-failure",
+] as const;
+export type NativeExchangeScenario = (typeof scenarios)[number];
 
 async function waitFor(gate: Int32Array<SharedArrayBuffer>, index: number): Promise<void> {
   await Atomics.waitAsync(gate, index, 0, 10_000).value;
@@ -38,6 +48,28 @@ if (!isMainThread) {
   serveWorkerTasks<Result, Input>(async (input, channel, control) => {
     if (input.kind === "echo") {
       return { threadId, value: input.value };
+    }
+    if (input.kind === "progress") {
+      const gate = new Int32Array(input.gate);
+      release(gate, 0);
+      await waitFor(gate, 1);
+      let value = 42;
+      if (input.callbacks) {
+        assert.ok(channel);
+        channel.consumeInput();
+        await waitFor(gate, 2);
+        channel.notify("progress notification");
+        await waitFor(gate, 3);
+        const response = await channel.request("progress request");
+        assert.ok(typeof response.input === "number");
+        value = response.input;
+        response.consumed();
+        await waitFor(gate, 4);
+      }
+      if (input.fail) {
+        throw new Error("progress fixture failed");
+      }
+      return { threadId, value };
     }
     assert.ok(channel);
     const gate = new Int32Array(input.gate);
@@ -65,10 +97,87 @@ if (!isMainThread) {
   });
 } else {
   const scenario = process.argv[2];
-  assert.ok(
-    scenario && ["close", "before-request", "reply-race", "stale-reply"].includes(scenario),
-  );
-  if (scenario === "close" || scenario === "before-request") {
+  assert.ok(scenario && scenarios.some((value) => value === scenario));
+  if (scenario.startsWith("progress-")) {
+    const gate = new Int32Array(new SharedArrayBuffer(20));
+    const progress = new Int32Array(new SharedArrayBuffer(4));
+    const events: string[] = [];
+    const callbacks = scenario === "progress-callbacks";
+    const fail = scenario === "progress-failure";
+    const pool = createOwnedWorkerTaskPool<Input, Result>(
+      { workerUrl: new URL(import.meta.url), maxWorkers: 1 },
+      { retainedTransport: true },
+    );
+    const task = pool.startTask(
+      { kind: "progress", gate: gate.buffer, callbacks, fail },
+      {
+        progressSignal: progress,
+        ...(callbacks
+          ? {
+              onInputConsumed() {
+                events.push("input");
+                release(gate, 2);
+              },
+              onNotification(value: unknown) {
+                assert.equal(value, "progress notification");
+                events.push("notification");
+                release(gate, 3);
+              },
+              onRequestSync(value: unknown) {
+                assert.equal(value, "progress request");
+                events.push("request");
+                return {
+                  input: 42,
+                  timeoutMs: 10_000,
+                  onConsumed() {
+                    events.push("response");
+                    release(gate, 4);
+                  },
+                };
+              },
+            }
+          : {}),
+      },
+    );
+    const settled = task.result.catch(() => {});
+    try {
+      await waitFor(gate, 0);
+      let observed = Atomics.load(progress, 0);
+      task.service();
+      assert.equal(task.read().status, "pending");
+      release(gate, 1);
+      for (;;) {
+        // A producer must publish its reply before waking this blocked host.
+        assert.notEqual(Atomics.wait(progress, 0, observed, 10_000), "timed-out");
+        observed = Atomics.load(progress, 0);
+        task.service();
+        const outcome = task.read();
+        if (!callbacks) {
+          assert.notEqual(outcome.status, "pending", "Wake preceded the posted reply");
+        }
+        if (outcome.status === "pending") {
+          continue;
+        }
+        if (fail) {
+          assert.ok(outcome.status === "rejected");
+          assert.match(String(outcome.error), /progress fixture failed/);
+        } else {
+          assert.ok(outcome.status === "fulfilled");
+          assert.equal(outcome.value.value, 42);
+        }
+        break;
+      }
+      assert.deepEqual(events, callbacks ? ["input", "notification", "request", "response"] : []);
+      console.log(JSON.stringify({ scenario, wokeForPostedMessages: true }));
+    } finally {
+      for (let index = 1; index < gate.length; index++) {
+        release(gate, index);
+      }
+      await settled;
+      await task.release().result;
+      await pool.close();
+    }
+  } else if (scenario === "close" || scenario === "before-request") {
     const gate = new Int32Array(new SharedArrayBuffer(32));
     const hostEntered = createDeferredCore();
     const hostReply = createDeferredCore();
@@ -170,10 +279,6 @@ if (!isMainThread) {
     const worker = new Worker(new URL(import.meta.url));
     const native = createWorkerNativeSectionState();
     const gate = new Int32Array(new SharedArrayBuffer(32));
-    let exited = false;
-    worker.once("exit", () => {
-      exited = true;
-    });
     const sendTask = (taskId: number, input: Input, nativeSections = native.buffer) =>
       worker.postMessage(
         {
@@ -226,9 +331,7 @@ if (!isMainThread) {
       }
     } finally {
       release(gate, 3);
-      if (!exited) {
-        await worker.terminate();
-      }
+      await worker.terminate();
     }
   }
 }

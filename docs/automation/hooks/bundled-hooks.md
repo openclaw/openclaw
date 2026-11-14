@@ -66,7 +66,9 @@ these are alternatives, not merged lists. Without patterns, the hook does nothin
 
 Paths resolve relative to the event's workspace and must remain inside it,
 including after symlink resolution. Only these basenames load: `AGENTS.md`,
-`SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`.
+`SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`. A path
+skipped for another basename, a location outside the workspace, or a read error
+logs a warning once per Gateway process. Missing files are skipped quietly.
 
 Extra files go through normal bootstrap filtering and injection limits. Reads
 are capped at 2 MiB per file. Injection defaults to 20,000 characters per file
@@ -120,7 +122,8 @@ a subsequent turn is admitted; this is not a timer that writes memory at the
 daily boundary while the session is idle.
 
 The artifact is `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default, with a
-numeric suffix if that filename already exists. Dates use
+numeric suffix if that filename already exists. Overlapping resets sharing a
+workspace keep separate files and matching session provenance. Dates use
 `agents.defaults.userTimezone`, then process `TZ` when no user timezone is set,
 and the host timezone as fallback. The file records session identity and the
 command source or automatic reset reason.

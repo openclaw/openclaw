@@ -1,4 +1,4 @@
-import { defineSolidPage } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 
 export const page = defineSolidPage("device", () =>
   import("./device-page.tsx").then((module) => module.DevicePage),

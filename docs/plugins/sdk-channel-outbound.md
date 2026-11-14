@@ -27,7 +27,7 @@ authorization, and platform-specific side effects.
 
 Use `createChannelIngressMonitor(...)` when a channel must persist accepted
 transport events before dispatch. It composes a channel ingress queue and drain
-with the shared admission, polling, pruning, delivery, and shutdown lifecycle.
+with the shared admission, recovery, pruning, delivery, and shutdown lifecycle.
 Use the lower-level `createChannelIngressDrain(...)` only when the transport
 owns a materially different admission or pump contract.
 
@@ -39,8 +39,32 @@ The required options are:
 | `inspect(raw, context)`          | Returns the stable `eventId` and serialized `laneKey`, or `null` for an ignored event. Claim-time facts must match the persisted id and lane.                                                                                                                                                                    |
 | `payload`                        | Supplies the payload version plus body serialization/deserialization. Use `storage: "raw-event"` for the standard `{ version, rawEvent }` string envelope, or provide custom encode/decode callbacks for an existing channel-specific shape. `createClaimError` classifies invalid versions or changed identity. |
 | `deliver(raw, lifecycle, claim)` | Dispatches one decoded event and receives the complete adoption lifecycle. It may return `completed`, `deferred`, `failed-retryable`, or nothing.                                                                                                                                                                |
-| `pollIntervalMs`                 | Schedules recovery/drain polls while the monitor is running.                                                                                                                                                                                                                                                     |
+| `pollIntervalMs`                 | Schedules abandoned-claim and external-enqueue recovery sweeps, with a minimum interval of five minutes. Admissions and retry deadlines wake the drain directly.                                                                                                                                                 |
 | `retention`                      | Supplies the prune cadence and completed/failed TTL and entry caps.                                                                                                                                                                                                                                              |
+
+Startup recovery runs immediately. External queue writes, including
+`openclaw channels dead-letters resubmit`, do not signal the running monitor.
+External enqueues and dead-owner claims can wait up to the recovery interval plus
+scheduling and execution time. An unrefreshed claim from a still-live remote process
+first expires its lease: with the default 30-minute lease and minimum five-minute
+sweep, that bound is 35 minutes from the last refresh, plus scheduling and execution time. A larger
+`pollIntervalMs` increases the bound. Active local claims keep their existing
+protection, including claims held after a settlement write fails.
+
+During a plugin reload, the monitor retains its queue custody while the plugin
+instance is quiesced. Already claimed work can settle, but new delivery callbacks
+wait until the instance resumes or a successor takes over. A failed reload wakes
+the existing monitor automatically. A retained caller may request `start()` while
+quiesced; delivery waits for resume. If that caller lacks live authority, startup
+throws so the caller can retry.
+
+`stop()` joins accepted writes and retires the drain even when a settlement write
+fails; configured `onError` observers receive that failure. Never-adopted claims
+can then be recovered by a successor immediately. Claims with unresolved terminal
+writes or uncertain write outcomes remain protected against same-process replay
+until the Gateway exits. Restart recovery, stored rows, retention, and schemas are
+unchanged. Permitted callbacks after stop, including `durable-after-stop`
+admissions, use the late caller's own active authority.
 
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
@@ -54,6 +78,25 @@ preparation. Supporting hosts prefer it over `inspect` in both admission and
 claim validation. Keep `inspect` as a synchronous fallback for older hosts, which
 ignore the companion. Both callbacks must derive the same identity and lane.
 The standard raw-event convenience monitor retains its synchronous inspection contract.
+
+Optional `prepareAdmission(raw, { facts, receivedAt, signal })` runs inside the
+same admission order, after inspection and before payload serialization. Return
+`{ raw: replacement, assertCurrent }` to bind a prepared replacement to its live
+policy authority, or `undefined` for ordinary admission. The monitor reinspects
+the replacement and refuses changed event IDs or lanes. Policy-protected
+singletons use `queue.enqueueAuthorized`; batches require
+`queue.enqueueBatchAuthorized(events, { assertCurrent })`. The native queue
+checks this assertion at transaction and commit. Protected intake never falls
+back to an unguarded or fused append-and-claim method on an older external queue;
+unprotected queues retain their existing compatibility path.
+
+Channel plugins can await `prepareChannelIngressEvent(raw, context)` from
+`openclaw/plugin-sdk/channel-ingress-runtime` inside this callback to run
+`before_channel_ingress` policies, then validate its unknown replacement through
+their provider decoder. Pass `{ channelId, accountId, signal }`; an absent result
+means no registered handlers. A present result contains `{ event, assertCurrent }`.
+Preserve the host assertion through enqueue, and never log the unsanitized value
+or substitute the original payload after a policy error.
 
 Asynchronous inspection stays inside the existing admission order. Shutdown and `waitForIdle()` join
 accepted inspections and their durable appends, including pending claim inspection
@@ -78,7 +121,7 @@ Plugin-supplied queues can implement optional `enqueueBatch(events)` with the sa
 atomic contract; queues exposing only `enqueue` retain individual admission.
 
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
-`onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
+`onCancelled`, `onAbandoned`, `onDropped`, and `abortSignal`. Use `onFailed` for delivery
 errors, `onCancelled` for explicit pre-adoption cancellation that must preserve
 retry accounting, and `onAbandoned` when a non-adopted turn should consume a
 retry attempt. Returning without an explicit handoff marks a terminal
@@ -86,6 +129,24 @@ no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
 keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.
+
+Forward and await `onDropped(reason)` for queue-cap policy drops. They are recorded
+terminal non-outcomes, without a failure notice or replay. A wrapper that spreads
+the lifecycle and overrides `onAbandoned` for cleanup must also wrap `onDropped`
+with that cleanup; invoking `onAbandoned` from `onDropped` would request a retry.
+Wrappers that omit `onDropped` retain the legacy abandonment/replay fallback.
+Only expose a wrapped `onDropped` when the underlying sources support terminal
+drop custody; its presence also suppresses ordinary queue-full notices.
+
+Use optional `drain.onDeadLetter(claim, { reason, message }, signal)` for a transport-owned
+failure reply or reaction. It runs only after this claim's failure write commits;
+ordinary retries and rejected claim writes do not invoke it. Notices are best
+effort: a rejection or a 15-second notice timeout is logged without replaying the
+failed event. The signal aborts on timeout; check it and current transport access
+authority immediately before sending, including queued dispatch and transport
+retries. An already dispatched request may still settle after abort. Durable
+receipt alone does not authorize a reply. A crash between commit and notification
+can lose the notice.
 
 ### One turn, several durable claims
 
@@ -125,12 +186,18 @@ semantics, unchanged by this budget.
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
+`drain.prioritizePending(record)` can prefer pending events while preserving
+snapshot order within each priority. It does not preempt active claims or bypass
+lanes blocked by retry backoff. Priority is scheduling only; normal claim and
+delivery validation still apply.
 The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
 `stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the
 `ensureQueueAvailable()` check (safe to repeat) when plugin-owned migration or preparation must
 run after the queue opens but before the drain starts. `stop` first settles
-accepted admissions, then aborts and disposes the drain, waits for the pump and
-active deliveries, and disposes again to close the lazy-creation race.
+accepted admissions, then aborts, joins the pump and configured delivery waits,
+disposes the drain, and releases its custody. Aborting the supplied `abortSignal`
+starts the same teardown; plugins do not need a separate `stop()` call to release
+an aborted monitor.
 
 Keep transport-specific redaction, raw-envelope validation, non-retryable
 classification, and persisted payload shape in the plugin. Webhook transports

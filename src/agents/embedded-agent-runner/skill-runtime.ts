@@ -1,4 +1,5 @@
 import path from "node:path";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildSkillSnapshot,
@@ -9,6 +10,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { resolveSessionSkillResourceSnapshot } from "../session-placement-skill-resources.js";
@@ -29,6 +31,10 @@ export async function prepareEmbeddedSkills(params: {
     | "contextTokenBudget"
     | "toolExecutionAllow"
     | "operation"
+    | "sessionPersistence"
+    | "disableTools"
+    | "modelRun"
+    | "promptMode"
   >;
   effectiveWorkspace: string;
   sandbox: SandboxContext | null | undefined;
@@ -38,8 +44,12 @@ export async function prepareEmbeddedSkills(params: {
   const executionAllow = params.attempt.toolExecutionAllow;
   // Retained schemas are not execution permission. An unreadable skill catalog
   // creates impossible prerequisites and exposes an ungated Code Mode reader.
+  // Detached tool-free raw requests consume neither skills nor their environment.
   if (
     params.attempt.operation === "settled-tool-finalization" ||
+    (params.attempt.sessionPersistence === "detached" &&
+      params.attempt.disableTools === true &&
+      (params.attempt.modelRun === true || params.attempt.promptMode === "none")) ||
     (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
   ) {
     return {
@@ -65,7 +75,10 @@ export async function prepareEmbeddedSkills(params: {
     mapEntries,
   } = await prepareRuntimeSkillEntries({
     sandbox: params.sandbox,
-    skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
+    skillsAnchorWorkspace:
+      params.attempt.config && hasAgentRosterProperty(params.attempt.config)
+        ? resolveAgentWorkspaceDir(params.attempt.config, params.sessionAgentId)
+        : (params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace),
     skillsSnapshot: params.attempt.skillsSnapshot,
     assertCurrent: params.assertCurrent,
     config: params.attempt.config,
@@ -85,25 +98,27 @@ export async function prepareEmbeddedSkills(params: {
         preserveEntryOrder,
         assertCurrent: params.assertCurrent,
       }));
-    const skillsPrompt = await resolveSkillsPrompt({
-      assertCurrent: params.assertCurrent,
-      contextTokenBudget: params.attempt.contextTokenBudget,
-      skillsSnapshot,
-      entries: promptSkillEntries,
-      loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
-      config: params.attempt.config,
-      workspaceDir: skillsPromptWorkspaceDir,
-      agentId: params.sessionAgentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    });
-    const libraryEntries = params.sandbox?.enabled
-      ? []
-      : await prepareSkillLibrarySelection(
-          skillsSnapshot.librarySelections ?? [],
-          {},
-          params.assertCurrent ?? (() => {}),
-        );
+    const [skillsPrompt, libraryEntries] = await settleCurrentReadPreparations([
+      resolveSkillsPrompt({
+        assertCurrent: params.assertCurrent,
+        contextTokenBudget: params.attempt.contextTokenBudget,
+        skillsSnapshot,
+        entries: promptSkillEntries,
+        loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
+        config: params.attempt.config,
+        workspaceDir: skillsPromptWorkspaceDir,
+        agentId: params.sessionAgentId,
+        eligibility: skillsEligibility,
+        preserveEntryOrder,
+      }),
+      params.sandbox?.enabled
+        ? []
+        : prepareSkillLibrarySelection(
+            skillsSnapshot.librarySelections ?? [],
+            {},
+            params.assertCurrent ?? (() => {}),
+          ),
+    ] as const);
     params.assertCurrent?.();
     // Preparation may yield to abort/revocation. Apply process-wide overrides only
     // once all filesystem work has settled and this caller can take custody.

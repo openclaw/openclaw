@@ -26,13 +26,20 @@ export function transitionState(call: CallRecord, newState: CallState): void {
   }
 }
 
-export function addTranscriptEntry(call: CallRecord, speaker: "bot" | "user", text: string): void {
+export function addTranscriptEntry(
+  call: CallRecord,
+  speaker: "bot" | "user",
+  text: string,
+  timestamp = Date.now(),
+): void {
   call.transcript.push({
-    timestamp: Date.now(),
+    timestamp,
     speaker,
     text,
     isFinal: true,
   });
+  // Caller ASR can finalize after its reply; equal timestamps retain arrival order.
+  call.transcript.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 /** Stage persisted changes without exposing uncommitted state through active-call getters. */

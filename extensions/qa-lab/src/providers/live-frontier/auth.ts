@@ -158,9 +158,8 @@ function resolveQaLiveAnthropicSetupToken(env: NodeJS.ProcessEnv = process.env) 
 export async function stageQaLiveAnthropicSetupToken(params: {
   cfg: OpenClawConfig;
   stateDir: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<OpenClawConfig> {
-  const resolved = resolveQaLiveAnthropicSetupToken(params.env);
+  const resolved = resolveQaLiveAnthropicSetupToken();
   if (!resolved) {
     return params.cfg;
   }
@@ -188,7 +187,6 @@ export async function stageQaLiveApiKeyProfiles(params: {
   stateDir: string;
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
-  agentIds?: readonly string[];
 }): Promise<OpenClawConfig> {
   const env = params.env ?? process.env;
   const providerIds = normalizeQaLiveProviderIds(params.providerIds);
@@ -227,9 +225,8 @@ export async function stageQaLiveApiKeyProfiles(params: {
   if (Object.keys(profiles).length === 0) {
     return next;
   }
-  const agentIds = uniqueStrings(params.agentIds ?? QA_LIVE_API_KEY_AGENT_IDS);
   await Promise.all(
-    agentIds.map((agentId) =>
+    QA_LIVE_API_KEY_AGENT_IDS.map((agentId) =>
       writeQaAuthProfiles({
         agentId,
         profiles,

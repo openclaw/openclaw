@@ -1,5 +1,5 @@
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { findCatalogSessionHovercardRow } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -23,12 +23,6 @@ type SidebarSessionLookupData = Pick<
   | "sessionResultsByAgent"
 >;
 
-type SidebarSessionLookupSource = {
-  readonly sessionData: SidebarSessionLookupData;
-  getSessionNavigationState(): SidebarSessionNavigationState;
-  visibleSessionCatalogs(): readonly SessionCatalog[];
-};
-
 export function findActiveSidebarLineageRow(
   sessionData: SidebarSessionLookupData,
   sessionKey: string,
@@ -50,7 +44,11 @@ export function findActiveSidebarLineageRow(
 }
 
 export function findSidebarHovercardRow(
-  source: SidebarSessionLookupSource,
+  source: {
+    readonly sessionData: SidebarSessionLookupData;
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    visibleSessionCatalogs(): readonly SessionCatalog[];
+  },
   sessionKey: string,
   projectedRows: readonly SidebarRecentSession[],
 ): SidebarSessionHovercardRow | undefined {
@@ -71,29 +69,4 @@ export function findSidebarHovercardRow(
     sessionKey,
     liveRow,
   });
-}
-
-/** Merge adopted catalog sessions into the visible PR-indicator rows so an
-    adopted session hidden from the regular list still surfaces its PR state. */
-export function mergeAdoptedSessionPullRequestRows(input: {
-  rows: SidebarRecentSession[];
-  adopted: ReadonlySet<string>;
-  sessionsResult: SessionsListResult | null;
-  sessionResultsByAgent: Record<string, SessionsListResult>;
-  navigationState: SidebarSessionNavigationState;
-}): SidebarRecentSession[] {
-  if (input.adopted.size === 0) {
-    return input.rows;
-  }
-  const byKey = new Map(input.rows.map((row) => [row.key, row]));
-  const liveRows = [
-    ...(input.sessionsResult?.sessions ?? []),
-    ...Object.values(input.sessionResultsByAgent).flatMap((result) => result.sessions),
-  ];
-  for (const row of liveRows) {
-    if (input.adopted.has(row.key) && !byKey.has(row.key)) {
-      byKey.set(row.key, input.navigationState.toSidebarSession(row));
-    }
-  }
-  return [...byKey.values()];
 }

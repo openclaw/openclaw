@@ -57,19 +57,19 @@ const busyPort = (
 describe("parseSshTarget", () => {
   it("parses OpenSSH tokens and refuses invalid ports or config injection", () => {
     const cases: [string, ReturnType<typeof parseSshTarget>][] = [
-      ["me@example.com:2222", { user: "me", host: "example.com", port: 2222 }],
-      [" ssh alice@example.com ", { user: "alice", host: "example.com", port: 22 }],
-      ["me+prod@prod+gpu:2222", { user: "me+prod", host: "prod+gpu", port: 2222 }],
+      ["me@[::1]:2222", { user: "me", host: "::1", port: 2222, explicitPort: true }],
+      [" ssh alice@[::1] ", { user: "alice", host: "::1", port: 22, explicitPort: false }],
+      ["a+b@prod+gpu:2222", { user: "a+b", host: "prod+gpu", port: 2222, explicitPort: true }],
       [
         String.raw`DOMAIN\alice@jump+gpu`,
-        { user: String.raw`DOMAIN\alice`, host: "jump+gpu", port: 22 },
+        { user: String.raw`DOMAIN\alice`, host: "jump+gpu", port: 22, explicitPort: false },
       ],
       ...[
         "",
-        "me@example.com:0",
-        "me@example.com:22abc",
-        "me@example.com:70000",
-        "me@example.com:not-a-port",
+        "[::1]:0",
+        "[::1]:22abc",
+        "[::1]:70000",
+        "[example.com]:22",
         "-V",
         "me@-badhost",
         "-oProxyCommand=touch@example.com",
@@ -81,9 +81,8 @@ describe("parseSshTarget", () => {
         "bad host",
         "me name@example.com",
         "host:",
-        ":22",
+        "[::1",
         "user@:22",
-        "user@host:",
         "host::22",
         ":host:22",
       ].map((target): [string, null] => [target, null]),
@@ -199,18 +198,19 @@ describe("startSshPortForward", () => {
   });
 
   it.each([
-    ["gateway-alias", undefined, "strict"],
-    ["gateway-alias:22", "22", "strict"],
-    ["gateway-alias", undefined, "openssh"],
+    ["me@2001:db8::10", undefined, "strict", "me@2001:db8::10"],
+    ["me@[::1]:22", "22", "strict", "me@::1"],
+    ["gateway-alias", undefined, "openssh", "gateway-alias"],
   ] as const)(
     "preserves OpenSSH routing for %s (port %s, %s)",
-    async (target, port, hostKeyPolicy) => {
+    async (target, port, hostKeyPolicy, host) => {
       const stop = new Error("captured SSH process boundary");
       mocks.spawn.mockImplementationOnce(() => {
         throw stop;
       });
       await expect(startTunnel(43210, { target, hostKeyPolicy })).rejects.toBe(stop);
       const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+      expect(args.at(-1)).toBe(host);
       if (port) {
         expect(args.slice(args.indexOf("-p"), args.indexOf("-p") + 2)).toEqual(["-p", port]);
       } else {

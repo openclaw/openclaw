@@ -50,6 +50,7 @@ export const MemoryWikiConfigSource = z
       .optional(),
     bridge: z
       .strictObject({
+        ownership: z.enum(["sandboxed-only", "owner"]).optional(),
         enabled: z.boolean().optional(),
         readMemoryArtifacts: z.boolean().optional(),
         indexDreamReports: z.boolean().optional(),
@@ -146,6 +147,7 @@ export function resolveMemoryWikiConfig(
       openAfterWrites: safeConfig.obsidian?.openAfterWrites ?? false,
     },
     bridge: {
+      ownership: safeConfig.bridge?.ownership ?? "sandboxed-only",
       enabled: safeConfig.bridge?.enabled ?? false,
       readMemoryArtifacts: safeConfig.bridge?.readMemoryArtifacts ?? true,
       indexDreamReports: safeConfig.bridge?.indexDreamReports ?? true,

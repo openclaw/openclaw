@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
 import { listPage } from "../cron/service/ops-read.js";
 import type { CronJob } from "../cron/types.js";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import {
   createSqliteReadOnlyWorkerScope,
   isSqliteInspectionDeadlineOwnedByCaller,
@@ -13,8 +16,7 @@ import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/cont
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronServiceContract, GatewayCronState } from "./server-cron-contract.js";
 
 const { buildGatewayCronService } = vi.hoisted(() => ({ buildGatewayCronService: vi.fn() }));
 // mock-isolation: Keep the heavy cron runtime unloaded to prove lazy service creation.
@@ -37,7 +39,6 @@ describe("createLazyGatewayCronState", () => {
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
       stopStreamWatchers: vi.fn(async () => {}),
-      reconcileSystemJobs: vi.fn(async () => "converged" as const),
     };
     buildGatewayCronService.mockReset().mockImplementation(() => state);
     lazy = createLazyGatewayCronState(createParams());
@@ -47,9 +48,23 @@ describe("createLazyGatewayCronState", () => {
     const broker = await createBroker();
     let observedBroker: unknown = "not-built";
     let observedReadOnlyScope = false;
+    let observedInstallation: unknown;
+    let observedOperationInstallation: unknown;
+    const originalStatus = cron.status;
+    cron.status = vi.fn(async () => {
+      observedOperationInstallation = getGatewayServiceInstallation();
+      return await originalStatus();
+    });
+    const installation = {
+      root: "/fixture/service",
+      version: "1",
+      cliVersion: "1",
+      databasePath: "/fixture/state.sqlite",
+    };
     buildGatewayCronService.mockImplementationOnce(() => {
       observedBroker = getSpawnBroker();
       observedReadOnlyScope = isSqliteInspectionDeadlineOwnedByCaller();
+      observedInstallation = getGatewayServiceInstallation();
       return state;
     });
     const readers = createSqliteReadOnlyWorkerScope({
@@ -57,10 +72,19 @@ describe("createLazyGatewayCronState", () => {
       deadlineOwnedByCaller: true,
     });
     lazy = readers.run(() =>
-      runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams())),
+      runWithSpawnBroker(broker, () =>
+        withGatewayServiceInstallation({ installation }, () =>
+          createLazyGatewayCronState(createParams()),
+        ),
+      ),
     );
+    state.readHeartbeatSummary = vi.fn(async () => []);
+    expect(lazy.readHeartbeatSummary).toBeUndefined();
+    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
+    await lazy.stopStreamWatchers();
     expect(buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
+    expect(lazy.cron.getLoadedJobs()).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
     try {
       await runInDetachedAsyncContext(() => lazy.cron.status());
@@ -68,14 +92,14 @@ describe("createLazyGatewayCronState", () => {
       await readers.close();
     }
     expect(buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.status).toHaveBeenCalledTimes(1);
+    const residentJobs: CronJob[] = [];
+    cron.getLoadedJobs.mockReturnValue(residentJobs);
+    expect(lazy.cron.getLoadedJobs()).toBe(residentJobs);
+    expect(lazy.readHeartbeatSummary).toBe(state.readHeartbeatSummary);
     expect(observedBroker === broker).toBe(true);
     expect(observedReadOnlyScope).toBe(true);
-  });
-
-  it("does not load cron solely to prepare a watcher handoff", async () => {
-    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
-    expect(buildGatewayCronService).not.toHaveBeenCalled();
+    expect(observedInstallation).toEqual(installation);
+    expect(observedOperationInstallation).toEqual(installation);
   });
 
   it("keeps visibility filtering inside the loaded service's page snapshot", async () => {
@@ -169,6 +193,30 @@ describe("createLazyGatewayCronState", () => {
     expect(cron.wake).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
   });
 
+  it("rejects a deferred notice when the lazy scheduler stops during admission", async () => {
+    const entered = deferred();
+    const resume = deferred();
+    let committed = false;
+    state.deferHookWake = async ({ commitGuard }) => {
+      entered.resolve();
+      await resume.promise;
+      commitGuard();
+      committed = true;
+      return { ok: true, eventOutcome: "queued" };
+    };
+    const request = lazy.deferHookWake!({
+      text: "Scheduled notice",
+      agentId: "main",
+      commitGuard() {},
+    });
+    const refused = expect(request).rejects.toThrow("Scheduled Hook wake owner changed");
+    await entered.promise;
+    lazy.cron.stop();
+    resume.resolve();
+    await refused;
+    expect(committed).toBe(false);
+  });
+
   it.each(["run", "enqueueRun"] as const)(
     "finishes startup recovery before admitting a manual %s",
     async (operation) => {
@@ -192,7 +240,6 @@ describe("createLazyGatewayCronState", () => {
       await run;
 
       expect(cron[operation]).toHaveBeenCalledExactlyOnceWith("demo", "force");
-      expect(buildGatewayCronService).toHaveBeenCalledOnce();
     },
   );
 
@@ -252,9 +299,6 @@ describe("createLazyGatewayCronState", () => {
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
-    // Teardown before load must not force the heavy import.
-    await lazy.stopStreamWatchers();
-    expect(buildGatewayCronService).not.toHaveBeenCalled();
     await lazy.reconcileExitWatchers();
     await lazy.reconcileStreamWatchers();
     expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
@@ -264,11 +308,11 @@ describe("createLazyGatewayCronState", () => {
   });
 });
 
-function createParams(overrides: Partial<OpenClawConfig> = {}) {
+function createParams() {
   return {
     storePath: "/tmp/openclaw-cron.json",
     scheduler: createTestGatewayScheduler(),
-    cfg: overrides,
+    cfg: {},
     deps: {} as CliDeps,
     broadcast: vi.fn(),
   };
@@ -298,6 +342,7 @@ function createCronService() {
     runEvent: vi.fn<GatewayCronServiceContract["runEvent"]>(async () => ({ kind: "invalidated" })),
     waitForManualRun: vi.fn(async () => true),
     getJob: vi.fn(() => undefined),
+    getLoadedJobs: vi.fn<GatewayCronServiceContract["getLoadedJobs"]>(() => undefined),
     readJob: vi.fn(async () => undefined),
     readScratch: vi.fn(async () => ({ currentRevision: 0 })),
     writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),

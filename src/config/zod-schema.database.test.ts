@@ -3,6 +3,14 @@ import { buildConfigSchemaCore } from "./schema.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const familyEngines = (engines: string[]) =>
+  Object.fromEntries(
+    ["state", "agent", "workboard", "logbook", "team-reports"].map((name, index) => [
+      name,
+      { engine: engines[index] },
+    ]),
+  );
+
 describe("database config", () => {
   it.each([
     { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
@@ -16,14 +24,8 @@ describe("database config", () => {
   it.each(["sqlite", "postgres"])(
     "reports a store-backed DSN for Doctor with %s selected",
     (engine) => {
-      const result = validateConfigObjectRaw({
-        database: {
-          engine,
-          postgres: {
-            connection: { source: "store", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
-          },
-        },
-      });
+      const connection = { source: "store", provider: "default", id: "OPENCLAW_DATABASE_DSN" };
+      const result = validateConfigObjectRaw({ database: { engine, postgres: { connection } } });
       expect(result).toMatchObject({
         ok: false,
         issues: [
@@ -56,30 +58,24 @@ describe("database config", () => {
     {},
     { engine: "sqlite" },
     { engine: "postgres" },
-    { engine: "postgres", families: { agent: { engine: "postgres" } } },
-    { families: { agent: { engine: "postgres" } } },
-    { engine: "postgres", families: { state: { engine: "sqlite" } } },
-    { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
-    {
-      families: {
-        state: { engine: "postgres" },
-        agent: { engine: "postgres" },
-        workboard: { engine: "postgres" },
-        logbook: { engine: "postgres" },
-        "team-reports": { engine: "postgres" },
-      },
-    },
+    { families: familyEngines(Array.from({ length: 5 }, () => "postgres")) },
     { families: {} },
-    { families: { state: { engine: "postgres" }, agent: { engine: "sqlite" } } },
     {
       engine: "postgres",
-      families: {
-        state: { engine: "sqlite" },
-        agent: { engine: "sqlite" },
-        workboard: { engine: "postgres" },
-        logbook: { engine: "sqlite" },
-        "team-reports": { engine: "postgres" },
-      },
+      families: familyEngines(["sqlite", "sqlite", "postgres", "sqlite", "postgres"]),
+    },
+    { engine: "sqlite", postgres: { ownership: "state-directory" } },
+    { engine: "postgres", postgres: { ownership: "installation" } },
+    { engine: "postgres", postgres: { ownership: "installation", recoveryCaptures: "server" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "state-directory", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation" },
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
     },
   ])("preserves optional database config %j for runtime admission", (database) => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
@@ -94,10 +90,24 @@ describe("database config", () => {
     { families: { state: "postgres" } },
     { families: { state: { engine: "unknown" } } },
     { families: { state: { engine: "postgres", postgres: { schemaPrefix: "state" } } } },
-    { families: { agents: { engine: "sqlite" } } },
     { families: { quarantine: { engine: "sqlite" } } },
-    { families: { "managed-update": { engine: "sqlite" } } },
-    { families: { "package-activation": { engine: "sqlite" } } },
+    { postgres: { ownership: "installation" } },
+    { engine: "sqlite", postgres: { ownership: "installation" } },
+    {
+      families: familyEngines(Array.from({ length: 5 }, () => "postgres")),
+      postgres: { ownership: "installation" },
+    },
+    { engine: "postgres", postgres: { ownership: "none" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation" },
+      families: familyEngines(["postgres", "postgres", "postgres", "postgres", "sqlite"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
   });

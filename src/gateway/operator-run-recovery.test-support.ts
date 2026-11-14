@@ -1,8 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import type { GatewayClientInfo } from "../../packages/gateway-protocol/src/client-info.js";
-import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
-import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,21 +10,68 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
+
+export function recoveryFixture(
+  stateDir: string,
+  profileId: string,
+  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
+) {
+  return createOperatorRecoveryFixture({
+    stateDir,
+    profileId,
+    context: createContext(),
+    config: {},
+    ...overrides,
+  });
+}
+
+export function pairedOperator(): PairedDevice {
+  return {
+    deviceId: "recovery-device",
+    publicKey: "fixture-public-key",
+    roles: ["operator"],
+    approvedScopes: ["operator.admin"],
+    tokens: {
+      operator: {
+        token: "fixture-device-token",
+        role: "operator",
+        scopes: ["operator.admin"],
+        createdAtMs: 1,
+      },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 1,
+  };
+}
+
+export function persistDevices(stateDir: string, devices: PairedDevice[], mode: "paired" | "both") {
+  persistDevicePairingStoreState(
+    { pendingById: {}, pairedByDeviceId: Object.fromEntries(devices.map((d) => [d.deviceId, d])) },
+    stateDir,
+    mode,
+  );
+}
 
 export async function createOperatorRecoveryFixture(params: {
   stateDir: string;
   context: GatewayRequestContext;
   profileId: string;
   config: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   sessionId?: string;
+  parentSessionKey?: string | null;
   scopes?: string[];
   device?: PairedDevice;
   tokenlessDevice?: boolean;
@@ -34,9 +80,7 @@ export async function createOperatorRecoveryFixture(params: {
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
-  sourceRunId?: string;
-  inputProvenance?: InputProvenance;
-  requesterOrigin?: RequesterOrigin;
+  openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
 }) {
   let config = params.config;
   const context = params.context;
@@ -52,6 +96,7 @@ export async function createOperatorRecoveryFixture(params: {
   // These facts represent the authenticated handshake, not session attribution.
   client.internal = {
     authenticatedOperator: true,
+    ...(params.openclawIdPrincipal ? { openclawIdPrincipal: params.openclawIdPrincipal } : {}),
     ...(params.localOperator ? { isLocalClient: true } : {}),
     ...(client.connect.client.id === "openclaw-control-ui" &&
     client.connect.scopes?.includes("operator.admin")
@@ -60,7 +105,7 @@ export async function createOperatorRecoveryFixture(params: {
   };
   client.authPolicy = captureGatewayAuthPolicy(config, {
     role: "operator",
-    authMethod: params.tokenlessDevice ? "trusted-proxy" : "token",
+    authMethod: params.tokenlessDevice || params.openclawIdPrincipal ? "trusted-proxy" : "token",
   });
   if (params.sharedGeneration !== undefined) {
     client.usesSharedGatewayAuth = true;
@@ -104,39 +149,26 @@ export async function createOperatorRecoveryFixture(params: {
     }),
     "authenticated operator source",
   );
+  const agentId = params.agentId ?? "main";
   const target = {
-    agentId: "main",
-    sessionKey: params.sessionKey ?? "agent:main:recovery-authority",
+    agentId,
+    sessionKey: params.sessionKey ?? `agent:${agentId}:recovery-authority`,
     sessionId: params.sessionId ?? "recovery-authority-session",
-    storePath: path.join(params.stateDir, "agents", "main", "sessions", "sessions.json"),
-    sourceRunId: params.sourceRunId ?? "original-operator-turn",
-    recoveryRunId: "recovered-operator-turn",
+    storePath: path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json"),
   };
   const entry: InternalSessionEntry = {
     sessionId: target.sessionId,
     updatedAt: 1,
     lifecycleRevision: "original-lifecycle",
     // Dashboard grouping is ancestry, not delegated execution.
-    parentSessionKey: "agent:main:main",
+    parentSessionKey:
+      params.parentSessionKey === null
+        ? undefined
+        : (params.parentSessionKey ?? `agent:${agentId}:main`),
     spawnDepth: 0,
-    restartRecoveryDeliveryRunId: target.recoveryRunId,
-    restartRecoveryDeliverySourceRunId: target.sourceRunId,
-    restartRecoverySourceIngress: params.sourceIngress ?? "control-ui",
     createdActor: { type: "human", source: "profile", id: params.profileId },
   };
-  entry.restartRecoveryOperatorSource = expectDefined(
-    createRestartRecoveryOperatorSource({
-      authority: captured.authority,
-      entry,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      sourceRunId: target.sourceRunId,
-      inputProvenance: params.inputProvenance,
-      requesterOrigin: params.requesterOrigin,
-    }),
-    "host-captured recovery source",
-  );
-  entry.restartRecoverySourceIngress = entry.restartRecoveryOperatorSource.snapshot.sourceIngress;
+  const snapshot = expectDefined(captured.authority.recoverySnapshot, "scheduled operator source");
   await replaceSessionEntry(target, entry);
   const sourceAuthority = captured.authority;
   captured.release();
@@ -152,21 +184,47 @@ export async function createOperatorRecoveryFixture(params: {
     target,
     entry,
     sourceAuthority,
+    snapshot,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
     retire: () => {
       current = false;
     },
-    restore: async () =>
-      (
-        await restoreGatewayRunRecovery({
-          target,
-          context,
-          assertCurrent,
-          restoreOperator: true,
-          restoreRequester: false,
-        })
-      ).operator,
+    restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
   };
+}
+
+export function expectCurrent(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
+  expect(authority.signal?.aborted).toBe(false);
+  expect(authority.assertCurrent).not.toThrow();
+}
+
+export type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
+export function withRecovery(
+  run: (
+    fixture: RecoveryFixture,
+    stateDir: string,
+    profile: ReturnType<typeof ensureProfileForEmail>,
+  ) => Promise<void>,
+  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    const profile = ensureProfileForEmail("recovery@example.test");
+    await run(
+      await recoveryFixture(stateDir, profile.id, { device: pairedOperator(), ...overrides }),
+      stateDir,
+      profile,
+    );
+  });
+}
+
+export function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
+  expect(authority.assertCurrent).toThrow();
+  expect(authority.signal?.aborted).toBe(true);
+}
+
+export async function restoreFixture(fixture: RecoveryFixture) {
+  const source = expectDefined(await fixture.restore(), "restored operator source");
+  return { ...source, [Symbol.dispose]: source.release };
 }

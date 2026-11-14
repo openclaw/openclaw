@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { createCopilotToolPolicyHarnessFixtureForTest } from "../extensions/copilot/test-api.js";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import {
+  createCopilotToolPolicyHarnessFixtureForTest,
+  makeUserTurnRecorder,
+} from "../extensions/copilot/test-api.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -21,30 +23,6 @@ afterEach(async () => {
   await Promise.all(createdFixtures.splice(0).map((fixture) => fixture.dispose()));
 });
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-copilot-policy-");
-
-function createUserTurnRecorder(message: Extract<AgentMessage, { role: "user" }>) {
-  let blocked = false;
-  let persisted = false;
-  return {
-    message,
-    resolveMessage: vi.fn(async () => message),
-    markRuntimePersistencePending: vi.fn(),
-    markRuntimePersisted: vi.fn(() => {
-      persisted = true;
-    }),
-    markBlocked: vi.fn(() => {
-      blocked = true;
-    }),
-    hasPersisted: () => persisted,
-    isBlocked: () => blocked,
-    hasRuntimePersistencePending: () => false,
-    getAdmissionReceipt: () => undefined,
-    waitForRuntimePersistence: vi.fn(async () => undefined),
-    persistApproved: vi.fn(async () => undefined),
-    persistBlocked: vi.fn(async () => undefined),
-    persistFallback: vi.fn(async () => undefined),
-  };
-}
 
 async function runCopilotHarnessTurn(params: {
   policy: Pick<EmbeddedRunAttemptParams, "disableTools" | "toolsAllow">;
@@ -100,7 +78,7 @@ async function runCopilotHarnessTurn(params: {
       },
       thinkLevel: "low",
       timeoutMs: 5_000,
-      userTurnTranscriptRecorder: createUserTurnRecorder(message),
+      userTurnTranscriptRecorder: makeUserTurnRecorder(message),
       workspaceDir: params.workspaceDir,
       ...params.policy,
     } as EmbeddedRunAttemptParams);

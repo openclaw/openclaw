@@ -27,39 +27,10 @@ import {
 const CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS = 300_000;
 const CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS = 20_000;
 const CODEX_APP_SERVER_ROLLOUT_TAIL_READ_BYTES = 64 * 1024;
-const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
-  b: 1,
-  k: 1024,
-  m: 1024 ** 2,
-  g: 1024 ** 3,
-  t: 1024 ** 4,
-};
 type CodexAppServerRolloutFile = {
   path: string;
-  bytes: number;
   handle?: Awaited<ReturnType<typeof fs.open>>;
 };
-
-function parseCodexAppServerByteLimit(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return floorPositiveFiniteNumber(value);
-  }
-  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
-  if (!match) {
-    return undefined;
-  }
-  const amount = Number(match[1]);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return undefined;
-  }
-  const unit = (match[2] ?? "b").toLowerCase();
-  const unitPrefix = /^[kmgt](?:i?b)?$/.test(unit) ? unit.charAt(0) : unit;
-  const multiplier = CODEX_APP_SERVER_BYTE_UNITS[unitPrefix];
-  if (multiplier === undefined) {
-    return undefined;
-  }
-  return Math.max(1, Math.round(amount * multiplier));
-}
 
 async function listCodexAppServerRolloutFilesForThread(
   agentDir: string,
@@ -98,7 +69,7 @@ async function listCodexAppServerRolloutFilesForThread(
         symlinks: "reject",
       });
       const opened = await safeRoot.open(path.relative(rolloutRoot, rolloutPath));
-      return [{ path: opened.realPath, bytes: opened.stat.size, handle: opened.handle }];
+      return [{ path: opened.realPath, handle: opened.handle }];
     } catch {
       // Older Codex servers and moved rollouts still need root-scoped discovery.
     }
@@ -126,11 +97,7 @@ async function listCodexAppServerRolloutFilesForThread(
         if (!entry.isFile() || !entry.name.endsWith(".jsonl") || !entry.name.includes(threadId)) {
           continue;
         }
-        try {
-          files.push({ path: file, bytes: (await fs.stat(file)).size });
-        } catch {
-          // Ignore rollout files that disappeared while the guard was scanning.
-        }
+        files.push({ path: file });
       }
     }
   }
@@ -316,36 +283,8 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     params.codexHome,
     binding.rolloutPath,
   );
-  const compaction = params.config?.agents?.defaults?.compaction;
-  const maxBytes = parseCodexAppServerByteLimit(compaction?.maxActiveTranscriptBytes);
-  const shouldDeferByteGuard =
-    maxBytes !== undefined &&
-    params.contextEngineActive === true &&
-    binding.contextEngine?.projection?.mode === "thread_bootstrap";
-  if (!shouldDeferByteGuard && maxBytes !== undefined) {
-    const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
-    if (oversizedFiles.length > 0) {
-      await Promise.all(
-        rolloutFiles.map(async (file) => {
-          await file.handle?.close();
-        }),
-      );
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "rotating an oversized native transcript",
-        params.expectedSessionRuntimeOwnership,
-      );
-      embeddedAgentLog.warn(
-        "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
-        {
-          threadId: binding.threadId,
-          maxBytes,
-          files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
-        },
-      );
-      return await clearBinding();
-    }
-  }
+  // Saved rollouts include history that Codex has already compacted. Their disk size
+  // is not active context pressure; maxActiveTranscriptBytes bounds fresh-thread seeds.
   const nativeTokenSnapshots = await Promise.all(
     rolloutFiles.map(async (file) =>
       readCodexAppServerRolloutTokenSnapshot(file.path, file.handle),

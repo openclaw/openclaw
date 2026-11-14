@@ -5,11 +5,17 @@ import { expect } from "vitest";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { prepareClientCredentialMigration } from "./client-credential-migration.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
+import { openClientCredentialCustody } from "./client-credential-store.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+
+export function openMigrationCredentials(env: NodeJS.ProcessEnv, createIfMissing = false) {
+  return openClientCredentialCustody(env, { createIfMissing, migration: true })!;
+}
 
 export async function captureClientCredentialMigrationFixture(sourcePath: string) {
   await createVerifiedSqliteSnapshot({ sourcePath, targetPath: `${sourcePath}.captured` });
@@ -69,29 +75,36 @@ export async function createClientCredentialMigrationFixture(
       .digest("hex"),
     createdAtMs: 12,
   };
-  source
-    .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
-    .run(
-      "primary",
+  const insertIdentity = source.prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)");
+  const insertToken = source.prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)");
+  const insertOrigin = source.prepare(
+    "INSERT INTO gateway_origin_device_tokens VALUES (?,?,?,?,?,?)",
+  );
+  const identityValues = [
+    identity.deviceId,
+    identity.publicKeyPem,
+    identity.privateKeyPem,
+    identity.createdAtMs,
+  ] as const;
+  function addCredential(index: number) {
+    insertIdentity.run(index ? `profile-${index}` : "primary", ...identityValues, 99 + index);
+    insertToken.run(
       identity.deviceId,
-      identity.publicKeyPem,
-      identity.privateKeyPem,
-      identity.createdAtMs,
-      99,
+      `v2.gateway.operator${index ? `.${index}` : ""}`,
+      index ? `token-${index}` : "token-original",
+      index ? '[ "operator.read", "operator.write" ]' : '["operator.read"]',
+      101 + index,
     );
-  source
-    .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
-    .run(identity.deviceId, "v2.gateway.operator", "token-original", '["operator.read"]', 101);
-  source
-    .prepare("INSERT INTO gateway_origin_device_tokens VALUES (?,?,?,?,?,?)")
-    .run(
-      "https://gateway.example",
+    insertOrigin.run(
+      `https://gateway${index ? `-${index}` : ""}.example`,
       identity.deviceId,
       "operator",
-      "origin-token",
-      '["operator.write"]',
-      102,
+      index ? `origin-token-${index}` : "origin-token",
+      index ? '[ "operator.write" ]' : '["operator.write"]',
+      102 + index,
     );
+  }
+  addCredential(0);
   const policy = {
     version: 1,
     socket: { path: "/socket", token: "socket-token", future: "keep" },
@@ -114,39 +127,35 @@ export async function createClientCredentialMigrationFixture(
       .run("é/gateway\u0301", '[ "scope/é", "control\\nvalue" ]');
   }
   if (credentialRowCount > 1) {
-    const insertIdentity = source.prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)");
-    const insertToken = source.prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)");
-    const insertOrigin = source.prepare(
-      "INSERT INTO gateway_origin_device_tokens VALUES (?,?,?,?,?,?)",
-    );
     runSqliteImmediateTransactionSync(source, () => {
       for (let index = 1; index < credentialRowCount; index++) {
-        insertIdentity.run(
-          `profile-${index}`,
-          identity.deviceId,
-          identity.publicKeyPem,
-          identity.privateKeyPem,
-          identity.createdAtMs,
-          99 + index,
-        );
-        insertToken.run(
-          identity.deviceId,
-          `v2.gateway.operator.${index}`,
-          `token-${index}`,
-          '[ "operator.read", "operator.write" ]',
-          101 + index,
-        );
-        insertOrigin.run(
-          `https://gateway-${index}.example`,
-          identity.deviceId,
-          "operator",
-          `origin-token-${index}`,
-          '[ "operator.write" ]',
-          102 + index,
-        );
+        addCredential(index);
       }
     });
   }
   const maintenance = await captureClientCredentialMigrationFixture(sourcePath);
-  return { source, sourcePath, env, identity, maintenance };
+  return {
+    source,
+    sourcePath,
+    env,
+    identity,
+    maintenance,
+    migrate(afterCopy?: () => void) {
+      maintenance.run(() =>
+        runSqliteImmediateTransactionSync(source, () => {
+          prepareClientCredentialMigration(source, {
+            path: sourcePath,
+            env,
+            fromVersion: 25,
+            capture: maintenance.capture,
+          });
+          afterCopy?.();
+        }),
+      );
+    },
+    async [Symbol.asyncDispose]() {
+      source.close();
+      await maintenance.close();
+    },
+  };
 }

@@ -56,11 +56,10 @@ type CodexDiagnosticsCandidate = Omit<
 
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
-  context: PluginCommandContext,
+  ctx: PluginCommandContext,
   pluginConfig: CodexPluginConfig | undefined,
   args: string,
 ): Promise<PluginCommandResult> {
-  const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
     return { text: "Only an owner can send Codex diagnostics." };
   }
@@ -408,10 +407,6 @@ async function resolveCodexDiagnosticsTargets(
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
       channel: ctx.channel,
-      channelId: ctx.channelId,
-      accountId: ctx.accountId,
-      messageThreadId: ctx.messageThreadId,
-      threadParentId: ctx.threadParentId,
     });
   }
   for (const session of ctx.diagnosticsSessions ?? []) {
@@ -433,10 +428,6 @@ async function resolveCodexDiagnosticsTargets(
       sessionKey: session.sessionKey,
       sessionId: session.sessionId,
       channel: session.channel,
-      channelId: session.channelId,
-      accountId: session.accountId,
-      messageThreadId: session.messageThreadId,
-      threadParentId: session.threadParentId,
     });
   }
   const seenBindingKeys = new Set<string>();
@@ -509,10 +500,6 @@ function createCodexDiagnosticsTarget(
     sessionKey: target.sessionKey,
     sessionId: target.sessionId,
     channel: target.channel,
-    channelId: target.channelId,
-    accountId: target.accountId,
-    messageThreadId: target.messageThreadId,
-    threadParentId: target.threadParentId,
   };
   if (binding.connectionScope === "supervision") {
     return {

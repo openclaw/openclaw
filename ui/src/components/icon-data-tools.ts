@@ -1,4 +1,5 @@
 import { neutralMarkData } from "./icon-data-neutral.ts";
+import { statusIconPaths } from "./icon-data-status.ts";
 import { strokeIconData, strokePathData, type IconData, type IconNode } from "./icon-data-types.ts";
 
 export const keyboardIconData = {
@@ -30,6 +31,7 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
 }
 
 export const toolIconData = {
+  codeXml: strokePathData("m18 16 4-4-4-4", "m6 8-4 4 4 4", "m14.5 4-5 16"),
   bookOpenText: strokePathData(
     "M12 5v16M16 13h2M16 9h2",
     "M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z",
@@ -71,6 +73,12 @@ export const toolIconData = {
   paperclip: strokePathData(
     "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48",
   ),
+  sharingOptions: strokeIconData([
+    ["circle", { cx: "18", cy: "5", r: "3" }],
+    ["circle", { cx: "6", cy: "12", r: "3" }],
+    ["circle", { cx: "18", cy: "19", r: "3" }],
+    ["path", { d: "m8.59 10.49 6.83-3.98m-6.83 6.98 6.83 3.98" }],
+  ]),
   globe: strokeIconData([
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" }],
@@ -170,6 +178,10 @@ export const toolIconData = {
     ["path", { d: "m16 9 6 6" }],
   ]),
   bookmark: strokePathData("m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"),
+  circlePlus: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "9" }],
+    ["path", { d: "M8 12h8M12 8v8" }],
+  ]),
   plus: strokePathData("M5 12h14M12 5v14"),
   gitBranch: strokeIconData([
     ["circle", { cx: "6", cy: "5", r: "2" }],
@@ -231,6 +243,16 @@ export const toolIconData = {
         d: "M5.6 12.2 C5.2 5.6 10.4 1.4 15.6 2 C19.4 2.6 21.8 5.2 22.6 8.2 C20.9 7.7 19.2 7.6 17.6 7.9 L16.9 6.3 L15.2 8.5 C13.6 9.4 12.2 10.9 11.6 12.4 L6.8 13 Z",
       },
     ],
+  ]),
+  // Lucide compass (ISC).
+  compass: strokeIconData([
+    [
+      "path",
+      {
+        d: "m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z",
+      },
+    ],
+    ["circle", { cx: "12", cy: "12", r: "10" }],
   ]),
   spark: strokePathData(
     "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
@@ -322,7 +344,7 @@ export const toolIconData = {
     "M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z",
     "m9 12 2 2 4-4",
   ),
-  refresh: strokePathData("M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8M21 3v5h-5"),
+  refresh: strokePathData(...statusIconPaths.refresh),
   history: strokePathData(
     "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
     "M3 3v5h5",
@@ -331,6 +353,9 @@ export const toolIconData = {
   rotateCcw: strokePathData("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5"),
   trash: strokePathData(
     "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6",
+  ),
+  trashSimple: strokePathData(
+    "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2",
   ),
   eye: strokeIconData([
     [
@@ -349,6 +374,44 @@ export const toolIconData = {
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M15 3v18M10 10l-3 2 3 2" }],
   ]),
+  // Session chrome has its own approved silhouettes; generic panel icons stay unchanged.
+  sessionMenu: strokePathData("M4 8h16M4 16h10"),
+  // Lucide message-circle opened at the lower right for the plus overlay.
+  sessionNew: strokePathData(
+    "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092A10 10 0 0 0 11.981 22M22 11.981A10 10 0 1 0 2.992 16.342M18.5 15v7M15 18.5h7",
+  ),
+  sessionPanels: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
+  ]),
+  // Dock is a destination action, so it has no open/close chevron or active fill.
+  sessionPanelDockBottom: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M3 15h18", "stroke-width": "1.8" }],
+  ]),
+  sessionPanelsActive: strokeIconData([
+    [
+      "path",
+      {
+        d: "M15 3h3a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3h-3Z",
+        fill: "currentColor",
+        stroke: "none",
+        style: "fill-opacity:.4",
+      },
+    ],
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
+  ]),
+  sessionSidebarOpen: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M9 3v18M14 10l3 2-3 2", "stroke-width": "1.8" }],
+  ]),
+  sessionSidebarClose: strokeIconData([
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
+    ["path", { d: "M9 3v18M16 10l-3 2 3 2", "stroke-width": "1.8" }],
+  ]),
+  sessionPanelExpand: strokePathData("M12 5h7v7M5 12v7h7"),
+  sessionPanelRestore: strokePathData("M14.121 2.808v7.071h7.071M2.808 14.121h7.071v7.071"),
   panelRightClose: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
     ["path", { d: "M15 3v18M8 10l3 2-3 2" }],

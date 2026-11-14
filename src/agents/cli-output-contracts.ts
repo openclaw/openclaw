@@ -3,6 +3,7 @@ import type {
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
   CliBackendParseJsonlLifecycleEvent,
+  CliCompactionMeasurement,
 } from "../plugins/cli-backend.types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
@@ -13,19 +14,6 @@ import type {
 import type { ToolSummaryTrace } from "./embedded-agent-runner/types.js";
 
 export type CliUsage = CliBackendJsonlUsage;
-
-type CliProcessDiagnostics = {
-  backendId: string;
-  processReason: string;
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  stdoutBytes: number;
-  stdoutHash: string;
-  stderrBytes: number;
-  stderrHash: string;
-  useResume: boolean;
-};
 
 export type CliTerminalFailure =
   | {
@@ -64,17 +52,36 @@ export type CliOutput = {
    */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
+  /** Completed native compactions this run observed, with the latest one's sizes. */
+  nativeCompaction?: {
+    compactionCount: number;
+    compactionTokensBefore?: number;
+    compactionTokensAfter?: number;
+  };
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
   /** A caller interruption that ended the turn after usable assistant text was streamed. */
   terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
-    process?: CliProcessDiagnostics;
+    process?: {
+      backendId: string;
+      processReason: string;
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      stdoutBytes: number;
+      stdoutHash: string;
+      stderrBytes: number;
+      stderrHash: string;
+      useResume: boolean;
+    };
   };
   finalPromptText?: string;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   sourceReplyDelivered?: true;
+  /** A completed source reply was the last tool action; later model text is redundant. */
+  terminalSourceReplyDelivered?: true;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
@@ -89,25 +96,26 @@ export type CliOutput = {
   yieldAcknowledgment?: string;
 };
 
-export type CliStreamingDelta = {
-  text: string;
+export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> & {
   delta: string;
-  sessionId?: string;
-  usage?: CliUsage;
 };
 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
-export type CliThinkingDelta = {
-  text: string;
-  delta: string;
+export type CliThinkingDelta = Pick<CliStreamingDelta, "text" | "delta"> & {
   isReasoningSnapshot?: boolean;
+  /** New parser-owned content, not a replay; absence permits display but no watchdog credit. */
+  modelProgress?: true;
 };
 
 export type CliThinkingProgress = {
   progressTokens: number;
+  /** Positive parser-owned token evidence; absence permits display but no watchdog credit. */
+  modelProgress?: true;
 };
 
-export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };
+export type CliCompactionDelta =
+  | { phase: "start" }
+  | ({ phase: "end"; completed: boolean } & CliCompactionMeasurement);
 
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
@@ -122,9 +130,7 @@ export type CliToolUseStartDelta = {
 export type CliToolInputDelta = LiveEditDiffProgress;
 
 /** Tool-call result event reconstructed from CLI stream output. */
-export type CliToolResultDelta = {
-  toolCallId: string;
-  name: string;
+export type CliToolResultDelta = Pick<CliToolUseStartDelta, "toolCallId" | "name"> & {
   isError: boolean;
   result?: unknown;
 };

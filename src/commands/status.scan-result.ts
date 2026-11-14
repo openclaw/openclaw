@@ -25,8 +25,6 @@ export type StatusScanResult<
   AgentStatus extends StatusJsonAgentStatuses = AgentLocalStatusesResult,
 > = Omit<
   StatusScanOverviewResult,
-  | "coldStart"
-  | "hasConfiguredChannels"
   | "skipColdStartNetworkChecks"
   | "gatewaySnapshot"
   | "channelsStatus"

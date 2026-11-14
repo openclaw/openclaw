@@ -1,10 +1,12 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure } from "./triage-update.js";
+import { readTriageUpdateFailure, sanitizeTriageUpdateFailure } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Failure = Parameters<typeof writeTriageUpdateFailure>[0];
@@ -33,6 +35,59 @@ describe("update failure triage diagnostics", () => {
   };
   const writePlugins = (plugins: Plugins) =>
     write({ reason: "post-update-plugins", postUpdate: { plugins } });
+
+  it("omits whole words when bounding the swap cause and recovery advice", async () => {
+    const { raw, failure } = await write({
+      steps: [
+        {
+          name: "global install swap",
+          exitCode: 1,
+          stderrTail: `Package rollback verification timed out. ${"diagnostic context ".repeat(30)}Installation recovery is unverified; inspect the installation and backups before restarting.`,
+        },
+      ],
+    });
+    expect(raw).toContain("Package rollback verification timed out.");
+    const detail = "result" in failure ? failure.result.steps[0]?.stderrTail : undefined;
+    expect(detail).toContain(" ... ");
+    const [head, tail] = detail!.split(" ... ");
+    expect(head).toMatch(/(?:timed out\.|diagnostic|context)$/u);
+    expect(tail).toMatch(
+      /^(?:diagnostic|context|Installation|recovery|is|unverified;|inspect|the|installation|and|backups|before|restarting\.)\b/u,
+    );
+  });
+
+  it.runIf(process.platform !== "win32")("rejects a writerless FIFO without blocking", async () => {
+    // This directory must outlive afterEach so the deadline cleanup can release the FIFO.
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-fifo-"));
+    const inputPath = path.join(directory, "failure.fifo");
+    execFileSync("mkfifo", [inputPath]);
+    const reading = readTriageUpdateFailure(inputPath, { env, stateDir });
+    onTestFinished(async () => {
+      // Release a regressed blocking open after the deadline so cleanup can finish.
+      const release = await fs.open(inputPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+      try {
+        await reading.catch(() => undefined);
+      } finally {
+        await release.close();
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    });
+    await expect(reading).rejects.toThrow("Update failure diagnostics must be a regular file.");
+    expect((await fs.lstat(inputPath)).isFIFO()).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reads a symlink to a regular failure artifact",
+    async () => {
+      const inputPath = path.join(home, "failure.json");
+      const linkPath = path.join(home, "failure-link.json");
+      await fs.writeFile(inputPath, JSON.stringify({ error: "synthetic update failure" }));
+      await fs.symlink(inputPath, linkPath);
+      await expect(readTriageUpdateFailure(linkPath, { env, stateDir })).resolves.toEqual({
+        error: "synthetic update failure",
+      });
+    },
+  );
 
   it("writes bounded sanitized failure evidence without changing the result", async () => {
     const secret = "sk-test-update-triage-secret-1234567890";
@@ -86,7 +141,7 @@ describe("update failure triage diagnostics", () => {
         reason: "Package install failed",
         before: { version: "2026.8.1" },
         recovery: result.recovery,
-        steps: [{ name: "step-1" }, { name: "step-2" }, { name: "step-3" }],
+        steps: [{ name: "step-0" }, { name: "step-2" }, { name: "step-3" }],
       },
     });
     for (const included of [
@@ -105,6 +160,113 @@ describe("update failure triage diagnostics", () => {
     if (process.platform !== "win32") {
       expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
     }
+  });
+
+  const failedStep = (name: string, details: Partial<Result["steps"][number]> = {}) => ({
+    name,
+    command: "openclaw update",
+    cwd: home,
+    durationMs: 1,
+    exitCode: 1,
+    stderrTail: `${name} failed`,
+    ...details,
+  });
+
+  it("keeps the failure that started recovery when recovery steps also fail", async () => {
+    const { failure } = await write({
+      reason: "state-migrated-no-rollback",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        failedStep("candidate-doctor-lint", { exitCode: 0 }),
+        failedStep("database rollback"),
+        failedStep("gateway migration recovery"),
+        failedStep("package-backup-retention"),
+        failedStep("gateway recovery verification"),
+      ],
+    });
+
+    expect(failure).toMatchObject({
+      omittedDetails: 1,
+      result: {
+        steps: [
+          { name: "database rollback" },
+          { name: "package-backup-retention" },
+          { name: "gateway recovery verification" },
+        ],
+      },
+    });
+  });
+
+  it("drops middle failures before the triggering one when the prompt budget is exceeded", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: ["trigger", "middle-1", "middle-2", "latest"].map((name) =>
+            failedStep(name, {
+              stderrTail: noisy(`${name} stderr`),
+              stdoutTail: noisy(`${name} stdout`),
+              failureFacts: Array.from({ length: 2 }, (_, index) => ({
+                check: `${name}/check-${index}`.padEnd(120, "-"),
+                code: "doctor-failed",
+                message: `${name} fact ${index}`.padEnd(190, "."),
+              })),
+            }),
+          ),
+        },
+      },
+      { env, stateDir },
+    );
+
+    expect("result" in recorded && recorded.result.steps.map((step) => step.name)).toEqual([
+      "trigger",
+      "latest",
+    ]);
+  });
+
+  it("keeps the latest failure when a lint inventory record follows it under the artifact budget", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const failing = (name: string) =>
+      failedStep(name, {
+        stderrTail: noisy(`${name} stderr`),
+        stdoutTail: noisy(`${name} stdout`),
+        failureFacts: Array.from({ length: 5 }, (_, index) => ({
+          check: `${name}/check-${index}`.padEnd(120, "-"),
+          code: "doctor-failed",
+          message: `${name} fact ${index}`.padEnd(190, "."),
+          affectedKey: `${name}.key.${index}`.padEnd(120, "k"),
+          location: `${name}/location/${index}`.padEnd(150, "l"),
+          // Sized so the artifact budget forces exactly one record out.
+          packageSpec: `${name}-package@${index}`.padEnd(128, "p"),
+        })),
+      });
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: [
+            failing("trigger"),
+            failing("latest"),
+            failedStep("candidate-doctor-lint", {
+              exitCode: 0,
+              doctorLintFindings: [{ checkId: "core/config", message: "Config warning" }],
+            }),
+          ],
+        },
+      },
+      { env, stateDir },
+      "artifact",
+    );
+
+    expect(recorded).toMatchObject({
+      omittedDetails: 1,
+      result: { steps: [{ name: "trigger" }, { name: "latest" }] },
+    });
   });
 
   it("preserves a post-install activation error even when the core update succeeded", async () => {
@@ -143,24 +305,16 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("reserves the terminal plugin warning before earlier errors exhaust the diagnostic budget", async () => {
+    const errors = ["Earlier failure one", "Earlier failure two", "Earlier failure three"];
     const { failure: recorded } = await writePlugins({
       status: "error",
-      sync: {
-        errors: ["Earlier failure one", "Earlier failure two", "Earlier failure three"],
-      },
+      sync: { errors },
       warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],
     });
-
-    expect(recorded).toMatchObject({
-      omittedDetails: 1,
-      result: {
-        postUpdate: {
-          plugins: {
-            sync: { errors: ["Earlier failure one", "Earlier failure two"] },
-            warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],
-          },
-        },
-      },
+    expect(recorded.omittedDetails).toBe(1);
+    expect("result" in recorded && recorded.result.postUpdate?.plugins).toMatchObject({
+      sync: { errors: ["Earlier failure one", "Earlier failure two"] },
+      warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],
     });
   });
 

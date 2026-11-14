@@ -18,20 +18,27 @@ import {
   IDENTITY,
   identityFor,
   makeManager,
-  type Manager,
   REQUEST,
-  SESSION_TARGET,
+  startInference as start,
   terminalFrames,
   waitForFast,
 } from "./inference.test-support.js";
 
-function start(instance: Manager, overrides: Partial<Parameters<Manager["start"]>[0]> = {}) {
-  return instance.start({
-    identity: IDENTITY,
-    request: REQUEST,
-    sessionTarget: SESSION_TARGET,
-    sink: overrides.sink ?? createSink().sink,
-    ...overrides,
+function setup(executor: WorkerInferenceExecutor = async () => DONE) {
+  const store = createMemoryStore();
+  const begin = vi.spyOn(store, "begin");
+  const complete = vi.spyOn(store, "complete");
+  const cancelPending = vi.spyOn(store, "cancelPending");
+  const execute = vi.fn(executor);
+  return { begin, complete, cancelPending, execute, instance: makeManager(execute, store) };
+}
+
+function revalidationFailure(kind: "ordinary" | "outcome-unknown", stage: string) {
+  return new Error(`${stage} revalidation failed`, {
+    cause:
+      kind === "outcome-unknown"
+        ? new SqliteWorkerError(`${stage} native result lost`, "outcome-unknown")
+        : undefined,
   });
 }
 
@@ -67,10 +74,10 @@ describe("worker inference manager", () => {
           refused = error;
         }
       };
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin");
-      const complete = vi.spyOn(store, "complete");
-      const cancelPending = vi.spyOn(store, "cancelPending");
+      const { begin, complete, cancelPending, instance } = setup((params) => {
+        providerEntered.resolve(params);
+        return stage === "execute" ? release.promise : Promise.resolve(DONE);
+      });
       // Synthetic controls; the SQLite refusal/reply-loss proof lives in inference-store.test.ts.
       if (stage === "complete") {
         complete.mockImplementation(async (_input, assertCurrent) => {
@@ -88,11 +95,6 @@ describe("worker inference manager", () => {
           throw native;
         });
       }
-      const execute = vi.fn<WorkerInferenceExecutor>((params) => {
-        providerEntered.resolve(params);
-        return stage === "execute" ? release.promise : Promise.resolve(DONE);
-      });
-      const instance = makeManager(execute, store);
       const sink = createSink();
       const revalidate = () => {
         if (invalid) {
@@ -184,20 +186,18 @@ describe("worker inference manager", () => {
       const allowBegin = createDeferred();
       const providerStarted = createDeferred();
       const finishProvider = createDeferred();
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin").mockImplementation(async () => {
-        begun.resolve();
-        await allowBegin.promise;
-        return kind === "replay" ? { kind, outcome: DONE } : { kind };
-      });
-      const execute = vi.fn<WorkerInferenceExecutor>(async ({ emit }) => {
+      const { begin, execute, instance } = setup(async ({ emit }) => {
         emit({ type: "text_delta", contentIndex: 0, delta: "first" });
         providerStarted.resolve();
         await finishProvider.promise;
         emit({ type: "text_delta", contentIndex: 0, delta: "second" });
         return DONE;
       });
-      const instance = makeManager(execute, store);
+      begin.mockImplementation(async () => {
+        begun.resolve();
+        await allowBegin.promise;
+        return kind === "replay" ? { kind, outcome: DONE } : { kind };
+      });
       const first = createSink("first");
       const second = createSink("second");
       const pendingFirst = accept(instance, { sink: first.sink }, false);
@@ -236,20 +236,13 @@ describe("worker inference manager", () => {
   it.each(["ordinary", "outcome-unknown"] as const)(
     "retains %s stream revalidation failure without mutating an unknown outcome",
     async (failureKind) => {
-      const failure =
-        failureKind === "outcome-unknown"
-          ? new Error("revalidation failed", {
-              cause: new SqliteWorkerError("revalidation result lost", "outcome-unknown"),
-            })
-          : new Error("revalidation unavailable");
+      const failure = revalidationFailure(failureKind, "stream");
       const entered = createDeferred<Parameters<WorkerInferenceExecutor>[0]>();
       const finished = createDeferred<WorkerInferenceTerminalOutcome>();
-      const store = createMemoryStore();
-      const complete = vi.spyOn(store, "complete");
-      const instance = makeManager(async (params) => {
+      const { complete, instance } = setup(async (params) => {
         entered.resolve(params);
         return await finished.promise;
-      }, store);
+      });
       let current = true;
       const sink = createSink();
       await accept(instance, {
@@ -288,18 +281,8 @@ describe("worker inference manager", () => {
   it.each(["ordinary", "outcome-unknown"] as const)(
     "rejects a non-admitted start with its original %s authority failure",
     async (failureKind) => {
-      const failure =
-        failureKind === "outcome-unknown"
-          ? new Error("initial revalidation failed", {
-              cause: new SqliteWorkerError("initial native result lost", "outcome-unknown"),
-            })
-          : new Error("initial revalidation unavailable");
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin");
-      const complete = vi.spyOn(store, "complete");
-      const cancelPending = vi.spyOn(store, "cancelPending");
-      const execute = vi.fn<WorkerInferenceExecutor>(async () => DONE);
-      const instance = makeManager(execute, store);
+      const failure = revalidationFailure(failureKind, "initial");
+      const { begin, complete, cancelPending, execute, instance } = setup();
       const sink = createSink();
       try {
         await expect(
@@ -351,24 +334,16 @@ describe("worker inference manager", () => {
   it.each(["ordinary", "outcome-unknown"] as const)(
     "retains %s begin-guard revalidation without completing inference",
     async (failureKind) => {
-      const failure =
-        failureKind === "outcome-unknown"
-          ? new Error("begin revalidation failed", {
-              cause: new SqliteWorkerError("begin native result lost", "outcome-unknown"),
-            })
-          : new Error("begin revalidation unavailable");
+      const failure = revalidationFailure(failureKind, "begin");
       const entered = createDeferred();
       const release = createDeferred();
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin").mockImplementation(async (_input, assertCurrent) => {
+      const { begin, complete, execute, instance } = setup();
+      begin.mockImplementation(async (_input, assertCurrent) => {
         entered.resolve();
         await release.promise;
         assertCurrent?.();
         return { kind: "claimed" };
       });
-      const complete = vi.spyOn(store, "complete");
-      const execute = vi.fn<WorkerInferenceExecutor>(async () => DONE);
-      const instance = makeManager(execute, store);
       let invalid = false;
       const started = start(instance, {
         revalidate: () => {

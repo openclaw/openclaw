@@ -2,6 +2,7 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
@@ -78,7 +79,6 @@ async function prepareCliDiagnosticBlockWriter(): Promise<
       const formatted = error === undefined ? message : format(message, error);
       process.stderr.write(
         formatConsoleDiagnosticBlock({
-          level: "error",
           message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
         }),
       );
@@ -226,7 +226,8 @@ async function runEntryMain(): Promise<void> {
         return;
       }
 
-      const parsed = parseCliProfileArgs(parsedContainer.argv);
+      const containerTargetName = resolveCliContainerTarget(process.argv);
+      const parsed = parseCliProfileArgs(parsedContainer.argv, containerTargetName);
       if (!parsed.ok) {
         // Keep it simple; Commander will handle rich help/errors after we strip flags.
         await writeCapturedCliArgumentError(parsed.error);
@@ -234,7 +235,6 @@ async function runEntryMain(): Promise<void> {
         return;
       }
 
-      const containerTargetName = resolveCliContainerTarget(process.argv);
       if (parsed.profile) {
         applyCliProfileEnv({ profile: parsed.profile });
         // Keep Commander and ad-hoc argv checks consistent.
@@ -297,7 +297,7 @@ export async function tryHandleRootHelpFastPath(argv: string[]): Promise<boolean
     await outputRootHelp(liveRootHelpOptions ?? undefined);
     return true;
   } catch (error) {
-    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    const detail = error instanceof Error ? formatErrorStackWithMessage(error) : String(error);
     const writeError = await prepareCliDiagnosticBlockWriter();
     await writeError(`[openclaw] Failed to display help: ${detail}\n`);
     process.exitCode = 1;

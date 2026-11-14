@@ -1,16 +1,11 @@
-import { deserialize, serialize } from "node:v8";
-import { getAiTransportHost } from "@openclaw/ai";
 import {
   independentResponsesRequest,
-  modelRequestBodyState,
   responsesRequestLifecycle,
 } from "@openclaw/ai/internal/openai";
-import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
-import { isCredentialFieldName, preparedRequestSuffix } from "@openclaw/ai/internal/shared";
+import { uncachedSuffixMessage } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
-import type { Message, Model } from "../../llm/types.js";
-import { isPlainData } from "../../shared/immutable-data.js";
+import type { Context, Model } from "../../llm/types.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../usage.js";
@@ -21,246 +16,179 @@ import {
 } from "./usage-accumulator.js";
 
 type StreamOptions = NonNullable<Parameters<StreamFn>[2]>;
-export type EmbeddedSessionForkIdentity = { sessionId: string; agentId: string; runId: string };
-type SessionForkAuthority = { active: boolean; capture: object };
-type Snapshot = EmbeddedSessionForkIdentity & {
-  metadata: Buffer;
-  options: StreamOptions;
-  publications: (Buffer | Message)[];
-  streamFn: StreamFn;
-  payload: Blob;
-  expires: number;
-  bytes: number;
-  expiryTimer: NodeJS.Timeout;
-  authority: SessionForkAuthority;
-};
 
-const snapshots = new Map<string, Snapshot>();
-const TTL_MS = 90 * 60 * 1000;
-const MAX_ENTRIES = 1000;
-// Parent calls replace request data, not the session authority held by an in-flight fork.
-const captures = new Map<string, SessionForkAuthority>();
-const MAX_BYTES = 64 * 1024 * 1024;
-let retainedBytes = 0;
-
-function forgetSnapshot(sessionId: string): void {
-  const previous = snapshots.get(sessionId);
-  if (previous) {
-    clearTimeout(previous.expiryTimer);
-    retainedBytes -= previous.bytes;
-    snapshots.delete(sessionId);
-  }
-}
-
-export function clearEmbeddedSessionForkSnapshot(sessionId?: string): void {
-  if (sessionId === undefined) {
-    for (const id of captures.keys()) {
-      clearEmbeddedSessionForkSnapshot(id);
-    }
-    return;
-  }
-  const authority = captures.get(sessionId);
-  if (authority) {
-    authority.active = false;
-  }
-  captures.delete(sessionId);
-  forgetSnapshot(sessionId);
-}
-registerSessionResourceCleanup(clearEmbeddedSessionForkSnapshot);
-
-function prune() {
-  const now = Date.now();
-  for (const [id, snapshot] of snapshots) {
-    if (snapshot.expires <= now || retainedBytes > MAX_BYTES) {
-      clearEmbeddedSessionForkSnapshot(id);
-    }
-  }
-}
-
-function safeHeaders(headers: Record<string, string> | undefined) {
-  return (
-    headers &&
-    Object.fromEntries(Object.entries(headers).filter(([key]) => !isCredentialFieldName(key)))
-  );
-}
-
-/** Record the model-visible publication, including split async calls and their outcomes. */
-export function recordEmbeddedSessionForkMessage(
-  sessionId: string,
-  runId: string,
-  message: Message,
-): void {
-  const snapshot = snapshots.get(sessionId);
-  if (
-    !snapshot ||
-    snapshot.runId !== runId ||
-    !snapshot.authority.active ||
-    snapshot.expires <= Date.now()
-  ) {
-    return;
-  }
-  try {
-    // Provider plugins can consume opaque cloneable details that V8 cannot encode.
-    const completed = isPlainData(message) ? serialize(message) : structuredClone(message);
-    const bytes = Buffer.isBuffer(completed)
-      ? completed.length
-      : Buffer.byteLength(JSON.stringify(completed));
-    snapshot.publications.push(completed);
-    snapshot.bytes += bytes;
-    retainedBytes += bytes;
-    prune();
-  } catch {
-    // Optional replay retention must never fail a successfully completed parent message.
-    clearEmbeddedSessionForkSnapshot(sessionId);
-  }
-}
-
-/** Installed below host context transforms and above the actual provider transport. */
-export function wrapStreamFnWithSessionFork(
-  streamFn: StreamFn,
-  identity: EmbeddedSessionForkIdentity,
-): StreamFn {
-  return (model, context, options) => {
-    // A new run or transport cannot reuse old prepared data. Within the same run,
-    // keep the last committed request until its replacement finishes preparing.
-    const previous = snapshots.get(identity.sessionId);
-    if (previous && (previous.runId !== identity.runId || previous.streamFn !== streamFn)) {
-      forgetSnapshot(identity.sessionId);
-    }
-    if (!captures.has(identity.sessionId) && captures.size >= MAX_ENTRIES) {
-      const oldest = captures.keys().next().value;
-      if (oldest !== undefined) {
-        clearEmbeddedSessionForkSnapshot(oldest);
-      }
-    }
-    const capture = {};
-    const authority = captures.get(identity.sessionId) ?? { active: true, capture };
-    authority.capture = capture;
-    captures.set(identity.sessionId, authority);
-    const {
-      apiKey: _apiKey,
-      signal: _signal,
-      onPayload,
-      onResponse: _onResponse,
-      onActiveResponse: _onActiveResponse,
-      headers,
-      ...requestOptions
-    } = options ?? {};
-    const savedOptions = { ...requestOptions, headers: safeHeaders(headers) };
-    // Internal symbol carriers belong to the parent run, not the independent request.
-    for (const key of Object.getOwnPropertySymbols(savedOptions)) {
-      Reflect.deleteProperty(savedOptions, key);
-    }
-    for (const key of Object.keys(savedOptions)) {
-      if (typeof Reflect.get(savedOptions, key) === "function") {
-        Reflect.deleteProperty(savedOptions, key);
-      }
-    }
-    const save = (savedPayload: Blob) => {
-      if (!authority.active || authority.capture !== capture) {
-        return;
-      }
-      // Only tool metadata is needed to convert the suffix; the prefix is already on the wire.
-      let metadata: Buffer;
-      try {
-        metadata = Buffer.from(
-          JSON.stringify({
-            model: { ...model, headers: safeHeaders(model.headers) },
-            tools: context.tools?.map(({ name, description, parameters, async }) => ({
-              name,
-              description,
-              parameters,
-              ...(async === false ? { async } : {}),
-            })),
-          }),
-        );
-      } catch {
-        // Optional capture must not fail the parent or revoke already-running forks.
-        return;
-      }
-      const bytes =
-        savedPayload.size + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
-      forgetSnapshot(identity.sessionId);
-      if (bytes <= MAX_BYTES) {
-        snapshots.set(identity.sessionId, {
-          ...identity,
-          metadata,
-          options: savedOptions,
-          publications: [],
-          payload: savedPayload,
-          streamFn,
-          authority,
-          bytes,
-          expires: Date.now() + TTL_MS,
-          expiryTimer: getAiTransportHost().runInDetachedAsyncContext(() =>
-            setTimeout(clearEmbeddedSessionForkSnapshot, TTL_MS, identity.sessionId).unref(),
-          ),
-        });
-        retainedBytes += bytes;
-      } else {
-        clearEmbeddedSessionForkSnapshot(identity.sessionId);
-      }
-      prune();
-    };
-    let preparedPayload: unknown;
-    const capturedOptions: StreamOptions = {
-      ...options,
-      onPayload: async (payload, payloadModel) => {
-        const replacement = await onPayload?.(payload, payloadModel);
-        const finalPayload = replacement === undefined ? payload : replacement;
-        // Native ChatGPT, Anthropic, and custom transports do not use the encoded-body boundary.
-        if (modelRequestBodyState(capturedOptions).enabled) {
-          preparedPayload = finalPayload;
-        } else if (isRecord(finalPayload)) {
-          save(new Blob([JSON.stringify(finalPayload)]));
-        }
-        return finalPayload;
-      },
-    };
-    modelRequestBodyState(capturedOptions).onEncoded = (body, payload) => {
-      if (!isRecord(payload)) {
-        return;
-      }
-      // HTTP continuations send only a suffix; an independent fork still needs the full prefix.
-      // Suffix-only retries reuse the captured prefix; a rebuilt request calls onPayload again.
-      if (payload.previous_response_id && preparedPayload === undefined) {
-        return;
-      }
-      save(payload.previous_response_id ? new Blob([JSON.stringify(preparedPayload)]) : body);
-      preparedPayload = undefined;
-    };
-    return streamFn(model, context, capturedOptions);
-  };
-}
-
-const EMBEDDED_FORK_REQUIRES_PARENT =
-  "Cache-parity session fork requires a parent turn prepared by this OpenClaw runtime. Send a normal message first.";
-
-function stripNewCacheMarkers(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stripNewCacheMarkers);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => key !== "cache_control")
-      .map(([key, child]) => [key, stripNewCacheMarkers(child)]),
-  );
-}
-
+// The fork denies client tool calls itself; tool_choice none is what stops provider-hosted
+// tools (for example web search), which run before the fork sees them.
 const FORK_TOOL_CHOICE_SHAPES = new Map<Model["api"], "object" | "string">([
   ["anthropic-messages", "object"],
   ["openai-responses", "string"],
   ["openai-chatgpt-responses", "string"],
   ["openai-completions", "string"],
 ]);
+// Responses WebSockets check fork authority through responsesRequestLifecycle. Other
+// transports must send through the host's guarded fetch, which checks it before every
+// physical send, including DNS/proxy setup, retries and redirects. An egress check makes
+// SDKs that otherwise choose their own fetch (Google GenAI) use the guarded one.
+const RESPONSES_LIFECYCLE_APIS = new Set<Model["api"]>([
+  "openai-responses",
+  "openai-chatgpt-responses",
+]);
+// The AWS SDK sends Bedrock requests and their retries through its own HTTP handler, so
+// a fork whose authority ended could still send.
+const UNFENCED_FORK_APIS = new Set<Model["api"]>(["bedrock-converse-stream"]);
 
-/** Replay prepared payload data, never the parent's one-shot admission hooks or tool executor. */
+const TOOL_CALL_ID_KEYS = new Set(["id", "call_id", "tool_use_id", "tool_call_id"]);
+
+/**
+ * Cache checkpoints place a request rather than content; only the parent's survive replay,
+ * as nothing reads one the fork writes past the parent's input. `id` maps tool-call IDs.
+ */
+const serializeItem = (item: unknown, id: (value: string) => unknown, textBlocks = false) =>
+  JSON.stringify(item, (key, value: unknown) => {
+    if (key === "cache_control") {
+      return undefined;
+    }
+    if (typeof value === "string" && TOOL_CALL_ID_KEYS.has(key)) {
+      return id(value);
+    }
+    return textBlocks && key === "content" && typeof value === "string"
+      ? [{ type: "text", text: value }]
+      : value;
+  });
+
+/**
+ * The parent's stream may rewrite tool-call IDs and collapse one text block to a string
+ * after the history the fork rebuilds, so items compare with IDs by order of first use.
+ */
+function compareItems(items: unknown[]) {
+  const ids: string[] = [];
+  const keys = items.map((item) =>
+    serializeItem(
+      item,
+      (value) => (ids.includes(value) ? ids.indexOf(value) : ids.push(value) - 1),
+      true,
+    ),
+  );
+  return { ids, keys };
+}
+
+const isPlainContainer = (value: unknown): value is Record<string, unknown> | unknown[] =>
+  Array.isArray(value) ||
+  (typeof value === "object" &&
+    value !== null &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value)));
+
+/** Signals, fetch overrides and class instances; JSON null and primitives are data. */
+const isTransportHandle = (value: unknown) =>
+  typeof value === "function" ||
+  (typeof value === "object" && value !== null && !isPlainContainer(value));
+
+/**
+ * Copies the parent's request data. Transport handles that ride in request configs (the
+ * Google SDK's abort signal, fetch overrides) belong to each request, so the fork's own
+ * value at the same path replaces them.
+ */
+function replayData(sent: unknown, own: unknown): unknown {
+  if (isTransportHandle(sent)) {
+    return own;
+  }
+  if (!isPlainContainer(sent)) {
+    return sent;
+  }
+  const ownRecord: Record<string, unknown> = isPlainContainer(own) ? Object(own) : {};
+  if (Array.isArray(sent)) {
+    return sent.map((item, index) => replayData(item, ownRecord[index]));
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(sent)) {
+    const replayed = replayData(value, ownRecord[name]);
+    if (replayed !== undefined) {
+      copy[name] = replayed;
+    }
+  }
+  for (const [name, value] of Object.entries(ownRecord)) {
+    if (!(name in copy) && isTransportHandle(value)) {
+      copy[name] = value;
+    }
+  }
+  return copy;
+}
+
+/**
+ * Replays the parent's last prepared request, then the fork's own items. Its own request is
+ * rebuilt from history, whose bytes and order may differ from what the parent sent. Keeps
+ * the rebuilt request when the parent sent items the fork lacks or only a continuation delta.
+ */
+function replayPreparedRequest(
+  payload: Record<string, unknown>,
+  prepared: Record<string, unknown>,
+): void {
+  const key = ["input", "messages", "contents"].find((name) => Array.isArray(payload[name]));
+  if (!key) {
+    return;
+  }
+  const ownItems = payload[key];
+  const sentItems = prepared[key];
+  if (
+    !Array.isArray(ownItems) ||
+    !Array.isArray(sentItems) ||
+    prepared.previous_response_id != null
+  ) {
+    return;
+  }
+  const parent = compareItems(sentItems);
+  const own = compareItems(ownItems);
+  const unmatched = new Map<string, number>();
+  for (const item of parent.keys) {
+    unmatched.set(item, (unmatched.get(item) ?? 0) + 1);
+  }
+  const suffix = ownItems.filter((_, index) => {
+    const count = unmatched.get(own.keys[index]!);
+    if (count) {
+      unmatched.set(own.keys[index]!, count - 1);
+    }
+    return !count;
+  });
+  if ([...unmatched.values()].some(Boolean)) {
+    return;
+  }
+  // Matched items share ID order, so the suffix spells the parent's IDs as the parent did.
+  const spelling = new Map(parent.ids.map((id, index) => [own.ids[index], id]));
+  const replay = replayData({ ...prepared, [key]: [] }, payload);
+  for (const name of Object.keys(payload)) {
+    delete payload[name];
+  }
+  Object.assign(payload, replay, {
+    [key]: [
+      ...sentItems.map((item) => replayData(item, undefined)),
+      ...suffix.map((item) =>
+        JSON.parse(serializeItem(item, (value) => spelling.get(value) ?? value)),
+      ),
+    ],
+  });
+}
+
+/** Function declarations the fork can deny; anything else may run at the provider. */
+function isClientTool(tool: unknown): boolean {
+  if (!isRecord(tool)) {
+    return false;
+  }
+  if (tool.type === undefined) {
+    // Anthropic client tools, or a Gemini functionDeclarations group.
+    return (
+      "input_schema" in tool || Object.keys(tool).every((key) => key === "functionDeclarations")
+    );
+  }
+  return tool.type === "function" || tool.type === "custom";
+}
+
+/** Prepare and run a tool-free request only when a caller actually forks. */
 export async function runEmbeddedSessionFork(params: {
-  sessionId: string;
-  agentId: string;
+  context: Context;
+  streamFn: StreamFn;
+  options?: StreamOptions;
+  /** The parent's last provider request; absent, the rebuilt request is sent unchanged. */
+  preparedRequest?: Record<string, unknown>;
   question: string;
   model: Model;
   apiKey?: string;
@@ -268,79 +196,20 @@ export async function runEmbeddedSessionFork(params: {
   assertCurrent: () => void;
   onUsage?: (usage: NormalizedUsage | undefined) => void;
 }): Promise<string> {
-  if (!FORK_TOOL_CHOICE_SHAPES.has(params.model.api)) {
+  if (UNFENCED_FORK_APIS.has(params.model.api)) {
     throw new Error(
-      `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
+      `Session forks do not support provider API ${params.model.api}: its transport cannot enforce live fork authority.`,
     );
-  }
-  prune();
-  const snapshot = snapshots.get(params.sessionId);
-  if (!snapshot) {
-    throw new Error(EMBEDDED_FORK_REQUIRES_PARENT);
   }
   const assertCurrent = () => {
     params.assertCurrent();
     params.signal?.throwIfAborted();
-    if (!snapshot.authority.active || snapshot.expires <= Date.now()) {
-      throw new Error(EMBEDDED_FORK_REQUIRES_PARENT);
-    }
   };
   assertCurrent();
-  const metadata: {
-    model: Model;
-    tools: Parameters<StreamFn>[1]["tools"];
-  } = JSON.parse(snapshot.metadata.toString("utf8"));
-  if (
-    snapshot.agentId !== params.agentId ||
-    metadata.model.provider !== params.model.provider ||
-    metadata.model.id !== params.model.id ||
-    metadata.model.api !== params.model.api ||
-    metadata.model.baseUrl !== params.model.baseUrl
-  ) {
-    throw new Error(
-      "Cache-parity session fork requires the parent's prepared model. Send a normal message first.",
-    );
-  }
-  const context: Parameters<StreamFn>[1] = {
-    tools: metadata.tools,
-    messages: snapshot.publications.map((data): Message =>
-      Buffer.isBuffer(data) ? deserialize(data) : structuredClone(data),
-    ),
-  };
-  const parentPayload: unknown = JSON.parse(await snapshot.payload.text());
-  if (!isRecord(parentPayload)) {
-    throw new Error("Cache-parity session fork requires an object provider request.");
-  }
-  const key = Array.isArray(parentPayload.input) ? "input" : "messages";
-  const prefix = parentPayload[key];
-  if (!Array.isArray(prefix)) {
-    throw new Error("Cache-parity session fork could not preserve the parent request prefix.");
-  }
-  const toolCallIds = new Set<string>();
-  for (const message of prefix) {
-    if (!isRecord(message)) {
-      continue;
-    }
-    if (message.type === "function_call" && typeof message.call_id === "string") {
-      toolCallIds.add(message.call_id);
-    }
-    const blocks = message.tool_calls ?? message.content;
-    if (Array.isArray(blocks)) {
-      for (const block of blocks) {
-        if (
-          isRecord(block) &&
-          (block.type === "tool_use" || block.type === "function") &&
-          typeof block.id === "string"
-        ) {
-          toolCallIds.add(block.id);
-        }
-      }
-    }
-  }
-  preparedRequestSuffix.mark(context, toolCallIds);
-  // Only publications after the prepared request can still be in flight. Pair them
-  // before provider replay repair can mistake a missing result for an aborted call.
-  // These placeholders belong to this fork, never the parent's retained history.
+  const model = params.model;
+  const context: Context = { ...params.context, messages: [...params.context.messages] };
+  // Pair unfinished calls before transport replay repair can mistake them for
+  // aborted calls. These placeholders belong only to the fork.
   const completedCalls = new Set<string>();
   for (let index = context.messages.length - 1; index >= 0; index--) {
     const message = context.messages[index]!;
@@ -367,16 +236,22 @@ export async function runEmbeddedSessionFork(params: {
       }
     }
   }
-  context.messages.push({ role: "user", content: params.question, timestamp: Date.now() });
-  const model = getAiTransportHost().inheritManagedTransport(params.model, {
-    ...metadata.model,
-    headers: params.model.headers,
-  });
+  // The session already cached the input of its latest response. Its next call sends and
+  // writes what follows itself, beside this fork, and nothing reads the fork's question.
+  const latestResponse = context.messages.findLastIndex((message) => message.role === "assistant");
+  if (latestResponse >= 0) {
+    for (let index = latestResponse + 1; index < context.messages.length; index++) {
+      context.messages[index] = uncachedSuffixMessage.mark({ ...context.messages[index]! });
+    }
+  }
+  context.messages.push(
+    uncachedSuffixMessage.mark({ role: "user", content: params.question, timestamp: Date.now() }),
+  );
   const usage = createUsageAccumulator();
   for (let iteration = 0; iteration < 3; iteration++) {
     assertCurrent();
     const options: StreamOptions = {
-      ...snapshot.options,
+      ...params.options,
       apiKey: params.apiKey,
       signal: params.signal,
       // Background reviews cannot advertise an asynchronous tool execution capability.
@@ -384,30 +259,29 @@ export async function runEmbeddedSessionFork(params: {
       onPayload: (payload) => {
         assertCurrent();
         if (!isRecord(payload)) {
-          throw new Error("Cache-parity session fork requires an object provider request.");
+          throw new Error("Session fork requires an object provider request.");
         }
-        const messages = payload[key];
-        if (!Array.isArray(messages)) {
-          throw new Error(
-            "Cache-parity session fork could not preserve the parent request prefix.",
-          );
+        if (params.preparedRequest) {
+          replayPreparedRequest(payload, params.preparedRequest);
         }
-        // Rebuilding the post-hook prefix would move Anthropic's final cache breakpoint.
-        const replay = {
-          ...parentPayload,
-          [key]: [...prefix, ...messages.map(stripNewCacheMarkers)],
-        };
-        delete replay.previous_response_id;
-        if (Array.isArray(replay.tools) && replay.tools.length > 0) {
-          // Keep schemas/cache breakpoints, but prevent provider-hosted execution.
-          // Anthropic invalidates its messages cache when tool_choice changes.
-          const toolChoiceShape = FORK_TOOL_CHOICE_SHAPES.get(model.api);
-          if (!toolChoiceShape) {
-            throw new Error("Session fork cannot disable hosted tools for this provider API.");
+        // Mutate the prepared body: provider wrappers reapply their defaults to
+        // replacement objects, but preserve an in-place caller override.
+        const toolChoiceShape = FORK_TOOL_CHOICE_SHAPES.get(model.api);
+        if (!toolChoiceShape) {
+          // Gemini SDK requests carry tools in config.
+          const tools = [payload.tools, isRecord(payload.config) && payload.config.tools];
+          if (!tools.every((list) => !Array.isArray(list) || list.every(isClientTool))) {
+            throw new Error(
+              `Session forks cannot disable provider-hosted tools on provider API ${model.api}. Remove hosted tools from this model's requests to fork it.`,
+            );
           }
-          replay.tool_choice = toolChoiceShape === "object" ? { type: "none" } : "none";
+        } else if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+          payload.tool_choice = toolChoiceShape === "object" ? { type: "none" } : "none";
+        } else {
+          delete payload.tool_choice;
         }
-        return replay;
+        delete payload.previous_response_id;
+        return payload;
       },
     };
     independentResponsesRequest.set(options);
@@ -418,22 +292,27 @@ export async function runEmbeddedSessionFork(params: {
       accepted: async () => assertCurrent(),
       settle: async () => assertCurrent(),
     });
-    const result = await withGuardedFetchRequestAuthority(assertCurrent, async () => {
-      const stream = await snapshot.streamFn(model, context, options);
-      assertCurrent();
-      return await stream.result();
-    });
+    assertCurrent();
+    const result = await withGuardedFetchRequestAuthority(
+      assertCurrent,
+      async () => {
+        const stream = await params.streamFn(model, context, options);
+        assertCurrent();
+        return await stream.result();
+      },
+      RESPONSES_LIFECYCLE_APIS.has(model.api) ? undefined : assertCurrent,
+    );
     assertCurrent();
     mergeUsageIntoAccumulator(usage, normalizeUsage(result.usage));
     params.onUsage?.(toNormalizedUsage(usage));
     if (result.stopReason === "error" || result.stopReason === "aborted") {
-      throw new Error(result.errorMessage || "Cache-parity session fork failed.");
+      throw new Error(result.errorMessage || "Session fork failed.");
     }
     const calls = result.content.filter((block) => block.type === "toolCall");
     if (calls.length === 0) {
       const text = collectTextContentBlocks(result.content).join("").trim();
       if (!text) {
-        throw new Error("No cache-parity session fork response generated.");
+        throw new Error("No session fork response generated.");
       }
       return text;
     }
@@ -455,6 +334,6 @@ export async function runEmbeddedSessionFork(params: {
     }
   }
   throw new Error(
-    "Cache-parity session fork kept requesting tools after three attempts. Ask a question that can be answered without tools.",
+    "Session fork kept requesting tools after three attempts. Ask a question that can be answered without tools.",
   );
 }

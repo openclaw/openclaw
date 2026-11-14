@@ -29,9 +29,17 @@ struct ChatCompletedWorkTests {
         let rows = Self.collapse(source)
         let work = try #require(Self.work(in: rows).first)
 
-        #expect(work.messages.map(\.id) == [progress.id, tool.id, trailing.id])
-        #expect(work.durationMilliseconds == 6000)
-        #expect(Self.visibleIDs(rows) == [user.id, answer.id, failed.id, unresolved.id, independent.id])
+        #expect(work.messages.map(\.id) == [tool.id])
+        #expect(work.durationMilliseconds == nil)
+        #expect(Self.visibleIDs(rows) == [
+            user.id,
+            progress.id,
+            answer.id,
+            trailing.id,
+            failed.id,
+            unresolved.id,
+            independent.id,
+        ])
         #expect(Self.collapse([user, progress, failed, unresolved]) == ChatTranscriptRow.build(
             from: [user, progress, failed, unresolved]))
     }
@@ -50,11 +58,14 @@ struct ChatCompletedWorkTests {
             content: [.init(type: "image", text: nil, mimeType: "image/png", fileName: "layout.png", content: nil)],
             timestamp: 6000)
         let rows = Self.collapse([progress, firstAnswer, mixed, media])
-        #expect(Self.work(in: rows).first?.messages.map(\.id) == [progress.id])
-        #expect(Self.visibleIDs(rows) == [firstAnswer.id, mixed.id, media.id])
-        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), mixed])) == [mixed.id])
+        #expect(Self.work(in: rows).isEmpty)
+        #expect(Self.visibleIDs(rows) == [progress.id, firstAnswer.id, mixed.id, media.id])
+        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), mixed])) == [progress.id, mixed.id])
         let legacyFinal = Self.message("assistant", "Legacy final", at: 7000)
-        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), legacyFinal])) == [legacyFinal.id])
+        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), legacyFinal])) == [
+            progress.id,
+            legacyFinal.id,
+        ])
     }
 
     @Test func `later run commentary cannot turn its unanswered tools into completed work`() {
@@ -102,8 +113,8 @@ struct ChatCompletedWorkTests {
             timestamp: 4000)
         #expect(Self.work(in: Self.collapse([progress, unfinished])).isEmpty)
         let rows = Self.collapse([progress, final, failed, unfinished])
-        #expect(Self.work(in: rows).first?.messages.map(\.id) == [progress.id])
-        #expect(Self.visibleIDs(rows) == [final.id, failed.id, unfinished.id])
+        #expect(Self.work(in: rows).isEmpty)
+        #expect(Self.visibleIDs(rows) == [progress.id, final.id, failed.id, unfinished.id, unfinished.id])
     }
 
     @Test func `overlapping steers extend the same chronological chain until its last input is answered`() {
@@ -192,8 +203,8 @@ struct ChatCompletedWorkTests {
         #expect(Self.visibleIDs(rows) == [original.id, steer.id, answer.id])
         let groups = Self.work(in: rows)
         #expect(groups.map { $0.messages.map(\.id) } == [[work.id], [continuedWork.id]])
-        #expect(groups.map(\.durationMilliseconds) == [5000, 3000])
-        let prepended = Self.message("assistant", "Earlier work", at: 1500, phase: "commentary")
+        #expect(groups.map(\.durationMilliseconds) == [nil, nil])
+        let prepended = Self.toolCall(at: 1500)
         let refreshed = Self.collapse([original, prepended, work, steer, continuedWork, answer])
         #expect(Self.work(in: refreshed).map(\.id) == groups.map(\.id))
     }
@@ -219,7 +230,7 @@ struct ChatCompletedWorkTests {
         #expect(unanchored.map(\.id) == [question.id, spoken.id, typed.id, reply.id])
     }
 
-    @Test @MainActor func `gateway split projections keep work and stable display IDs`() throws {
+    @Test @MainActor func `gateway split projections keep work and stable display IDs`() async throws {
         // Real history projects text and tools with the same canonical ID, then
         // delivers the parent's final answer on a requester-settle run.
         let text = try Self.decode(#"""
@@ -236,13 +247,13 @@ struct ChatCompletedWorkTests {
         let final = Self.message("assistant", "Use consistent padding", at: 5000, run: "announce:requester-settle")
         let original = [text, tool, result, final]
         let raw = try original.map { try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode($0)) }
-        let decoded = OpenClawChatViewModel.decodeMessages(raw)
+        let decoded = await OpenClawChatViewModel.decodeMessages(raw)
         #expect(decoded.count == 4)
         let refreshed = OpenClawChatViewModel.reconcileMessageIDs(
-            previous: decoded, incoming: OpenClawChatViewModel.decodeMessages(raw))
+            previous: decoded, incoming: await OpenClawChatViewModel.decodeMessages(raw))
         #expect(refreshed.map(\.id) == decoded.map(\.id))
         #expect(Set(refreshed.map(\.id)).count == 4)
-        #expect(Self.work(in: Self.collapse(refreshed)).first?.messages.count == 3)
+        #expect(Self.work(in: Self.collapse(refreshed)).first?.messages.count == 2)
         let cached = OpenClawChatSQLiteTranscriptCache.cacheableMessages(decoded)
         #expect(OpenClawChatViewModel.dedupeMessages(cached).count == 4)
     }
@@ -300,7 +311,7 @@ struct ChatCompletedWorkTests {
             #expect(Self.work(in: Self.collapse([failed, roundTrip])).isEmpty)
         }
         let final = Self.message("assistant", "The first read failed; the next file is ready.", at: 5000)
-        #expect(Self.visibleIDs(Self.collapse(decoded + [final])) == [final.id])
+        #expect(Self.visibleIDs(Self.collapse(decoded + [final])) == [first.id, second.id, final.id])
 
         let unkeyed = try Self.decode(#"""
         {"role":"assistant","timestamp":5000,"openclawStreamFallback":{"source":"current","itemId":"  "},
@@ -350,7 +361,9 @@ struct ChatCompletedWorkTests {
         rows.compactMap {
             if case let .completedWork(work) = $0 {
                 work
-            } else { nil }
+            } else {
+                nil
+            }
         }
     }
 
@@ -358,7 +371,9 @@ struct ChatCompletedWorkTests {
         rows.compactMap {
             if case let .message(message) = $0 {
                 message.id
-            } else { nil }
+            } else {
+                nil
+            }
         }
     }
 }

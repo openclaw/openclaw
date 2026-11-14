@@ -2,10 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
-import { listDevicePairing } from "../infra/device-pairing.js";
-import { verifyPairingToken } from "../infra/pairing-token.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -45,6 +43,7 @@ import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
+import { verifyHttpOperatorDeviceToken } from "./http-operator-device-token.js";
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
@@ -68,9 +67,12 @@ import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
-
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
-const CONTROL_UI_OPERATOR_ROLE = "operator";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
+import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "./trusted-proxy-delegation.js";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
 
@@ -139,35 +141,6 @@ function resolveControlUiReadAuthToken(
   }
 }
 
-async function verifyHttpOperatorDeviceToken(
-  token: string,
-  requiredSharedGatewaySessionGeneration: string | undefined,
-  requiredScopes: readonly string[] = [],
-): Promise<string[] | null> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (
-      !operatorToken ||
-      operatorToken.revokedAtMs ||
-      !verifyPairingToken(token, operatorToken.token)
-    ) {
-      continue;
-    }
-    const verified = await verifyDeviceToken({
-      deviceId: device.deviceId,
-      token,
-      role: CONTROL_UI_OPERATOR_ROLE,
-      // Verify the whole observed grant so a concurrent scope reduction cannot
-      // leave the HTTP request with authority from the earlier pairing snapshot.
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
-      requiredSharedGatewaySessionGeneration,
-    });
-    return verified.ok ? [...operatorToken.scopes] : null;
-  }
-  return null;
-}
-
 function resolveControlUiReadOperatorScopes(
   req: IncomingMessage,
   authMethod: NonNullable<GatewayAuthResult["method"]>,
@@ -204,6 +177,10 @@ async function checkHttpOperatorCredentials(
 ): Promise<HttpOperatorCredentialResult> {
   const { auth, token } = params;
   const remoteIngress = getRemoteControlUiIngressContext(params.req);
+  const delegationClaim = hasGatewayDelegationClaim(params.req, auth.trustedProxy?.userHeader);
+  if (delegationClaim && (remoteIngress || auth.mode !== "trusted-proxy")) {
+    return { authResult: { ok: false, reason: GATEWAY_DELEGATION_DENIED } };
+  }
   if (remoteIngress) {
     assertRemoteControlUiIngressCurrent(remoteIngress);
     return {
@@ -216,6 +193,7 @@ async function checkHttpOperatorCredentials(
   const ingressAttribution = prepareGatewayIngressAttribution({
     req: params.req,
     trustedProxies: params.trustedProxies,
+    trustedProxy: auth.trustedProxy,
     allowRealIpFallback: params.allowRealIpFallback,
   });
   if (ingressAttribution.kind === "unattributable-proxy") {
@@ -223,7 +201,10 @@ async function checkHttpOperatorCredentials(
   }
   const clientIp = ingressAttribution.rateLimit.subject.key;
   const canUseDeviceTokenFallback =
-    Boolean(token) && auth.mode !== "trusted-proxy" && auth.mode !== "none";
+    Boolean(token) &&
+    auth.mode !== "trusted-proxy" &&
+    auth.mode !== "none" &&
+    ingressAttribution.kind !== "openclaw-id-tunnel";
   const run = async (): Promise<HttpOperatorCredentialResult> => {
     const authResult = await authorizeConnect({
       auth,
@@ -243,6 +224,7 @@ async function checkHttpOperatorCredentials(
     if (
       !authResult.ok &&
       authResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
+      !delegationClaim &&
       canUseDeviceTokenFallback &&
       token
     ) {
@@ -423,31 +405,54 @@ export async function authorizeControlUiReadRequestOrReply(
   return requestAuth;
 }
 
+/** Decides whether a session-byte route may serve bytes for one resolved session entry. */
+type ControlUiSessionReadFilter = (
+  sessionKey: string | undefined,
+  entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+) => boolean;
+
+type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest &
+  GatewayHttpResponseAuthority & { canReadSession: ControlUiSessionReadFilter };
+
 /**
- * Session byte routes cannot apply the client-specific `sessions.list` filter.
- * Require its read scope plus an unfiltered owner view. Locally approved ingress
- * grants retain that view without acquiring admin scope.
+ * Session byte routes serve one session's bytes after the route resolves its
+ * entry, so they apply the same per-profile visibility rule as session reads:
+ * the creating profile sees its own sessions and other profiles see shared ones
+ * within their role's session cap. Admin scope and locally approved ingress
+ * owner grants keep the unfiltered view. A request without an authenticated
+ * profile has no visibility to evaluate and stays refused.
  */
 export async function authorizeControlUiSessionOwnerReadRequestOrReply(
   params: Omit<ControlUiReadAuthParams, "allowQueryToken" | "requiredOperatorMethod">,
-): Promise<(AuthorizedControlUiReadRequest & GatewayHttpResponseAuthority) | null> {
+): Promise<AuthorizedControlUiSessionOwnerReadRequest | null> {
   const requestAuth = await authorizeControlUiReadRequestOrReply({
     ...params,
     requiredOperatorMethod: "sessions.list",
   });
+  if (!requestAuth) {
+    return null;
+  }
   if (
-    !requestAuth ||
     requestAuth.operatorScopes.includes(ADMIN_SCOPE) ||
     (getRemoteControlUiIngressContext(params.req) &&
       requestAuth.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID)
   ) {
-    return requestAuth;
+    return { ...requestAuth, canReadSession: () => true };
   }
-  sendJson(params.res, 403, {
-    ok: false,
-    error: { message: "owner access required", type: "forbidden" },
-  });
-  return null;
+  const profile = requestAuth.preparedSessionProfile;
+  if (!profile?.profileId) {
+    sendJson(params.res, 403, {
+      ok: false,
+      error: { message: "owner access required", type: "forbidden" },
+    });
+    return null;
+  }
+  // Aliases were prepared with the profile; the filter never reads resident state later.
+  const canReadSession = createProfileSessionEntryFilter(
+    { profileId: profile.profileId, sessionCap: requestAuth.operatorRolePolicy?.sessions.others },
+    prepareSessionCreatorProfile(profile.profileId, profile.aliases),
+  );
+  return { ...requestAuth, canReadSession };
 }
 
 export async function authorizeGatewayHttpRequestOrReply(
@@ -477,6 +482,10 @@ export function setControlUiPluginAuthCookieForRequest(
   authenticatedScopes: readonly string[],
   authenticatedProfileId?: string,
 ): ControlUiPluginTabAuthGrant[] {
+  if (hasGatewayDelegationClaim(req, cfg.gateway?.auth?.trustedProxy?.userHeader)) {
+    // OCE must authorize every request; do not export an ambient native grant.
+    return [];
+  }
   const grants = listControlUiPluginTabAuthGrants(authenticatedScopes);
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {
@@ -597,6 +606,7 @@ export async function checkGatewayHttpRequestAuth(
     requestAuth: {
       hasCurrentClientAuthority: () =>
         hasCurrentClientAuthority() &&
+        authenticatedProfile.hasCurrentProfileAuthority?.() !== false &&
         hasCurrentGatewayOperatorAccess(authenticatedProfile.operatorAccessAuthority),
       authMethod: authResult.method,
       ...(authResult.user ? { user: authResult.user } : {}),

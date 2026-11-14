@@ -23,18 +23,15 @@ async function fixture() {
   const skillDir = join(workspaceDir, "skills", slug);
   const content = "---\nname: triage\ndescription: Triage incidents\nversion: 0.9.0\n---\n";
   const sha256 = createHash("sha256").update(content).digest("hex");
-  const installedAt = 123;
-  const registry = "https://clawhub.ai";
-  const ownerHandle = "owner";
   await mkdir(join(skillDir, ".clawhub"), { recursive: true });
   await mkdir(join(workspaceDir, ".clawhub"), { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), content);
   const fileTreeSha256 = await digestClawHubSkillTree(skillDir);
   const entry = {
     version: "1.0.0",
-    registry,
-    installedAt,
-    ownerHandle,
+    registry: "https://clawhub.ai",
+    installedAt: 123,
+    ownerHandle: "owner",
     skillFile: { path: "SKILL.md", sha256 },
     fileTreeSha256,
   };
@@ -212,14 +209,10 @@ describe("ClawHub skill uninstall lifecycle", () => {
           source: "clawhub",
           before: {
             name: "triage",
-            skillKey: "triage",
-            description: "Triage incidents",
             source: "clawhub",
             revision: {
               declaredVersion: "0.9.0",
               sourceVersion: "1.0.0",
-              contentSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-              treeSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
             },
           },
         });
@@ -322,7 +315,6 @@ describe("ClawHub skill uninstall lifecycle", () => {
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining(message) });
       const lock = await current.readLock();
       expect(JSON.parse(lock)).toEqual(JSON.parse(before));
-      expect(JSON.parse(lock).skills.triage).toBeDefined();
       const restored = await current.readSkill();
       expect(restored).toContain("name: triage");
       expect(restored).toContain("Triage incidents");

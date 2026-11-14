@@ -79,15 +79,15 @@ afterEach(async () => {
 it("reads exec and SecretRef values without caller-thread SQL and registers host redaction", async () => {
   const handoff = "github-setup-11111111111111111111111111111111";
   await writeEntries([
-    entry("WORKER_READ_SECRET", "synthetic-worker-read"),
-    entry("WORKER_READ_ENV", "synthetic-env", { kind: "env" }),
+    entry("TOKEN", "synthetic-worker-read"),
+    entry("ENV", "synthetic-env", { kind: "env" }),
     entry(handoff, "synthetic-handoff"),
   ]);
   await closeDatabase();
   const assertNoCallerSql = spyOnCallerSql();
   resetSecretRedactionRegistryForTest();
   const value = await resolveSecretRefString(
-    { source: "store", provider: "default", id: "WORKER_READ_SECRET" },
+    { source: "store", provider: "default", id: "TOKEN" },
     { config: {}, env: state.env },
   );
   expect(isRegistered(value)).toBe(true);
@@ -95,8 +95,8 @@ it("reads exec and SecretRef values without caller-thread SQL and registers host
   resetSecretRedactionRegistryForTest();
   const environment = await readExec({ includeSecretSentinels: true });
   expect(isRegistered("synthetic-worker-read")).toBe(true);
-  expect(environment.env).toEqual({ WORKER_READ_ENV: "synthetic-env" });
-  expect(resolveSecretSentinel(environment.secretSentinels?.WORKER_READ_SECRET ?? "")).toBe(value);
+  expect(environment.env).toEqual({ ENV: "synthetic-env" });
+  expect(resolveSecretSentinel(environment.secretSentinels?.TOKEN ?? "")).toBe(value);
   resetSecretRedactionRegistryForTest();
   expect(await consumeGitHubSetupHandoff({ name: handoff })).toBe("synthetic-handoff");
   expect(isRegistered("synthetic-handoff")).toBe(true);
@@ -132,37 +132,30 @@ it("pins the physical read source before yielding and refuses revoked disclosure
 
 it("loads only named protected rows with their host policy in a worker snapshot", async () => {
   await writeEntries([
-    entry("SELECTED_ONE", "synthetic-selected-one", { allowedHosts: ["one.example.test"] }),
-    entry("SELECTED_TWO", "synthetic-selected-two", { allowedHosts: ["two.example.test"] }),
-    entry("UNRELATED_SECRET", "synthetic-unrelated"),
-    entry("READABLE_ENV", "synthetic-readable", { kind: "env" }),
-    entry("DELETED_SECRET", "synthetic-deleted"),
+    entry("TOKEN_A", "selected-one", { allowedHosts: ["one.test"] }),
+    entry("TOKEN_B", "selected-two", { allowedHosts: ["two.test"] }),
+    entry("OTHER", "synthetic-unrelated"),
+    entry("ENV", "synthetic-readable", { kind: "env" }),
+    entry("DELETED", "synthetic-deleted"),
   ]);
-  await deleteSecretStoreEntry({ scope, name: "DELETED_SECRET" });
+  await deleteSecretStoreEntry({ scope, name: "DELETED" });
   await closeDatabase();
   const assertNoCallerSql = spyOnCallerSql(false);
   resetSecretRedactionRegistryForTest();
   expect(
     await readSelected({
-      names: [
-        "SELECTED_TWO",
-        "READABLE_ENV",
-        "SELECTED_ONE",
-        "DELETED_SECRET",
-        "MISSING_SECRET",
-        "SELECTED_ONE",
-      ],
+      names: ["TOKEN_B", "ENV", "TOKEN_A", "DELETED", "MISSING", "TOKEN_A"],
     }),
   ).toEqual([
-    { name: "SELECTED_ONE", value: "synthetic-selected-one", allowedHosts: ["one.example.test"] },
-    { name: "SELECTED_TWO", value: "synthetic-selected-two", allowedHosts: ["two.example.test"] },
+    { name: "TOKEN_A", value: "selected-one", allowedHosts: ["one.test"] },
+    { name: "TOKEN_B", value: "selected-two", allowedHosts: ["two.test"] },
   ]);
-  expect(isRegistered("synthetic-selected-one")).toBe(true);
+  expect(isRegistered("selected-one")).toBe(true);
   expect(isRegistered("synthetic-unrelated")).toBe(false);
   expect(isRegistered("synthetic-deleted")).toBe(false);
   await expect(
     readSelected({
-      names: ["SELECTED_ONE"],
+      names: ["TOKEN_A"],
       assertCurrent: () => {
         throw new Error("selected authority revoked");
       },
@@ -204,22 +197,19 @@ it("sets, lists, rolls back, and deletes metadata in FIFO order without caller-t
   const original = {
     scope,
     updatedBy: "fixture",
-    ...entry("WORKER_METADATA_SECRET", "synthetic-worker-original", {
-      allowedHosts: ["original.example.test"],
-    }),
+    ...entry("TOKEN", "synthetic-original", { allowedHosts: ["original.test"] }),
   };
   const first = writeSecretStoreEntry(original);
   expect(isRegistered(original.value)).toBe(true);
   const second = writeSecretStoreEntry({
     ...original,
-    value: "synthetic-worker-second",
-    allowedHosts: ["second.example.test"],
+    value: "synthetic-second",
+    allowedHosts: ["second.test"],
     updatedBy: "second",
   });
   await Promise.all([first, second]);
-  expect(await list()).toMatchObject([
-    { name: original.name, updatedBy: "second", allowedHosts: ["second.example.test"] },
-  ]);
+  const secondMetadata = { name: "TOKEN", updatedBy: "second", allowedHosts: ["second.test"] };
+  expect(await list()).toMatchObject([secondMetadata]);
 
   const staged = await writeWithRollback({
     ...original,
@@ -231,17 +221,10 @@ it("sets, lists, rolls back, and deletes metadata in FIFO order without caller-t
   expect(staged.rollback()).toBe(rollingBack);
   expect(await rollingBack).toBe(true);
   const restored = await list();
-  expect(restored).toMatchObject([
-    {
-      name: original.name,
-      kind: "secret",
-      updatedBy: "second",
-      allowedHosts: ["second.example.test"],
-    },
-  ]);
+  expect(restored).toMatchObject([{ ...secondMetadata, kind: "secret" }]);
   expect(restored[0]).not.toHaveProperty("valuePreview");
 
-  const superseded = await writeWithRollback({ ...original, value: "synthetic-worker-superseded" });
+  const superseded = await writeWithRollback({ ...original, value: "synthetic-superseded" });
   await writeSecretStoreEntry({ ...original, updatedBy: "successor" });
   expect(await superseded.rollback()).toBe(false);
   expect(await list()).toMatchObject([{ updatedBy: "successor" }]);
@@ -272,10 +255,7 @@ it.each(["transaction", "commit"] as const)(
           input: {
             scope,
             updatedBy: "revoked-fixture",
-            entries: [
-              entry("FIRST_SECRET", "synthetic-first"),
-              entry("SECOND_SECRET", "synthetic-second"),
-            ],
+            entries: [entry("FIRST", "synthetic-first"), entry("SECOND", "synthetic-second")],
             capturePrevious: false,
             now: Date.now(),
           },

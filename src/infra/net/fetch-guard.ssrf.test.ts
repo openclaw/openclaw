@@ -3,7 +3,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseWithLimit } from "../http-body.js";
@@ -342,34 +342,43 @@ describe("redirect boundaries", () => {
     },
   );
 
-  it("strips sensitive headers and symbols across origins without mutating caller headers", async () => {
-    const headers = {
-      Authorization: "Bearer secret",
-      Cookie: "session=abc",
-      Cookie2: "legacy=1",
-      "Proxy-Authorization": "Basic secret",
-      "X-Api-Key": "secret",
-      "Private-Token": "secret",
-      "X-Trace": "1",
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": "OpenClaw-Test/1.0",
-    };
-    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
-      value: new Set(["authorization"]),
-      enumerable: false,
-    });
-    const fetchImpl = redirectFetch("https://cdn.example/asset");
-    const result = await guardedRequest(fetchImpl, { init: { headers } });
-    expect(Object.getOwnPropertySymbols(recordedCall(fetchImpl.mock.calls)[1].headers)).toEqual([]);
-    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
-    expect(Object.fromEntries(new Headers(secondInit(fetchImpl).headers))).toEqual({
-      accept: "application/json",
-      "content-type": "application/json",
-      "user-agent": "OpenClaw-Test/1.0",
-    });
-    await result.release();
-  });
+  it.each([false, true])(
+    "strips sensitive headers across origins without mutating caller headers (symbols=%s)",
+    async (withSymbols) => {
+      const headers = {
+        Authorization: "Bearer secret",
+        Cookie: "session=abc",
+        Cookie2: "legacy=1",
+        "Proxy-Authorization": "Basic secret",
+        "X-Api-Key": "secret",
+        "Private-Token": "secret",
+        "X-Trace": "1",
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "OpenClaw-Test/1.0",
+      };
+      const originalHeaders = { ...headers };
+      if (withSymbols) {
+        Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+          value: new Set(["authorization"]),
+          enumerable: false,
+        });
+      }
+      const fetchImpl = redirectFetch("https://cdn.example/asset");
+      const result = await guardedRequest(fetchImpl, { init: { headers } });
+      expect(Object.getOwnPropertySymbols(recordedCall(fetchImpl.mock.calls)[1].headers)).toEqual(
+        [],
+      );
+      expect(headers).toEqual(originalHeaders);
+      expect(Object.getOwnPropertySymbols(headers)).toHaveLength(withSymbols ? 1 : 0);
+      expect(Object.fromEntries(new Headers(secondInit(fetchImpl).headers))).toEqual({
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "OpenClaw-Test/1.0",
+      });
+      await result.release();
+    },
+  );
 
   it("never restores authorization on an HTTPS-to-HTTP downgrade", async () => {
     const fetchImpl = redirectFetch("http://cdn.example/asset");
@@ -440,9 +449,9 @@ describe("redirect boundaries", () => {
     }
   });
 
-  it.each(["/next", undefined])(
+  it.for(["/next", undefined])(
     "settles redirects before retained capture cancellation (location: %s)",
-    async (location) => {
+    async (location, { signal }) => {
       const cancel = vi.fn();
       const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
         status: 302,
@@ -462,7 +471,7 @@ describe("redirect boundaries", () => {
       );
 
       try {
-        const result = await raceWithTimeoutResult(request, 500, undefined);
+        const result = await withinTest(request, signal);
         if (location) {
           expect(result).toBe("ok");
         } else {
@@ -764,7 +773,7 @@ describe("configured local-origin bypass", () => {
 describe("request lifecycle", () => {
   it("blocks a private DNS rebind before consulting a warm dispatcher", async () => {
     installRuntime();
-    const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
+    const pool = new PinnedDispatcherPool();
     const lookupFn = vi
       .fn()
       .mockResolvedValueOnce([publicAddress])

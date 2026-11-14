@@ -1,9 +1,11 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveThreadBindingFarewellText,
+  resolveThreadBindingTargetKind,
   type SessionBindingAdapterV2,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import type { MatrixClient } from "./sdk.js";
@@ -28,15 +30,18 @@ export function sameBindingIncarnation(a: MatrixThreadBindingRecord, b: MatrixTh
 function buildMatrixBindingIntroText(params: {
   metadata?: Record<string, unknown>;
   targetSessionKey: string;
+  introText?: unknown;
 }): string {
-  const introText = normalizeOptionalString(params.metadata?.introText);
+  const introText = normalizeOptionalString(params.introText);
   if (introText) {
     return introText;
   }
   const label = normalizeOptionalString(params.metadata?.label);
   const agentId =
     normalizeOptionalString(params.metadata?.agentId) ||
-    resolveAgentIdFromSessionKey(params.targetSessionKey);
+    (isPluginOwnedSessionBindingRecord(params)
+      ? undefined
+      : resolveAgentIdFromSessionKey(params.targetSessionKey));
   const base = label || agentId || "session";
   return `⚙️ ${base} session active. Messages here go directly to this session.`;
 }
@@ -62,41 +67,6 @@ async function sendBindingMessage(params: {
   return result.messageId || null;
 }
 
-async function sendFarewellMessage(params: {
-  cfg: OpenClawConfig;
-  client: MatrixClient;
-  accountId: string;
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-  reason?: string;
-}): Promise<void> {
-  const roomId = params.record.parentConversationId ?? params.record.conversationId;
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? params.record.idleTimeoutMs
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number" ? params.record.maxAgeMs : params.defaultMaxAgeMs;
-  const farewellText = resolveThreadBindingFarewellText({
-    reason: params.reason,
-    idleTimeoutMs,
-    maxAgeMs,
-  });
-  await sendBindingMessage({
-    cfg: params.cfg,
-    client: params.client,
-    accountId: params.accountId,
-    roomId,
-    threadId:
-      params.record.parentConversationId &&
-      params.record.parentConversationId !== params.record.conversationId
-        ? params.record.conversationId
-        : undefined,
-    text: farewellText,
-  }).catch(() => {});
-}
-
 export function createMatrixSessionBindingAdapter(
   params: { cfg: OpenClawConfig; accountId: string; client: MatrixClient },
   {
@@ -119,6 +89,24 @@ export function createMatrixSessionBindingAdapter(
   },
 ) {
   const { removeBindingsAsync, touchBindingAsync } = manager;
+  const sendFarewellMessage = async (record: MatrixThreadBindingRecord, reason?: string) => {
+    const roomId = record.parentConversationId ?? record.conversationId;
+    const idleTimeoutMs =
+      typeof record.idleTimeoutMs === "number" ? record.idleTimeoutMs : defaults.idleTimeoutMs;
+    const maxAgeMs = typeof record.maxAgeMs === "number" ? record.maxAgeMs : defaults.maxAgeMs;
+    const farewellText = resolveThreadBindingFarewellText({ reason, idleTimeoutMs, maxAgeMs });
+    await sendBindingMessage({
+      cfg: params.cfg,
+      client: params.client,
+      accountId: params.accountId,
+      roomId,
+      threadId:
+        record.parentConversationId && record.parentConversationId !== record.conversationId
+          ? record.conversationId
+          : undefined,
+      text: farewellText,
+    }).catch(() => {});
+  };
   const unbindRecords = async (
     records: MatrixThreadBindingRecord[],
     reason: string | ((record: MatrixThreadBindingRecord) => string | undefined),
@@ -131,15 +119,7 @@ export function createMatrixSessionBindingAdapter(
     removed.forEach((record) => onRemoved?.(record));
     await Promise.all(
       removed.map((record) =>
-        sendFarewellMessage({
-          cfg: params.cfg,
-          client: params.client,
-          accountId: params.accountId,
-          record,
-          defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-          defaultMaxAgeMs: defaults.maxAgeMs,
-          reason: typeof reason === "function" ? reason(record) : reason,
-        }),
+        sendFarewellMessage(record, typeof reason === "function" ? reason(record) : reason),
       ),
     );
     return removed.map((record) => toSessionBindingRecord(record, defaults));
@@ -182,11 +162,47 @@ export function createMatrixSessionBindingAdapter(
         return null;
       }
 
+      const existing =
+        input.placement !== "child"
+          ? manager.getByConversation({ conversationId, parentConversationId })
+          : undefined;
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
+      const metadata = {
+        ...(previous
+          ? {
+              agentId: previous.agentId,
+              label: previous.label,
+              boundBy: previous.boundBy,
+              ...previous.metadata,
+            }
+          : undefined),
+        ...input.metadata,
+      };
+      const targetKind = await resolveThreadBindingTargetKind({
+        cfg: params.cfg,
+        targetSessionKey,
+        targetKind: input.targetKind,
+        metadata,
+        agentId: normalizeOptionalString(metadata.agentId),
+        channel: "Matrix",
+        assertCurrent: () => {
+          assertManagerCurrent();
+          input.assertCurrent?.();
+        },
+      });
+
+      assertAcceptingMutation();
+      input.assertCurrent?.();
       let boundConversationId = conversationId;
       let boundParentConversationId = parentConversationId;
       const introText = buildMatrixBindingIntroText({
-        metadata: input.metadata,
+        metadata,
         targetSessionKey,
+        introText: input.metadata?.introText,
       });
 
       if (input.placement === "child") {
@@ -211,17 +227,20 @@ export function createMatrixSessionBindingAdapter(
         accountId: params.accountId,
         conversationId: boundConversationId,
         ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
-        targetKind: input.targetKind === "subagent" ? "subagent" : "acp",
+        targetKind,
         targetSessionKey,
         agentId:
-          normalizeOptionalString(input.metadata?.agentId) ??
-          resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey }),
-        label: normalizeOptionalString(input.metadata?.label) || undefined,
-        boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
+          normalizeOptionalString(metadata.agentId) ??
+          (isPluginOwnedSessionBindingRecord({ metadata })
+            ? undefined
+            : resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey })),
+        label: normalizeOptionalString(metadata.label) || undefined,
+        boundBy: normalizeOptionalString(metadata.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs: defaults.idleTimeoutMs,
         maxAgeMs: defaults.maxAgeMs,
+        metadata,
       };
       await mutateBindings(
         (current) => [

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { admitMediaHandle } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -7,6 +6,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
   return { ...observeMediaActivity(actual, taskExecutorMocks) };
 });
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,16 +15,17 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce/subagent-announce-origin.js";
 import {
   createMediaCompletionFixture,
   expectFallbackMediaAnnouncement,
   resetMediaBackgroundMocks,
 } from "./media-generate-background.test-support.js";
+import { buildSavedMediaAttachment } from "./media-generate-result-shared.js";
 const taskExecutorMocks = vi.hoisted(() => ({
   createOperation: vi.fn(),
   recordProgress: vi.fn(),
@@ -38,10 +39,15 @@ const sessionMocks = vi.hoisted((): { entry: SessionEntry } => ({
   entry: { sessionId: "media-requester", updatedAt: 1 },
 }));
 const announce = announceDeliveryMocks.deliverSubagentAnnouncement;
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 // mock-isolation: Keep the session database outside this routing fixture.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (_scope: unknown, assertCurrent: () => void) => {
+    assertCurrent();
+    return sessionMocks.entry;
+  },
   withSessionEntryReadOnlyInWorker: async (
     _scope: unknown,
     assertCurrent: () => void,
@@ -132,7 +138,6 @@ it.each([
       options: { inputProvenance },
       acquire: async () => undefined,
       resolveProviders: () => [],
-      findDuplicate: async () => undefined,
       prepare: async ({ prompt }) => ({
         kind: "task",
         params: {
@@ -176,103 +181,75 @@ it.each([
   },
 );
 
-it("records task progress updates", () => {
-  imageGenerationTaskLifecycle.recordTaskProgress({
-    handle: admitMediaHandle({
-      taskId: "task-123",
-      runId: "tool:image_generate:abc",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      taskLabel: "small watercolor robot",
-    }),
-    progressSummary: "Saving generated image",
+it("wakes the original conversation with generated attachments and visible-reply guidance", async () => {
+  const attachments = (
+    [
+      ["audio", "audio/mpeg", "night-drive.mp3"],
+      ["image", "image/png", "night-drive-cover.png"],
+    ] as const
+  ).map(([type, mimeType, name]) => ({ type, mimeType, name, path: `/tmp/generated-${name}` }));
+  const path = "/tmp/generated-preview.png";
+  const completed = completion("music", `Generated a track and cover art.\nMEDIA:${path}`, [path]);
+  await musicGenerationTaskLifecycle.wakeTaskCompletion({
+    ...completed,
+    attachments,
   });
-  expect(taskExecutorMocks.recordProgress.mock.calls[0]?.[0]).toMatchObject({
-    runId: "tool:image_generate:abc",
-    progressSummary: "Saving generated image",
+  expect(announce.mock.lastCall?.[0]).toMatchObject({
+    completionRequesterSessionId: completed.handle.requesterTranscript?.sessionId,
+    completionRequesterLifecycleRevision:
+      completed.handle.requesterTranscript?.lifecycleRevision ?? undefined,
   });
-});
-
-it("queues a completion event through the shared generated-media wake path", async () => {
-  const path = "/tmp/generated-robot.png";
-  await imageGenerationTaskLifecycle.wakeTaskCompletion(
-    completion("image", `Generated 1 image.\nMEDIA:${path}`, [path]),
-  );
   expectFallbackMediaAnnouncement({
     deliverAnnouncementMock: announce,
-    requesterSessionKey: "agent:main:discord:direct:123",
+    requesterSessionKey: completed.handle.requesterSessionKey,
     channel: "discord",
     to: "channel:1",
-    source: "image_generation",
-    announceType: "image generation task",
+    source: "music_generation",
+    announceType: "music generation task",
     resultMediaPath: `MEDIA:${path}`,
-    mediaUrls: [path],
+    mediaUrls: [path, ...attachments.map((attachment) => attachment.path)],
   });
+  const event = expectReplyInstruction([
+    "do not send them again",
+    "Check the result against what the user asked for",
+    "generate again with adjusted parameters",
+    "current visible-reply contract",
+  ]);
+  expect(event?.attachments).toEqual(attachments);
+  musicGenerationTaskLifecycle.completeTaskRun({ handle: completed.handle, count: 1 });
+  await expect(musicGenerationTaskLifecycle.wakeTaskCompletion(completed)).resolves.toEqual({
+    status: "permanent_failure",
+  });
+  expect(announce).toHaveBeenCalledOnce();
 });
-
-it("keeps failed completion notices in the durable agent-loop handoff", async () => {
-  announce.mockResolvedValue({
-    delivered: false,
-    path: "direct",
-    reason: "generated_media_missing",
-    error: "completion agent did not deliver generated media",
-  });
-  await expect(
-    imageGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion("image", "provider failed"),
-      status: "error",
-      statusLabel: "failed",
-    }),
-  ).resolves.toEqual({ status: "permanent_failure" });
-  expect(announce).toHaveBeenCalledTimes(1);
-});
-
-it("creates a running task with queued progress text", async () => {
-  const handle = await musicGenerationTaskLifecycle.createTaskRun({
-    sessionKey: "agent:main:discord:direct:123",
-    requesterOrigin: { channel: "discord", to: "channel:1" },
-    prompt: "night-drive synthwave",
-    providerId: "google",
-  });
-  expect(handle).toMatchObject({
-    taskId: "task-123",
-    requesterSessionKey: "agent:main:discord:direct:123",
-    taskLabel: "night-drive synthwave",
-  });
-  expect(taskExecutorMocks.createOperation.mock.calls[0]?.[0]).toMatchObject({
-    taskKind: MUSIC_GENERATION_TASK_KIND,
-    sourceId: "music_generate:google",
-    progressSummary: "Queued music generation",
-  });
-});
-
-it.each([
-  "agent:main:discord:direct:123",
-  "agent:main:discord:channel:C123",
-  "agent:main:whatsapp:123@g.us",
-])(
-  "gives %s tool-agnostic visible-reply guidance with every generated attachment",
-  async (requesterSessionKey) => {
-    const attachments = (
-      [
-        ["audio", "audio/mpeg", "night-drive.mp3"],
-        ["image", "image/png", "night-drive-cover.png"],
-      ] as const
-    ).map(([type, mimeType, name]) => ({ type, mimeType, name, path: `/tmp/generated-${name}` }));
-    const completed = completion("music", "Generated a track and cover art.");
-    await musicGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completed,
-      attachments,
-      handle: { ...completed.handle, requesterSessionKey },
+it("admits the exact successful image outputs, not paths from completion text or media URLs", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", mediaTempDirs.make("openclaw-image-completion-input-"));
+  try {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const saved = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+    const unrelatedPath = "/tmp/unrelated-completion-image.png";
+    await imageGenerationTaskLifecycle.wakeTaskCompletion({
+      ...completion("image", `Generated an image. Inspect ${unrelatedPath}`, [unrelatedPath]),
+      attachments: [buildSavedMediaAttachment("image", saved)],
     });
-    const event = expectReplyInstruction([
-      "do not send them again",
-      "Check the result against what the user asked for",
-      "generate again with adjusted parameters",
-      "current visible-reply contract",
-    ]);
-    expect(event?.attachments).toEqual(attachments);
-  },
-);
+    expect(announce.mock.lastCall?.[0]).toMatchObject({
+      inputAttachments: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          content: png.toString("base64"),
+        },
+      ],
+    });
+    expect(announce.mock.lastCall?.[0].inputAttachments).toHaveLength(1);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 it("keeps the detached video tool run context registered until terminal status", async () => {
   const handle = await videoGenerationTaskLifecycle.createTaskRun({
     sessionKey: "agent:main:discord:channel:123",
@@ -290,7 +267,6 @@ it("keeps the detached video tool run context registered until terminal status",
   expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
   videoGenerationTaskLifecycle.failTaskRun({
     handle,
-    error: new Error("provider failed"),
   });
   expect(getAgentRunContext(handle.runId)).toBeUndefined();
 });

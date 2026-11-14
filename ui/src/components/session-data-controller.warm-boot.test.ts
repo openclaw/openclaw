@@ -15,6 +15,7 @@ import { createContext, createGatewayHarness, TWO_AGENTS } from "../test-helpers
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createSessionDataHost } from "./session-data-controller.test-support.ts";
+import { publishSidebarSessionList } from "./session-data-events.ts";
 import { SessionDataOwner } from "./session-data.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -22,6 +23,32 @@ afterEach(() => vi.restoreAllMocks());
 function row(key: string, updatedAt: number, extra: Partial<GatewaySessionRow> = {}) {
   return { key: `agent:main:${key}`, kind: "direct" as const, updatedAt, ...extra };
 }
+
+it("selects current and cached agent windows without reviving a retired current result", () => {
+  const gateway = createGatewayHarness(createTestGatewayClient(vi.fn()));
+  const sessions = createTestSessionCapability(gateway.gateway);
+  const owner = new SessionDataOwner(
+    createSessionDataHost(createContext(gateway.gateway, sessions, TWO_AGENTS)),
+    () => undefined,
+  );
+  const main = sessionsResult([row("main", 1)]);
+  const research = sessionsResult([{ key: "agent:research:work", kind: "direct" }]);
+  const publish = (agentId: string | null, result: SessionsListResult | null) =>
+    publishSidebarSessionList(owner, { agentId, result, loading: false, error: null });
+
+  publish("main", main);
+  publish("research", research);
+  expect(owner.resultForAgent(" MAIN ")).toBe(main);
+  expect(owner.resultForAgent("research")).toBe(research);
+  expect(owner.resultForAgent("unseen")).toBeNull();
+
+  publish("research", null);
+  expect(owner.resultForAgent("research")).toBeNull();
+  expect(owner.resultForAgent("main")).toBe(main);
+
+  publish(null, research);
+  expect(owner.resultForAgent("main")).toBe(research);
+});
 
 it("applies the saved roster filter before its first read and releases it with the data owner", async () => {
   const rows = [row("mine", 1), row("other", 2)];

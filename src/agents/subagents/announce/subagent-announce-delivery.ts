@@ -26,7 +26,7 @@ import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.
 import {
   buildAgentInternalEventContext,
   collectAgentInternalEventMedia,
-  resolveAcpPromptBody,
+  formatGeneratedMediaDeliveredForPrompt,
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
@@ -76,50 +76,6 @@ function collectExpectedMediaFromInternalEvents(events: AgentInternalEvent[] | u
   };
 }
 
-function createCompletionUserTurnTranscriptRecorderFactory(params: {
-  directIdempotencyKey: string;
-  requesterAgentId?: string;
-  sourceSessionKey?: string;
-  sourceTool?: string;
-  targetRequesterSessionKey: string;
-  transcriptMessage: string;
-}): (sessionId: string) => UserTurnTranscriptRecorder {
-  const provenance: InputProvenance = {
-    kind: "inter_session",
-    ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-    sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-    sourceTool: params.sourceTool ?? "subagent_announce",
-  };
-  // The recorder guards the exact requester session the completion steers into.
-  return (sessionId) =>
-    createUserTurnTranscriptRecorder({
-      input: {
-        text: params.transcriptMessage,
-        idempotencyKey: `${params.directIdempotencyKey}:active-wake`,
-        provenance,
-      },
-      target: async () => {
-        const loaded = await loadRequesterSessionEntry(
-          params.targetRequesterSessionKey,
-          params.requesterAgentId,
-        );
-        if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
-          return undefined;
-        }
-        return {
-          sessionId,
-          expectedSessionId: sessionId,
-          sessionKey: loaded.canonicalKey,
-          sessionEntry: loaded.entry,
-          ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
-          agentId: loaded.agentId,
-          config: loaded.cfg,
-        };
-      },
-      errorContext: "active requester completion transcript",
-    });
-}
-
 export async function deliverSubagentAnnouncement(
   params: Omit<SubagentAnnounceDirectParams, "createUserTurnTranscriptRecorder"> & {
     sourceRunId?: string;
@@ -142,7 +98,10 @@ async function deliverSubagentAnnouncementBound(
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }
+  const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
+  let internalEvents = params.internalEvents;
   const durableGeneratedMediaHandoff =
+    expectedMedia.expectedMediaUrls.length > 0 &&
     params.expectsCompletionMessage &&
     isAgentMediatedCompletionSourceTool(params.sourceTool) &&
     hasGeneratedMediaCompletionEvent(params.internalEvents);
@@ -180,11 +139,9 @@ async function deliverSubagentAnnouncementBound(
               })
             ? "message_tool_only"
             : "automatic";
-      const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
       const queuePayload = {
         kind: "agentTurn",
         sessionKey: canonicalSessionKey,
-        message: resolveAcpPromptBody("", params.internalEvents) || params.triggerMessage,
         messageId: `${params.directIdempotencyKey}:agent-loop`,
         route: queuedRoute.route,
         ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),
@@ -228,10 +185,22 @@ async function deliverSubagentAnnouncementBound(
           "generated media session handoff was already dead-lettered",
         );
       }
-      if (queued.status === "completed") {
-        return { delivered: true, path: "queued", disposition: "delivered" };
+      // The queue owns produced files only. After its receipt, this live caller
+      // admits the ordinary completion input; startup delivery never starts inference.
+      if (queued.status !== "completed") {
+        durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
+      } else {
+        const deliveredMediaContext = formatGeneratedMediaDeliveredForPrompt(
+          expectedMedia.expectedMediaUrls,
+        );
+        internalEvents = params.internalEvents?.map((event) => ({
+          ...event,
+          // Delivered files must not seed the completion run's pending tool media.
+          mediaUrls: undefined,
+          attachments: undefined,
+          replyInstruction: `${event.replyInstruction}\n\n${deliveredMediaContext}`,
+        }));
       }
-      durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
     } catch (error) {
       if (error instanceof SessionDeliveryDeadLetteredError) {
         return {
@@ -273,19 +242,54 @@ async function deliverSubagentAnnouncementBound(
     return { delivered: false, path: "queued", disposition: "session_queued" };
   }
 
-  const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
-  const createCompletionUserTurnTranscriptRecorder = params.expectsCompletionMessage
-    ? createCompletionUserTurnTranscriptRecorderFactory({
-        directIdempotencyKey: params.directIdempotencyKey,
-        requesterAgentId: params.requesterAgentId,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceTool: params.sourceTool,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        transcriptMessage: runtimeContextFragments.length
-          ? RUNTIME_EVENT_USER_PROMPT
-          : params.triggerMessage,
-      })
-    : undefined;
+  const runtimeContextFragments = buildAgentInternalEventContext(internalEvents);
+  let createCompletionUserTurnTranscriptRecorder:
+    | ((sessionId: string) => UserTurnTranscriptRecorder)
+    | undefined;
+  if (params.expectsCompletionMessage) {
+    const directIdempotencyKey = params.directIdempotencyKey;
+    const requesterAgentId = params.requesterAgentId;
+    const sourceSessionKey = params.sourceSessionKey;
+    const sourceTool = params.sourceTool;
+    const targetRequesterSessionKey = params.targetRequesterSessionKey;
+    const transcriptMessage = runtimeContextFragments.length
+      ? RUNTIME_EVENT_USER_PROMPT
+      : params.triggerMessage;
+    const provenance: InputProvenance = {
+      kind: "inter_session",
+      ...(sourceSessionKey ? { sourceSessionKey } : {}),
+      sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+      sourceTool: sourceTool ?? "subagent_announce",
+    };
+    // The recorder guards the exact requester session the completion steers into.
+    createCompletionUserTurnTranscriptRecorder = (sessionId) =>
+      createUserTurnTranscriptRecorder({
+        input: {
+          text: transcriptMessage,
+          idempotencyKey: `${directIdempotencyKey}:active-wake`,
+          provenance,
+        },
+        target: async () => {
+          const loaded = await loadRequesterSessionEntry(
+            targetRequesterSessionKey,
+            requesterAgentId,
+          );
+          if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
+            return undefined;
+          }
+          return {
+            sessionId,
+            expectedSessionId: sessionId,
+            sessionKey: loaded.canonicalKey,
+            sessionEntry: loaded.entry,
+            ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
+            agentId: loaded.agentId,
+            config: loaded.cfg,
+          };
+        },
+        errorContext: "active requester completion transcript",
+      });
+  }
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }
@@ -295,6 +299,7 @@ async function deliverSubagentAnnouncementBound(
   let directError: unknown;
   const delivery = await sendSubagentAnnounceDirectly({
     ...params,
+    internalEvents,
     createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
     onDeliveryError: (error) => {
       directError = error;

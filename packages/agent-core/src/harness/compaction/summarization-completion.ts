@@ -3,6 +3,7 @@ import { resolveCompletionTokenReservation } from "@openclaw/ai/transports";
 import {
   resolveClaudeFable5ModelIdentity,
   type Model,
+  type ModelRequestHeaders,
   type SimpleStreamOptions,
   type StreamFn,
 } from "@openclaw/llm-core";
@@ -32,6 +33,7 @@ import {
   SUMMARIZATION_SYSTEM_PROMPT,
 } from "./summarization-prompts.js";
 import {
+  type BoundedConversation,
   extractSummaryText,
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversationWithinBudget,
@@ -58,40 +60,21 @@ const MIN_SUMMARY_INPUT_CHARS = 4_000;
  */
 const MAX_OVERFLOW_SHRINKS = 2;
 
-/**
- * Conversation budget for one summary request: the fixed cap, lowered when the
- * summarizer's own window cannot hold it next to the prompt and the largest
- * completion the transport may request.
- */
-function resolveSummaryInputChars(
-  model: Model,
-  completionTokens: number,
-  promptText: string,
-): number {
-  const contextWindow = model.contextWindow ?? 0;
-  if (contextWindow <= 0) {
-    return MAX_SUMMARY_INPUT_CHARS;
-  }
-  const windowChars =
-    ((contextWindow - completionTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
-    SUMMARY_WINDOW_SAFETY_MARGIN;
-  const available = Math.floor(
-    windowChars -
-      estimateStringChars(SUMMARIZATION_SYSTEM_PROMPT) -
-      estimateStringChars(promptText),
-  );
-  return Math.min(MAX_SUMMARY_INPUT_CHARS, available);
+/** A worker-owned, sanitized transcript snapshot that renders only the requested budget. */
+export interface SummarizationConversationSource {
+  readonly length: number;
+  serialize(maxChars: number): Promise<BoundedConversation>;
 }
 
 export interface SummarizationCompletionParams {
-  messages: AgentMessage[];
+  messages: AgentMessage[] | SummarizationConversationSource;
   prompt: string;
   customInstructions?: string;
   previousSummary?: string;
   model: Model;
   maxTokens: number;
   apiKey: string | undefined;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
@@ -121,11 +104,26 @@ export async function runSummarizationCompletion(
     options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   const completionTokens = resolveCompletionTokenReservation(model, maxTokens, options.reasoning);
-  const fullBudget = resolveSummaryInputChars(
-    model,
-    completionTokens,
-    `${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`,
-  );
+  /**
+   * Conversation budget for one summary request: the fixed cap, lowered when the
+   * summarizer's own window cannot hold it next to the prompt and the largest
+   * completion the transport may request.
+   */
+  const contextWindow = model.contextWindow ?? 0;
+  let fullBudget: number;
+  if (contextWindow <= 0) {
+    fullBudget = MAX_SUMMARY_INPUT_CHARS;
+  } else {
+    const windowChars =
+      ((contextWindow - completionTokens - SUMMARY_FRAMING_TOKENS) * CHARS_PER_TOKEN_ESTIMATE) /
+      SUMMARY_WINDOW_SAFETY_MARGIN;
+    const available = Math.floor(
+      windowChars -
+        estimateStringChars(SUMMARIZATION_SYSTEM_PROMPT) -
+        estimateStringChars(`${instructions}\n\n${OMITTED_ENTRIES_INSTRUCTION}`),
+    );
+    fullBudget = Math.min(MAX_SUMMARY_INPUT_CHARS, available);
+  }
   const budgetError = () =>
     err<string, CompactionError>(
       new SummaryOutputBudgetError(
@@ -136,11 +134,18 @@ export async function runSummarizationCompletion(
   if (fullBudget < 0) {
     return budgetError();
   }
-  const llmMessages = convertToLlm(params.messages);
+  const input = Array.isArray(params.messages) ? convertToLlm(params.messages) : params.messages;
   let conversationBudget = fullBudget;
   let response;
   for (let shrink = 0; ; shrink += 1) {
-    const conversation = serializeConversationWithinBudget(llmMessages, conversationBudget);
+    const conversation = Array.isArray(input)
+      ? serializeConversationWithinBudget(input, conversationBudget)
+      : await input.serialize(conversationBudget);
+    // Worker reads can yield while this request is cancelled. Never issue provider
+    // work with the delayed artifact after its caller has stopped.
+    if (signal?.aborted) {
+      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
+    }
     const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
     // A history that fits is sent unchanged; only a sample needs the minimum room.
     if (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS) {
@@ -192,7 +197,7 @@ export async function runSummarizationCompletion(
     if (response.stopReason === "length") {
       return err(
         new SummaryOutputBudgetError(
-          `${params.errorLabel} failed: summary output budget (${params.maxTokens} tokens) was exhausted without visible text; reduce thinking or increase the selected model's maxTokens before retrying`,
+          `${params.errorLabel} failed: summary output budget (${maxTokens} tokens) was exhausted without visible text for ${model.provider}/${model.id} (model maxTokens: ${model.maxTokens}); set agents.defaults.compaction.thinkingLevel to "off" if supported, or use agents.defaults.compaction.model to select a model that can summarize within this budget`,
         ),
       );
     }

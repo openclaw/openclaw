@@ -7,11 +7,8 @@ import {
   isExecApprovalRuntimeActive,
   isExecApprovalMutationRefused,
 } from "./exec-approval-authority.js";
+import { prepareExecApprovalConsumption } from "./exec-approval-consumption.js";
 import { ExecApprovalExpiry } from "./exec-approval-expiry.js";
-import {
-  EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
-  prepareExecApprovalRedemptionWindow,
-} from "./exec-approval-lifecycle.js";
 import type {
   ExecApprovalDurableLookup,
   ExecApprovalForceDenyResult,
@@ -54,7 +51,10 @@ import {
   type OperatorApprovalTerminalReason,
   type ResolveOperatorApprovalResult,
 } from "./operator-approval-store.js";
-import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
+import type {
+  ExecApprovalPreparedConsumption,
+  OperatorApprovalStoreGuard,
+} from "./operator-approval-store.types.js";
 
 export type {
   ExecApprovalRecord,
@@ -612,6 +612,29 @@ export class ExecApprovalManager<
     return result.outcome === "denied";
   }
 
+  /** The effect owner composes this live guard and the shared consumption CAS in its transaction. */
+  prepareConsumeAllowOnce(
+    recordId: string,
+    consumerId = recordId,
+  ): ExecApprovalPreparedConsumption | null {
+    const entry = this.pending.get(recordId);
+    if (!entry) {
+      return null;
+    }
+    return prepareExecApprovalConsumption({
+      id: recordId,
+      record: entry.record,
+      consumerId,
+      kind: this.approvalKind,
+      persistence: this.options.persistence,
+      isCurrent: () =>
+        this.canUseRetainedBinding() &&
+        this.pending.get(recordId) === entry &&
+        isExecApprovalRuntimeActive(this.options, entry.record),
+      resolvedGraceAnchorMs: (nowMs) => this.resolvedGraceAnchorMs(entry, nowMs),
+    });
+  }
+
   async consumeAllowOnce(recordId: string, consumerId = recordId): Promise<boolean> {
     // Retirement preserves consumption only inside an already-owned genuine handoff.
     const entry = this.pending.get(recordId);
@@ -623,40 +646,14 @@ export class ExecApprovalManager<
       return false;
     }
     return this.trackMutation(async () => {
-      const nowMs = Date.now();
-      const graceAnchorMs = this.resolvedGraceAnchorMs(entry, nowMs);
-      // Durable records are audit/control-plane truth, not executable capability
-      // material. Redemption requires the live waiter entry and its requester binding.
-      const redemptionWindowMs = prepareExecApprovalRedemptionWindow(
-        entry.record,
-        graceAnchorMs,
-        nowMs,
-      );
-      if (redemptionWindowMs === null) {
+      const prepared = this.prepareConsumeAllowOnce(recordId, consumerId);
+      if (!prepared) {
         return false;
       }
-      const persistence = this.options.persistence;
       const result = await consumeOperatorApprovalAllowOnce({
-        id: recordId,
-        nowMs,
-        consumerId,
-        expectedKind: this.approvalKind,
-        runtimeEpoch: persistence.runtimeEpoch,
-        redemptionWindowMs,
-        databaseOptions: persistence.databaseOptions,
-        assertCurrent: () => {
-          const currentNowMs = Date.now();
-          const currentGraceAnchorMs = this.resolvedGraceAnchorMs(entry, currentNowMs);
-          if (
-            !this.canUseRetainedBinding() ||
-            this.pending.get(recordId) !== entry ||
-            !isExecApprovalRuntimeActive(this.options, entry.record) ||
-            currentGraceAnchorMs === null ||
-            currentNowMs - currentGraceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS
-          ) {
-            throw new ApprovalMutationRefusedError("approval authority is no longer active");
-          }
-        },
+        ...prepared.input,
+        databaseOptions: this.options.persistence.databaseOptions,
+        assertCurrent: prepared.assertCurrent,
       }).catch((error: unknown) => {
         if (error instanceof ApprovalMutationRefusedError) {
           return null;
@@ -666,11 +663,7 @@ export class ExecApprovalManager<
       if (!result || result.outcome !== "consumed" || this.pending.get(recordId) !== entry) {
         return false;
       }
-      // Keep the winning decision for audit/retry reporting; consumedDecision
-      // is the process-local replay guard during the resolved grace window.
-      entry.record.consumedDecision = "allow-once";
-      entry.record.consumedAtMs = result.record.consumedAtMs;
-      entry.record.consumedBy = result.record.consumedBy;
+      prepared.markCommitted(result.record);
       return isExecApprovalRuntimeActive(this.options, entry.record);
     }, recordId);
   }

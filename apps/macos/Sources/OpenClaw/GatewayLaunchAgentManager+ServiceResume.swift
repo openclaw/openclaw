@@ -108,8 +108,9 @@ extension GatewayLaunchAgentManager {
         }
         var environment = cli.environment
         environment["OPENCLAW_SQLITE_LIBRARY"] = runtime.sqliteLibrary.path
+        // Resume reinstalls the new build on the stable service Bun, like an active-service update.
         return InstalledServiceCLI(
-            prefix: runtime.cliCommand,
+            prefix: [runtime.serviceBun.path] + runtime.cliCommand.dropFirst(),
             sqliteLibrary: runtime.sqliteLibrary.path,
             environment: environment,
             usesGeneratedEnvironment: cli.usesGeneratedEnvironment,

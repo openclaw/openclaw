@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginHookPromptContinuity } from "../../plugins/hook-before-agent-start.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
@@ -20,6 +21,8 @@ const warnHookFailure = (hook: string) => (error: unknown) => {
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** A before_prompt_build `systemPrompt`, including "", replaced the harness's own policy. */
+  systemPromptReplaced?: true;
   /** Stable policy and per-turn context for harnesses with separate instruction carriers. */
   threadDeveloperInstructions?: string;
   turnDeveloperInstructions?: string;
@@ -47,15 +50,14 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     activeToolNames: () => readonly string[];
     assertActive: () => void;
   };
+  /** The harness session owner's decision for this request; reported to authorized hooks. */
+  continuity?: PluginHookPromptContinuity;
 }): Promise<AgentHarnessPromptBuildResult> {
   const inputPrompt = buildCurrentInboundPrompt({
     context: params.currentInboundContext,
     prompt: params.prompt,
   });
   const hookRunner = getGlobalHookRunner();
-  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
-  const hasHeartbeatContribution =
-    isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
   const hookCtx = buildAgentHookContext(params.ctx);
   const currentUserMessage = params.currentUserMessage;
@@ -91,20 +93,6 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     hookCtx,
     hookRunner,
   });
-  const heartbeatResult =
-    hasHeartbeatContribution && hookRunner
-      ? await hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.ctx.sessionKey,
-              agentId: params.ctx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            hookCtx,
-          )
-          .catch(warnHookFailure("heartbeat_prompt_contribution"))
-      : undefined;
-
   const promptBuildResult =
     hookRunner && hasPromptBuildHooks
       ? await hookRunner
@@ -120,26 +108,27 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const authorizedPromptBuildResult =
     hookRunner && toolAuthorityFingerprint && toolAuthority
       ? await hookRunner
-          .runAuthorizedPromptBuild(promptEvent, hookCtx, {
-            toolAuthorityFingerprint,
-            activeToolNames: toolAuthority.activeToolNames(),
-            assertHostActive: toolAuthority.assertActive,
-          })
+          .runAuthorizedPromptBuild(
+            { ...promptEvent, ...(params.continuity ? { continuity: params.continuity } : {}) },
+            hookCtx,
+            {
+              toolAuthorityFingerprint,
+              activeToolNames: toolAuthority.activeToolNames(),
+              assertHostActive: toolAuthority.assertActive,
+            },
+          )
           .catch(warnHookFailure("authorized before_prompt_build"))
       : undefined;
-  const systemPrompt =
-    typeof promptBuildResult?.systemPrompt === "string"
-      ? promptBuildResult.systemPrompt
-      : developerInstructions;
+  const replacementSystemPrompt = promptBuildResult?.systemPrompt;
+  const systemPromptReplaced = typeof replacementSystemPrompt === "string";
+  const systemPrompt = systemPromptReplaced ? replacementSystemPrompt : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
     turnContext.prependContext,
-    heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
     authorizedPromptBuildResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
     turnContext.appendContext,
-    heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
     authorizedPromptBuildResult?.appendContext,
   ]);
@@ -168,6 +157,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     developerInstructions:
       joinPresentTextSegments([prependSystemContext, systemPrompt, appendSystemContext]) ??
       systemPrompt,
+    ...(systemPromptReplaced ? { systemPromptReplaced: true as const } : {}),
     ...(turnDeveloperInstructions
       ? { threadDeveloperInstructions: systemPrompt, turnDeveloperInstructions }
       : {}),

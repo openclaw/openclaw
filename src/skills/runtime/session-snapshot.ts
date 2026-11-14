@@ -17,7 +17,7 @@ import { prepareRemoteSkillConnections } from "./remote-skills.js";
 import { recordSkillRootsExecutionFileHost } from "./skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 
-// Completed projections are reusable only for the same persisted selection.
+// Fresh sessions rebuild eligibility before sharing an equal completed projection.
 const skillSnapshotCache = new Map<string, SkillSnapshot>();
 const pendingSkillSnapshots = new Map<
   string,
@@ -137,29 +137,29 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     };
   }
   const retainedSnapshot = shouldRefresh ? undefined : params.existingSnapshot;
-  const catalog = parseSkillsPromptCatalog(retainedSnapshot?.prompt ?? "");
-  const matchesSnapshotSkill = (skill: Skill) =>
-    !retainedSnapshot ||
-    retainedSnapshot.skills.some((saved) => {
-      if (saved.name !== skill.name) {
-        return false;
-      }
-      const source =
-        saved.source ??
-        (saved.gatewayFilePath
-          ? { filePath: saved.gatewayFilePath, fileHost: "gateway" }
-          : undefined);
-      if (source) {
-        return source.filePath === skill.filePath && source.fileHost === skill.fileHost;
-      }
-      const location = resolveSkillReadPath(compactPromptSkills([skill], params)[0]!);
-      return (
-        skill.fileHost === undefined &&
-        !isWorkspaceSkillReadPath(location) &&
-        catalog.some((entry) => entry.name === saved.name && entry.location === location)
-      );
-    });
   const buildSnapshot = async (assertCurrent: () => void) => {
+    const catalog = parseSkillsPromptCatalog(retainedSnapshot?.prompt ?? "");
+    const matchesSnapshotSkill = (skill: Skill) =>
+      !retainedSnapshot ||
+      retainedSnapshot.skills.some((saved) => {
+        if (saved.name !== skill.name) {
+          return false;
+        }
+        const source =
+          saved.source ??
+          (saved.gatewayFilePath
+            ? { filePath: saved.gatewayFilePath, fileHost: "gateway" }
+            : undefined);
+        if (source) {
+          return source.filePath === skill.filePath && source.fileHost === skill.fileHost;
+        }
+        const location = resolveSkillReadPath(compactPromptSkills([skill])[0]!);
+        return (
+          skill.fileHost === undefined &&
+          !isWorkspaceSkillReadPath(location) &&
+          catalog.some((entry) => entry.name === saved.name && entry.location === location)
+        );
+      });
     const snapshot = await buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
       executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
       executionWorkspaceFileHost: normalizedRoots.executionWorkspaceFileHost,
@@ -176,6 +176,16 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       snapshotVersion,
       matchesSnapshotSkill: retainedSnapshot ? matchesSnapshotSkill : undefined,
     });
+    if (retainedSnapshot) {
+      const discoverySkills = snapshot.discoverySkills ?? snapshot.resolvedSkills ?? [];
+      return {
+        ...retainedSnapshot,
+        resolvedSkills: catalog.flatMap(({ name }) =>
+          discoverySkills.filter((skill) => skill.name === name),
+        ),
+        discoverySkills,
+      };
+    }
     return {
       ...snapshot,
       ...(skillRoots ? { skillRoots } : {}),
@@ -194,8 +204,8 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       params.agentId,
       eligibility,
       fingerprintSkillSnapshotConfig(params.config),
-      retainedSnapshot?.skills,
-      catalog,
+      // Cache the completed hydration, including its original prompt and selection.
+      retainedSnapshot,
     ]);
     const cachedSnapshot = skillSnapshotCache.get(snapshotCacheKey);
     if (cachedSnapshot && retainedSnapshot) {
@@ -221,10 +231,12 @@ export async function resolveReusableWorkspaceSkillSnapshot(
       };
       const promise = buildSnapshot(assertLiveWaiter).then((snapshot) => {
         assertLiveWaiter();
+        const sharedSnapshot =
+          cachedSnapshot && isDeepStrictEqual(cachedSnapshot, snapshot) ? cachedSnapshot : snapshot;
         // Mid-build catalog changes are picked up by the next request's revision key.
-        skillSnapshotCache.set(snapshotCacheKey, snapshot);
+        skillSnapshotCache.set(snapshotCacheKey, sharedSnapshot);
         pruneMapToMaxSize(skillSnapshotCache, SKILL_SNAPSHOT_CACHE_MAX);
-        return snapshot;
+        return sharedSnapshot;
       });
       pending = { promise, waiters };
       pendingSkillSnapshots.set(snapshotCacheKey, pending);
@@ -250,20 +262,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     }
   };
 
-  const rebuilt = await cachedRebuild();
-  let snapshot = rebuilt;
-  if (rebuilt && retainedSnapshot) {
-    const discoverySkills = (rebuilt.discoverySkills ?? rebuilt.resolvedSkills ?? []).filter(
-      matchesSnapshotSkill,
-    );
-    snapshot = {
-      ...retainedSnapshot,
-      resolvedSkills: catalog.flatMap(({ name }) =>
-        discoverySkills.filter((skill) => skill.name === name),
-      ),
-      discoverySkills,
-    };
-  }
+  const snapshot = await cachedRebuild();
   if (!snapshot) {
     const currentVersion = getSkillsSnapshotVersion(watcherWorkspaceDir);
     return resolveReusableWorkspaceSkillSnapshot({

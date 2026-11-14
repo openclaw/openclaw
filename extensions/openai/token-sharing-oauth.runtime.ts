@@ -5,6 +5,8 @@ import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { startProviderOAuthLoopbackCallbackServer } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
   generateOAuthState,
   generatePKCE,
   oauthErrorHtml,
@@ -71,9 +73,26 @@ async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParam
       owner.assertCurrent?.();
       let json: Record<string, unknown> | undefined;
       try {
-        json = asOptionalRecord(JSON.parse(Buffer.from(bytes).toString("utf8")));
+        json = asOptionalRecord(
+          JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+        );
       } catch {
         // Provider bodies can contain credentials: report bounded status, never the body.
+      }
+      if (
+        body?.get("grant_type") === "refresh_token" &&
+        (!response.ok || json?.error !== undefined)
+      ) {
+        const failure = createOAuthRefreshResponseError(
+          "ChatGPT token-sharing refresh",
+          response.status,
+          json,
+        );
+        if (json?.error === "invalid_grant") {
+          failure.message =
+            "ChatGPT connection expired or was revoked. Sign in again to reconnect.";
+        }
+        throw failure;
       }
       if (!response.ok) {
         const invalidGrant = json?.error === "invalid_grant";
@@ -137,9 +156,13 @@ async function readCredential(params: {
 }): Promise<{ credential: OAuthCredential & { accountId: string }; subject: string }> {
   const { json, previous, clientId, owner } = params;
   const access = normalizeOptionalString(json.access_token);
-  const refresh = normalizeOptionalString(json.refresh_token) ?? previous?.refresh;
+  const refresh =
+    json.refresh_token === undefined
+      ? previous?.refresh
+      : normalizeOptionalString(json.refresh_token);
   let expires = resolveOAuthTokenExpiresAt(json.expires_in);
-  const idToken = normalizeOptionalString(json.id_token) ?? previous?.idToken;
+  const idToken =
+    json.id_token === undefined ? previous?.idToken : normalizeOptionalString(json.id_token);
   if (
     !access ||
     !refresh ||
@@ -165,7 +188,7 @@ async function readCredential(params: {
   }
   // Initial identity is signature-verified; refresh may omit its unchanged ID token.
   const identity =
-    json.id_token || !previous
+    json.id_token !== undefined || !previous
       ? await verifyIdentity(idToken, clientId, owner, params.nonce)
       : decodeJwt(idToken);
   const subject = identity.sub;
@@ -173,8 +196,13 @@ async function readCredential(params: {
     throw new Error("ChatGPT account changed during refresh. Sign in again to reconnect.");
   }
   // OAuth refresh may omit unchanged scope; never infer a grant from requested permissions.
-  const scope = normalizeOptionalString(json.scope) ?? previous?.grantedScope;
-  if (!previous && scope === undefined) {
+  const scope =
+    json.scope === undefined
+      ? previous?.grantedScope
+      : typeof json.scope === "string"
+        ? json.scope.trim()
+        : undefined;
+  if ((json.scope !== undefined || !previous) && scope === undefined) {
     throw new Error("ChatGPT did not report the granted scopes. Start sign-in again.");
   }
   const grantedScopes = new Set(scope?.split(/\s+/u));
@@ -236,9 +264,18 @@ export async function refreshTokenSharingCredential(
       resource: TOKEN_SHARING_RESOURCE,
     }),
   );
-  return (
-    await readCredential({ json, clientId: credential.clientId, owner: {}, previous: credential })
-  ).credential;
+  try {
+    return (
+      await readCredential({ json, clientId: credential.clientId, owner: {}, previous: credential })
+    ).credential;
+  } catch (cause) {
+    // The token endpoint has already replied; a later JWKS/identity failure cannot replay it.
+    throw createOAuthRefreshError(
+      "ChatGPT refresh identity could not be verified. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+      { cause },
+    );
+  }
 }
 
 /** Local authorization owns the listener, state, verifier, and callback lifetime together. */
@@ -301,28 +338,32 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   const { verifier, challenge } = await generatePKCE();
   const state = generateOAuthState();
   const nonce = generateOAuthState();
-  const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
-  url.search = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: TOKEN_SHARING_REDIRECT_URI,
-    resource: TOKEN_SHARING_RESOURCE,
-    scope: authorizationScope,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-    nonce,
-    ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
-  }).toString();
   const callback = await startProviderOAuthLoopbackCallbackServer({
     redirectUrl: TOKEN_SHARING_REDIRECT_URI,
     expectedState: state,
     signal: owner.signal,
-    // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
+    // SSH forwards target IPv4 loopback; the redirect still names localhost.
     bindOnlyHostname: "127.0.0.1",
     deferResponse: true,
   });
   try {
+    // A free port per attempt, so an app on any fixed port cannot block sign-in. Loopback
+    // redirects may vary their port (RFC 8252 section 7.3); exchange must repeat the exact URI.
+    const redirectUri = callback.redirectUrl;
+    const { port } = new URL(redirectUri);
+    const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
+    url.search = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      resource: TOKEN_SHARING_RESOURCE,
+      scope: authorizationScope,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      state,
+      nonce,
+      ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
+    }).toString();
     owner.assertCurrent?.();
     // Gateway wizards attach the browser URL to the next note they publish.
     await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
@@ -340,7 +381,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
               ]),
           ...(ctx.isRemote
             ? [
-                "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+                `Open the sign-in link in your browser. Its localhost:${port} callback must reach this OpenClaw process, and the port changes on every sign-in. For an SSH host, forward it before opening the link: ssh -N -L ${port}:127.0.0.1:${port} user@gateway-host`,
               ]
             : []),
           ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
@@ -380,7 +421,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
         clientId: authorizedClientId,
         code: authorization.code,
         verifier,
-        redirectUri: TOKEN_SHARING_REDIRECT_URI,
+        redirectUri,
         resource: TOKEN_SHARING_RESOURCE,
       }),
     );

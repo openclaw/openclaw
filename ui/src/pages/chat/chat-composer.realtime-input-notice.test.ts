@@ -2,7 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 
 afterEach(() => resetChatViewState());
@@ -17,7 +17,7 @@ it("keeps recovered microphone input-loss guidance visible while listening", () 
   });
 
   expect(container.querySelector(".agent-chat__voice-activity")).not.toBeNull();
-  const notice = container.querySelector('[role="alert"].agent-chat__talk-status');
+  const notice = container.querySelector('[role="status"].agent-chat__composer-alert');
   expect(notice?.textContent).toContain("Microphone input recovered; repeat the last part");
   expect(notice?.closest(".sr-only")).toBeNull();
   const dismiss = notice?.querySelector<HTMLButtonElement>(

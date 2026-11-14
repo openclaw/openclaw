@@ -3,20 +3,7 @@ import type {
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
-
-type DiagnosticSessionRecoverySkipReason =
-  | "active_embedded_run"
-  | "model_attempt_recovery"
-  | "active_reply_work"
-  | "human_input_wait"
-  | "runtime_owned_wait"
-  | "deferred_maintenance_wait"
-  | "terminal_outcome_committed"
-  | "global_lane_wait"
-  | "active_lane_task"
-  | "already_in_flight"
-  | "missing_session_ref"
-  | "stale_session_state";
+import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 
 export type StuckSessionRecoveryRequest = {
   /** Exact captured controller owner; diagnostic IDs and map absence grant no authority. */
@@ -26,22 +13,28 @@ export type StuckSessionRecoveryRequest = {
   sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
+  /** Recorded controller decision for SDK recovery callbacks, never independent authority. */
   allowActiveAbort?: boolean;
-  /** Revalidate semantic no-progress evidence after deferred recovery dispatch. */
+  /** Legacy diagnostic threshold metadata retained by the logging-core SDK callback contract. */
   repeatedRequestNoProgressAbortMs?: number;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**
-   * Built-in no-forward-progress age after
-   * which an "active" run with queued work is treated as a leaked/dead handle and
-   * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
+   * Legacy observation threshold retained for SDK callback compatibility.
+   * The captured controller alone decides whether its work can be recovered.
    */
   staleActiveProgressAbortMs?: number;
   /**
-   * Resolved compaction safety timeout. Ownerless lane recovery waits at least
-   * this long plus settle grace so queued compaction cannot be double-run.
+   * Resolved compaction timeout metadata retained for SDK callbacks.
+   * It never grants ownerless recovery or changes the controller deadline.
    */
   compactionSafetyTimeoutMs?: number;
+  /**
+   * Attention classification that triggered this recovery. Carried through so the
+   * abort branch can report the semantic cause (e.g. `blocked_tool_call`) instead
+   * of a cause-free literal. Never grants recovery authority on its own.
+   */
+  classification?: SessionAttentionClassification;
 };
 
 type DiagnosticSessionRecoveryBaseOutcome = {
@@ -54,6 +47,11 @@ type DiagnosticSessionRecoveryBaseOutcome = {
 
 export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
+      status: "noop";
+      action: "reconcile_state";
+      reason: "no_active_work" | "pending_session_work";
+    })
+  | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "aborted";
       action: "abort_embedded_run";
       aborted: boolean;
@@ -61,6 +59,12 @@ export type StuckSessionRecoveryOutcome =
       forceCleared: boolean;
       released: number;
       queuedCount?: number;
+      /**
+       * Semantic cause the recovery acted on when it killed the run (e.g.
+       * `blocked_tool_call`). The other terminal branches each carry a reason;
+       * this one previously dropped it, leaving a cause-free history entry.
+       */
+      reason?: string;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
@@ -72,7 +76,19 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";
       action: "observe_only" | "keep_lane";
-      reason: DiagnosticSessionRecoverySkipReason;
+      reason:
+        | "active_embedded_run"
+        | "model_attempt_recovery"
+        | "active_reply_work"
+        | "human_input_wait"
+        | "runtime_owned_wait"
+        | "deferred_maintenance_wait"
+        | "terminal_outcome_committed"
+        | "global_lane_wait"
+        | "active_lane_task"
+        | "already_in_flight"
+        | "missing_session_ref"
+        | "stale_session_state";
       activeCount?: number;
       queuedCount?: number;
     })

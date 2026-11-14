@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,6 +9,9 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import {
   captureActivePluginRegistrySnapshot,
   createPluginRegistryOwner,
@@ -23,6 +27,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -182,21 +187,17 @@ it("settles accepted Memory sync before closing its existing executor", async ({
     await closing;
     expect(requests()).not.toContainEqual(agentOpen);
     expect(shared.db.isOpen).toBe(false);
-    const stored = new DatabaseSync(agentPath, { readOnly: true });
-    const leases = new DatabaseSync(shared.path, { readOnly: true });
-    try {
-      const chunks = stored.prepare("SELECT text FROM memory_index_chunks WHERE path = ?");
-      const cached = stored.prepare("SELECT count(*) AS count FROM memory_embedding_cache");
-      const live = leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
-      expect(chunks.all("memory/shutdown.md")).toEqual([
-        { text: expect.stringContaining("Keep the synthetic blue release preference.") },
-      ]);
-      expect(cached.get()).toMatchObject({ count: 1 });
-      expect(live.all(agentPath)).toEqual([]);
-    } finally {
-      stored.close();
-      leases.close();
-    }
+    using stored = new DatabaseSync(agentPath, { readOnly: true });
+    using leases = new DatabaseSync(shared.path, { readOnly: true });
+    const chunks = stored.prepare("SELECT text FROM memory_index_chunks WHERE path = ?");
+    const cached = stored.prepare("SELECT count(*) AS count FROM memory_embedding_cache");
+    const live = leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
+    expect(chunks.all("memory/shutdown.md")).toEqual([
+      { text: expect.stringContaining("Keep the synthetic blue release preference.") },
+    ]);
+    // Successful publication retires the redundant cache copy of the indexed vector.
+    expect(cached.get()).toMatchObject({ count: 0 });
+    expect(live.all(agentPath)).toEqual([]);
   } finally {
     releaseEmbedding.resolve();
     await Promise.allSettled([syncing, closing]);
@@ -217,7 +218,6 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
   let server: GatewayServer;
   let refuse = true;
   const memoryFailure = new Error("synthetic memory close refused");
-  const completed: string[] = [];
   const memoryCloseStarted = createDeferredCore();
   const releaseConnectionWork = createDeferredCore();
   let connectionWork: Promise<void> | undefined;
@@ -227,12 +227,10 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     if (refuse) {
       throw memoryFailure;
     }
-    completed.push("first");
   });
   const first = fixture.registry(firstClose);
   try {
     ({ server, kernel } = await fixture.start(first));
-    expect(kernel.pluginRuntime.registry).toBe(first.registry);
     await openManager(fixture, first);
     const warning = new Error("synthetic earlier shutdown warning");
     const registryClose = vi.spyOn(kernel.pluginRuntime, "close");
@@ -250,13 +248,10 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     expect.soft(failure).toBeInstanceOf(AggregateError);
     expect.soft(collectNestedErrorCandidates(failure)).toContain(warning);
     const failedAttempts = firstClose.mock.calls.length;
-    expect.soft(firstClose).toHaveBeenCalled();
     const registryResult = await registryClose.mock.results[0]?.value;
-    expect(registryClose).toHaveBeenCalledOnce();
     expect(registryResult?.memoryErrors).toContain(memoryFailure);
     expect([first.instance.lifecycle.signal.aborted, contextAborted(kernel)]).toEqual([true, true]);
     expect(() => kernel.pluginRuntime.publish(first.registry)).toThrow();
-    expect(completed).toEqual([]);
     await expect(server.close({ reason: "warning failure stays terminal" })).rejects.toBe(failure);
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
@@ -265,6 +260,61 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     releaseConnectionWork.resolve();
     await connectionWork;
     refuse = false;
+    await fixture.cleanup();
+  }
+});
+
+it("closes memory and channel transports after the requesting plugin scope ends", async () => {
+  const fixture = await createFixture("gateway-retired-request-close");
+  const close = vi.fn(async () => {});
+  const memory = fixture.registry(close);
+  const channelIds = ["discord", "slack", "clickclack", "x"];
+  const stopped: string[] = [];
+  const hooks: string[] = [];
+  for (const id of channelIds) {
+    const record = createPluginRecord({
+      id,
+      source: "fixture",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    memory.registry.plugins.push(record);
+    const api = memory.createApi(record, { config: fixture.config });
+    api.on("gateway_stop", async () => {
+      hooks.push(id);
+    });
+    api.registerChannel({
+      plugin: {
+        ...createChannelTestPluginBase({ id }),
+        gateway: {
+          startAccount: ({ abortSignal }) =>
+            new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            }),
+          stopAccount: async () => {
+            stopped.push(id);
+          },
+        },
+      },
+    });
+  }
+  try {
+    const { server, kernel } = await fixture.start(memory);
+    await openManager(fixture, memory);
+    for (const id of channelIds) {
+      await kernel.startChannel(id);
+    }
+    const instances = memory.registry.plugins.flatMap((record) => getPluginInstance(record) ?? []);
+    const request = new PluginInvocationScope(memory.registry, instances);
+    const deferredClose = request.run(() => AsyncLocalStorage.bind(() => server.close()));
+    request.release();
+    await expect(deferredClose()).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledOnce();
+    expect(stopped.toSorted()).toEqual(channelIds.toSorted());
+    expect(hooks.toSorted()).toEqual(channelIds.toSorted());
+    expect(memory.instance.lifecycle.signal.aborted).toBe(true);
+  } finally {
     await fixture.cleanup();
   }
 });

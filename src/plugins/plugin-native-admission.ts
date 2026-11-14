@@ -43,6 +43,7 @@ import {
 import {
   hashPluginSourceFile,
   isPluginNativeExecutable,
+  isPluginWasmModule,
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
@@ -218,7 +219,9 @@ function isNativeArtifact(
   known: boolean,
 ): boolean {
   return (
-    /\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) ||
+    // WASI libraries can use .so; their bytes do not need a native companion namespace.
+    (/\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) &&
+      (known || !/\.so(?:\.\d+)*$/i.test(source) || !isPluginWasmModule(source, boundary))) ||
     ((stat.mode & 0o111n) !== 0n &&
       path.extname(source) === "" &&
       (known || isPluginNativeExecutable(source, boundary)))
@@ -248,7 +251,7 @@ export function createPluginNativeAdmission(
   const priorNamespaces = new Set<PluginNativeNamespaceFact>();
   const files = new Map<string, PluginNativeArtifactFact>();
   const targets = new Map<string, string>();
-  const hardlinkedTargets = new Set<string>();
+  const fileReferenceTargets = new Set<string>();
   const pendingTargets = new Set<string>();
   let assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
   const recoveredFiles = new Map<string, PluginNativeArtifactFact>();
@@ -426,10 +429,10 @@ export function createPluginNativeAdmission(
       ...fact,
       sourceIdentity: pluginSourceStatIdentity(fs.statSync(input, { bigint: true })),
     };
-    if (linkPluginNativeReference(input, target, linked) === "hardlink") {
-      hardlinkedTargets.add(target);
+    if (linkPluginNativeReference(input, target, linked) !== "symlink") {
+      fileReferenceTargets.add(target);
     } else {
-      hardlinkedTargets.delete(target);
+      fileReferenceTargets.delete(target);
     }
     const oldIdentity = member.capturedIdentity;
     member.capturedIdentity = linked.capturedIdentity;
@@ -442,7 +445,7 @@ export function createPluginNativeAdmission(
   };
   const assertReferenceNamespaces = (references: Iterable<string> = pendingTargets) => {
     for (const target of references) {
-      if (!hardlinkedTargets.has(target)) {
+      if (!fileReferenceTargets.has(target)) {
         continue;
       }
       const fact = files.get(targets.get(target)!)!;
@@ -565,6 +568,7 @@ export function createPluginNativeAdmission(
       const recovered = recoveredFiles.get(source);
       const resolvedSource = sourceForPrepared(source) ?? source;
       const known = files.get(logicalSource) ?? state.files.get(logicalSource) ?? recovered;
+      const identity = known && pluginSourceStatIdentity(stat);
       if (
         owner?.source === logicalSource ||
         owner?.setupSource === logicalSource ||
@@ -572,7 +576,16 @@ export function createPluginNativeAdmission(
       ) {
         return undefined;
       }
-      if (!isNativeArtifact(source, boundary, stat, Boolean(known))) {
+      if (
+        !isNativeArtifact(
+          source,
+          boundary,
+          stat,
+          Boolean(
+            known && (known.sourceIdentity === identity || known.capturedIdentity === identity),
+          ),
+        )
+      ) {
         return undefined;
       }
       const found = namespaceFor(resolvedSource);
@@ -695,7 +708,7 @@ export function createPluginNativeAdmission(
       // Explicit host selection is a new admission boundary, even without newly captured files.
       assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
       linkHost(selectedHost);
-      assertReferenceNamespaces(hardlinkedTargets);
+      assertReferenceNamespaces(fileReferenceTargets);
       publish();
       pendingTargets.clear();
     },

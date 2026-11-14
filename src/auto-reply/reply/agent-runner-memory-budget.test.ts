@@ -5,7 +5,7 @@ import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 
 // mock-isolation: Existing transcript usage is fixed; no provider executes before the trigger.
 vi.mock("./agent-runner-memory-transcript-context.js", () => ({
-  estimatePromptTokensFromSessionTranscript: async () => ({ promptTokens: 150_000 }),
+  estimateContextTokensFromSessionTranscript: async () => ({ contextTokens: 150_000 }),
   readSessionLogSnapshot: async () => ({}),
 }));
 
@@ -58,7 +58,7 @@ it.each([undefined, 100_000])(
         : {},
       followupRun,
       defaultModel: model,
-      isHeartbeat: false,
+
       sessionKey: "main",
       sessionEntry: {
         sessionId: "session",

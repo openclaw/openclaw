@@ -3,19 +3,38 @@ import { validateNodeEventParams } from "../../../packages/gateway-protocol/src/
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
+  isPairedDeviceNodeBindingCurrent,
 } from "../../infra/device-pairing-node-state.js";
-import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
 import { NodeWorkerProcessesChangedSchema } from "../../worker/worker-process-observation.js";
-import type { NodeEventContext } from "../server-node-events-types.js";
+import { pairingBindingForSession } from "../node-registry-pairing.js";
+import type { NodeEventContext, NodeEventHandleResult } from "../server-node-events-types.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeEventHandlers: GatewayRequestHandlers = {
-  "node.event": async ({ params, respond, context, client }) => {
+  "node.event": async ({ params, respond: sendResponse, context, client }) => {
+    let responded = false;
+    const respond: RespondFn = (...args) => {
+      if (responded) {
+        if (!args[0]) {
+          context.logGateway.warn("node.event failed after its result was sent");
+        }
+        return;
+      }
+      responded = true;
+      sendResponse(...args);
+    };
+    const publishResult = (result: NodeEventHandleResult) => {
+      if (result.reason === "pairing_changed") {
+        respondPairingChanged(respond);
+      } else {
+        respond(true, result, undefined);
+      }
+    };
     if (!assertValidParams(params, validateNodeEventParams, "node.event", respond)) {
       return;
     }
@@ -27,6 +46,12 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
       const nodeSession = context.nodeRegistry.get(nodeId);
       const eventConnId = client?.connId;
       const eventPairingGeneration = nodeSession?.pairingGeneration;
+      const eventPairingBinding = nodeSession?.pairingIdentity
+        ? pairingBindingForSession({
+            pairingIdentity: nodeSession.pairingIdentity,
+            pairingGeneration: eventPairingGeneration,
+          })
+        : undefined;
       const sessionForGeneration = (generation: string) =>
         resolveDispatchableNodeSession(
           context.nodeRegistry.getForPairingGeneration(nodeId, generation),
@@ -44,6 +69,22 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         }
         return sessionForGeneration(eventPairingGeneration)?.connId === eventConnId;
       };
+      if (p.event === "mcp.elicitation") {
+        if (!nodeSession || !eventConnId || nodeSession.connId !== eventConnId) {
+          respondPairingChanged(respond);
+          return;
+        }
+        const result = await context.nodeRegistry.mcpElicitation.receive(
+          nodeSession,
+          safeParseJson(payloadJSON ?? ""),
+          async () =>
+            (await isEventConnectionCurrent()) &&
+            context.getRuntimeConfig().mcp?.apps?.enabled === true &&
+            nodeSession.commands.includes(NODE_MCP_TOOLS_CALL_COMMAND),
+        );
+        respond(true, result, undefined);
+        return;
+      }
       if (p.event === "worker.processes.changed") {
         const change = NodeWorkerProcessesChangedSchema.safeParse(safeParseJson(payloadJSON ?? ""));
         let handled = false;
@@ -144,22 +185,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.clearPresenceActivity(activity),
         updateNodeDesktopAvailability: (availability) =>
           context.nodeRegistry.updateDesktopAvailability(availability),
-        updateNodeHostStats: (stats) => {
-          const hostStats = context.nodeRegistry.updateHostStats(stats);
-          if (hostStats && eventPairingGeneration) {
-            // The 60 s reporting cadence costs one small JSON-column update per node per minute.
-            void recordPairedNodeHostStats({
-              nodeId,
-              hostStats,
-              expectedPairingGeneration: { nodeId, key: eventPairingGeneration },
-            }).catch((error: unknown) =>
-              context.logGateway.warn(
-                `failed to persist node host stats for ${nodeId}: ${formatErrorMessage(error)}`,
-              ),
-            );
-          }
-          return hostStats;
-        },
+        updateNodeHostStats: (stats) => context.nodeRegistry.updateHostStats(stats),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -170,6 +196,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           payloadJSON,
         },
         {
+          onResult: publishResult,
           connId: client?.connId,
           deviceId: client?.connect?.device?.id,
           pairingGeneration: eventPairingGeneration
@@ -177,6 +204,28 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertAgentTurnCurrent: () => {
+            if (
+              !eventPairingBinding?.generation ||
+              !isPairedDeviceNodeBindingCurrent(nodeId, eventPairingBinding)
+            ) {
+              throw new Error("Node pairing changed before agent turn admission");
+            }
+          },
+          assertSessionEventCurrent: () => {
+            const current = eventPairingGeneration
+              ? sessionForGeneration(eventPairingGeneration)
+              : undefined;
+            if (
+              !eventConnId ||
+              !current ||
+              current !== nodeSession ||
+              current.connId !== eventConnId ||
+              current.client.invalidated === true
+            ) {
+              throw new Error("Node event connection changed during preparation");
+            }
+          },
           assertApnsRegistrationCurrent: () => {
             const current = apnsGeneration
               ? context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key)
@@ -207,11 +256,11 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           },
         },
       );
-      if (result?.reason === "pairing_changed") {
-        respondPairingChanged(respond);
-        return;
+      if (result) {
+        publishResult(result);
+      } else {
+        respond(true, { ok: true }, undefined);
       }
-      respond(true, result ?? { ok: true }, undefined);
     });
   },
 };

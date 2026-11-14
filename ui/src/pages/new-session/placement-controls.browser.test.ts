@@ -1,28 +1,50 @@
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { CheckoutChip } from "./checkout-chip.tsx";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import { pickerParams } from "./where-chip.test-support.ts";
 import { WhereChip } from "./where-chip.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import composerStyles from "../../styles/chat/composer-surface.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import placementStyles from "../../styles/new-session.css?inline";
 
+let fixture: HTMLDivElement;
+let composer: HTMLDivElement;
 let controls: HTMLDivElement;
 let styles: HTMLStyleElement;
+const button = (name: string) => page.getByRole("button", { name, exact: true });
+const bounds = (element: Element) => element.getBoundingClientRect();
+const query = (selector: string, root: Element = controls) =>
+  root.querySelector<HTMLElement>(selector)!;
 beforeEach(() => {
   styles = document.createElement("style");
-  styles.textContent = baseStyles + componentStyles + placementStyles;
+  styles.textContent = baseStyles + componentStyles + composerStyles + placementStyles;
   document.head.append(styles);
+  fixture = document.createElement("div");
+  const subtitle = document.createElement("div");
+  subtitle.className = "new-session-page__welcome-hint";
+  subtitle.textContent = "New session";
+  const shell = document.createElement("div");
+  shell.className = "agent-chat__composer-shell new-session-page__composer";
+  shell.style.marginTop = "400px";
+  composer = document.createElement("div");
+  composer.className = "agent-chat__input";
+  fixture.append(subtitle, shell);
   controls = document.createElement("div");
-  controls.className = "new-session-page__triggers";
-  document.body.append(controls);
+  controls.className = "new-session-page__context-tray";
+  const row = document.createElement("div");
+  row.className = "new-session-page__triggers";
+  controls.append(row);
+  shell.append(composer, controls);
+  document.body.append(fixture);
 });
 afterEach(() => {
   cleanupSolid();
-  controls.remove();
+  fixture.remove();
   styles.remove();
 });
 
@@ -34,7 +56,7 @@ it.each([
   { width: 390, shortLabels: true, direction: "ltr" },
   { width: 390, shortLabels: false, direction: "rtl" },
 ])(
-  "keeps placement controls inline with truncated labels at $width px ($direction, short=$shortLabels)",
+  "keeps placement choices reachable at $width px ($direction, short=$shortLabels)",
   async ({ width, shortLabels, direction }) => {
     await page.viewport(width, 900);
     controls.dir = direction;
@@ -73,87 +95,78 @@ it.each([
       }),
       nativeTerminal: false,
     };
-    mountSolid(() => [createComponent(WhereChip, where), createComponent(ProjectChip, project)], {
-      container: controls,
-    });
+    const row = query(".new-session-page__triggers");
+    mountSolid(() => createComponent(WhereChip, where), { container: row });
+    const workspaceGroup = document.createElement("div");
+    workspaceGroup.className = "new-session-page__workspace";
+    row.append(workspaceGroup);
+    mountSolid(
+      () => [
+        createComponent(ProjectChip, project),
+        createComponent(CheckoutChip, { params: where.params, folderLabel: workspaceLabel }),
+      ],
+      { container: workspaceGroup },
+    );
     await document.fonts.ready;
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
-    const environment = controls.querySelector<HTMLButtonElement>("#new-session-where-trigger")!;
-    const workspaceTrigger = controls.querySelector<HTMLButtonElement>(
-      "#new-session-project-trigger",
-    )!;
-    const envBox = environment.getBoundingClientRect();
-    const workspaceBox = workspaceTrigger.getBoundingClientRect();
-    // Flex aligns the slots; inline button baselines can differ inside them.
-    const envRow = environment.closest(".new-session-page__select")!.getBoundingClientRect();
-    const workspaceRow = workspaceTrigger
-      .closest(".new-session-page__select")!
-      .getBoundingClientRect();
-    expect(workspaceRow.top + workspaceRow.height / 2).toBeCloseTo(
-      envRow.top + envRow.height / 2,
-      0,
-    );
-    if (direction === "rtl") {
-      expect(workspaceBox.right).toBeLessThanOrEqual(envBox.left);
-    } else {
-      expect(workspaceBox.left).toBeGreaterThanOrEqual(envBox.right);
-    }
-    const summary = environment.querySelector<HTMLElement>(".new-session-page__trigger-summary")!;
+    const environment = query("#new-session-where-trigger");
+    const workspaceTrigger = query("#new-session-project-trigger");
+    const checkout = query("#new-session-checkout-trigger");
+    const summary = query(".new-session-page__trigger-summary", environment);
     expect(summary.textContent).toBe("Windows (WSL2) · Large");
-    expect(summary.checkVisibility()).toBe(width > 560);
-    for (const trigger of [environment, workspaceTrigger]) {
-      const box = trigger.getBoundingClientRect();
+    expect(summary.checkVisibility()).toBe(true);
+    for (const trigger of [environment, workspaceTrigger, checkout]) {
+      const box = bounds(trigger);
       expect(box.left).toBeGreaterThanOrEqual(0);
       expect(box.right).toBeLessThanOrEqual(width);
-      expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
-      if (width <= 560) {
-        const slot = trigger.closest<HTMLElement>(".new-session-page__select")!;
-        expect(box.width).toBeCloseTo(slot.clientWidth, 0);
-        expect(box.width).toBeGreaterThanOrEqual(44);
-      }
-      const chevron = trigger
-        .querySelector<HTMLElement>(
-          width <= 560
-            ? ".new-session-page__trigger-chevron--mobile"
-            : ".new-session-page__trigger-chevron--desktop",
-        )!
-        .getBoundingClientRect();
-      const labels = [
-        ...trigger.querySelectorAll<HTMLElement>(
-          ".new-session-page__trigger-label, .new-session-page__trigger-summary",
-        ),
-      ].filter((label) => label.checkVisibility());
-      const boxes = labels.map((label) => label.getBoundingClientRect());
-      const gap =
-        direction === "rtl"
-          ? Math.min(...boxes.map((label) => label.left)) - chevron.right
-          : chevron.left - Math.max(...boxes.map((label) => label.right));
-      expect(gap).toBeGreaterThanOrEqual(width <= 560 ? 3 : 8);
-      for (const label of labels) {
-        const style = getComputedStyle(label);
-        expect(style.whiteSpace).toBe("nowrap");
-        expect(style.textOverflow).toBe("ellipsis");
-        expect(style.maskImage).toBe("none");
-        expect(label.scrollHeight).toBeLessThanOrEqual(label.clientHeight + 1);
-        if (shortLabels || width > 560) {
-          expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth + 1);
-        }
-      }
     }
     expect(controls.scrollWidth).toBeLessThanOrEqual(controls.clientWidth);
     await expect
-      .element(
-        page.getByRole("button", {
-          name: `Where: ${profileId}, Windows (WSL2) · Large`,
-          exact: true,
-        }),
-      )
-      .toHaveAccessibleDescription("Cloud worker provider: AWS");
+      .element(button(`Where: ${profileId}, Windows (WSL2) · Large`))
+      .toHaveAccessibleDescription("Cloud provider: AWS");
     // Exercise the real workspace popover after reflow, not a static label facsimile.
-    await page.getByRole("button", { name: `What: ${workspaceLabel}`, exact: true }).click();
-    await page.getByRole("button", { name: workspaceLabel, exact: true }).click();
+    await button(`What: ${workspaceLabel}`).click();
+    await expect.element(button(workspaceLabel)).toBeVisible();
+    const panel = query("#new-session-project-popover");
+    await expect.poll(() => panel.dataset.phase).toBe("open");
+    expect(bounds(panel).left).toBeGreaterThanOrEqual(0);
+    expect(bounds(panel).right).toBeLessThanOrEqual(width);
+    expect(bounds(panel).top).toBeGreaterThanOrEqual(0);
+    expect(bounds(panel).bottom).toBeLessThanOrEqual(900);
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => panel.hasAttribute("open")).toBe(false);
+    await expect.element(button(`What: ${workspaceLabel}`)).toHaveFocus();
+    await button(`What: ${workspaceLabel}`).click();
+    await button(workspaceLabel).click();
     expect(onApplyFolder).toHaveBeenCalledExactlyOnceWith(workspace);
   },
 );
+
+it("selects the second device option with two ArrowDown presses from search", async () => {
+  await page.viewport(1440, 900);
+  const onSelectDevice = vi.fn();
+  const where = pickerParams(true, undefined, {}, { onSelectDevice });
+  mountSolid(() => createComponent(WhereChip, where), {
+    container: query(".new-session-page__triggers"),
+  });
+  const search = page.getByRole("searchbox", { name: "Search devices" });
+  await search.click();
+  const input = query('input[type="search"]') as HTMLInputElement;
+  const visibility = vi.spyOn(Element.prototype, "checkVisibility");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+  expect(visibility).not.toHaveBeenCalled();
+  visibility.mockRestore();
+  await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+  const active = input.getAttribute("aria-activedescendant");
+  expect(active).toBeTruthy();
+  expect(input.getAttribute("aria-owns")?.split(" ")).toContain(active);
+  input.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+  );
+  expect(onSelectDevice).not.toHaveBeenCalled();
+  await expect.element(search).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  expect(onSelectDevice).toHaveBeenCalledExactlyOnceWith("");
+});

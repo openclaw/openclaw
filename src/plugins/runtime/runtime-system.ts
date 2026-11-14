@@ -1,47 +1,29 @@
-import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
-import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
+import { captureSessionEventTarget, createSessionEventEnqueuer } from "./runtime-session-events.js";
+import {
+  capturePluginSessionGeneration,
+  postPluginSessionNotice,
+} from "./runtime-session-notice.js";
 import { enqueueSystemEventFromSdk } from "./system-events.js";
-import type { RunHeartbeatOnceOptions } from "./types-core.js";
 import type { PluginRuntime } from "./types.js";
 
-const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
-  () => import("../../infra/heartbeat-runner.js"),
-);
-const runHeartbeatOnceInternal = createLazyRuntimeMethod(
-  loadHeartbeatRunnerRuntime,
-  (runtime) => runtime.runHeartbeatOnce,
-);
-
-/** Creates the plugin runtime system facade with heartbeat/event/process helpers. */
-export function createRuntimeSystem(): PluginRuntime["system"] {
-  const requestHeartbeatNow: PluginRuntime["system"]["requestHeartbeatNow"] = (opts) =>
-    requestHeartbeat({
-      source: opts?.source ?? "other",
-      intent: opts?.intent ?? "immediate",
-      reason: opts?.reason,
-      coalesceMs: opts?.coalesceMs,
-      agentId: opts?.agentId,
-      sessionKey: opts?.sessionKey,
-      heartbeat: opts?.heartbeat,
-    });
-
+/** Creates the plugin runtime system facade with session-event and process helpers. */
+export function createRuntimeSystem(
+  enqueueForHost: Parameters<typeof createSessionEventEnqueuer>[0],
+): PluginRuntime["system"] {
   return {
+    captureSessionEventTarget,
+    enqueueSessionEvent: createSessionEventEnqueuer(enqueueForHost),
     enqueueSystemEvent: enqueueSystemEventFromSdk,
-    requestHeartbeat,
-    requestHeartbeatNow,
-    runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => {
-      // Destructure to forward only the plugin-safe subset; prevent cfg/deps injection at runtime.
-      const { reason, agentId, sessionKey, heartbeat } = opts ?? {};
-      return runHeartbeatOnceInternal({
-        reason,
-        agentId,
-        sessionKey,
-        heartbeat: heartbeat ? { target: heartbeat.target } : undefined,
-      });
+    captureSessionGeneration: capturePluginSessionGeneration,
+    postSessionNotice: postPluginSessionNotice,
+    async runCommandWithTimeout(...args) {
+      const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertSystemOwnerCurrent;
+      const { runCommandWithTimeout } = await import("../../process/exec.js");
+      assertCurrent?.();
+      return await runCommandWithTimeout(...args);
     },
-    runCommandWithTimeout,
     formatNativeDependencyHint,
   };
 }

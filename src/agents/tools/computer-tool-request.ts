@@ -262,7 +262,11 @@ export function buildComputerActParams(params: {
       break;
     }
     case "set_value": {
-      wire.value = readToolStringParam(input, "value", { required: true, allowEmpty: true });
+      wire.value = readToolStringParam(input, "value", {
+        required: true,
+        allowEmpty: true,
+        trim: false,
+      });
       copyDeliveryMode(wire, input);
       break;
     }
@@ -325,7 +329,11 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_type": {
-      wire.text = readToolStringParam(input, "text", { required: true, allowEmpty: true });
+      wire.text = readToolStringParam(input, "text", {
+        required: true,
+        allowEmpty: true,
+        trim: false,
+      });
       copyOptionalStringParams(wire, input, "mode");
       copyOptionalBooleanParam(wire, input, "replace");
       break;

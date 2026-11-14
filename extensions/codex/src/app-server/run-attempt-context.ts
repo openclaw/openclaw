@@ -27,7 +27,10 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  resolveCodexOpenClawBaseInstructions,
+} from "./thread-prompt.js";
 
 export async function prepareCodexAttemptContext(
   runtime: CodexAttemptRuntime,
@@ -197,13 +200,24 @@ export async function prepareCodexAttemptContext(
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
-      dynamicTools: toolBridge.availableSpecs,
+      // The lifecycle restores this section to creation policy if no relay is selected.
+      omitConversationTurnContext: true,
+      dynamicTools: toolBridge.specs,
       nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:
         runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),
     agentWorkspaceDeveloperInstructions,
   );
+  // Pre-startup estimate of the base the thread lifecycle places, for history budgets and
+  // early reports. Reports adopt the lifecycle's own render once the thread is ready.
+  const startupBinding = connection.mutable.startupBinding;
+  const openClawBaseInstructions = resolveCodexOpenClawBaseInstructions(runtimeParams, {
+    dynamicTools: toolBridge.specs,
+    nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
+    nativeModelProvider:
+      startupBinding?.connectionScope === "supervision" ? startupBinding.modelProvider : undefined,
+  });
   const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
     attempt: runtimeParams,
     dynamicTools: toolBridge.availableSpecs,
@@ -264,6 +278,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
+    openClawBaseInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
     refreshableInstructions,

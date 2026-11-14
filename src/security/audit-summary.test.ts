@@ -1,18 +1,13 @@
-// Verifies security audit summary formatting and severity counts.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectAttackSurfaceSummaryFindings } from "./audit-extra.summary.js";
 
-function requireAttackSurfaceSummary(
-  findings: Awaited<ReturnType<typeof collectAttackSurfaceSummaryFindings>>,
-) {
+async function attackSurface(cfg: OpenClawConfig) {
+  const findings = await collectAttackSurfaceSummaryFindings(cfg);
   const summary = findings.find((f) => f.checkId === "summary.attack_surface");
-  if (!summary) {
-    throw new Error("Expected attack surface summary finding");
-  }
-  expect(summary.checkId).toBe("summary.attack_surface");
-  expect(summary.severity).toBe("info");
-  return summary;
+  expect(summary).toMatchObject({ checkId: "summary.attack_surface", severity: "info" });
+  return expectDefined(summary, "summary");
 }
 
 describe("security audit attack surface summary", () => {
@@ -52,19 +47,17 @@ describe("security audit attack surface summary", () => {
   });
 
   it("includes an attack surface summary (info)", async () => {
-    const cfg: OpenClawConfig = {
+    const summary = await attackSurface({
       channels: { whatsapp: { groupPolicy: "open" }, telegram: { groupPolicy: "allowlist" } },
       tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
       hooks: { enabled: true },
       browser: { enabled: true },
-    };
-
-    const findings = await collectAttackSurfaceSummaryFindings(cfg);
-    const summary = requireAttackSurfaceSummary(findings);
+    });
 
     expect(summary.detail).toBe(
       [
         "groups: open=1, allowlist=1",
+        "direct messages: open=0",
         "tools.elevated: enabled",
         "hooks.webhooks: enabled",
         "hooks.internal: disabled",
@@ -74,49 +67,25 @@ describe("security audit attack surface summary", () => {
     );
   });
 
-  it.each([
-    {
-      name: "explicit browser config does not bypass a restrictive plugin allowlist",
-      cfg: {
-        browser: { enabled: true },
-        plugins: { allow: ["openai"] },
-      } satisfies OpenClawConfig,
-      expected: "browser control: disabled",
+  it.each<[string, OpenClawConfig["plugins"], boolean | undefined, string]>([
+    ["allowlist wins", { allow: ["openai"] }, true, "disabled"],
+    ["case-insensitive IDs", { allow: ["Browser"] }, undefined, "enabled"],
+    ["case-normalized deny wins", { allow: ["browser"], deny: ["BROWSER"] }, true, "disabled"],
+    [
+      "disabled entry wins",
+      { allow: ["browser"], entries: { browser: { enabled: false } } },
+      true,
+      "disabled",
+    ],
+    ["browser.enabled=false wins", { allow: ["browser"] }, false, "disabled"],
+  ])(
+    "reports browser control from effective plugin policy: %s",
+    async (_name, plugins, enabled, expected) => {
+      const summary = await attackSurface({
+        plugins,
+        browser: enabled === undefined ? undefined : { enabled },
+      });
+      expect(summary.detail).toContain(`browser control: ${expected}`);
     },
-    {
-      name: "plugin ids use the same case-insensitive canonical form as startup",
-      cfg: {
-        plugins: { allow: ["Browser"] },
-      } satisfies OpenClawConfig,
-      expected: "browser control: enabled",
-    },
-    {
-      name: "case-normalized plugin deny policy wins over explicit browser config",
-      cfg: {
-        browser: { enabled: true },
-        plugins: { allow: ["browser"], deny: ["BROWSER"] },
-      } satisfies OpenClawConfig,
-      expected: "browser control: disabled",
-    },
-    {
-      name: "disabled browser plugin entry wins over explicit browser config",
-      cfg: {
-        browser: { enabled: true },
-        plugins: { allow: ["browser"], entries: { browser: { enabled: false } } },
-      } satisfies OpenClawConfig,
-      expected: "browser control: disabled",
-    },
-    {
-      name: "browser.enabled=false disables browser control",
-      cfg: {
-        browser: { enabled: false },
-        plugins: { allow: ["browser"] },
-      } satisfies OpenClawConfig,
-      expected: "browser control: disabled",
-    },
-  ])("reports browser control from effective plugin policy: $name", async ({ cfg, expected }) => {
-    const summary = requireAttackSurfaceSummary(await collectAttackSurfaceSummaryFindings(cfg));
-
-    expect(summary.detail).toContain(expected);
-  });
+  );
 });

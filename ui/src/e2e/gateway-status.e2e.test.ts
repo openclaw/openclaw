@@ -1,10 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -26,18 +24,207 @@ const withPage = (
     run,
   );
 
-async function captureStatus(page: Page, name: string, surface: Locator, content: Locator[]) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, content, {
-    elements: content,
-    animations: "disabled",
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-  for (const [index, element] of frame.elements.entries()) {
-    await writeFile(path.join(suite.artifactDir, `${name}-${index + 1}.png`), element.png);
-  }
-}
-
 suite.define(() => {
+  it.each([1280, 390])(
+    "keeps the normal shell through a cold connection at %ipx",
+    async (width) => {
+      await withPage(width, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["connect"],
+        });
+        await page.goto(suite.server.baseUrl);
+        const heading = page.getByRole("heading", {
+          name: "Connecting to OpenClaw",
+          exact: true,
+        });
+        await heading.waitFor();
+        await page.locator("openclaw-app-sidebar").waitFor({ state: "attached" });
+        if (width < 900) {
+          // Nothing behind the compact drawer or the action pill works before the first connection.
+          await page.locator(".topbar--navigation-locked").waitFor({ state: "attached" });
+          expect(
+            await page
+              .getByRole("button", { name: "Expand sidebar" })
+              .filter({ visible: true })
+              .count(),
+          ).toBe(0);
+          expect(await page.locator(".topnav-shell__actions").first().isVisible()).toBe(false);
+          expect(await page.getByRole("img", { name: "OpenClaw", exact: true }).isVisible()).toBe(
+            true,
+          );
+        }
+        const shell = await page.locator("openclaw-app-shell").elementHandle();
+        expect(shell).not.toBeNull();
+        expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+        await expect
+          .poll(async () => (await gateway.getRequests("connect")).length)
+          .toBeGreaterThan(0);
+        expect(await page.locator(".gateway-connection-view button").count()).toBe(0);
+        const skeleton = page.locator(".sidebar-connection-skeleton");
+        await skeleton.waitFor({ state: "attached" });
+        expect(
+          await page.locator("openclaw-app-sidebar .sidebar-shell__content").textContent(),
+        ).not.toContain("Sessions");
+        expect(await page.locator(".gateway-identity-placeholder").count()).toBeGreaterThanOrEqual(
+          width < 900 ? 1 : 2,
+        );
+        expect(
+          await skeleton
+            .locator("span")
+            .evaluateAll((nodes) =>
+              nodes.every((node) => getComputedStyle(node).animationName === "none"),
+            ),
+        ).toBe(true);
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+          await page.locator(".topbar-brand img").evaluateAll(async (images) => {
+            for (const image of images) {
+              if (image instanceof HTMLImageElement && image.getBoundingClientRect().width > 0) {
+                await image.decode();
+              }
+            }
+          });
+          await writeFile(
+            path.join(suite.artifactDir, "cold-shell-" + width + ".png"),
+            await page.screenshot({ animations: "disabled" }),
+          );
+        }
+        if (width === 1280 && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+          await page.emulateMedia({ colorScheme: "dark" });
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
+          await writeFile(
+            path.join(suite.artifactDir, "cold-shell-dark-" + width + ".png"),
+            await page.screenshot({ animations: "disabled" }),
+          );
+          await page.emulateMedia({ colorScheme: "light" });
+        }
+        await gateway.rejectDeferred("connect", {
+          code: "UNAVAILABLE",
+          message: "gateway starting; retry shortly",
+          details: { reason: "startup-sidecars" },
+          retryable: true,
+        });
+        await page.getByRole("heading", { name: "OpenClaw is starting", exact: true }).waitFor();
+        expect(await page.locator(".gateway-connection-view button").count()).toBe(0);
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+          await writeFile(
+            path.join(suite.artifactDir, "starting-" + width + ".png"),
+            await page.screenshot({ animations: "disabled" }),
+          );
+        }
+        await waitForControlUiGatewayReady(page);
+        await expect.poll(() => page.locator(".gateway-connection-view").count()).toBe(0);
+        expect(await shell?.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await page.locator(".sidebar-connection-skeleton").count()).toBe(0);
+        if (width < 900) {
+          await page
+            .getByRole("button", { name: "Expand sidebar" })
+            .filter({ visible: true })
+            .first()
+            .waitFor();
+          expect(await page.locator(".topbar--navigation-locked").count()).toBe(0);
+        }
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+          await page.locator(".topbar-brand img").evaluateAll(async (images) => {
+            for (const image of images) {
+              if (image instanceof HTMLImageElement && image.getBoundingClientRect().width > 0) {
+                await image.decode();
+              }
+            }
+          });
+          await writeFile(
+            path.join(suite.artifactDir, "cold-shell-recovered-" + width + ".png"),
+            await page.screenshot({ animations: "disabled" }),
+          );
+        }
+        // These events act on an authenticated, recovered workspace, not an invented cold state.
+        for (const [phase, status] of [
+          ["draining", "Suspending…"],
+          ["prepared", "Suspended"],
+        ] as const) {
+          await gateway.emitGatewayEvent("gateway.suspension", { phase });
+          await page.getByText(status, { exact: true }).filter({ visible: true }).first().waitFor();
+          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+            await writeFile(
+              path.join(suite.artifactDir, phase + "-" + width + ".png"),
+              await page.screenshot({ animations: "disabled" }),
+            );
+          }
+        }
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+        await gateway.emitGatewayEvent("shutdown", { restartExpectedMs: 30000 });
+        await page
+          .getByText("Restarting…", { exact: true })
+          .filter({ visible: true })
+          .first()
+          .waitFor();
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+          await writeFile(
+            path.join(suite.artifactDir, "restarting-" + width + ".png"),
+            await page.screenshot({ animations: "disabled" }),
+          );
+        }
+      });
+    },
+  );
+
+  it.each([1280, 390])("shows an honest automatic retry at %spx", async (width) => {
+    await withPage(width, async ({ page }) => {
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      await page.goto(suite.server.baseUrl);
+      await page.getByRole("heading", { name: "Connecting to OpenClaw", exact: true }).waitFor();
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).length)
+        .toBeGreaterThan(0);
+      await gateway.setOnline(false);
+      await page.getByRole("heading", { name: "Still connecting", exact: true }).waitFor();
+      expect(await page.locator(".gateway-connection-view button").count()).toBe(0);
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
+        await writeFile(
+          path.join(suite.artifactDir, "retrying-" + width + ".png"),
+          await page.screenshot({ animations: "disabled" }),
+        );
+      }
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await expect.poll(() => page.locator(".gateway-connection-view").count()).toBe(0);
+    });
+  });
+
+  it("automatically refreshes an incompatible page before reconnecting", async () => {
+    await withPage(1280, async ({ page }) => {
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      await page.goto(suite.server.baseUrl);
+      await page.getByRole("heading", { name: "Connecting to OpenClaw", exact: true }).waitFor();
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).length)
+        .toBeGreaterThan(0);
+      const refreshed = page.waitForEvent("domcontentloaded");
+      await gateway.rejectDeferred("connect", {
+        code: "UNAVAILABLE",
+        message: "Control UI build mismatch",
+        details: {
+          code: "CONTROL_UI_BUILD_MISMATCH",
+          gatewayBuildId: "new-gateway-build",
+          reloadRequired: true,
+        },
+      });
+      await refreshed;
+      await page.getByRole("heading", { name: "Connecting to OpenClaw", exact: true }).waitFor();
+      expect(await page.getByRole("button", { name: "Try again", exact: true }).count()).toBe(0);
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).length)
+        .toBeGreaterThan(0);
+      await gateway.resolveDeferred("connect");
+      await waitForControlUiGatewayReady(page);
+      await expect.poll(() => page.locator(".gateway-connection-view").count()).toBe(0);
+    });
+  });
+
   it("keeps shared chat usable without polling operator-only surfaces", async () => {
     await withPage(
       1280,
@@ -45,7 +232,6 @@ suite.define(() => {
         await page.clock.install();
         const sessionKey = "agent:main:scope-reader";
         const operatorMethods = [
-          "board.get",
           "presence.activity",
           "cron.list",
           "cron.status",
@@ -61,11 +247,14 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           operatorScopes: ["operator.sessions.read"],
-          featureMethods: [...defaultControlUiFeatureMethods, ...operatorMethods],
+          featureMethods: [...defaultControlUiFeatureMethods, "board.get", ...operatorMethods],
           historyMessages: [
             { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
           ],
-          methodResponses: Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+          methodResponses: {
+            ...Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+            "board.get": { sessionKey, revision: 0, tabs: [], widgets: [] },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("Shared discussion", { exact: true }).waitFor();
@@ -76,13 +265,17 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
-        expect(requests.some((request) => request.method === "chat.startup")).toBe(true);
+        expect(requests.filter((request) => request.method === "board.get")).toEqual([
+          expect.objectContaining({ params: { agentId: "main", sessionKey } }),
+        ]);
+        expect(requests.some((request) => request.method === "sessions.messages.subscribe")).toBe(
+          true,
+        );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
-          .getByText(
-            "You don't have permission to view scheduled tasks. Ask the person who manages OpenClaw for access.",
-            { exact: true },
-          )
+          .getByText("Couldn’t view scheduled tasks. Ask an admin to grant read access.", {
+            exact: true,
+          })
           .waitFor();
         expect(await gateway.getRequests("cron.list")).toHaveLength(0);
 
@@ -133,11 +326,11 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await waitForGatewayRecoveryScope(page, false);
         await page.getByText("Recovery frame 4", { exact: true }).waitFor({ state: "visible" });
-        const header = page.locator(".chat-pane__header").first();
+        const header = page.locator(".agent-chat__header--mobile");
         const initialHeaderY = await header.evaluate(
           (element) => element.getBoundingClientRect().y,
         );
-        const connectionStatus = page.locator(".mobile-connection-status .gateway-status:visible");
+        const connectionStatus = page.locator(".mobile-header__notices:visible");
         const content = page.locator("main.content");
         const initialContentBounds = await content.boundingBox();
         expect(initialContentBounds).not.toBeNull();
@@ -157,7 +350,6 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await waitForGatewayRecoveryScope(page, false);
         await connectionStatus
-          .locator(".gateway-status__label")
           .getByText("Restoring…", { exact: true })
           .waitFor({ state: "visible" });
         expect(await content.boundingBox()).toEqual(initialContentBounds);
@@ -211,37 +403,34 @@ suite.define(() => {
       const identityTooltip = page
         .getByRole("tooltip")
         .filter({ hasText: "Identity and app menu for Owner:" });
-      const retry = flag.getByRole("button", {
-        name: "Reconnecting… — Retry now",
-        exact: true,
-      });
-      await retry.waitFor({ state: "visible" });
+      const recovery = flag.locator(".gateway-status");
+      await recovery.waitFor({ state: "visible" });
       expect(await retainedStatus.getAttribute("title")).toBe("");
       await page.clock.runFor(4_001);
       await flag.waitFor({ state: "hidden" });
       await page.clock.resume();
       await retainedStatus.hover();
-      await retry.waitFor({ state: "visible" });
+      await recovery.waitFor({ state: "visible" });
       await page.clock.runFor(200);
       expect(await identityTooltip.count()).toBe(0);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
       expect(
-        await retry.evaluate((button) => {
+        await recovery.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
           return button.contains(
             document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
           );
         }),
       ).toBe(true);
-      await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
       await pauseVirtualClock(page);
       await gateway.closeLatest(1006, "synthetic failed attempt");
       await retainedStatus.focus();
-      await retry.waitFor({ state: "visible" });
+      await recovery.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
-      expect(await retry.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await recovery.evaluate((element) => element === document.activeElement)).toBe(true);
+      await page.clock.resume();
 
       await composer.locator("textarea").focus();
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -253,7 +442,6 @@ suite.define(() => {
       await page.clock.runFor(200);
       await flag.waitFor({ state: "hidden" });
       await identityTooltip.waitFor({ state: "visible" });
-      await captureStatus(page, "collapsed-avatar-overlap", composer, [retainedStatus, composer]);
       await retainedStatus.focus();
       expect(await flag.isVisible()).toBe(false);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
@@ -310,17 +498,16 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe("");
         }
         const footer = page.locator(".sidebar-footer-bar");
-        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
+        const connectionStatus = page.locator(".sidebar-shell__connection .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
-        await connectionStatus
-          .getByRole("button", { name: "Reconnecting… · 2 queued — Retry now", exact: true })
-          .waitFor();
+        await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
+        expect(await connectionStatus.getByRole("button").count()).toBe(0);
         expect(await connectionStatus.count()).toBe(1);
         expect(await connectionStatus.locator(".gateway-status__label").textContent()).toBe(
           "Reconnecting… · 2 queued",
         );
         expect(await content.boundingBox()).toEqual(connectedContentBounds);
-        expect((await connectionStatus.boundingBox())!.height).toBe(44);
+        expect((await connectionStatus.boundingBox())!.height).toBe(28);
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("data-connection-status")).toBe("reconnecting");
@@ -337,40 +524,30 @@ suite.define(() => {
         expect(await connectionStatus.getAttribute("role")).toBeNull();
         expect(await footer.textContent()).not.toContain("in outbox");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await captureStatus(page, "desktop-footer-queued", connectionStatus, [
-          identityStatus,
-          connectionStatus,
-        ]);
 
         await page.setViewportSize({ width: 390, height: 844 });
-        const mobileStatus = page.locator(".mobile-connection-status .gateway-status:visible");
+        const mobileStatus = page.locator(".mobile-header__notices:visible");
         await mobileStatus.waitFor({ state: "visible" });
         // The drawer stays mounted for its slide; Playwright visibility ignores off-screen placement.
         await expect
           .poll(() => connectionStatus.evaluate((element) => element.getBoundingClientRect().right))
           .toBeLessThanOrEqual(0);
         expect(
-          await connectionStatus.locator("button").evaluate((button) => {
-            button.focus();
+          await connectionStatus.evaluate((element) => {
+            element.focus();
             return {
-              inert: button.closest("[inert]") !== null,
-              focused: document.activeElement === button,
+              inert: element.closest("[inert]") !== null,
+              focused: document.activeElement === element,
             };
           }),
         ).toEqual({ inert: true, focused: false });
         expect(await page.locator(".sidebar-connection-flag").isVisible()).toBe(false);
-        expect(await mobileStatus.locator(".gateway-status__label").textContent()).toBe(
-          "Reconnecting… · 2 queued",
-        );
-        expect(
-          await page
-            .getByRole("button", { name: "Expand sidebar" })
-            .getAttribute("data-connection-status"),
-        ).toBe("reconnecting");
-        await captureStatus(page, "mobile-header-queued", mobileStatus, [
-          page.getByRole("button", { name: "Expand sidebar" }),
-          mobileStatus,
-        ]);
+        expect(await mobileStatus.textContent()).toBe("Reconnecting…");
+        expect(await page.locator(".chat-queue__item").count()).toBe(2);
+        expect(await announcement.textContent()).toBe("Reconnecting… · 2 queued");
+        // The shell owns the single live announcement, including queued messages.
+        expect(await mobileStatus.getAttribute("role")).toBeNull();
+        expect(await mobileStatus.getAttribute("aria-live")).toBeNull();
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 
@@ -390,18 +567,10 @@ suite.define(() => {
         expect(await mobileStatus.isVisible()).toBe(false);
         await identityStatus.click();
         await menu.getByText("Alex", { exact: true }).waitFor();
-        const retry = menu.locator('[data-value="command:retry-connect"]');
-        await retry.waitFor();
+        expect(await menu.locator('[data-value="command:retry-connect"]').count()).toBe(0);
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
-        const bounds = await retry.boundingBox();
-        expect(bounds).not.toBeNull();
-        expect(bounds!.x).toBeGreaterThanOrEqual(0);
-        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
-        const socketCount = await gateway.getSocketCount();
-        await gateway.closeLatest(1006, "synthetic failed attempt");
-        await retry.click();
-        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+        await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
         await connectionStatus.waitFor({ state: "detached" });

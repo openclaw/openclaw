@@ -1,0 +1,162 @@
+/* @vitest-environment jsdom */
+
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
+import { createMobileSheetScrollFadeConnection } from "./chat-mobile-scroll-fades.runtime.ts";
+import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
+
+const releases: Array<() => void> = [];
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+});
+
+afterEach(() => {
+  releases.splice(0).forEach((release) => release());
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  document.body.replaceChildren();
+});
+
+function shell() {
+  const element = document.createElement("section");
+  element.style.backgroundColor = "rgb(10, 20, 30)";
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(10, 20, 300, 400));
+  document.body.append(element);
+  return element;
+}
+
+function port(parent: HTMLElement, left: number) {
+  const element = document.createElement("div");
+  element.style.overflowY = "auto";
+  Object.defineProperties(element, {
+    clientHeight: { value: 100 },
+    clientWidth: { value: 180 },
+    clientLeft: { value: 2 },
+    clientTop: { value: 3 },
+    scrollHeight: { value: 300 },
+  });
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(left, 50, 200, 100));
+  element.scrollTop = 25;
+  parent.append(element);
+  return element;
+}
+
+const edges = (host: HTMLElement) => [
+  ...host.querySelectorAll<HTMLElement>(".chat-mobile-host__scroll-edge"),
+];
+
+function connect(
+  fades: ReturnType<typeof createMobileSheetScrollFades>,
+  host: HTMLElement,
+  presentation?: PresentationBinding,
+) {
+  const disconnect = fades.connect((ports) =>
+    createMobileSheetScrollFadeConnection(ports, host, presentation),
+  );
+  releases.push(disconnect);
+  vi.advanceTimersToNextFrame();
+  return disconnect;
+}
+
+function scroll(element: HTMLElement, top = element.scrollTop) {
+  element.scrollTop = top;
+  element.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersToNextFrame();
+}
+
+it("paints retained and late scroll ports in document order with the existing inset and surface", () => {
+  const host = shell();
+  const first = port(host, 30);
+  const second = port(host, 50);
+  const fades = createMobileSheetScrollFades();
+  releases.push(fades.register(second), fades.register(first));
+  connect(fades, host);
+
+  expect(edges(host).map((edge) => edge.style.left)).toEqual(["22px", "22px", "42px", "42px"]);
+  const top = edges(host)[0]!;
+  const bottom = edges(host)[1]!;
+  expect([top.style.top, bottom.style.top, top.style.width]).toEqual(["33px", "123px", "180px"]);
+  expect(top.style.getPropertyValue("--mobile-fade-surface")).toBe("rgb(10, 20, 30)");
+  expect([top.hidden, bottom.hidden]).toEqual([false, false]);
+
+  const nested = port(first, 40);
+  releases.push(fades.register(nested));
+  vi.advanceTimersToNextFrame();
+  expect(edges(host).map((edge) => edge.style.left)).toEqual(
+    ["22px", "32px", "42px"].flatMap((left) => [left, left]),
+  );
+  expect(edges(host)[0]).toBe(top);
+  expect(edges(host)[1]).toBe(bottom);
+
+  scroll(first, 0);
+  expect([top.hidden, bottom.hidden]).toEqual([true, false]);
+  scroll(first, 200);
+  expect([top.hidden, bottom.hidden]).toEqual([false, true]);
+});
+
+it("reconnects retained ports only within the current shell and releases disposed ports", async () => {
+  const firstHost = shell();
+  const nextHost = shell();
+  const retained = port(firstHost, 30);
+  const outside = port(nextHost, 50);
+  const fades = createMobileSheetScrollFades();
+  const releaseRetained = fades.register(retained);
+  releases.push(releaseRetained, fades.register(outside));
+  const disconnect = connect(fades, firstHost);
+  expect(edges(firstHost)).toHaveLength(2);
+  expect(edges(nextHost)).toHaveLength(0);
+
+  disconnect();
+  expect(firstHost.querySelector(".chat-mobile-host__scroll-fades")).toBeNull();
+  scroll(retained);
+  expect(edges(firstHost)).toHaveLength(0);
+
+  nextHost.prepend(retained);
+  connect(fades, nextHost);
+  expect(edges(nextHost)).toHaveLength(4);
+  releaseRetained();
+  expect(edges(nextHost)).toHaveLength(2);
+
+  outside.remove();
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(edges(nextHost)).toHaveLength(0);
+});
+
+it("cancels hidden paints and refreshes retained edges when the pane or sheet returns", async () => {
+  const host = shell();
+  const content = port(host, 30);
+  const owner = new EventTarget();
+  let presented = true;
+  const fades = createMobileSheetScrollFades();
+  releases.push(fades.register(content));
+  connect(fades, host, { owner, isPresented: () => presented });
+  const top = edges(host)[0]!;
+  const bounds = vi.spyOn(host, "getBoundingClientRect");
+  bounds.mockClear();
+
+  content.dispatchEvent(new Event("scroll"));
+  presented = false;
+  owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+  vi.advanceTimersToNextFrame();
+  expect(bounds).not.toHaveBeenCalled();
+
+  content.scrollTop = 0;
+  presented = true;
+  owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+  vi.advanceTimersToNextFrame();
+  expect(edges(host)[0]).toBe(top);
+  expect(top.hidden).toBe(true);
+  expect(bounds).toHaveBeenCalledTimes(1);
+
+  host.hidden = true;
+  await Promise.resolve();
+  scroll(content, 25);
+  expect(bounds).toHaveBeenCalledTimes(1);
+  host.hidden = false;
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(bounds).toHaveBeenCalledTimes(2);
+  expect(top.hidden).toBe(false);
+});

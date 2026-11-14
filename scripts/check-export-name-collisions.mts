@@ -56,7 +56,13 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -717,9 +723,9 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/config/sessions/session-lifecycle-projection.worker.ts",
       "src/config/sessions/session-message-rewrite.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
+      "src/config/sessions/session-transcript-active-facts-backfill.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
-      "src/infra/heartbeat-outcome-store.worker.ts",
       "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],

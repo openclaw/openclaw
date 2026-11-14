@@ -1,11 +1,12 @@
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { getRpcSourceForGateway } from "../../../sessions/session-controller.rpc-sources.js";
 import type { SessionControllerStopCapture } from "../../../sessions/session-controller.stop.js";
+import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
@@ -31,8 +32,11 @@ import type {
   SubagentAdminKillResult,
 } from "./subagent-control.types.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
-import { captureSubagentExecution } from "./subagent-registry-execution-cleanup.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  assertCapturedSubagentExecutionCurrent,
+  captureSubagentExecution,
+} from "./subagent-registry-execution-cleanup.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { withSubagentKillOwner } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -86,21 +90,7 @@ async function settleSubagentKill(
     params.cancellationControl.assertCurrent();
   }
   if (captured) {
-    const input = captured.execution.input;
-    // Async cleanup keeps a consumed input resident until its settlement receipt completes.
-    const cleanupSettled = input.phase === "consumed" && !input.mailbox.entries.includes(input);
-    if (!cleanupSettled) {
-      const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? captured.entry;
-      const target = input.target;
-      const rpcSource =
-        target && getRpcSourceForGateway(captured.runId, getGatewayContextResolver(input), target);
-      if (
-        entry.runId !== captured.runId ||
-        (rpcSource !== undefined && rpcSource !== captured.execution)
-      ) {
-        throw new Error("Subagent execution owner changed during cancellation");
-      }
-    }
+    assertCapturedSubagentExecutionCurrent(captured, params.entry);
   }
   if (settlement?.failure) {
     const error =
@@ -124,6 +114,7 @@ async function killLatestSubagentRun(params: {
   commands?: ReturnType<typeof captureSubagentCommands>;
   onKilled?: (entry: SubagentRunRecord) => void;
   onContinuationRetired?: () => void;
+  onCancelled?: (entry: SubagentRunRecord) => void;
 }): Promise<{
   entry: SubagentRunRecord;
   session?: SubagentKillSession;
@@ -205,6 +196,9 @@ async function killLatestSubagentRun(params: {
     // Later command or ownership failures cannot erase the committed native outcome.
     params.onKilled?.(tree.entry);
   }
+  if (result.killed || result.continuationRetired) {
+    params.onCancelled?.(entry);
+  }
   if (commands && !result.superseded && !result.declined && !result.error) {
     for (
       let pending = cancellationControl.prepareRead();
@@ -261,6 +255,7 @@ type KillTraversal = {
   /** A requester-wide Stop or reset cancels the tree; that requester needs no report. */
   suppressTaskDelivery?: boolean;
   stopRequestCommands?: boolean;
+  onCancelled?: (entry: SubagentRunRecord) => void;
 };
 
 async function visitAll(work: Promise<void>[]): Promise<void> {
@@ -446,6 +441,8 @@ export async function killAllControlledSubagentRuns(params: {
   requestSelection?: ReturnType<typeof captureExecRequestSubagentSelection>;
   assertCurrent?: () => void;
   suppressTaskDelivery?: boolean;
+  /** Reports an accepted kill or retirement of this exact captured owner's wake. */
+  onCancelled?: (entry: SubagentRunRecord) => void;
   /** False declines traversal; the scope still releases every reservation hold. */
   beforeKill?: (sealRootSelection: () => void) => boolean | Promise<boolean>;
 }): Promise<
@@ -538,6 +535,7 @@ async function killSelectedSubagentRuns(
   params: KillSelection & {
     preparationErrors?: string[];
     suppressTaskDelivery?: boolean;
+    onCancelled?: (entry: SubagentRunRecord) => void;
     beforeKill?: (sealRootSelection: () => void) => boolean | Promise<boolean>;
   },
 ) {
@@ -551,6 +549,7 @@ async function killSelectedSubagentRuns(
     // The bulk signal was consumed above; never forward caller hooks into child kills.
     const stopped = await killSubagentRunTree({
       suppressTaskDelivery: params.suppressTaskDelivery,
+      onCancelled: params.onCancelled,
       stopRequestCommands: true,
       trees: acceptedTrees,
       scope,
@@ -711,6 +710,26 @@ export async function killSubagentRunAdmin(
       }
       const targetState = ownsOutcome ? resolveSubagentKillTargetState(tree.entry) : undefined;
       const { errors } = collectKillErrors([tree], tree);
+      const caller = getGatewayToolCallerIdentity();
+      const instance = caller?.operationalRunInstance;
+      if (
+        errors.length === 0 &&
+        targetState?.state === "terminal" &&
+        targetState.task.status === "cancelled" &&
+        caller &&
+        instance &&
+        instance.runId === tree.entry.requesterTurnRunId &&
+        caller.sessionKey === tree.entry.requesterSessionKey &&
+        caller.agentId === authority.requesterAgentId &&
+        getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance === instance
+      ) {
+        // Reconcile only the final acknowledged cancellation, after native cleanup
+        // and outcome ownership checks, before its registry witness is released.
+        retireAcceptedSessionSpawnCompletionForRun(instance, {
+          runId: tree.entry.taskRunId ?? tree.entry.runId,
+          childSessionKey: tree.entry.childSessionKey,
+        });
+      }
       return {
         ...result,
         ...(targetState ? { targetState } : {}),

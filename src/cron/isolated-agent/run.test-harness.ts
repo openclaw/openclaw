@@ -1,4 +1,3 @@
-// Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
 import {
@@ -11,10 +10,18 @@ import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
+// Isolated run test harness builds cron run inputs, mocks, and assertions.
+import { resetCronAutomationMocks } from "./run-automation.test-support.js";
+import {
+  createCronModelCatalogOwnerFixture,
+  createCronPreparedModelRuntimeFixture,
+} from "./run-prepared-runtime.test-support.js";
+import {
+  createSessionEntryPatchStore,
+  usesRealAccessorStore,
+} from "./run-session-store.test-support.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -51,10 +58,6 @@ function normalizeModelSelectionForTest(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeOptionalString((value as { primary?: unknown }).primary);
-}
-
-function usesRealAccessorStore(storePath?: string): boolean {
-  return Boolean(storePath && storePath !== "/tmp/store.json");
 }
 
 export const buildWorkspaceSkillSnapshotMock = vi.fn();
@@ -101,7 +104,6 @@ export const cleanupBrowserSessionsForLifecycleEndMock = vi.fn();
 export const removeCronRunContinuationSessionIfIdleMock = vi.fn();
 export const callGatewayMock = vi.fn();
 export const hasUsableWebSearchProviderMock = vi.fn();
-export const readSessionMessagesAsyncMock = vi.fn();
 
 const resolveBootstrapWarningSignaturesSeenMock = vi.fn<() => string[]>();
 const resolveCronStyleNowMock = vi.fn();
@@ -305,7 +307,10 @@ vi.mock("../../agents/model-runtime-aliases.js", async (importOriginal) => ({
     const runtime = key
       ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
       : undefined;
-    return runtime || provider;
+    const executionProvider = runtime || provider;
+    return executionProvider && isCliProviderMock(executionProvider, cfg)
+      ? executionProvider
+      : undefined;
   },
 }));
 
@@ -313,9 +318,8 @@ vi.mock("./run-auth-profile.runtime.js", () => ({
   resolveSessionAuthSelection: resolveSessionAuthSelectionMock,
 }));
 
-vi.mock("./run-embedded.runtime.js", () => ({
-  resolveFastModeState: resolveFastModeStateMock,
-  resolveCronAgentLane: resolveCronAgentLaneMock,
+// mock-isolation: Keep the provider-executing runner graph out of unit tests; the cron adapter stays real.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
@@ -338,11 +342,6 @@ vi.mock("../run-continuation-cleanup.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewayMock,
-}));
-
-vi.mock("../../gateway/session-transcript-readers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../gateway/session-transcript-readers.js")>()),
-  readSessionMessagesAsync: readSessionMessagesAsyncMock,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
@@ -376,8 +375,10 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
             sessionKey: scope.sessionKey,
             operation,
             replaceEntry: options?.replaceEntry,
+            preserveActivity: options?.preserveActivity,
           }) ?? null,
-        options,
+        // The operation already produced a complete row, including intentional field removals.
+        { ...options, replaceEntry: true },
       ),
   };
 });
@@ -566,46 +567,21 @@ function resetRunConfigMocks(): void {
   loadModelCatalogMock.mockResolvedValue([]);
   preparedRunPluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
   loadPublishedReplyDispatchRuntimeMock.mockResolvedValue(undefined);
-  acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) => {
-    const registry = preparedRunPluginRegistryMock();
-    const metadata =
-      options?.pluginGeneration?.pluginMetadataSnapshot ??
-      options?.pluginMetadataSnapshot ??
-      createPluginMetadataSnapshotFixture();
-    return {
-      snapshot: { ...input, metadataSnapshot: metadata, pluginRegistry: registry },
-      pluginGeneration: {
-        ...options?.pluginGeneration,
-        pluginMetadataSnapshot: metadata,
-        pluginRegistry: registry,
-      },
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
-    };
-  });
-  loadModelCatalogOwnerMock.mockImplementation(
-    async (params: {
-      agentId?: string;
-      agentDir?: string;
-      config: object;
-      workspaceDir?: string;
-    }) => {
-      const agentId = params.agentId ?? "default";
-      return {
-        agentId,
-        agentDir: params.agentDir ?? "/tmp/agent-dir",
-        workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId),
-        config: params.config,
-        modelCatalog: {
-          entries: await loadModelCatalogMock(params),
-          routeVariants: [],
-        },
-      };
-    },
+  acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) =>
+    createCronPreparedModelRuntimeFixture(input, options, preparedRunPluginRegistryMock()),
+  );
+  loadModelCatalogOwnerMock.mockImplementation(async (params) =>
+    createCronModelCatalogOwnerFixture(params, {
+      resolveAgentDir: (await import("./run.runtime.js")).resolveAgentDir,
+      resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
+      loadModelCatalog: loadModelCatalogMock,
+    }),
   );
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
 
 function resetRunExecutionMocks(): void {
+  resetCronAutomationMocks();
   isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue([]);
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
@@ -765,7 +741,11 @@ function resetRunSessionMocks(): void {
     },
   );
   patchSessionEntryMock.mockReset();
-  installPatchSessionEntryStore();
+  patchSessionEntryMock.mockImplementation(
+    createSessionEntryPatchStore(loadSessionEntryMock, (scope, entry) =>
+      actualReplaceSessionEntry(scope, entry),
+    ),
+  );
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   callGatewayMock.mockReset();
@@ -774,52 +754,6 @@ function resetRunSessionMocks(): void {
   removeCronRunContinuationSessionIfIdleMock.mockResolvedValue(undefined);
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
-}
-
-/**
- * In-memory stand-in for the SQLite accessor `patchSessionEntryCore` used by the
- * cron persist path. Prod flips real session storage to per-agent SQLite, but
- * these orchestration tests must stay off disk. The store keys on
- * storePath+sessionKey so successive persists in one run observe the row the
- * previous persist committed, mirroring the accessor's read-modify-write and
- * letting the lifecycle claim guard prove ownership without real SQLite.
- */
-function installPatchSessionEntryStore(): void {
-  type PatchRow = Record<string, unknown>;
-  const rows = new Map<string, PatchRow>();
-  patchSessionEntryMock.mockImplementation(
-    async (
-      scope: { storePath?: string; sessionKey: string },
-      update: (
-        entry: PatchRow,
-        context: { existingEntry: PatchRow | undefined },
-      ) => PatchRow | null,
-      options: { fallbackEntry?: PatchRow } = {},
-    ) => {
-      const key = `${scope.storePath ?? ""}\\0${scope.sessionKey}`;
-      const existingEntry =
-        rows.get(key) ??
-        (usesRealAccessorStore(scope.storePath)
-          ? await readSessionEntryReadOnlyInWorker(scope)
-          : loadSessionEntryMock(scope.storePath, scope.sessionKey));
-      const writeBase = existingEntry ?? options.fallbackEntry;
-      if (!writeBase) {
-        return null;
-      }
-      const next = update(structuredClone(writeBase), {
-        existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
-      });
-      if (!next) {
-        return structuredClone(writeBase);
-      }
-      const committed = structuredClone(next);
-      rows.set(key, committed);
-      if (usesRealAccessorStore(scope.storePath)) {
-        await actualReplaceSessionEntry(scope as never, committed as never);
-      }
-      return committed;
-    },
-  );
 }
 
 export function resetRunCronIsolatedAgentTurnHarness(): void {
@@ -849,8 +783,6 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
       Boolean(params?.runtimeWebSearch?.selectedProvider),
   );
-  readSessionMessagesAsyncMock.mockReset();
-  readSessionMessagesAsyncMock.mockResolvedValue([]);
 }
 
 export function clearFastTestEnv(): string | undefined {

@@ -27,6 +27,7 @@ import {
 } from "./prepared-model-runtime.build.js";
 import {
   assertPreparedModelRuntimeInputCurrent,
+  capturePreparedModelRuntimeRefreshError,
   isPreparedModelRuntimePluginLifecycleFailure,
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -346,6 +347,24 @@ function configuredOwnerCandidates(
   return byAgent.get(agentId) ?? [];
 }
 
+let gatewayLifecycleActive = false;
+
+/** Gateway lifecycles own configured-agent inventory; standalone hosts stay workspace-scoped. */
+export const isPreparedModelRuntimeGatewayLifecycleActive = () => gatewayLifecycleActive;
+export const setPreparedModelRuntimeGatewayLifecycleActive = (active: boolean) => {
+  gatewayLifecycleActive = active;
+};
+
+/** Gateway inventory belongs to the configured agent; the session cwd only controls execution. */
+export function resolveInventoryInput(
+  input: PreparedModelRuntimeInput,
+  configuredOwner?: PreparedModelRuntimeOwner,
+): PreparedModelRuntimeInput {
+  return gatewayLifecycleActive
+    ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
+    : input;
+}
+
 export function resolvePublishedOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   input: PreparedModelRuntimeInput,
@@ -441,7 +460,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     providerDiscoveryTimeoutMs?: number;
     isPublicationCurrent?: () => boolean;
     isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
-    isOwnerPublished?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isBuildCurrent?: () => boolean;
     onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
     registerEntriesAfterBuildStart?: boolean;
@@ -477,7 +495,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner.generation === generation &&
       (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
     const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
-    const isPublished = params.isOwnerPublished;
     return {
       catalogMode: owner.catalogMode,
       input,
@@ -487,7 +504,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       prepareInboundPluginRegistry: owner.provenance === "configured",
       inspectRegistry:
         owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
-      isPublished: isPublished ? () => isPublished(key, owner) : undefined,
       isGenerationCurrent,
       retirementSignal: capturePreparedModelRuntimeGeneration(owner),
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,
@@ -634,7 +650,18 @@ export async function publishPreparedModelRuntimeOwnerBatch(
         continue;
       }
       candidate.owner.needsRefresh = true;
-      candidate.owner.refreshError = refreshError;
+      candidate.owner.refreshError = capturePreparedModelRuntimeRefreshError(refreshError);
+      if (
+        candidate.owner.provenance === "configured" &&
+        !(refreshError instanceof PreparedModelRuntimePublicationSupersededError)
+      ) {
+        candidate.owner.catalogRecovery ??= {
+          error: candidate.owner.refreshError,
+          scheduledAttempted: false,
+          retryAfter: 0,
+        };
+        candidate.owner.catalogRecovery.error = candidate.owner.refreshError;
+      }
     }
     settleSingleOwner?.failed(refreshError, candidates[0]!.isCurrent);
     throw refreshError;

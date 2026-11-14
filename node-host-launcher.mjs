@@ -1,7 +1,7 @@
 // The node supervisor must select its runtime before importing config or SQLite.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
+import fs, {
   closeSync,
   existsSync,
   fstatSync,
@@ -10,7 +10,6 @@ import {
   openSync,
   readFileSync,
   realpathSync,
-  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -21,6 +20,7 @@ import { resolveOpenClawCliInvocation } from "./cli-invocation.mjs";
 
 const CHILD_ARGUMENT = "--openclaw-node-host-child";
 const MANAGED_CHILD_ARGUMENT = "--openclaw-node-host-managed-child";
+const RESUME_CHILD_ARGUMENT = "--openclaw-node-host-resume-child";
 const CHILD_MARKER = Symbol.for("openclaw.node-host.launcher-child");
 const MANAGED_STATE_MARKER = Symbol.for("openclaw.node-host.managed-state-path");
 const RESTART_INTERVAL_MS = 12 * 60 * 60 * 1_000;
@@ -77,8 +77,11 @@ function parseInvocation(args, env) {
     words.push(arg);
   }
   const nodeRun = words[0] === "node" && words[1] === "run";
-  const connect = words[0] === "connect" && !words.includes("--service");
-  return nodeRun || connect ? { rootArgs } : null;
+  // Foreground enrollment is supervised like `node run`; it hands back `node run` restart args.
+  const enroll =
+    (words[0] === "connect" || (words[0] === "node" && words[1] === "join")) &&
+    !words.includes("--service");
+  return nodeRun || enroll ? { rootArgs } : null;
 }
 
 function readPackage(packageRoot) {
@@ -227,7 +230,7 @@ function activateRuntime(currentPath, runtimeRoot) {
   try {
     symlinkSync(runtimeRoot, temporary, process.platform === "win32" ? "junction" : "dir");
     try {
-      renameSync(temporary, currentPath);
+      fs.renameSync(temporary, currentPath);
     } catch (error) {
       if (
         !["EPERM", "EACCES", "EEXIST", "ENOTEMPTY"].includes(error.code) ||
@@ -237,12 +240,12 @@ function activateRuntime(currentPath, runtimeRoot) {
       }
       // Windows cannot replace a directory junction. Keep its timestamp and target recoverable.
       removePrevious();
-      renameSync(currentPath, previous);
+      fs.renameSync(currentPath, previous);
       try {
-        renameSync(temporary, currentPath);
+        fs.renameSync(temporary, currentPath);
       } catch (publishError) {
         try {
-          renameSync(previous, currentPath);
+          fs.renameSync(previous, currentPath);
         } catch (restoreError) {
           throw new AggregateError(
             [publishError, restoreError],
@@ -277,6 +280,62 @@ function activateRuntime(currentPath, runtimeRoot) {
 export const isNodeHostLauncherChild = () => process[CHILD_MARKER] === true;
 
 export async function runNodeHostLauncher({ entryPath, packageRoot }) {
+  if (process.argv[2] === RESUME_CHILD_ARGUMENT) {
+    const deviceId = process.argv[3];
+    const resumeIndex = process.argv.indexOf("--resume-device", 6);
+    if (
+      !deviceId ||
+      process.argv[4] !== "node" ||
+      process.argv[5] !== "run" ||
+      resumeIndex < 0 ||
+      process.argv[resumeIndex + 1] !== deviceId ||
+      !process.send ||
+      !process.connected
+    ) {
+      throw new Error("Saved node resume requires its connected process owner.");
+    }
+    process.argv.splice(2, 2);
+    // The provider owns the uncommitted child through this private channel. A
+    // killed launcher closes it even when this child has already detached.
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        process.off("message", onMessage);
+        process.off("disconnect", onDisconnect);
+      };
+      /** @param {Error} error */
+      const fail = (error) => {
+        cleanup();
+        reject(error);
+      };
+      const onDisconnect = () =>
+        fail(new Error("Saved node resume owner disconnected before handoff."));
+      const onMessage = (message) => {
+        if (message?.type !== "openclaw.node.resume-commit" || message.deviceId !== deviceId) {
+          return;
+        }
+        process.off("message", onMessage);
+        process.send({ type: "openclaw.node.resume-committed", deviceId }, (error) => {
+          if (error) {
+            fail(error);
+            return;
+          }
+          cleanup();
+          resolve();
+        });
+      };
+      process.on("message", onMessage);
+      process.once("disconnect", onDisconnect);
+      process.send({ type: "openclaw.node.resume-ready", deviceId }, (error) => {
+        if (error) {
+          fail(error);
+        }
+      });
+    });
+    if (process.connected) {
+      process.disconnect();
+    }
+    return false;
+  }
   const managedChild = process.argv[2] === MANAGED_CHILD_ARGUMENT;
   if (process.argv[2] === CHILD_ARGUMENT || managedChild) {
     if (!process.send || !process.connected) {

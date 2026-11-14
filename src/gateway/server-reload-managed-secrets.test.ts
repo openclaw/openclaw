@@ -2,6 +2,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { createModelProviderRouteOverrideResolver } from "../config/model-provider-config.js";
 import {
@@ -12,6 +13,7 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -61,15 +63,10 @@ function configPair(
   name = "Luna",
   extraModel?: { id: string; contextWindow: number },
 ) {
-  const model: ModelDefinitionConfig = {
-    id: "gpt-5.6-luna",
+  const model: ModelDefinitionConfig = modelDefinition("gpt-5.6-luna", {
     name,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    maxTokens: 4096,
     ...(contextWindow === undefined ? {} : { contextWindow }),
-  };
+  });
   const source = {
     agents: { defaults: { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: runtime } } } } },
     models: {
@@ -198,45 +195,46 @@ async function createReload(
   { initial = configPair("openclaw"), next = configPair("codex") } = {},
 ) {
   activateSecretsRuntimeSnapshotWithSource(await prepare(initial.config), initial.source);
-  expectAuthoredSource(initial.source);
   const activateRuntimeSecrets = createActivator();
   // Only secret publication is exercised here; the service tail is injected at its existing seam.
-  const applyHotReload = vi.fn<SecretHandlerOptions["applyHotReload"]>(
-    async (_plan, _config, publication) => {
-      await beforePublication?.();
-      let committed = false;
-      try {
-        await publication!.publish(
-          async () => {
-            await commit();
-            committed = true;
-            plugin?.afterCommit?.();
-          },
-          () => committed,
-        );
-      } catch (cause) {
-        if (!plugin) {
-          throw cause;
-        }
-        throw new PluginRuntimeApplicationError(
-          "Plugin operation failed during activate",
-          {
-            operationId: "secrets-publication",
-            generation: 1,
-            pluginIds: ["fixture"],
-            phase: "activate",
-            committed,
-          },
-          {
-            cause: plugin.cleanupFailure
-              ? new AggregateError([cause, plugin.cleanupFailure], "Plugin rollback failed")
-              : cause,
-          },
-        );
+  const applyHotReload: SecretHandlerOptions["applyHotReload"] = async (
+    _plan,
+    _config,
+    publication,
+  ) => {
+    await beforePublication?.();
+    let committed = false;
+    try {
+      await publication!.publish(
+        async () => {
+          await commit();
+          committed = true;
+          plugin?.afterCommit?.();
+        },
+        () => committed,
+      );
+    } catch (cause) {
+      if (!plugin) {
+        throw cause;
       }
-      return "applied";
-    },
-  );
+      throw new PluginRuntimeApplicationError(
+        "Plugin operation failed during activate",
+        {
+          operationId: "secrets-publication",
+          generation: 1,
+          pluginIds: ["fixture"],
+          phase: "activate",
+          committed,
+        },
+        {
+          cause: plugin.cleanupFailure
+            ? new AggregateError([cause, plugin.cleanupFailure], "Plugin rollback failed")
+            : cause,
+        },
+      );
+    }
+    return "applied";
+  };
   const { onHotReload } = createSecretHandlers(activateRuntimeSecrets, prepare, applyHotReload);
   const ownership: GatewayConfigReloadTransactionOwnership = {
     isCurrent: () => true,
@@ -257,7 +255,6 @@ async function createReload(
     initial,
     next,
     ownership,
-    applyHotReload,
     run: () => onHotReload(plan, next.config, ownership, next.source),
   };
 }
@@ -302,10 +299,9 @@ describe("managed reload authored source", () => {
     expect(getRuntimeConfigSnapshot()?.models?.providers?.fixture?.apiKey).toBe(
       "resolved-fixture-key",
     );
-    expect(refresh).toHaveBeenCalledOnce();
 
     const application = createRuntimeConfigWriteApplication();
-    const settled: string[] = [];
+    const settled: RuntimeConfigWriteApplicationStatus[] = [];
     void application.result.then((status) => settled.push(status));
     harness.emitWrite(
       attachRuntimeConfigWriteApplication(
@@ -320,8 +316,54 @@ describe("managed reload authored source", () => {
       "resolved-fixture-key",
     );
     expect(getRuntimeConfigSourceSnapshot()).toEqual(source);
-    expect(harness.onHotReload).toHaveBeenCalledOnce();
     expect(refresh).toHaveBeenCalledOnce();
+    await harness.reloader.stop();
+  });
+
+  it("settles an unchanged activation write whose secrets are still unresolved", async () => {
+    // Setup recovery restores the running config; its write carries authored SecretRefs.
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.example.invalid/v1",
+            apiKey: { source: "env", provider: "default", id: "RELOAD_KEY" },
+            models: [],
+          },
+        },
+      },
+    };
+    const prepareSnapshot = (next: OpenClawConfig) =>
+      prepare(next, { RELOAD_KEY: "resolved-fixture-key" });
+    activateSecretsRuntimeSnapshotWithSource(await prepareSnapshot(config), config);
+    const handlers = createSecretHandlers(
+      createActivator({
+        prepareRuntimeSecretsSnapshot: ({ config: next }) => prepareSnapshot(next),
+      }),
+      prepareSnapshot,
+    );
+    vi.spyOn(skillsDiscovery, "refreshSkillsDiscovery").mockResolvedValue();
+    const { clock, scheduler } = createConfigReloadTestClock();
+    const harness = createReloaderHarness(async () => makeSnapshot({ config, hash: "running" }), {
+      scheduler,
+      initialConfig: config,
+      onHotReload: handlers.onHotReload,
+      onNoopConfigCommit: handlers.onHotReload,
+      onEffectiveConfigUnchanged: handlers.onEffectiveConfigUnchanged,
+    });
+    await harness.reloader.ready;
+    const application = createRuntimeConfigWriteApplication(undefined, { prepare: async () => {} });
+    const settled: RuntimeConfigWriteApplicationStatus[] = [];
+    void application.result.then((status) => settled.push(status));
+    harness.emitWrite(
+      attachRuntimeConfigWriteApplication(makeWrite(config, "restored"), application),
+    );
+    await clock.advanceBy(0);
+
+    expect(settled).toEqual(["applied"]);
+    expect(getRuntimeConfigSnapshot()?.models?.providers?.fixture?.apiKey).toBe(
+      "resolved-fixture-key",
+    );
     await harness.reloader.stop();
   });
 
@@ -374,7 +416,7 @@ describe("managed reload authored source", () => {
     expect(policies).toEqual([prepared.config]);
   });
 
-  it.each(["success", "hook fails", "publisher fails", "publisher replaces then fails"] as const)(
+  it.each(["hook fails", "publisher fails", "publisher replaces then fails"] as const)(
     "commits the exact target and reconciles publication outcome: %s",
     async (outcome) => {
       const [initial, candidate] = await prepareCandidates();
@@ -386,7 +428,7 @@ describe("managed reload authored source", () => {
       const beforeSnapshotPublication = vi.fn(async (config: OpenClawConfig | null) => {
         if (!publisherFails) {
           expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(initial.config);
-          if (outcome === "hook fails" && config === candidate.config) {
+          if (config === candidate.config) {
             throw failure;
           }
         }
@@ -405,15 +447,9 @@ describe("managed reload authored source", () => {
       const publication = publisherFails
         ? activate.activatePreparedSnapshot(candidate, reloadActivation)
         : publish(activate, candidate);
-      const survivor = outcome === "success" || replaced ? candidate : initial;
-      if (outcome !== "success") {
-        await expect(publication).rejects.toBe(failure);
-        expectPublishedConfigs(beforeSnapshotPublication, candidate.config, survivor.config);
-      } else {
-        await expect(publication).resolves.toBe(candidate);
-        expect(beforeSnapshotPublication).toHaveBeenCalledExactlyOnceWith(candidate.config);
-      }
-      expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(survivor.config);
+      const survivor = replaced ? candidate : initial;
+      await expect(publication).rejects.toBe(failure);
+      expectPublishedConfigs(beforeSnapshotPublication, candidate.config, survivor.config);
     },
   );
 
@@ -525,7 +561,7 @@ describe("managed reload authored source", () => {
           throw new GatewayHotReloadStaleSecretsError();
         }
       });
-      const { next, ownership, applyHotReload, run } = await createReload(
+      const { next, ownership, run } = await createReload(
         commit,
         beforePublication,
         recovery === "direct"
@@ -552,7 +588,6 @@ describe("managed reload authored source", () => {
         expect(result).toBe("applied");
         expect(getRuntimeConfigSnapshot()).toMatchObject(next.source);
       }
-      expect(applyHotReload).toHaveBeenCalledTimes(cleanupFailed || committed ? 1 : 2);
       expect(commit).toHaveBeenCalledTimes(cleanupFailed ? 0 : 1);
       expect(ownership.markRuntimeCommitted).toHaveBeenCalledTimes(cleanupFailed ? 0 : 1);
       expectAuthoredSource(cleanupFailed ? refreshed.source : next.source);

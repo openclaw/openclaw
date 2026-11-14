@@ -49,9 +49,9 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResults"
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
-      | "setNextUserMessagePersistence"
     >
   > & {
+    setNextUserMessagePersistence?: TranscriptRunContext["setNextUserMessagePersistence"];
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
     setTranscriptRunContext?: (options: Parameters<typeof guardSessionManager>[1]) => void;
     /** Retire only this binding after its accepted transcript writes drain. */
@@ -93,7 +93,6 @@ type GuardOptions = {
   privateCompletion?: true;
   allowSyntheticToolResults?: boolean;
   missingToolResultText?: string;
-  allowedToolNames?: Iterable<string>;
   trigger?: EmbeddedRunTrigger;
   preparedUserTurnMessage?: PersistedUserTurnMessage;
   preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
@@ -232,6 +231,7 @@ function createTranscriptRunContext(
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
+      runId,
       hidden,
       inputProvenance,
       message,
@@ -407,7 +407,6 @@ export function guardSessionManager(
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: options?.allowSyntheticToolResults,
     missingToolResultText: options?.missingToolResultText,
-    allowedToolNames: options?.allowedToolNames,
     config: options?.config,
     maxToolResultChars,
     withCompactionPersistence: options?.withCompactionPersistence,

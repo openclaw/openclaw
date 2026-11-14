@@ -35,10 +35,6 @@ import {
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../src/infra/runtime-worker-url.js";
 import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
@@ -47,7 +43,6 @@ import {
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -433,40 +428,20 @@ it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitte
   expect(projectViewer({ ...viewerFailure, ...absent })).toMatchObject(absent);
 });
 
-it("retains the last eight node closes from a 1 MiB JSON file logger output", async () => {
+it("retains the last eight node closes from a 1 MiB structured log", async () => {
   const file = fixtureFile("desktop-node-log-", "node.log");
-  const loggerUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.logger);
-  const subsystemUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.subsystemLogger);
-  execFileSync(
-    process.execPath,
+  const record = (streamKind: string, closeCode: number) =>
+    JSON.stringify({
+      "0": '{"subsystem":"node-host/stream"}',
+      "1": { streamKind, trigger: "target-close", closeCode, privateDetail: "private-node-data" },
+      "2": "node stream closed",
+    });
+  await writeFile(
+    file,
     [
-      ...resolveRuntimeWorkerArgv(loggerUrl, process.execPath).slice(0, -1),
-      "--input-type=module",
-      "--eval",
-      `
-          import { flushLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl.href)};
-          import { createSubsystemLogger } from ${JSON.stringify(subsystemUrl.href)};
-          setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
-          const log = createSubsystemLogger("node-host/stream");
-          log.info("node stream closed", {
-            streamKind: "portal", trigger: "target-close", closeCode: 1000,
-          });
-          for (let index = 0; index < 10; index++) {
-            log.info("node stream closed", {
-              streamKind: "desktop", trigger: "target-close", closeCode: 1000 + index,
-              privateDetail: "private-node-data",
-            });
-          }
-          await flushLogger();
-        `,
-      file,
-    ],
-    {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      env: { ...process.env, OPENCLAW_TEST_FILE_LOG: "1" },
-      timeout: 15_000,
-      stdio: "pipe",
-    },
+      record("portal", 1000),
+      ...Array.from({ length: 10 }, (_, index) => record("desktop", 1000 + index)),
+    ].join("\n"),
   );
   await appendFile(file, Buffer.alloc(1024 * 1024 - (await stat(file)).size, 32));
   const closes = await readDesktopProofNodeStreamCloses(file);
@@ -605,6 +580,66 @@ it("publishes fixed phases and known failure locations, not raw reporter content
     ],
   });
   expectRedacted(result, /private|token|secret|password|actual|expected|success|title|https/u);
+});
+
+it("retains native desktop file and case timing without publishing private reporter fields", async () => {
+  const file = fixtureFile("desktop-timing-report-", "report.json");
+  const log = path.join(path.dirname(file), "test-node.log");
+  const report = rawTestReport();
+  Object.assign(report.testResults[0]!, { startTime: 1000, endTime: 1025 });
+  Object.assign(report.testResults[0]!.assertionResults[0]!, { duration: 25.5 });
+  await writeJson(file, report);
+  await writeFile(
+    log,
+    [
+      "private stdout",
+      "[vitest:module] " +
+        JSON.stringify({
+          file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+          project: "private-project",
+          diagnostic: { duration: 72.25, collectDuration: 14.5, privateData: "private-token" },
+        }),
+    ].join("\n"),
+  );
+  const result = await readDesktopProofTestReport(file, log);
+  expect(result.files[0]?.timing).toEqual({ executionMs: 72.25, collectionMs: 14.5 });
+  expect(reportAssertion(result)?.durationMs).toBe(25.5);
+  expectRedacted(result, /private|token|stdout|project|startTime|endTime|privateData/u);
+});
+
+it("leaves unavailable or invalid desktop timing unknown without changing failure evidence", async () => {
+  const file = fixtureFile("desktop-timing-missing-", "report.json");
+  const log = path.join(path.dirname(file), "test-node.log");
+  const report = rawTestReport();
+  await writeJson(file, report);
+  const unchanged = await readDesktopProofTestReport(file);
+  expect(unchanged.files[0]?.timing).toBeNull();
+  expect(reportAssertion(unchanged)?.durationMs).toBeNull();
+  const record = {
+    file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+    diagnostic: { duration: 12, collectDuration: 4 },
+  };
+  const line = "[vitest:module] " + JSON.stringify(record);
+  for (const text of [
+    "private partial stdout\n[vitest:module] {",
+    line + "\n[vitest:module] {",
+    line + "\n" + line,
+    "[vitest:module] " + JSON.stringify({ ...record, file: "/private/other.test.ts" }),
+    ...[-1, null, "private-token", 720_001].map(
+      (duration) =>
+        "[vitest:module] " +
+        JSON.stringify({ ...record, diagnostic: { duration, collectDuration: 4 } }),
+    ),
+  ]) {
+    await writeFile(log, text);
+    expect(await readDesktopProofTestReport(file, log)).toEqual(unchanged);
+  }
+  expect(await readDesktopProofTestReport(file, log + ".missing")).toEqual(unchanged);
+  for (const duration of [-1, Infinity, Number.NaN, "private-token", 720_001]) {
+    const value = rawTestReport();
+    Object.assign(value.testResults[0]!.assertionResults[0]!, { duration });
+    expect(reportAssertion(desktopProofTestReport(value))?.durationMs).toBeNull();
+  }
 });
 
 it.each([

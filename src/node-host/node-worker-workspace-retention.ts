@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import type { NodeWorkerWorkspaceSession } from "./node-worker-workspace-identity.js";
 
@@ -13,10 +14,7 @@ export async function listOwnedEntries(parent: string): Promise<fs.Dirent[]> {
       left.name.localeCompare(right.name),
     );
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return [];
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? [];
   }
 }
 
@@ -68,4 +66,27 @@ export async function listNodeWorkerWorkspaceSessions(
     }
   }
   return sessions;
+}
+
+/** Retain an exact generation through asynchronous work and concurrent collection. */
+export function retainNodeWorkerWorkspaceOperation(
+  active: Map<string, number>,
+  retainedDuringPass: Set<string> | undefined,
+  generationKey: string,
+): () => void {
+  active.set(generationKey, (active.get(generationKey) ?? 0) + 1);
+  retainedDuringPass?.add(generationKey);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const count = active.get(generationKey) ?? 0;
+    if (count <= 1) {
+      active.delete(generationKey);
+    } else {
+      active.set(generationKey, count - 1);
+    }
+  };
 }

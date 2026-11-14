@@ -1,0 +1,237 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  assertAuditBounds,
+  parseReleasePrepushArgs,
+  runReleasePrepush,
+  selectChangedGateBase,
+} from "../../scripts/release-prepush.mts";
+
+const BASE_SHA = "1".repeat(40);
+const HEAD_SHA = "2".repeat(40);
+const MERGE_BASE_SHA = "3".repeat(40);
+const RELEASE_SHA = "4".repeat(40);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function fixture() {
+  const deps = {
+    assertCleanWorktree: vi.fn(),
+    assertAuditBounds: vi.fn().mockReturnValue(BASE_SHA),
+    currentBranch: vi.fn().mockReturnValue("release/2026.10.6"),
+    pushValidatedHead: vi.fn(),
+    refreshMain: vi.fn(),
+    refreshReleaseBranch: vi.fn(),
+    resolveInitialReleaseBase: vi.fn(),
+    resolveCommit: vi.fn((ref: string) => (ref === "origin/main" ? BASE_SHA : HEAD_SHA)),
+    runCommand: vi
+      .fn<NonNullable<Parameters<typeof runReleasePrepush>[1]>["runCommand"]>()
+      .mockResolvedValue(0),
+  };
+  return {
+    deps,
+    run: (options: Partial<Parameters<typeof runReleasePrepush>[0]> = {}) =>
+      runReleasePrepush({ base: "origin/main", dryRun: false, push: false, ...options }, deps),
+  };
+}
+
+describe("release:prepush", () => {
+  it("accepts the package-script separator after its injected push flag", () => {
+    expect(
+      parseReleasePrepushArgs([
+        "--push",
+        "--",
+        "--head",
+        HEAD_SHA,
+        "--branch",
+        "release/2026.10.6",
+      ]),
+    ).toMatchObject({
+      branch: "release/2026.10.6",
+      head: HEAD_SHA,
+      push: true,
+    });
+    expect(() => parseReleasePrepushArgs(["--push", "--", "--", "--head", HEAD_SHA])).toThrow(
+      "unknown argument: --",
+    );
+  });
+
+  it("accepts the exact package-script CLI shape at the executable boundary", () => {
+    const output = execFileSync(
+      process.execPath,
+      ["--import", "./scripts/tsx.mjs", "scripts/release-prepush.mts", "--push", "--", "--help"],
+      { encoding: "utf8" },
+    );
+    expect(output).toContain("Usage: pnpm release:prepush");
+  });
+
+  it("pushes a first cut from its shipped ancestor while retaining strict changed-byte gates", () => {
+    const root = process.cwd();
+    const repo = mkdtempSync(join(tmpdir(), "openclaw-release-baseline-"));
+    const remote = join(repo, "remote.git");
+    const checkout = join(repo, "checkout");
+    mkdirSync(checkout);
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8" }).trim();
+    const commit = (message: string) => {
+      git(["add", "."]);
+      git(["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", message]);
+      return git(["rev-parse", "HEAD"]);
+    };
+    const push = () =>
+      spawnSync(
+        process.execPath,
+        [
+          "--import",
+          join(root, "scripts/tsx.mjs"),
+          join(root, "scripts/release-prepush.mts"),
+          "--push",
+        ],
+        { cwd: checkout, encoding: "utf8" },
+      );
+    try {
+      git(["init", "--quiet", "--initial-branch=main"]);
+      git(["config", "user.name", "Release Test"]);
+      git(["config", "user.email", "release-test@example.com"]);
+      git(["config", "core.hooksPath", "/dev/null"]);
+      git(["init", "--quiet", "--bare", remote]);
+      git(["remote", "add", "origin", remote]);
+      mkdirSync(join(checkout, "scripts/lib"), { recursive: true });
+      for (const file of ["scripts/release-changelog.mjs", "scripts/lib/release-changelog.mjs"]) {
+        copyFileSync(join(root, file), join(checkout, file));
+      }
+      writeFileSync(
+        join(checkout, "CHANGELOG.md"),
+        "# Changelog\n\n## 2026.10.7\n\n### Fixes\n\n- Fixture.\n",
+      );
+      execFileSync(process.execPath, ["scripts/release-changelog.mjs", "split"], { cwd: checkout });
+      commit("shared");
+      git(["switch", "--quiet", "-c", "release/2026.10.6"]);
+      mkdirSync(join(checkout, "patches"));
+      writeFileSync(
+        join(checkout, "patches/vendor.patch"),
+        "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n \n-\told\n+\tnew\n",
+      );
+      const shipped = commit("shipped patch bytes");
+      git(["tag", "v2026.10.6"]);
+      git(["switch", "--quiet", "main"]);
+      writeFileSync(join(checkout, "main.txt"), "main only\n");
+      commit("main diverges");
+      git(["push", "--quiet", "origin", "main", "--tags"]);
+      git(["tag", "--delete", "v2026.10.6"]);
+      git(["switch", "--quiet", "-c", "release/2026.10.7", shipped]);
+      writeFileSync(join(checkout, "candidate.txt"), "candidate \n");
+      commit("bad first candidate");
+      git(["tag", "v2026.10.7-beta.1"]);
+      git(["tag", "v2026.10.7"]);
+      expect(push().status).not.toBe(0);
+      expect(git(["ls-remote", "origin", "refs/heads/release/2026.10.7"])).toBe("");
+      writeFileSync(join(checkout, "candidate.txt"), "candidate\n");
+      const candidate = commit("new candidate");
+      const result = push();
+      expect(result.stderr).not.toContain("trailing whitespace");
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(git(["ls-remote", "origin", "refs/heads/release/2026.10.7"])).toContain(candidate);
+      for (const content of [
+        "new trailing whitespace \n",
+        "<<<<<<< ours\n=======\n>>>>>>> theirs\n",
+      ]) {
+        git(["reset", "--hard", candidate]);
+        writeFileSync(join(checkout, "candidate.txt"), content);
+        commit("bad candidate bytes");
+        const rejected = push();
+        expect(rejected.status).not.toBe(0);
+        expect(rejected.stderr).toContain("whitespace and conflict-marker check");
+        expect(git(["ls-remote", "origin", "refs/heads/release/2026.10.7"])).toContain(candidate);
+      }
+    } finally {
+      rmSync(repo, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a candidate that does not advance the canonical release branch", () => {
+    const mergeBase = vi
+      .fn()
+      .mockReturnValueOnce(MERGE_BASE_SHA)
+      .mockReturnValueOnce(MERGE_BASE_SHA);
+    expect(() => selectChangedGateBase(BASE_SHA, HEAD_SHA, RELEASE_SHA, mergeBase)).toThrow(
+      "not a fast-forward",
+    );
+  });
+
+  it("uses the audited merge base for the short preflight on a divergent release branch", async () => {
+    const { deps, run } = fixture();
+    deps.assertAuditBounds.mockReturnValue(MERGE_BASE_SHA);
+    expect(await run()).toBe(0);
+    expect(deps.runCommand.mock.calls.map(([command]) => [command.bin, command.args])).toEqual([
+      ["git", ["diff", "--check", MERGE_BASE_SHA, HEAD_SHA]],
+      ["node", ["scripts/release-changelog.mjs", "check", "--ref", HEAD_SHA]],
+    ]);
+    expect(deps.runCommand.mock.calls.every(([command]) => command.cwd === process.cwd())).toBe(
+      true,
+    );
+    expect(deps.runCommand.mock.calls[0]?.[0].env?.OPENCLAW_RELEASE_CONTEXT_REF).toBeUndefined();
+  });
+
+  it("stops at the first failed integrated gate", async () => {
+    const { deps, run } = fixture();
+    deps.runCommand.mockResolvedValueOnce(0).mockResolvedValueOnce(9);
+    expect(await run()).toBe(9);
+    expect(deps.runCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a head that changes during validation", async () => {
+    const { deps, run } = fixture();
+    deps.resolveCommit
+      .mockReturnValueOnce(BASE_SHA)
+      .mockReturnValueOnce(HEAD_SHA)
+      .mockReturnValueOnce("3".repeat(40));
+    await expect(run()).rejects.toThrow("HEAD changed");
+    expect(deps.assertCleanWorktree).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("pushes only the validated cut (explicit: %s)", async (explicit) => {
+    const { deps, run } = fixture();
+    deps.assertAuditBounds.mockReturnValueOnce(MERGE_BASE_SHA).mockReturnValueOnce(RELEASE_SHA);
+    deps.refreshReleaseBranch.mockReturnValue(RELEASE_SHA);
+    const options = explicit
+      ? { branch: "release/2026.10.6", head: HEAD_SHA, push: true }
+      : { push: true };
+    expect(await run(options)).toBe(0);
+    expect(deps.refreshMain).toHaveBeenCalledOnce();
+    expect(deps.currentBranch).toHaveBeenCalledTimes(explicit ? 0 : 2);
+    expect(deps.resolveCommit).toHaveBeenCalledWith(explicit ? HEAD_SHA : "HEAD");
+    expect(
+      deps.runCommand.mock.calls.every(
+        ([command]) => command.env?.OPENCLAW_RELEASE_CONTEXT_REF === "release/2026.10.6",
+      ),
+    ).toBe(true);
+    expect(deps.runCommand.mock.calls[0]?.[0].args).toEqual([
+      "diff",
+      "--check",
+      RELEASE_SHA,
+      HEAD_SHA,
+    ]);
+    expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
+  });
+
+  it("runs applicable gates and pushes when a fresh cut equals origin/main", async () => {
+    const { deps, run } = fixture();
+    deps.assertAuditBounds.mockImplementation(assertAuditBounds);
+    deps.resolveCommit.mockReturnValue(HEAD_SHA);
+    expect(await run({ branch: "release/2026.10.6", head: HEAD_SHA, push: true })).toBe(0);
+    expect(deps.runCommand).toHaveBeenCalledTimes(2);
+    expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
+  });
+
+  it("refuses a custom comparison base for a release push", async () => {
+    const { deps, run } = fixture();
+    await expect(run({ base: "HEAD~1", push: true })).rejects.toThrow("authoritative origin/main");
+    expect(deps.refreshMain).not.toHaveBeenCalled();
+  });
+});

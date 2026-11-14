@@ -35,8 +35,8 @@ separate implementations:
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ title, code }` payload, executed by the selected Node or
-  QuickJS executor.
+  tool takes a JSON `{ code }` payload with an optional `title`, executed by
+  the selected Node or QuickJS executor.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
@@ -63,6 +63,12 @@ job. Open the page that matches your task.
 | [Code Mode quickstart](/tools/code-mode/quickstart)       | You want to turn Code Mode on, override one model, and recover from tool errors.   |
 | [Code Mode executors](/tools/code-mode/executors)         | You want to choose Node or QuickJS and understand their security boundaries.       |
 | [Code Mode configuration](/tools/code-mode/configuration) | You need the configuration fields, the preferred-model list, and activation order. |
+
+The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+can prioritize frequently and recently used tools within the same index budget.
+It is off by default, keeps core coding tools pinned, reserves room for newcomers,
+and freezes its ranking for the prompt series. It does not change callable tools
+or apply to Codex-native Code Mode.
 
 ## What it does
 

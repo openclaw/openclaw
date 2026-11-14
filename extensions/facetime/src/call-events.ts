@@ -40,6 +40,7 @@ const TU_CALL_STATUS = {
   active: 1,
   outgoingRinging: 3,
   incomingRinging: 4,
+  disconnected: 6,
 } as const;
 
 export type AuthenticatedFaceTimeOwner = {
@@ -256,7 +257,9 @@ export function isOutgoingRingingCall(event: FaceTimeCallStatusEvent): boolean {
 }
 
 export function isEndedCall(event: FaceTimeCallStatusEvent): boolean {
-  return event.data.has_ended === true;
+  // TUCall may publish disconnected before dateEnded is populated. Waiting for
+  // that timestamp retains a dead carrier and blocks subsequent incoming calls.
+  return event.data.has_ended === true || event.data.call_status === TU_CALL_STATUS.disconnected;
 }
 
 export function isUnknownCallStatus(event: FaceTimeCallStatusEvent): boolean {

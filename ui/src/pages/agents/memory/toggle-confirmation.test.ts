@@ -2,7 +2,9 @@
 
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { renderDreamingToggleConfirmation } from "./toggle-confirmation.tsx";
 
 afterEach(() => cleanupSolid());
@@ -13,11 +15,9 @@ function renderToggle(overrides?: Partial<ToggleProps>): HTMLElement {
   const props: ToggleProps = {
     open: true,
     enabling: true,
-    loading: false,
     disabled: false,
     onConfirm: vi.fn(),
     onCancel: vi.fn(),
-    hasError: false,
     ...overrides,
   };
   const host = document.createElement("div");
@@ -34,33 +34,40 @@ describe("renderDreamingToggleConfirmation", () => {
   it("states the global scope and never promises a gateway restart", () => {
     for (const enabling of [true, false]) {
       const text = renderToggle({ enabling }).textContent ?? "";
-      expect(text).toContain("All Agents");
-      expect(text).toContain("global setting");
+      expect(text).toContain("all agents");
+      expect(text).toContain("Dreaming applies to all agents.");
       expect(text.toLowerCase()).not.toContain("restart");
       expect(text.toLowerCase()).not.toContain("interrupt");
     }
   });
 
   it("uses direction-specific copy for enabling and disabling", () => {
-    expect(renderToggle({ enabling: true }).textContent).toContain("Turn On Dreaming");
+    expect(renderToggle({ enabling: true }).textContent).toContain(
+      "Turn on dreaming for all agents?",
+    );
     const disabling = renderToggle({ enabling: false });
-    expect(disabling.textContent).toContain("Turn Off Dreaming");
+    expect(disabling.textContent).toContain("Turn off dreaming for all agents?");
+    expect(disabling.textContent).toContain("not only this agent");
     // Disabling is the destructive direction: it stops the sweep for every agent.
     expect(disabling.querySelector("button.btn.danger")).not.toBeNull();
     expect(renderToggle({ enabling: true }).querySelector("button.btn.danger")).toBeNull();
   });
 
-  it("swaps the confirm label for a saving label while the write is in flight", () => {
-    const host = renderToggle({ loading: true });
-    const confirm = host.querySelector("button");
-    expect(confirm?.textContent?.trim()).toBe("Saving…");
-    expect(confirm?.hasAttribute("disabled")).toBe(true);
-  });
-
-  it("ignores backdrop cancel while saving", () => {
+  it("shows saving and vetoes cancel until the admitted write settles", async () => {
+    const pending = createDeferred();
     const onCancel = vi.fn();
-    const host = renderToggle({ loading: true, onCancel });
+    const host = renderToggle({ onConfirm: () => pending.promise, onCancel });
+    const confirm = host.querySelector<HTMLButtonElement>(
+      "openclaw-modal-actions button:last-child",
+    );
+    confirm?.click();
+    await waitForSolid(() => expect(confirm?.textContent?.trim()).toBe("Saving…"));
+    expect(confirm?.hasAttribute("disabled")).toBe(true);
     host.querySelector("openclaw-modal-dialog")?.dispatchEvent(new CustomEvent("modal-cancel"));
     expect(onCancel).not.toHaveBeenCalled();
+    pending.resolve();
+    await waitForSolid(() => expect(confirm?.hasAttribute("disabled")).toBe(false));
+    host.querySelector("openclaw-modal-dialog")?.dispatchEvent(new CustomEvent("modal-cancel"));
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 });

@@ -1,3 +1,4 @@
+import { kitesurfEngine } from "./kitesurf.js";
 import { lightpandaEngine } from "./lightpanda.js";
 import type { BrowserEngineAdapter, BrowserEngineDescriptor, BrowserEngineId } from "./types.js";
 
@@ -29,10 +30,7 @@ const chromiumEngine: BrowserEngineAdapter = {
       supportsVisualActions: true,
       supportsUploads: true,
       supportsDialogs: true,
-      supportsStorage: true,
-      supportsScreencast: profile.driver !== "existing-session",
       supportsConsole: true,
-      supportsMultipleTabs: true,
       supportsNativeSnapshots: true,
       requiresCompleteTargetEnumeration: profile.driver === "extension",
       mode: usesChromeMcp
@@ -52,28 +50,28 @@ const chromiumEngine: BrowserEngineAdapter = {
       usesChromeMcp,
       usesPersistentPlaywright: usesExtension || isRemote,
       supportsPerTabWs: localManaged,
-      supportsJsonTabEndpoints: localManaged,
       supportsReset: localManaged,
       supportsManagedTabLimit: localManaged,
     };
   },
 };
 
-// The Browser plugin owns this fixed registry. Register both implementations
+// The Browser plugin owns this fixed registry. Register implementations
 // here; selection never loads a second tool, process manager, or plugin runtime.
 const engines: Readonly<Record<BrowserEngineId, BrowserEngineAdapter>> = {
   chromium: chromiumEngine,
   lightpanda: lightpandaEngine,
+  kitesurf: kitesurfEngine,
 };
 
 export function resolveBrowserEngine(id: BrowserEngineId = "chromium"): BrowserEngineAdapter {
   if (!Object.hasOwn(engines, id)) {
-    throw new Error(`Unknown browser engine "${id}". Select chromium or lightpanda.`);
+    throw new Error(`Unknown browser engine "${id}". Select chromium, lightpanda, or kitesurf.`);
   }
   return engines[id];
 }
 
 /** The same registered implementations drive status discovery and execution. */
 export function listBrowserEngines(): BrowserEngineDescriptor[] {
-  return Object.values(engines).map(({ descriptor }) => Object.assign({}, descriptor));
+  return Object.values(engines).map(({ descriptor }) => descriptor);
 }

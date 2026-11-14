@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { z } from "zod";
@@ -27,9 +25,11 @@ type MockRequestSnapshot = {
   body?: Record<string, unknown>;
   cursor?: number;
   plannedToolArgs?: Record<string, unknown>;
+  plannedToolCallId?: string;
   plannedToolName?: string;
   prompt?: string;
   toolOutput?: string;
+  toolOutputCallId?: string;
 };
 
 type GatewayHandle = Awaited<
@@ -49,6 +49,15 @@ const responsesInputSchema = z.object({
       content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
     }),
   ),
+});
+const describedSessionSchema = z.object({
+  session: z.object({
+    agentId: z.string().optional(),
+    key: z.string(),
+    sessionId: z.string().optional(),
+    placement: z.object({ state: z.string() }).optional(),
+    hasActiveRun: z.boolean().optional(),
+  }),
 });
 const historyTextSchema = z.union([
   z.string(),
@@ -539,29 +548,120 @@ describe("Gateway chat RPCs", () => {
           (otherHistory.messages ?? []).some((message) => messageContains(message, reply)),
         ).toBe(false);
       }
-      const database = new DatabaseSync(
-        path.join(gateway.tempRoot, "state", "state", "openclaw.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const placements = database.prepare(
-          "SELECT agent_id, session_key, session_id, state, turn_claim_id FROM worker_session_placements WHERE agent_id IN (?, ?) ORDER BY agent_id",
-        );
-        // The terminal event can precede the placement owner's final claim release.
-        await expect
-          .poll(() => placements.all(first, second))
-          .toEqual(
-            [first, second].toSorted().map((agentId) => ({
-              agent_id: agentId,
-              session_key: sessionKey,
-              session_id: expectDefined(sessionIds.get(agentId), "owner session id"),
-              state: "local",
-              turn_claim_id: null,
-            })),
-          );
-      } finally {
-        database.close();
+      // Plain-local turn claims are owner-only; a leaked final claim rejects the next turn.
+      for (const agentId of [first, second]) {
+        const reply = `GLOBAL_OWNER_CLAIM_RELEASED_${agentId}`;
+        const started = (await gateway.call(
+          "agent",
+          {
+            sessionKey,
+            agentId,
+            message: `Gateway claim release QA for ${agentId}. Reply exactly \`${reply}\`.`,
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          },
+          { timeoutMs: 30_000 },
+        )) as GatewayChatRun;
+        const terminal = await waitForRun(gateway, started.runId);
+        expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
       }
+      // Plain-local placements live with the Gateway placement owner, not in SQL rows.
+      // The terminal event can precede the final session row projection.
+      await expect
+        .poll(() =>
+          Promise.all(
+            [first, second].map(async (agentId) => {
+              const { session } = describedSessionSchema.parse(
+                await gateway.call("sessions.describe", { key: sessionKey, agentId }),
+              );
+              return {
+                agentId: session.agentId,
+                key: session.key,
+                sessionId: session.sessionId,
+                placement: session.placement?.state,
+                active: session.hasActiveRun === true,
+              };
+            }),
+          ),
+        )
+        .toEqual(
+          [first, second].map((agentId) => ({
+            agentId,
+            key: sessionKey,
+            sessionId: expectDefined(sessionIds.get(agentId), "owner session id"),
+            placement: "local",
+            active: false,
+          })),
+        );
+    },
+  );
+
+  it(
+    "denies a model-planned dynamic predicate in a separate Gateway process",
+    { timeout: 120_000 },
+    async () => {
+      harness = await startChatGateway({
+        mutateConfig: (config) => ({
+          ...config,
+          tools: {
+            ...config.tools,
+            exec: { host: "gateway", security: "allowlist", ask: "off", safeBins: [] },
+          },
+        }),
+      });
+      const { gateway, mock } = harness;
+      if (!mock) {
+        throw new Error("mock provider did not start");
+      }
+      onTestFailed(() => {
+        process.stderr.write(gateway.logs().slice(-12_000) + "\n");
+      });
+      await fs.writeFile(`${gateway.workspaceDir}/proof.txt`, "fixture");
+      const policy = (await gateway.call("exec.approvals.get", {})) as { hash: string };
+      await gateway.call("exec.approvals.set", {
+        baseHash: policy.hash,
+        file: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        },
+      });
+
+      const run = async (command: string) => {
+        const cursor = await readMockJson<MockRequestCursor>(mock.baseUrl, "/debug/request-cursor");
+        await sendAndWait({
+          gateway,
+          sessionKey: `agent:qa:predicate-proof-${randomUUID()}`,
+          message: [
+            "Tool progress QA check.",
+            `Call the exec tool exactly once with this exact command before answering: \`${command}\`.`,
+            "Reply exactly `PREDICATE_PROOF_DONE`.",
+          ].join(" "),
+        });
+        const requests = await readMockJson<MockRequestSnapshot[]>(
+          mock.baseUrl,
+          `/debug/requests?after=${cursor.cursor}`,
+        );
+        const planned = expectDefined(
+          requests.find(
+            (request) =>
+              request.plannedToolName === "exec" && request.plannedToolArgs?.command === command,
+          ),
+          "model-planned exec call",
+        );
+        const callId = expectDefined(planned.plannedToolCallId, "model-planned exec call id");
+        const result = expectDefined(
+          requests.find((request) => request.toolOutputCallId === callId),
+          "paired exec result",
+        );
+        return expectDefined(result.toolOutput, "paired exec output");
+      };
+
+      const staticOutput = await run("test -e proof.txt && pwd");
+      expect(staticOutput).toContain(gateway.workspaceDir);
+
+      const dynamicOutput = await run("test -e *.txt && pwd");
+      expect(dynamicOutput).toContain("exec denied: allowlist miss");
+      expect(dynamicOutput).not.toContain(gateway.workspaceDir);
     },
   );
 

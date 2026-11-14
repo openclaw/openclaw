@@ -1,6 +1,9 @@
 import { isProxy } from "node:util/types";
 import {
+  markModelPayloadObserver,
   modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
+import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
@@ -12,7 +15,9 @@ import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message } from "../../llm/types.js";
+import type { PreparedProviderRequest } from "../../sessions/session-fork-context.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { log } from "./logger.js";
 import {
   fingerprintMessage,
@@ -56,6 +61,14 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
   const state = providerPromptStates.get(runId) ?? {};
   providerPromptStates.set(runId, state);
   return state;
+}
+
+// Request content never joins the serialized identity state; it lives and dies with it.
+const preparedRequests = new WeakMap<ProviderPromptState, PreparedProviderRequest>();
+
+export function readPreparedProviderRequest(runId: string): PreparedProviderRequest | undefined {
+  const state = providerPromptStates.get(runId);
+  return state && preparedRequests.get(state);
 }
 
 export function clearProviderPromptState(runId: string): void {
@@ -109,7 +122,8 @@ function providerPromptWorkerBytes(
     return undefined;
   }
   let bytes = 64;
-  for (const [index, key] of keys.entries()) {
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]!;
     if (array && key !== String(index)) {
       return undefined;
     }
@@ -208,6 +222,10 @@ export function wrapStreamFnWithProviderPromptState(params: {
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
+        if (finalPayload && typeof finalPayload === "object" && !Array.isArray(finalPayload)) {
+          // Shallow: transports reassign top-level fields after the hook; items stay shared.
+          preparedRequests.set(params.state, { model: payloadModel, body: { ...finalPayload } });
+        }
         if (modelRequestBodyState(observedOptions).enabled) {
           return finalPayload;
         }
@@ -252,6 +270,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         await options?.onResponse?.(response, responseModel);
       },
     };
+    markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
       const encoded = await recordProviderPrompt({
         state: params.state,
@@ -302,7 +321,9 @@ export async function preparePromptCacheHistory(
 ): Promise<void> {
   signal?.throwIfAborted();
   const missing = messages.filter(
-    (message) => isOwnedTranscriptPayload(message) && !messageFingerprints.has(message),
+    (message) =>
+      !messageFingerprints.has(message) &&
+      (isOwnedTranscriptPayload(message) || isDeeplyFrozenPlainData(message)),
   );
   if (missing.length === 0) {
     return;

@@ -5,6 +5,8 @@ import { expect } from "vitest";
 import { WebSocket } from "ws";
 import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import type { GatewayAuthConfig, GatewayConfig } from "../config/types.gateway.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
@@ -17,6 +19,43 @@ import {
 } from "./test-helpers.js";
 
 let authIdentityPathSeq = 0;
+
+export const BROWSER_ORIGIN = "https://control.example.com";
+export const TRUSTED_BROWSER_HEADERS = {
+  origin: BROWSER_ORIGIN,
+  "x-forwarded-for": "203.0.113.50",
+  "x-forwarded-proto": "https",
+  "x-forwarded-user": "admin@example.com",
+};
+
+export function browserProxyAuth(overrides: Partial<GatewayAuthConfig> = {}): GatewayAuthConfig {
+  return {
+    mode: "trusted-proxy",
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+      allowLoopback: true,
+    },
+    ...overrides,
+  };
+}
+
+export async function configureBrowserAuth(
+  auth = browserProxyAuth(),
+  options: Pick<GatewayConfig, "roles" | "tailscale"> = {},
+) {
+  const { writeConfigFile } = await import("../config/config.js");
+  testState.gatewayAuth = auth;
+  testState.gatewayControlUi = { allowedOrigins: [BROWSER_ORIGIN] };
+  await writeConfigFile({
+    gateway: {
+      auth,
+      ...options,
+      trustedProxies: ["127.0.0.1"],
+      controlUi: testState.gatewayControlUi,
+    },
+  });
+}
 
 function nextAuthIdentityPath(prefix: string): string {
   const poolId = process.env.VITEST_POOL_ID ?? "0";
@@ -45,10 +84,7 @@ export async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<
 async function openAuthWs(url: string, headers?: Record<string, string>) {
   const ws = new WebSocket(url, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", resolve);
-  });
-  return ws;
+  return await acquireGatewayTestWebSocket(ws, 10_000);
 }
 
 export const openWs = (port: number, headers?: Record<string, string>) =>
@@ -187,7 +223,9 @@ async function approvePendingPairingIfNeeded() {
   });
 }
 
-export async function configureTrustedProxyControlUiAuth() {
+export async function configureTrustedProxyControlUiAuth(
+  options: Pick<NonNullable<GatewayAuthConfig["trustedProxy"]>, "allowLoopback"> = {},
+) {
   const { replaceConfigFile } = await import("../config/config.js");
   testState.gatewayAuth = undefined;
   testState.gatewayControlUi = {
@@ -202,6 +240,7 @@ export async function configureTrustedProxyControlUiAuth() {
           trustedProxy: {
             userHeader: "x-forwarded-user",
             requiredHeaders: ["x-forwarded-proto"],
+            ...options,
           },
         },
         trustedProxies: ["127.0.0.1"],

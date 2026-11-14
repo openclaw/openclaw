@@ -14,6 +14,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
@@ -39,6 +40,18 @@ import type {
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
 
+/** Presentation only: sign-in aliases are not necessarily email addresses. */
+export function isUserProfileEmailAddress(alias: string): boolean {
+  return /^[^\s@/:]+@[^\s@/:]+$/u.test(alias);
+}
+
+/** Older profiles inferred their name from an issuer-qualified proxy subject. */
+export function userProfileEditableDisplayName(name: string | null | undefined): string | null {
+  // A deliberately chosen name with this same opaque shape is also hidden; the
+  // saved name and authentication binding remain intact and can be edited.
+  return name && !/^https?:\/\/\S+#\S+$/iu.test(name.trim()) ? name : null;
+}
+
 export function insertUserProfile(
   db: EngineConnection,
   displayName: string | null,
@@ -63,7 +76,7 @@ export function insertUserProfile(
 export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">): UserProfile {
   return {
     id: row.id,
-    displayName: row.display_name,
+    displayName: userProfileEditableDisplayName(row.display_name),
     avatarMime: normalizeUserProfileAvatarMime(row.avatar_mime),
     mergedInto: row.merged_into,
     ...(row.role ? { role: row.role } : {}),
@@ -104,9 +117,9 @@ export function projectUserProfileListItem(
 ) {
   return {
     ...toUserProfile(row),
-    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
-      Buffer.compare(Buffer.from(left), Buffer.from(right)),
-    ),
+    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])]
+      .filter(isUserProfileEmailAddress)
+      .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right))),
     githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
     hasAvatar: row.has_avatar === 1,
   };
@@ -453,7 +466,12 @@ export function projectUserProfileDisplay(
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {
     id: profile.id,
-    displayName: profile.display_name,
+    displayName:
+      userProfileDisplayName(
+        profile.id,
+        userProfileEditableDisplayName(profile.display_name),
+        profile.githubIdentity?.login ?? profile.githubLogin,
+      ) ?? null,
     avatarRevision:
       profile.avatar_sha256 && avatarMime
         ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
@@ -506,6 +524,20 @@ export function projectCatalogUserProfileIdentity(
   );
 }
 
+/** Verified GitHub identity facts of one catalog row; a row without them exposes neither field. */
+export function projectUserProfileGitHubFacts(
+  row: Pick<ProfileDisplayRow, "githubAccountIds" | "enterpriseGitHubAccounts"> | undefined,
+) {
+  return {
+    ...(row?.githubAccountIds ? { githubAccountIds: [...row.githubAccountIds] } : {}),
+    ...(row?.enterpriseGitHubAccounts
+      ? {
+          enterpriseGitHubAccounts: row.enterpriseGitHubAccounts.map((account) => ({ ...account })),
+        }
+      : {}),
+  };
+}
+
 /** Bind a canonical account and its original email lifetimes to the retained catalog owner. */
 export function bindPreparedUserProfileIdentity(
   profileId: string,
@@ -530,33 +562,36 @@ export function bindPreparedUserProfileIdentity(
     requiredGithubAccountIds?: readonly number[],
   ) => {
     catalog.assertCurrent(profileId);
+    const profile = resolveCatalogProfile(rows, profileId);
     if (
-      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
+      profile?.id !== profileId ||
       requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
     ) {
       throw new UserProfileNotFoundError(profileId);
     }
     if (requiredGithubAccountIds?.length) {
-      const accounts = new Set(rows.get(profileId)?.githubAccountIds);
+      const accounts = new Set(profile.githubAccountIds);
       if (requiredGithubAccountIds.some((accountId) => !accounts.has(accountId))) {
         throw new UserProfileNotFoundError(profileId);
       }
     }
+    return profile;
   };
   function readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],
     requiredGithubAccountIds?: readonly number[],
   ) {
-    assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
+    const profile = assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
     return {
       profileId,
-      assignedRole: rows.get(profileId)?.role || null,
-      githubLogin: rows.get(profileId)?.githubLogin ?? null,
+      assignedRole: profile.role || null,
+      githubLogin: profile.githubLogin ?? null,
     };
   }
   return {
     readCurrentProfile,
+    readCurrentRevision: assertCurrent,
     get emailBindingIds() {
       assertCurrent();
       if (
@@ -570,7 +605,6 @@ export function bindPreparedUserProfileIdentity(
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
       const profile = readCurrentProfile(requiredEmailBindingIds);
-      const githubAccountIds = rows.get(profileId)?.githubAccountIds;
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -581,7 +615,7 @@ export function bindPreparedUserProfileIdentity(
         profile: {
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          ...(githubAccountIds ? { githubAccountIds: [...githubAccountIds] } : {}),
+          ...projectUserProfileGitHubFacts(rows.get(profileId)),
           assignedRole: profile.assignedRole,
           githubLogin: profile.githubLogin,
         },

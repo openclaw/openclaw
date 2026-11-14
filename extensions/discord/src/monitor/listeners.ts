@@ -1,11 +1,9 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
   GatewayDispatchEvents,
@@ -14,8 +12,16 @@ import {
   GuildCreateListener,
   ReadyListener,
 } from "../internal/discord.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
-import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
+import {
+  type DiscordGuildEntryResolved,
+  hasConfiguredDiscordChannels,
+  resolveDiscordChannelConfigWithFallback,
+  resolveDiscordGuildEntry,
+  resolveDiscordMemberAccessState,
+} from "./allow-list.js";
+import { formatDiscordUserTag } from "./format.js";
 import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { clearPresences, setPresence } from "./presence-cache.js";
@@ -33,6 +39,7 @@ import {
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
+import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 
@@ -102,6 +109,67 @@ type GuildCreateEvent = Parameters<GuildCreateListener["handle"]>[0];
 type GuildDeleteEvent = ListenerDataByEvent[GatewayDispatchEvents.GuildDelete];
 type GuildPresenceState = { available: boolean; inferUnknownAsNewlyAvailable: boolean };
 
+// A presence wake triggers the agent, so the guild/channel sender allowlist applies as on every
+// other Discord ingress. presenceEvents.users only narrows the greeting audience further.
+async function isDiscordPresenceMemberAllowed(params: {
+  client: Client;
+  guildInfo: DiscordGuildEntryResolved;
+  guildId: string;
+  channelId: string;
+  userId: string;
+  allowNameMatching: boolean;
+}): Promise<boolean> {
+  const { client, guildInfo } = params;
+  let channelConfig = null;
+  if (hasConfiguredDiscordChannels(guildInfo.channels)) {
+    // Fetch directly like reactions: a failed lookup must not read as "no channel restriction".
+    const fetched = await client.fetchChannel(params.channelId);
+    if (!fetched) {
+      return false;
+    }
+    const channel = await resolveFetchedDiscordThreadLikeChannelContext({
+      client,
+      channel: fetched,
+      channelIdFallback: params.channelId,
+    });
+    channelConfig = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: params.channelId,
+      channelName: channel.channelName,
+      channelSlug: channel.channelSlug,
+      parentId: channel.isThreadChannel ? channel.threadParentId : channel.parentId,
+      parentName: channel.isThreadChannel ? channel.threadParentName : undefined,
+      parentSlug: channel.isThreadChannel ? channel.threadParentSlug : "",
+      scope: channel.isThreadChannel ? "thread" : "channel",
+    });
+  }
+  // Presence payloads often omit the username, so name/tag entries need the fetched user.
+  const sender = params.allowNameMatching
+    ? await client.fetchUser(params.userId).then((user) => ({
+        id: user.id,
+        name: user.username,
+        tag: formatDiscordUserTag(user),
+      }))
+    : { id: params.userId };
+  const access = (memberRoleIds: string[]) =>
+    resolveDiscordMemberAccessState({
+      channelConfig,
+      guildInfo,
+      memberRoleIds,
+      sender,
+      allowNameMatching: params.allowNameMatching,
+    });
+  const { hasAccessRestrictions, memberAllowed } = access([]);
+  if (!hasAccessRestrictions || memberAllowed) {
+    return true;
+  }
+  // PRESENCE_UPDATE carries no member roles; fetch them only when the user list did not admit.
+  if (!(channelConfig?.roles ?? guildInfo.roles)?.length) {
+    return false;
+  }
+  return access((await client.fetchMember(params.guildId, params.userId)).roles).memberAllowed;
+}
+
 export class DiscordPresenceListener {
   readonly type = GatewayDispatchEvents.PresenceUpdate;
   private readonly presenceBaseline: DiscordPresenceBaselineCache;
@@ -122,6 +190,7 @@ export class DiscordPresenceListener {
       botUserId?: string;
       readPolicy?: DiscordLivePolicyReader;
       guildEntries?: Record<string, DiscordGuildEntryResolved>;
+      allowNameMatching?: boolean;
       nowMs?: () => number;
       cooldownStore?: PluginStateKeyedStore<number>;
       presenceBaseline?: DiscordPresenceBaselineCache;
@@ -259,11 +328,12 @@ export class DiscordPresenceListener {
     }
     const policy = await this.params.readPolicy?.();
     const cfg = policy?.cfg ?? this.params.cfg;
-    const config = resolveDiscordGuildEntry({
+    const guildInfo = resolveDiscordGuildEntry({
       guildId: data.guild_id,
       guildEntries: policy ? policy.guildEntries : this.params.guildEntries,
-    })?.presenceEvents;
-    if (!config || config.enabled === false) {
+    });
+    const config = guildInfo?.presenceEvents;
+    if (!guildInfo || !config || config.enabled === false) {
       return;
     }
     // Filter before every baseline read or write. Excluded traffic must not consume bounded state.
@@ -271,6 +341,13 @@ export class DiscordPresenceListener {
       return;
     }
 
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: this.params.accountId,
+      guildId: data.guild_id,
+      peer: { kind: "channel", id: config.channelId },
+    });
     const lastEmittedAtMs = await this.cooldownStore.lookup(presenceKey);
     const nowMs = this.params.nowMs?.() ?? Date.now();
     const presenceScope = data.guild_id;
@@ -332,9 +409,33 @@ export class DiscordPresenceListener {
     let burstCommitted = false;
     let cooldownReserved = false;
     try {
+      const system = getDiscordRuntime().system;
+      const expectedTarget = await system.captureSessionEventTarget(
+        route.agentId,
+        route.sessionKey,
+      );
+      if (
+        this.stopped ||
+        policy?.isCurrent() === false ||
+        !(this.guildPresenceState.get(data.guild_id)?.available ?? !this.hasGatewayReset)
+      ) {
+        return;
+      }
       const fetchedUserIsBot =
         data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
       if (fetchedUserIsBot) {
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+        return;
+      }
+      const memberAllowed = await isDiscordPresenceMemberAllowed({
+        client,
+        guildInfo,
+        guildId: data.guild_id,
+        channelId: presenceEvent.channelId,
+        userId,
+        allowNameMatching: policy?.allowNameMatching ?? this.params.allowNameMatching ?? false,
+      });
+      if (!memberAllowed) {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
@@ -354,14 +455,6 @@ export class DiscordPresenceListener {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
-      const route = resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: this.params.accountId,
-        guildId: data.guild_id,
-        peer: { kind: "channel", id: presenceEvent.channelId },
-      });
-
       try {
         cooldownReserved = await this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
           ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
@@ -394,7 +487,11 @@ export class DiscordPresenceListener {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
-      const queued = enqueueRoutedSystemEvent(presenceEvent.text, route, {
+      const receipt = system.enqueueSessionEvent(presenceEvent.text, {
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        expectedTarget,
+        createIfMissing: true,
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
           channel: "discord",
@@ -402,23 +499,24 @@ export class DiscordPresenceListener {
           accountId: this.params.accountId,
         },
       });
-      if (!queued) {
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        (this.params.logger ?? discordEventQueueLog).warn(
+          danger(`discord presence admission failed: ${accepted.error}`),
+        );
         return;
       }
       this.emissionGate.commitBurst(burstReservation, this.params.nowMs?.() ?? Date.now());
       burstCommitted = true;
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-      requestHeartbeat({
-        source: "notifications-event",
-        intent: "immediate",
-        reason: "wake",
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        heartbeat: {
-          target: "discord",
-          to: `channel:${presenceEvent.channelId}`,
-          accountId: this.params.accountId,
-        },
+      void receipt.settled.then((outcome) => {
+        if (outcome.status !== "completed") {
+          (this.params.logger ?? discordEventQueueLog).warn(
+            danger(
+              `discord presence follow-up ${outcome.status}: ${outcome.error ?? outcome.status}`,
+            ),
+          );
+        }
       });
     } finally {
       if (!burstCommitted) {

@@ -1,11 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createMemo } from "solid-js";
+import { For } from "solid-js";
 import {
   analyzeConfigSchema,
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.analyze.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 
 export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
@@ -13,6 +14,16 @@ export function asConfigSchema(value: unknown): JsonSchema | null {
   }
   // SAFETY: The schema comes from config.schema; the boundary check excludes non-object payloads.
   return value as JsonSchema;
+}
+
+// Hides optional feature controls from the page without changing the editable
+// config; an unresolved schema passes through unchanged.
+export function visibleConfigSchema(
+  value: unknown,
+  openclawIdEnabled: boolean | undefined,
+): unknown {
+  const schema = asConfigSchema(value);
+  return schema ? omitCuratedOwnedConfigLeaves(schema, "", openclawIdEnabled) : value;
 }
 
 export function getConfigSchemaAnalysis(
@@ -62,12 +73,12 @@ export function configValueExistsAtPath(
 }
 
 export function UnsupportedPathSummary(props: { paths: string[] }) {
-  const message = createMemo(() => {
+  const message = () => {
     const marker = "__OPENCLAW_CONFIG_PATHS__";
     const key =
       props.paths.length === 1 ? "configView.formUnsafeCount" : "configView.formUnsafeCountPlural";
     return t(key, { count: String(props.paths.length), paths: marker }).split(marker);
-  });
+  };
   return (
     <span class="config-content-callout__text">
       {message()[0]}

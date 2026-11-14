@@ -1,4 +1,4 @@
-import { createMemo, onCleanup } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -20,13 +20,13 @@ function resolveChannelIconOwner(
   );
 }
 
-type PluginPresentationHooks = ChannelSettingsHooks & {
-  getContext: () => ApplicationContext;
-  getChannelIds: () => readonly string[];
-  isConnected: () => boolean;
-};
-
-export function createChannelPluginPresentation(hooks: PluginPresentationHooks) {
+export function createChannelPluginPresentation(
+  hooks: ChannelSettingsHooks & {
+    getContext: () => ApplicationContext;
+    getChannelIds: () => readonly string[];
+    isConnected: () => boolean;
+  },
+) {
   const details = createChannelSettingsPresentation(hooks);
   let catalog: PluginListResult | null = null;
   let iconUrls: Record<string, string> = {};
@@ -121,7 +121,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
     catalog = null;
     icons.reset();
   }
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     reset();
   });
