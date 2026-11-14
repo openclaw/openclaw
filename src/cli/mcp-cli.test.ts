@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import {
@@ -764,6 +765,51 @@ it("reports omitted enabled servers while accepting omitted disabled servers", a
   const output = await runReport("probe");
   expect(output).toContain("- healthy: 1 tools");
   expect(output).not.toContain("No enabled MCP servers");
+});
+
+it.each([
+  ["probe", "--json"],
+  ["doctor", "--probe"],
+])("joins interrupted %s cleanup before returning without a report", async (...args) => {
+  await writeMcpServers({ docs: { command: process.execPath } });
+  const started = createDeferred();
+  const blockedCatalog = createDeferred<Catalog>();
+  const cleanup = createDeferred();
+  const dispose = vi.fn(async () => {
+    blockedCatalog.resolve(catalog({}));
+    await cleanup.promise;
+  });
+  setCreateSessionMcpRuntimeOverride((params) => ({
+    ...probeRuntime(params, "cli-read-cancel", async () => {
+      started.resolve();
+      return blockedCatalog.promise;
+    }),
+    dispose,
+    joinCleanup: () => cleanup.promise,
+  }));
+  mockLog.mockClear();
+  mockError.mockClear();
+  const scope = new AsyncWorkScope();
+  let settled = false;
+  const pending = scope
+    .track(() => mcp(...args))
+    .finally(() => {
+      settled = true;
+    });
+  try {
+    await started.promise;
+    scope.beginClose();
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalled());
+    expect(settled).toBe(false);
+    cleanup.resolve();
+    await pending;
+    expect(mockLog).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+  } finally {
+    cleanup.resolve();
+    blockedCatalog.resolve(catalog({}));
+    await pending.catch(() => {});
+  }
 });
 
 it("warns when auto-approved Codex MCP tools have no safety annotations", async () => {

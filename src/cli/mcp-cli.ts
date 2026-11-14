@@ -32,10 +32,10 @@ import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
 import {
-  formatMcpProbeIssues,
   probeMcpServers,
   probeMcpServersOrFail,
-  resolveMcpProbeIssue,
+  reportMcpProbeResult,
+  runMcpDiagnosticRead,
 } from "./mcp-cli-probe.js";
 import { resolveMcpServeOptions } from "./mcp-cli-serve-options.js";
 import {
@@ -45,7 +45,7 @@ import {
   configureMcpServerOffline,
   updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
-import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { parseKeyValueEntries } from "./parse-key-value-entries.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -359,6 +359,7 @@ async function collectMcpDoctorIssues(params: {
   server: Record<string, unknown>;
   authoredServer?: Record<string, unknown>;
   probe: boolean;
+  signal?: AbortSignal;
   config: OpenClawConfig;
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
@@ -446,9 +447,12 @@ async function collectMcpDoctorIssues(params: {
     !issues.some((entry) => entry.level === "error")
   ) {
     try {
-      const result = await probeMcpServers("openclaw-cli-mcp-doctor", params.config, {
-        [name]: server,
-      });
+      const result = await probeMcpServers(
+        "openclaw-cli-mcp-doctor",
+        params.config,
+        { [name]: server },
+        params.signal,
+      );
       const diagnostic = result.diagnostics[0];
       if (diagnostic) {
         issues.push(issue("error", `check failed: ${diagnostic.message}`));
@@ -469,6 +473,9 @@ async function collectMcpDoctorIssues(params: {
         issues.push(issue("error", `cleanup failed: ${result.cleanupError}`));
       }
     } catch (err) {
+      if (params.signal?.aborted) {
+        throw err;
+      }
       issues.push(issue("error", `check failed: ${formatErrorMessage(err)}`));
     }
   }
@@ -691,11 +698,11 @@ export function registerMcpCli(program: Command) {
     .argument("[name]", "MCP server name")
     .option("--json", "Print JSON")
     .action(
-      offlineMcpAction(
-        "probe",
-        async (_owner, name: string | undefined, opts: { json?: boolean }) => {
+      offlineMcpAction("probe", (_owner, name: string | undefined, opts: { json?: boolean }) =>
+        runMcpDiagnosticRead(async (signal) => {
           const loaded = await loadMcpConfig(opts);
           const servers = selectMcpServers(loaded, name, opts);
+          signal?.throwIfAborted();
           if (name && loaded.mcpServers[name]?.enabled === false) {
             fail(
               `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before checking it.`,
@@ -710,34 +717,14 @@ export function registerMcpCli(program: Command) {
             );
             return;
           }
-          const result = await probeMcpServers("openclaw-cli-mcp-probe", loaded.config, servers);
-          if (opts.json) {
-            defaultRuntime.writeJson(result);
-          } else {
-            defaultRuntime.log(terminalText`MCP check (${loaded.path}):`);
-            for (const [serverName, server] of Object.entries(result.servers)) {
-              defaultRuntime.log(
-                terminalText`- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
-              );
-              if (server.approvalHint) {
-                defaultRuntime.log(terminalText`  i ${server.approvalHint}`);
-              }
-            }
-            for (const diagnostic of result.diagnostics) {
-              defaultRuntime.log(terminalText`! ${diagnostic.serverName}: ${diagnostic.message}`);
-            }
-            if (result.cleanupError) {
-              defaultRuntime.log(terminalText`! cleanup: ${result.cleanupError}`);
-            }
-          }
-          const probeIssues = resolveMcpProbeIssue({ result, servers, path: loaded.path });
-          if (probeIssues.length > 0) {
-            defaultRuntime.error(formatMcpProbeIssues(probeIssues));
-            if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
-              exitCliAfterOutput(defaultRuntime, 1);
-            }
-          }
-        },
+          const result = await probeMcpServers(
+            "openclaw-cli-mcp-probe",
+            loaded.config,
+            servers,
+            signal,
+          );
+          reportMcpProbeResult({ result, servers, path: loaded.path, json: opts.json });
+        }),
       ),
     );
 
@@ -748,7 +735,7 @@ export function registerMcpCli(program: Command) {
     .option("--probe", "Also connect to each checked server", false)
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { probe?: boolean; json?: boolean }) => {
-      const run = async () => {
+      const run = async (signal?: AbortSignal) => {
         const loaded = await loadMcpConfig(opts);
         const selected = selectMcpServers(loaded, name, opts);
         const tasks = Object.entries(selected)
@@ -760,6 +747,7 @@ export function registerMcpCli(program: Command) {
               authoredServer: loaded.authoredConfig?.mcp?.servers?.[serverName],
               config: loaded.config,
               probe: Boolean(opts.probe),
+              signal,
             });
             return {
               name: serverName,
@@ -780,6 +768,7 @@ export function registerMcpCli(program: Command) {
         if (hasError) {
           throw firstError;
         }
+        signal?.throwIfAborted();
         const ok = servers.every((server) => server.ok);
         if (opts.json) {
           defaultRuntime.writeJson({ path: loaded.path, ok, servers });
@@ -807,7 +796,9 @@ export function registerMcpCli(program: Command) {
         }
       };
       if (opts.probe) {
-        await offlineMcpAction("doctor --probe", run)();
+        await runMcpDiagnosticRead((signal) =>
+          offlineMcpAction("doctor --probe", () => run(signal))(),
+        );
       } else {
         await run();
       }
