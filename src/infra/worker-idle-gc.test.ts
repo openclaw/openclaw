@@ -112,6 +112,7 @@ it("names a forced collection slow enough to delay requests posted to the worker
   scheduleWorkerIdleGc();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(collect).toHaveBeenCalledTimes(1);
+  await vi.dynamicImportSettled();
   expect(warn).not.toHaveBeenCalled();
 
   heapUsed += 128 * MiB;

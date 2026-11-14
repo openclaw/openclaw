@@ -2332,6 +2332,7 @@ src/state/sqlite-table-layout-migration.ts
 src/state/worker-operation-registry.ts
 src/system-agent/agent-id.ts
 src/test-utils/bun-process.ts
+src/test-utils/env.ts
 src/trajectory/paths.ts
 src/trajectory/runtime-retention.sqlite.ts
 src/utils.ts

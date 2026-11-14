@@ -1,5 +1,5 @@
 import { Session } from "node:inspector/promises";
-import { isMainThread } from "node:worker_threads";
+import { isMainThread, threadId } from "node:worker_threads";
 
 declare const Bun: { gc(full: boolean): number };
 
@@ -48,9 +48,21 @@ async function collectWorkerIdleGarbage(): Promise<void> {
     if (elapsedMs >= SLOW_IDLE_GC_MS) {
       // The forced collection blocks this thread, so requests posted meanwhile show
       // only as slow broker delivery; name the pause instead.
-      // Small workers must not load the logging graph unless a collection is slow.
-      const { logSlowWorkerIdleGc } = await import("./worker-idle-gc-log.js");
-      logSlowWorkerIdleGc(elapsedMs, before, collectedMemory);
+      const fields = {
+        elapsedMs,
+        threadId,
+        heapUsedBeforeBytes: before.heapUsed,
+        heapUsedAfterBytes: collectedMemory.heapUsed,
+        externalBeforeBytes: before.external,
+        externalAfterBytes: collectedMemory.external,
+      };
+      // Every pool worker loads this module; load logging only on this rare path so
+      // small workers stay inside their evaluated-module budgets.
+      void import("./worker-idle-gc-report.runtime.js")
+        .then(({ reportSlowIdleWorkerGc }) => reportSlowIdleWorkerGc(fields))
+        .catch((error: unknown) => {
+          process.emitWarning(error instanceof Error ? error : String(error));
+        });
     }
   } catch (error) {
     process.emitWarning(error instanceof Error ? error : String(error));
