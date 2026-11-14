@@ -10,7 +10,6 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
-  type ReplyMediaAttachment,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
@@ -62,6 +61,7 @@ import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
   applySendLocationToActionParams,
   applySendPayloadPartsToActionParams,
+  resolveReplyMediaAttachmentType,
   type SendPayloadParts,
   updateSendPayloadPartsFromReplyPayload,
   withSendNormalization,
@@ -84,12 +84,6 @@ const log = createSubsystemLogger("outbound/message-action");
 const loadMessageActionTtsRuntime = createLazyRuntimeModule(
   () => import("../../tts/tts.runtime.js"),
 );
-
-function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["type"] {
-  return value === "image" || value === "audio" || value === "video" || value === "file"
-    ? value
-    : undefined;
-}
 
 export async function buildMessagePayload(params: {
   actionParams: Record<string, unknown>;
