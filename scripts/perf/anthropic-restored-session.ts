@@ -194,7 +194,7 @@ export async function measureRestoredAnthropicSession(options: {
           ? new Uint8Array(await init.body.arrayBuffer())
           : typeof init.body === "string"
             ? new TextEncoder().encode(init.body)
-            : init.body;
+            : new Uint8Array(init.body);
       return new Response(responseBody, { headers: { "content-type": "text/event-stream" } });
     },
   });
