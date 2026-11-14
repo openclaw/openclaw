@@ -1,6 +1,16 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -1220,12 +1230,14 @@ it.each([
         options.signal.addEventListener("abort", onAbort, { once: true });
       });
     } else if (args[0] === "status") {
-      expect(args).toEqual(["status", "--porcelain=v1", "--untracked-files=all"]);
+      expect(args).toEqual(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
       if (scenario === "dirty-tracked" || (scenario === "source-late-dirty" && sourceChanged)) {
-        stdout.write(" M scripts/ios-release-e2e.ts\n");
+        stdout.write(" M scripts/ios-release-e2e.ts\0");
       } else if (scenario === "dirty-untracked") {
-        stdout.write("?? untracked-source.ts\n");
+        stdout.write("?? untracked-source.ts\0");
       }
+    } else if (args[0] === "ls-tree") {
+      stdout.write("scripts/ios-release-e2e.ts\0");
     } else if (options.bin === "git") {
       stdout.write(
         (scenario === "source-late-head-change" && sourceChanged ? "2" : "1").repeat(40),
@@ -1551,7 +1563,16 @@ it.each([
     const preserved = unjoined || scenario === "gateway-preflight-cleanup-failure";
     expect(readdirSync(temp)).toHaveLength(preserved ? 1 : 0);
     if (dirtySource) {
-      expect(nativeMocks.command.mock.calls).toHaveLength(2);
+      expect(nativeMocks.command.mock.calls).toHaveLength(3);
+      expect(proof.sourceStatusFailure).toMatchObject({
+        targetSha: "1".repeat(40),
+        sourceCheckOrdinal: 1,
+        lastCompletedOperation: null,
+        entryCount: 1,
+        entryCountComplete: true,
+        targetTreeVerified: true,
+        redactedPathCount: scenario === "dirty-untracked" ? 1 : 0,
+      });
     }
     if (invalidRuntime) {
       expect(commandsWith("build-for-testing")).toHaveLength(0);
@@ -1998,6 +2019,13 @@ it.each([
             ? { operation: "source-status", code: "dirty-source" }
             : { operation: "source-head", code: "identity-mismatch" },
       });
+      if (scenario === "source-late-dirty") {
+        expect(proof.sourceStatusFailure).toMatchObject({
+          sourceCheckOrdinal: 2,
+          lastCompletedOperation: "simulator-delete",
+          entries: [{ status: " M", paths: [{ path: "scripts/ios-release-e2e.ts" }] }],
+        });
+      }
       expect(lifecycle.filter((entry) => entry.endsWith("-test"))).toEqual([
         "live-test",
         "reader-test",
@@ -2156,3 +2184,132 @@ it.each([
     }
   }
 });
+
+it.each(["names", "overflow", "tree-capture-failure"])(
+  "dirty rejection retains bounded verified Git status for %s",
+  async (scenario) => {
+    const root = tempDirs.make("ios-source-status-");
+    const git = (...args: string[]) => {
+      const gitResult = spawnSync("git", args, { cwd: root });
+      expect(gitResult.status).toBe(0);
+      return gitResult.stdout.toString().trim();
+    };
+    git("init", "-q");
+    git("config", "core.hooksPath", "/dev/null");
+    const tracked = [" leading.ts", "original.ts", "unsafe\nname.ts"];
+    if (scenario === "names") {
+      tracked.push("type-change.ts");
+    }
+    if (scenario === "overflow") {
+      for (let index = 0; index < 70; index++) {
+        tracked.push(`${"a".repeat(180)}/${"b".repeat(180)}/${index}.ts`);
+      }
+    }
+    for (const name of tracked) {
+      mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+      writeFileSync(path.join(root, name), "original\n");
+    }
+    git("add", ".");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    const targetSha = git("rev-parse", "HEAD");
+    for (const name of tracked.filter((candidateName) => candidateName !== "original.ts")) {
+      writeFileSync(path.join(root, name), "changed\n");
+    }
+    if (scenario === "names") {
+      unlinkSync(path.join(root, "type-change.ts"));
+      symlinkSync(" leading.ts", path.join(root, "type-change.ts"));
+    }
+    renameSync(path.join(root, "original.ts"), path.join(root, "private-renamed.ts"));
+    git("add", "--", "original.ts", "private-renamed.ts");
+    writeFileSync(path.join(root, "private-untracked.txt"), "never publish contents\n");
+    vi.stubGlobal(
+      "process",
+      Object.defineProperties(Object.create(process), {
+        platform: { value: "darwin" },
+        arch: { value: "arm64" },
+        cwd: { value: () => root },
+      }),
+    );
+    const { runManagedCommand } = await vi.importActual<
+      typeof import("../../scripts/lib/managed-child-process.mjs")
+    >("../../scripts/lib/managed-child-process.mjs");
+    nativeMocks.command.mockImplementation(async (options) => {
+      expect(options.bin).toBe("git");
+      expect(options.cwd).toBe(root);
+      expect(options.requireProcessTreeExit).toBe(true);
+      if (scenario === "tree-capture-failure" && options.args[0] === "ls-tree") {
+        throw new Error("private capture failure");
+      }
+      return runManagedCommand(options);
+    });
+    const proof: Record<string, unknown> = {};
+    await expect(
+      createNativeDependencies({
+        mode: "stock",
+        targetSha,
+        signal: new AbortController().signal,
+        proof,
+      }),
+    ).rejects.toMatchObject({ diagnostic: { operation: "source-status", code: "dirty-source" } });
+    const evidence = proof.sourceStatusFailure as {
+      entries: { status: string; paths: ({ path: string } | { sha256: string })[] }[];
+      entryCount: number;
+      truncatedEntryCount: number;
+    };
+    expect(evidence).toMatchObject({
+      targetSha,
+      sourceCheckOrdinal: 1,
+      lastCompletedOperation: null,
+      entryCount: tracked.length + 1,
+      entryCountComplete: true,
+      targetTreeVerified: scenario !== "tree-capture-failure",
+      malformedRecordCount: 0,
+      omittedStatusBytes: 0,
+    });
+    expect(evidence.entries.length).toBeLessThanOrEqual(64);
+    expect(evidence.truncatedEntryCount).toBe(evidence.entryCount - evidence.entries.length);
+    expect(
+      Buffer.byteLength(JSON.stringify({ sourceStatusFailure: evidence }, null, 2)),
+    ).toBeLessThanOrEqual(16 * 1024);
+    const digest = (name: string) => ({ sha256: createHash("sha256").update(name).digest("hex") });
+    if (scenario === "names") {
+      expect(evidence.entries).toEqual([
+        { status: " M", paths: [{ path: " leading.ts" }] },
+        { status: "R ", paths: [digest("private-renamed.ts"), { path: "original.ts" }] },
+        { status: " T", paths: [{ path: "type-change.ts" }] },
+        { status: " M", paths: [digest("unsafe\nname.ts")] },
+        { status: "??", paths: [digest("private-untracked.txt")] },
+      ]);
+      expect(evidence).toMatchObject({ redactedPathCount: 3 });
+    } else if (scenario === "overflow") {
+      expect(evidence.entries.length).toBeLessThan(64);
+    } else {
+      expect(evidence.entries.every((entry) => entry.paths.every((name) => "sha256" in name))).toBe(
+        true,
+      );
+    }
+    const serialized = JSON.stringify(proof);
+    for (const privateValue of [
+      root,
+      "private-renamed",
+      "private-untracked",
+      "unsafe",
+      "never publish",
+      "private capture",
+    ]) {
+      expect(serialized).not.toContain(privateValue);
+    }
+    expect(nativeMocks.build).not.toHaveBeenCalled();
+    expect(nativeMocks.install).not.toHaveBeenCalled();
+  },
+);

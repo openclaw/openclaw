@@ -1,0 +1,2 @@
+# Real Git dirty-source proof: verified names, redaction, bounds, late checks and capture failure.
+157

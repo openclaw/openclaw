@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,77 @@ const CHAT_MARKERS = [
   ["second", "OPENCLAW_E2E_SECOND"],
   ["relaunch", "OPENCLAW_E2E_RELAUNCH"],
 ] as const;
+
+type SourceCapture = { chunks: Buffer[]; bytes: number; omittedBytes: number };
+const sourceCapture = (): SourceCapture => ({ chunks: [], bytes: 0, omittedBytes: 0 });
+
+function sourceStatusEvidence(capture: SourceCapture, tracked: Set<string> | undefined) {
+  const raw = Buffer.concat(capture.chunks);
+  const entries: { status: string; paths: ({ path: string } | { sha256: string })[] }[] = [];
+  let entryCount = 0;
+  let redactedPathCount = 0;
+  let malformedRecordCount = 0;
+  let offset = 0;
+  const next = () => {
+    const end = raw.indexOf(0, offset);
+    if (end < 0) {
+      offset = raw.length;
+      malformedRecordCount++;
+      return undefined;
+    }
+    const record = raw.subarray(offset, end);
+    offset = end + 1;
+    return record;
+  };
+  while (offset < raw.length) {
+    const record = next();
+    if (!record) {
+      break;
+    }
+    const status = record.subarray(0, 2).toString("ascii");
+    if (record[2] !== 32 || !/^[ MTADRCU?!]{2}$/u.test(status)) {
+      malformedRecordCount++;
+      continue;
+    }
+    const paths = [record.subarray(3)];
+    if (/[RC]/u.test(status)) {
+      const original = next();
+      if (!original) {
+        break;
+      }
+      paths.push(original);
+    }
+    entryCount++;
+    const evidence = paths.map((bytes) => {
+      const name = bytes.toString("utf8");
+      // Tree membership alone does not make control characters or absolute paths printable.
+      if (
+        status !== "??" &&
+        tracked?.has(name) &&
+        Buffer.from(name).equals(bytes) &&
+        name.length > 0 &&
+        !/^[/]|[\\\p{C}]|(?:^|\/)\.\.(?:\/|$)/u.test(name)
+      ) {
+        return { path: name };
+      }
+      redactedPathCount++;
+      return { sha256: createHash("sha256").update(bytes).digest("hex") };
+    });
+    if (entries.length < 64) {
+      entries.push({ status, paths: evidence });
+    }
+  }
+  return {
+    entries,
+    entryCount,
+    entryCountComplete: capture.omittedBytes === 0 && malformedRecordCount === 0,
+    redactedPathCount,
+    malformedRecordCount,
+    omittedStatusBytes: capture.omittedBytes,
+    truncatedEntryCount: entryCount - entries.length,
+    targetTreeVerified: tracked !== undefined,
+  };
+}
 
 export async function createNativeDependencies(options: {
   mode: Mode;
@@ -116,6 +187,7 @@ export async function createNativeDependencies(options: {
       cleanup?: boolean;
       captureChatFailure?: () => Promise<string[]>;
       signal?: AbortSignal;
+      sourceCapture?: SourceCapture;
     } = {},
   ) =>
     phase(operation, async () => {
@@ -153,6 +225,15 @@ export async function createNativeDependencies(options: {
           signal: config.cleanup ? undefined : (config.signal ?? options.signal),
           onReady(child) {
             child.stdout?.on("data", (chunk: Buffer) => {
+              const capture = config.sourceCapture;
+              if (capture) {
+                const kept = chunk.subarray(0, Math.max(0, 16 * 1024 * 1024 - capture.bytes));
+                if (kept.length) {
+                  capture.chunks.push(Buffer.from(kept));
+                }
+                capture.bytes += kept.length;
+                capture.omittedBytes += chunk.length - kept.length;
+              }
               stdout = (stdout + chunk.toString()).slice(-16 * 1024 * 1024);
               observeChatFailure();
               if (operation === "native-test") {
@@ -193,15 +274,68 @@ export async function createNativeDependencies(options: {
       }
       return stdout.trim();
     });
+  let sourceCheckOrdinal = 0;
   const assertCurrentSource = async () => {
+    sourceCheckOrdinal++;
+    const lastCompletedOperation =
+      phases.findLast((entry) => entry.status === "passed")?.operation ?? null;
     const head = await command("source-head", "git", ["rev-parse", "HEAD"]);
     if (head !== options.targetSha) {
       throw new OperationError("source-head", "identity-mismatch");
     }
-    if (
-      await command("source-status", "git", ["status", "--porcelain=v1", "--untracked-files=all"])
-    ) {
-      throw new OperationError("source-status", "dirty-source");
+    const status = sourceCapture();
+    await command(
+      "source-status",
+      "git",
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      {
+        sourceCapture: status,
+      },
+    );
+    if (status.bytes || status.omittedBytes) {
+      const failure = new OperationError("source-status", "dirty-source");
+      try {
+        let tracked: Set<string> | undefined;
+        try {
+          const tree = sourceCapture();
+          await command(
+            "source-status",
+            "git",
+            ["ls-tree", "-r", "--full-tree", "--name-only", "-z", options.targetSha],
+            {
+              sourceCapture: tree,
+            },
+          );
+          if (!tree.omittedBytes) {
+            tracked = new Set(Buffer.concat(tree.chunks).toString("utf8").split("\0"));
+          }
+        } catch {
+          // Missing name verification must not replace the original dirty rejection.
+        }
+        const evidence = {
+          targetSha: options.targetSha,
+          sourceCheckOrdinal,
+          lastCompletedOperation,
+          ...sourceStatusEvidence(status, tracked),
+        };
+        while (
+          Buffer.byteLength(JSON.stringify({ sourceStatusFailure: evidence }, null, 2)) >
+            16 * 1024 &&
+          evidence.entries.length
+        ) {
+          evidence.entries.pop();
+          evidence.truncatedEntryCount++;
+        }
+        options.proof.sourceStatusFailure = evidence;
+      } catch {
+        options.proof.sourceStatusFailure = {
+          targetSha: options.targetSha,
+          sourceCheckOrdinal,
+          lastCompletedOperation,
+          captureFailed: true,
+        };
+      }
+      throw failure;
     }
   };
   await assertCurrentSource();
