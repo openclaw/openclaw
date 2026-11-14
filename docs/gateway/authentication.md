@@ -143,6 +143,11 @@ Provider-specific phrases like `ThrottlingException`, `concurrency limit reached
 
 Removing saved auth does not revoke the key at the provider — rotate or revoke it in the provider dashboard when you need provider-side invalidation.
 
+If a model fallback chain ends with an OAuth refresh failure, the reply distinguishes
+the primary attempt from the failed fallback. A fallback refresh timeout means the
+refresh did not finish; it does not establish that the login expired. Retry and
+check the Gateway logs for the original failure before changing credentials.
+
 ## Removing provider auth while the gateway is running
 
 When you remove provider auth through the gateway control plane, OpenClaw deletes the saved auth profiles for that provider and aborts active chat/agent runs whose selected model provider matches the removed one. Aborted runs emit the normal cancellation/lifecycle events with `stopReason: "auth-revoked"`, so connected clients can show the run stopped because credentials were removed.
