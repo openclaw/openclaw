@@ -278,12 +278,20 @@ export async function prepareCodexMcpAppSession(params: {
     // Other discoveries recheck under this same reentrant lease instead of
     // selecting a second lifecycle from an obsolete empty snapshot. Bound
     // resumes still acquire the native thread queue before the binding lease.
-    const thread = await params.bindingStore.withLease(sessionBindingIdentity(input), async () => {
-      assertCurrent();
-      const current = await params.bindingStore.readAsync(sessionBindingIdentity(input));
-      assertCurrent();
-      return current ?? (await prepareThread());
-    });
+    // Carry the admitted authority into the lease: at namespace capacity the
+    // binding store's overflow recovery sheds rows only under caller
+    // authority, and a bare call here would leave a cold App request without
+    // recovery or, worse, deleting shared rows unbound.
+    const thread = await params.bindingStore.withLease(
+      sessionBindingIdentity(input),
+      async () => {
+        assertCurrent();
+        const current = await params.bindingStore.readAsync(sessionBindingIdentity(input));
+        assertCurrent();
+        return current ?? (await prepareThread());
+      },
+      { assertCurrent, authority: admitted.authority },
+    );
     assertCurrent();
     return thread;
   });
