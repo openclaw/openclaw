@@ -134,6 +134,21 @@ describe("whatsapp edit through the action handler", () => {
     });
   }
 
+  function dispatchEditInInboundChat(params: Record<string, unknown>) {
+    return actions?.handleAction?.({
+      channel: "whatsapp",
+      action: "edit",
+      cfg: config({}),
+      accountId: "default",
+      params,
+      toolContext: {
+        currentChannelId: target,
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "inbound-1",
+      },
+    });
+  }
+
   function expectEditOnSocket(messageId: string) {
     expect(rawSend).toHaveBeenCalledOnce();
     expect(rawSend.mock.calls[0]?.slice(0, 2)).toEqual([
@@ -181,6 +196,27 @@ describe("whatsapp edit through the action handler", () => {
     const result = await dispatchEdit(config({ allowFrom: [target] }), "sent-uncached");
     expect(result?.details).toMatchObject({ submitted: true, confirmed: false });
     expectEditOnSocket("sent-uncached");
+  });
+
+  it("edits in the current chat with content when message is absent", async () => {
+    await dispatchEditInInboundChat({ messageId: "sent-own", content: updatedText });
+    expectEditOnSocket("sent-own");
+  });
+
+  it("edits in the current chat, ignoring a chatJid the host never checked", async () => {
+    await dispatchEditInInboundChat({
+      chatJid: otherTarget,
+      messageId: "sent-own",
+      message: updatedText,
+    });
+    expectEditOnSocket("sent-own");
+  });
+
+  it("rejects a missing messageId instead of editing the inbound message", async () => {
+    await expect(
+      dispatchEditInInboundChat({ to: target, message: updatedText }),
+    ).rejects.toMatchObject({ name: "ToolInputError", message: "messageId required" });
+    expect(rawSend).not.toHaveBeenCalled();
   });
 
   it("rejects when actions.editMessage is off", async () => {
