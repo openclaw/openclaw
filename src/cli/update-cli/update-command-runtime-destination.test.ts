@@ -271,6 +271,38 @@ it.each([
   },
 );
 
+it("previews the retry of an interrupted link replacement without moving the link", async () => {
+  vi.mocked(packageDestination.inspectNpmGlobalDestination).mockRestore();
+  const selected = path.join(path.dirname(fixture.root), "selected");
+  const newRoot = packageRoot(selected);
+  const backup = path.join(path.dirname(newRoot), ".openclaw.package-backup-1-1");
+  await fs.mkdir(path.dirname(newRoot), { recursive: true });
+  await fs.writeFile(entrypoint(fixture.root), "// original deployment\n");
+  // A killed update left this installation's npm link under its backup name.
+  await fs.symlink(fixture.root, backup, process.platform === "win32" ? "junction" : "dir");
+  await writeLauncher(selected, newRoot);
+  vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
+    manager: "npm",
+    command: "npm",
+    globalRoot: path.dirname(newRoot),
+    packageRoot: newRoot,
+    npmOwner: { version: "11.10.0", lifecyclePolicy: "unflagged" },
+  });
+  vi.spyOn(plugins, "preflightConfiguredNpmPluginTargets").mockResolvedValue([]);
+
+  await updateCommand({ ...opts, dryRun: true });
+
+  expect(lastJson()).toMatchObject({ dryRun: true, root: fixture.root });
+  expect(vi.mocked(defaultRuntime.error).mock.calls.flat()).toContainEqual(
+    expect.stringContaining(
+      `Would restore the npm package link an interrupted update left at ${backup}`,
+    ),
+  );
+  await expect(fs.lstat(newRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await fs.realpath(backup)).toBe(await fs.realpath(fixture.root));
+  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+});
+
 const lastJsonCall = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall;
 function preflightOutcome(
   preflight: MockInstance<typeof runtimePlan.resolvePackageRuntimePreflight>,

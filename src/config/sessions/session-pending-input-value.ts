@@ -23,6 +23,12 @@ export function markSessionPendingInputCancelledByUser(messageJson: string): str
   });
 }
 
+/** Stop and dismissal keep the row as a record; redelivery must never execute it again. */
+export function isSessionPendingInputRetiredByUser(messageJson: string): boolean {
+  const message = parseSessionPendingInputMessage(messageJson);
+  return message.display === false || message["__openclaw"]?.pendingInputCancelledByUser === true;
+}
+
 export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
   return (
     outcome.reason === "completed" ||

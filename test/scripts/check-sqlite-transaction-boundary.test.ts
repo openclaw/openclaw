@@ -1,13 +1,24 @@
-import { afterAll, expect, it } from "vitest";
+import path from "node:path";
+import { expect, it } from "vitest";
 import { findSqliteTransactionBoundaryViolations } from "../../scripts/check-sqlite-transaction-boundary.mts";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
-
-const parser = createNativeTypeScriptParser();
-afterAll(() => parser.close());
+import { createNativeTypeScriptProject } from "../../scripts/lib/native-typescript.mts";
 
 function check(content: string) {
-  const source = parser.parseSourceFile("source.ts", content);
-  return expect(findSqliteTransactionBoundaryViolations(content, "source.ts", source));
+  const configFileName = path.resolve("tsconfig.transaction-boundary-test.json");
+  const fileName = path.resolve("transaction-boundary-test.ts");
+  using session = createNativeTypeScriptProject({
+    cwd: process.cwd(),
+    configFileName,
+    files: {
+      [configFileName]: JSON.stringify({
+        compilerOptions: { target: "ES2023", strict: true, types: [] },
+        files: [fileName],
+      }),
+      [fileName]: content,
+    },
+  });
+  const source = session.project.program.getSourceFile(fileName)!;
+  return expect(findSqliteTransactionBoundaryViolations(source, session.project.checker));
 }
 
 function asyncCallback(line: number, name: string) {
@@ -105,7 +116,7 @@ it("rejects async commit hooks without forbidding async preparation or unrelated
         transact(db, () => 42, { ...options, async withCommit(commit) { commit(); } });
         runPostgresTransactionSync(db, () => 42, { withCommit: commitLater });
         runSqliteImmediateTransaction(db, async () => () => 42, { withCommit: async (commit) => commit() });
-        const withCommit = async () => undefined;
+        const withCommit: () => void = async () => undefined;
         transact(db, () => 42, { withCommit });
         transact(db, () => 42, { "withCommit": async function (commit) { commit(); } });
         transact(db, () => 42, { ...options, withCommit(commit) { commit(); } });
@@ -131,4 +142,41 @@ it("allows asynchronous preparation followed by a synchronous commit callback", 
           apply(database, prepared.patch);
         }, options);
       `).toEqual([]);
+});
+
+it("checks typed and optional hooks without losing spread override order", () => {
+  check(`
+    const typed: () => void = async () => {};
+    runSqliteImmediateTransactionSync(db, () => 1, { withCommit: typed });
+    runSqliteImmediateTransactionSync(db, () => 1, { ...{ withCommit: typed } });
+    runSqliteImmediateTransactionSync(db, () => 1, { ...{ withCommit: typed }, withCommit: () => {} });
+    declare const optional: { withCommit?: () => Promise<void> };
+    runSqliteImmediateTransactionSync(db, () => 1, optional);
+    declare const mixed: { withCommit: (() => void) | (() => Promise<void>) };
+    runSqliteImmediateTransactionSync(db, () => 1, mixed);
+    const withCommit = "other";
+    runSqliteImmediateTransactionSync(db, () => 1, { ...{ withCommit: typed }, [withCommit]: () => {} });
+    const key = "withCommit";
+    runSqliteImmediateTransactionSync(db, () => 1, { ...{ withCommit: typed }, [key]: () => {} });
+  `).toEqual(
+    [3, 4, 7, 9, 11].map((line) => ({
+      line,
+      reason: "passes an async commit hook to synchronous SQLite transaction helper",
+    })),
+  );
+});
+
+it("rejects Promise-like results and erased callbacks without confusing lexical shadows", () => {
+  check(`
+    const write: () => void = async () => {};
+    runSqliteImmediateTransactionSync(db, write);
+    runSqliteImmediateTransactionSync(db, () => ({ then(resolve: (value: number) => void) { resolve(1); } }));
+    function nested() {
+      const write = () => 1;
+      runSqliteImmediateTransactionSync(db, write);
+    }
+  `).toEqual([
+    asyncCallback(3, "runSqliteImmediateTransactionSync"),
+    asyncCallback(4, "runSqliteImmediateTransactionSync"),
+  ]);
 });

@@ -6,18 +6,28 @@ import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.
 import type {
   OwnerCapability,
   InviteCapBody,
+  NodeInviteCapBody,
+  NodeRedemptionBody,
   MemberRole,
   MembershipSnapshotBody,
   OwnerDeviceCertBody,
   SignedStatement,
   UnixSeconds,
 } from "../statements/types.js";
-import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import type {
+  MemberDeviceLookup,
+  OwnerDeviceLookup,
+  TrustAnchor,
+  VerifyErrorCode,
+} from "../statements/verify.js";
+import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
  * How a write reached the Gateway.
  * - `tunnel`: from an authenticated device over the iroh tunnel (relayed or direct path).
  * - `local_operator`: authenticated **direct loopback** (never traffic from the tunnel child).
+ *   The Gateway also uses it for the link ceremony alone when an admin with a verified personal
+ *   identity runs it directly (never through the tunnel or the mailbox).
  * - `mailbox`: through Discovery's per-claw mailbox.
  */
 export type Channel = "tunnel" | "local_operator" | "mailbox";
@@ -47,9 +57,23 @@ export type OwnerDeviceRecord = {
   peer_listed_seq?: number[];
 };
 
+/** Who admitted a member device to this claw. */
+export type MemberDeviceApprover =
+  | { kind: "invite"; invite_id: string }
+  | { kind: "owner"; by: "root" | KeyFingerprint }
+  | { kind: "member_device"; device_fp: KeyFingerprint };
+
+/** A member's signing key and untrusted display label, attached to its peer key. */
+export type MemberDevice = {
+  device_pub: Ed25519PublicKey;
+  label: string;
+  approved_by: MemberDeviceApprover;
+};
+
 /** A member and the browsers (peer keys) they use at this claw. */
 export type MemberRecord = {
   role: MemberRole;
+  devices?: Partial<Record<IrohEndpointKey, MemberDevice>>;
   peer_keys: IrohEndpointKey[];
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
   last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
@@ -68,6 +92,7 @@ export type InviteRecord = {
   pending: {
     account_id: string;
     device_pub: Ed25519PublicKey;
+    label: string;
     peer_key: IrohEndpointKey;
     requested_at: UnixSeconds;
   } | null;
@@ -78,10 +103,36 @@ export type InviteRecord = {
   created_by?: OwnerApprover;
 };
 
+/**
+ * An admitted node; it has no account, role, owner capabilities or approval descendants. It was
+ * approved either from a node invite (`invite_id`) or together with an owner device
+ * (`owner_device`), whose removal removes it and whose certificate bounds its lifetime.
+ */
+export type NodeRecord = {
+  description: NodeRedemptionBody["description"];
+  label: string;
+  listed_seq: number;
+  added_by: OwnerApprover;
+  /** Last authenticated tunnel activity/admission (or initial approval). */
+  last_seen: UnixSeconds;
+  invite_id?: string;
+  /** The owner device this node belongs to, by fingerprint of its D. */
+  owner_device?: KeyFingerprint;
+};
+
+/** Separate invite class; member proofs can never redeem it. */
+export type NodeInviteRecord = {
+  cap: NodeInviteCapBody;
+  proof_key: string;
+  status: "open" | "pending" | "consumed";
+  pending: Pick<NodeRedemptionBody, "peer_key" | "requested_at" | "description"> | null;
+  created_by: OwnerApprover;
+};
+
 /** The Gateway's membership state for one claw. */
 export type AuthorityState = {
   claw_id: string;
-  /** The root R pinned at linking. It never changes for a claw (owner reset is OCF-319). */
+  /** The root R pinned at linking. Only an owner reset on the machine replaces it (enrollment.md). */
   anchor: TrustAnchor;
   /** Monotonic membership seq; a MembershipChange must carry seq + 1. */
   seq: number;
@@ -89,16 +140,24 @@ export type AuthorityState = {
   owner_devices: Record<KeyFingerprint, OwnerDeviceRecord>;
   members: Record<string, MemberRecord>;
   invites: Record<string, InviteRecord>;
+  nodes: Record<IrohEndpointKey, NodeRecord>;
+  node_invites: Record<string, NodeInviteRecord>;
 };
 
 /** Side effects the Gateway must perform after a write. */
 export type AuthorityEvent =
   | { type: "disconnect"; peer_keys: IrohEndpointKey[] }
   | { type: "invalidate_tokens"; peer_keys: IrohEndpointKey[] }
+  | { type: "remove_node_pairings"; peer_keys: IrohEndpointKey[] }
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
-      event: "kit_used" | "redemption_pending" | "redemption_resolved";
+      event:
+        | "kit_used"
+        | "redemption_pending"
+        | "redemption_resolved"
+        | "rebind"
+        | "member_device_added";
       ref: string;
     }
   | { type: "publish_snapshot" };
@@ -162,7 +221,7 @@ export function certificateWindowError(
 }
 
 /**
- * "Make reachable" (spec section 4): pin R for good. Only over direct loopback,
+ * "Make reachable" (spec section 4): pin R for good. Only on the `local_operator` channel,
  * never over the tunnel, even though tunnel traffic reaches the Gateway on loopback.
  */
 export function linkClaw(
@@ -181,6 +240,8 @@ export function linkClaw(
       owner_devices: {},
       members: {},
       invites: {},
+      nodes: {},
+      node_invites: {},
     },
   };
 }
@@ -206,6 +267,21 @@ export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDevic
   return (devicePub) => caps.get(devicePub);
 }
 
+/** Listed member signing keys. A peer without device metadata has no signing authority. */
+export function memberLookup(state: AuthorityState): MemberDeviceLookup {
+  return (devicePub) => {
+    for (const [account_id, member] of Object.entries(state.members)) {
+      const peer_key = member.peer_keys.find(
+        (peer) => member.devices?.[peer]?.device_pub === devicePub,
+      );
+      if (peer_key) {
+        return { account_id, peer_key };
+      }
+    }
+    return undefined;
+  };
+}
+
 /**
  * The earliest moment after `now` at which a currently active owner device stops being
  * active because its certificate expires, or null if none expires. The Gateway closes
@@ -224,7 +300,8 @@ export function nextOwnerExpiry(state: AuthorityState, now: UnixSeconds): UnixSe
 
 /**
  * Tunnel admission (the tunnel child asks this for every connection): the peer key
- * belongs to a member or to an owner device active at `now`. Discovery is not consulted,
+ * belongs to a member, an active owner device, or a node whose bound owner is active.
+ * Invite-enrolled nodes have independent lifetimes. Discovery is not consulted,
  * so a withheld or delayed snapshot cannot keep a removed key admitted.
  */
 export function isAdmitted(
@@ -232,12 +309,25 @@ export function isAdmitted(
   peerKey: IrohEndpointKey,
   now: UnixSeconds,
 ): boolean {
+  const node = state.nodes[peerKey];
+  if (node) {
+    if (!node.owner_device) {
+      return true;
+    }
+    const owner = state.owner_devices[node.owner_device];
+    return owner !== undefined && isOwnerDeviceActive(owner, now);
+  }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
     return true;
   }
   return activeOwnerDevices(state, now).some((record) =>
     record.cert.body.peer_keys.includes(peerKey),
   );
+}
+
+/** Whether an admitted W has only node authority (Gateway builds a node principal). */
+export function isNode(state: AuthorityState, peerKey: IrohEndpointKey): boolean {
+  return state.nodes[peerKey] !== undefined;
 }
 
 /** The snapshot body the Gateway signs with K_gw and publishes to Discovery: current state only. */
@@ -260,6 +350,10 @@ export function snapshotBody(
     owner_peer_keys: [
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
+    // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
+    node_peer_keys: (Object.keys(state.nodes) as IrohEndpointKey[])
+      .filter((key) => isAdmitted(state, key, now))
+      .toSorted(),
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,
@@ -267,6 +361,10 @@ export function snapshotBody(
         peer_keys: member.peer_keys,
       }))
       .toSorted((a, b) => a.account_id.localeCompare(b.account_id)),
+    protocols: {
+      statement: [...SUPPORTED_STATEMENT_VERSIONS],
+      descriptor: [...SUPPORTED_DESCRIPTOR_VERSIONS],
+    },
     issued_at: now,
   };
 }

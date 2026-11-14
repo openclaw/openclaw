@@ -1,33 +1,40 @@
 // Write rules of the reference membership authority: who may change what, over which channel.
 import { hexToBytes } from "../bytes.js";
+import { inviteSecretHash, verifyInviteRedemption, type AssertedIdentity } from "../invites.js";
 import {
-  inviteSecretHash,
-  MAX_INVITE_LIFETIME_SECONDS,
-  verifyInviteRedemption,
-  type AssertedIdentity,
-} from "../invites.js";
-import { fingerprint, type IrohEndpointKey } from "../keys.js";
+  fingerprint,
+  formatIrohEndpointKey,
+  rawPublicKey,
+  type IrohEndpointKey,
+  type Ed25519PublicKey,
+  type KeyFingerprint,
+} from "../keys.js";
 import {
   MAX_INVITES,
   MAX_MEMBER_PEER_KEYS,
   MAX_MEMBERS,
   MAX_OWNER_DEVICE_PEER_KEYS,
   MAX_OWNER_DEVICES,
-  MEMBER_ROLES,
-  type MemberRole,
   type SignedStatement,
   type UnixSeconds,
 } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { verifyOwnerStatement, type Authority, type VerifyOptions } from "../statements/verify.js";
-import { ownerDeviceListedSeq, peerKeyListedSeq, withoutMemberPeerKeys } from "./allowlist.js";
-import { withoutSpentInvites } from "./invite-retention.js";
+import {
+  approvalDescendants,
+  memberDeviceDescendants,
+  ownerDeviceListedSeq,
+  peerKeyListedSeq,
+  withoutMemberPeerKeys,
+} from "./allowlist.js";
+import { inviteLifetimeError, withoutSpentInvites } from "./invite-retention.js";
+import { addNode, bindOwnerDeviceNode, nodeRemovalEvents, withoutNodes } from "./nodes.js";
 import { applyRevocation } from "./revocation.js";
 import {
   applied,
-  CERT_CLOCK_SKEW_SECONDS,
   certificateWindowError,
   ownerLookup,
+  memberLookup,
   proofKeyHex,
   refuse,
   type AuthorityEvent,
@@ -43,11 +50,7 @@ import {
 export type WriteContext = { channel: Channel; now: UnixSeconds };
 
 function verifyOptions(state: AuthorityState, now: UnixSeconds): VerifyOptions {
-  return { now, owners: ownerLookup(state, now) };
-}
-
-function roleRank(role: MemberRole): number {
-  return MEMBER_ROLES.indexOf(role);
+  return { now, owners: ownerLookup(state, now), members: memberLookup(state) };
 }
 
 // Mailbox policy (spec sections 6 and 7): through Discovery, only root-signed statements,
@@ -67,7 +70,7 @@ export async function submitStatement(
 ): Promise<AuthorityResult> {
   const parsed = parseStatement(input);
   if (!parsed.ok) {
-    return refuse(state, "malformed", parsed.detail);
+    return refuse(state, parsed.code, parsed.detail);
   }
   const statement = parsed.statement;
   switch (statement.type) {
@@ -147,6 +150,18 @@ async function applyTarget(
   context: WriteContext,
 ): Promise<AuthorityResult> {
   switch (target.op) {
+    case "add_member_device":
+      return addMemberDevice(state, target, authority, context.now);
+    case "add_node":
+      if (authority.kind !== "root" && authority.kind !== "owner_device") {
+        return refuse(state, "not_an_owner", "only an owner can add a node");
+      }
+      return addNode(state, target, authority, context.now);
+    case "remove_node":
+      if (!state.nodes[target.peer_key]) {
+        return refuse(state, "target_mismatch", "unknown node");
+      }
+      return applied(withoutNodes(state, [target.peer_key]), nodeRemovalEvents([target.peer_key]));
     case "add":
       return addMember(state, target, context.now);
     case "remove": {
@@ -178,10 +193,41 @@ async function applyTarget(
       );
     }
     case "revoke_device":
-      return applyRemovalOfPeer(state, target.peer_key);
+      if (
+        authority.kind === "member_device" &&
+        (target.peer_key === authority.peer_key ||
+          !state.members[authority.account_id]?.peer_keys.includes(target.peer_key))
+      ) {
+        return refuse(
+          state,
+          "target_mismatch",
+          "a member may revoke only another device of their own account",
+        );
+      }
+      return applyRemovalOfPeer(state, target.peer_key, authority);
     case "add_owner_device":
-      return addOwnerDevice(state, target.cert, authority, context);
+      return addOwnerDevice(state, target, authority, context);
     case "deny_invite": {
+      const nodeInvite = state.node_invites[target.invite_id];
+      if (nodeInvite?.status === "pending") {
+        return applied(
+          {
+            ...state,
+            node_invites: {
+              ...state.node_invites,
+              [target.invite_id]: {
+                ...nodeInvite,
+                status: "consumed",
+                pending: null,
+              },
+            },
+          },
+          [
+            { type: "notify_owners", event: "redemption_resolved", ref: target.invite_id },
+            { type: "publish_snapshot" },
+          ],
+        );
+      }
       const invite = state.invites[target.invite_id];
       if (!invite || invite.status !== "pending") {
         return refuse(state, "invite_not_pending", "no pending redemption for this invite");
@@ -206,13 +252,131 @@ async function applyTarget(
   }
 }
 
-// Removes one member browser (peer key); the member stays listed.
-function applyRemovalOfPeer(state: AuthorityState, peer: IrohEndpointKey): AuthorityResult {
-  return applied(withoutMemberPeerKeys(state, [peer]), [
-    { type: "disconnect", peer_keys: [peer] },
-    { type: "invalidate_tokens", peer_keys: [peer] },
+// Removes the member device and its approval descendants; the account stays listed.
+async function applyRemovalOfPeer(
+  state: AuthorityState,
+  peer: IrohEndpointKey,
+  authority: Authority,
+): Promise<AuthorityResult> {
+  const peers = [
+    ...new Set(
+      (
+        await Promise.all(
+          Object.values(state.members).map((member) => memberDeviceDescendants(member, peer)),
+        )
+      ).flat(),
+    ),
+  ];
+  if (authority.kind === "member_device") {
+    if (peers.includes(authority.peer_key)) {
+      return refuse(
+        state,
+        "target_mismatch",
+        "a member cannot revoke the signing device through its approver",
+      );
+    }
+    if (
+      Object.entries(state.members).some(
+        ([account, member]) =>
+          account !== authority.account_id && member.peer_keys.some((key) => peers.includes(key)),
+      ) ||
+      Object.values(state.owner_devices).some((owner) =>
+        owner.cert.body.peer_keys.some((key) => peers.includes(key)),
+      )
+    ) {
+      return refuse(
+        state,
+        "target_mismatch",
+        "a member cannot revoke keys shared with another account or owner",
+      );
+    }
+  }
+  return applied(withoutMemberPeerKeys(state, peers), [
+    { type: "disconnect", peer_keys: peers },
+    { type: "invalidate_tokens", peer_keys: peers },
     { type: "publish_snapshot" },
   ]);
+}
+
+function deviceSigningKeyListed(state: AuthorityState, devicePub: Ed25519PublicKey): boolean {
+  return (
+    Object.values(state.owner_devices).some((owner) => owner.cert.body.device_pub === devicePub) ||
+    Object.values(state.members).some((member) =>
+      member.peer_keys.some((peer) => member.devices?.[peer]?.device_pub === devicePub),
+    )
+  );
+}
+
+async function addMemberDevice(
+  state: AuthorityState,
+  target: Extract<
+    SignedStatement<"MembershipChange">["body"]["target"],
+    { op: "add_member_device" }
+  >,
+  authority: Authority,
+  now: UnixSeconds,
+): Promise<AuthorityResult> {
+  if (
+    authority.kind !== "root" &&
+    authority.kind !== "owner_device" &&
+    authority.kind !== "member_device"
+  ) {
+    return refuse(state, "not_an_owner", "signer cannot add a member device");
+  }
+  const member = state.members[target.account_id];
+  if (!member) {
+    return refuse(state, "target_mismatch", "unknown member");
+  }
+  if (authority.kind === "member_device" && authority.account_id !== target.account_id) {
+    return refuse(state, "target_mismatch", "a member may add devices only to their own account");
+  }
+  if (member.peer_keys.length >= MAX_MEMBER_PEER_KEYS) {
+    return refuse(
+      state,
+      "limit_reached",
+      `a member has at most ${MAX_MEMBER_PEER_KEYS} devices at a claw`,
+    );
+  }
+  if (peerKeyListedSeq(state, target.peer_key) !== undefined) {
+    return refuse(state, "target_mismatch", "peer key is already listed");
+  }
+  if (deviceSigningKeyListed(state, target.device_pub)) {
+    return refuse(state, "target_mismatch", "device signing key is already listed");
+  }
+  const approved_by =
+    authority.kind === "member_device"
+      ? { kind: "member_device" as const, device_fp: await fingerprint(authority.device_pub) }
+      : {
+          kind: "owner" as const,
+          by:
+            authority.kind === "root" ? ("root" as const) : await fingerprint(authority.device_pub),
+        };
+  return applied(
+    {
+      ...state,
+      members: {
+        ...state.members,
+        [target.account_id]: {
+          ...member,
+          peer_keys: [...member.peer_keys, target.peer_key],
+          listed_seq: [...member.peer_keys.map((_, i) => member.listed_seq?.[i] ?? 0), state.seq],
+          last_seen: { ...member.last_seen, [target.peer_key]: now },
+          devices: {
+            ...member.devices,
+            [target.peer_key]: { device_pub: target.device_pub, label: target.label, approved_by },
+          },
+        },
+      },
+    },
+    [
+      { type: "publish_snapshot" },
+      {
+        type: "notify_owners",
+        event: "member_device_added",
+        ref: await fingerprint(target.peer_key),
+      },
+    ],
+  );
 }
 
 // Adds a member directly, or approves a pending redemption when `invite_id` is set.
@@ -222,6 +386,9 @@ function addMember(
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
   now: UnixSeconds,
 ): AuthorityResult {
+  if (target.peer_keys.some((key) => state.nodes[key])) {
+    return refuse(state, "target_mismatch", "a node key cannot be a member key");
+  }
   const existing = state.members[target.account_id];
   if (!existing && Object.keys(state.members).length >= MAX_MEMBERS) {
     return refuse(state, "limit_reached", `a claw has at most ${MAX_MEMBERS} members`);
@@ -242,6 +409,7 @@ function addMember(
   // this change's seq.
   const listedSeq = peerKeys.map((key) => peerKeyListedSeq(state, key) ?? state.seq);
   const member: MemberRecord = {
+    ...existing,
     role: target.role,
     peer_keys: peerKeys,
     last_seen: lastSeen,
@@ -260,9 +428,23 @@ function addMember(
   if (pending.account_id !== target.account_id || !target.peer_keys.includes(pending.peer_key)) {
     return refuse(state, "target_mismatch", "approval does not match the pending redemption");
   }
-  if (roleRank(target.role) < roleRank(invite.cap.role)) {
-    return refuse(state, "target_mismatch", "approval grants more than the invite");
+  if (target.role !== invite.cap.role) {
+    return refuse(state, "target_mismatch", "approval's role differs from the invite's");
   }
+  if (peerKeyListedSeq(state, pending.peer_key) !== undefined) {
+    return refuse(state, "target_mismatch", "redemption peer key is already listed");
+  }
+  if (deviceSigningKeyListed(state, pending.device_pub)) {
+    return refuse(state, "target_mismatch", "device signing key is already listed");
+  }
+  member.devices = {
+    ...member.devices,
+    [pending.peer_key]: {
+      device_pub: pending.device_pub,
+      label: pending.label,
+      approved_by: { kind: "invite", invite_id: target.invite_id },
+    },
+  };
   return applied(
     {
       ...state,
@@ -279,15 +461,64 @@ function addMember(
   );
 }
 
-// The certificate's signer must be R or a current owner device with approve_device, and an
-// owner device may grant only caps it holds (R may grant any); the Gateway records the
-// granted caps and the signer as approved_by. At most MAX_OWNER_DEVICES devices are listed.
-async function addOwnerDevice(
+// Whether the certificate was signed by the same key as the change that carries it, so the
+// change's current authority is the authority of the grant.
+function signedByChangeSigner(
   state: AuthorityState,
   cert: SignedStatement<"OwnerDeviceCert">,
   authority: Authority,
+): boolean {
+  if (authority.kind === "root") {
+    return cert.signer === state.anchor.root_pub;
+  }
+  return authority.kind === "owner_device" && cert.signer === authority.device_pub;
+}
+
+// Who a device listed by this change counts as approved by. A new device is approved by the
+// change's signer. A listed device keeps its approver unless R re-anchors it, so a re-add by an
+// owner device can never move a device out from under the device that approved it.
+async function approverFor(
+  existing: OwnerDeviceRecord | undefined,
+  authority: Authority,
+  cert: SignedStatement<"OwnerDeviceCert">,
+): Promise<OwnerApprover> {
+  if (authority.kind === "root") {
+    return "root";
+  }
+  return existing ? existing.approved_by : await fingerprint(cert.signer);
+}
+
+// Whether an owner device may re-add the listed device `fp`: only itself or a device it approved,
+// directly or through devices it approved, so whatever it changes (peer keys included) stays
+// inside its own removal cascade.
+async function mayReAdd(
+  state: AuthorityState,
+  authority: Authority,
+  fp: KeyFingerprint,
+): Promise<boolean> {
+  if (authority.kind === "root") {
+    return true;
+  }
+  if (authority.kind !== "owner_device") {
+    return false;
+  }
+  return approvalDescendants(state, await fingerprint(authority.device_pub)).includes(fp);
+}
+
+// The certificate must be signed by the change's signer: R or a current owner device with
+// approve_device. An owner device may grant only caps it holds (R may grant any), may re-add only
+// devices in its own approval subtree, and only R may raise a listed device's caps. The Gateway records the granted caps and the approver. At most
+// MAX_OWNER_DEVICES devices are listed. A `node` in the same change is bound to the device.
+async function addOwnerDevice(
+  state: AuthorityState,
+  target: Extract<
+    SignedStatement<"MembershipChange">["body"]["target"],
+    { op: "add_owner_device" }
+  >,
+  authority: Authority,
   context: WriteContext,
 ): Promise<AuthorityResult> {
+  const cert = target.cert;
   const verified = await verifyOwnerStatement(
     cert,
     state.anchor,
@@ -295,6 +526,11 @@ async function addOwnerDevice(
   );
   if (!verified.ok) {
     return refuse(state, verified.code, `certificate: ${verified.detail}`);
+  }
+  // A certificate signed by anyone else (for example, an old R-signed certificate carried by an
+  // owner device's change) would grant with authority the change's signer does not hold now.
+  if (!signedByChangeSigner(state, cert, authority)) {
+    return refuse(state, "wrong_signer", "certificate must be signed by the change's signer");
   }
   const window = certificateWindowError(cert.body, context.now);
   if (window) {
@@ -307,13 +543,27 @@ async function addOwnerDevice(
       `an owner device has at most ${MAX_OWNER_DEVICE_PEER_KEYS} peer keys`,
     );
   }
+  if (
+    [formatIrohEndpointKey(rawPublicKey(cert.body.device_pub)), ...cert.body.peer_keys].some(
+      (key) => state.nodes[key],
+    )
+  ) {
+    return refuse(state, "target_mismatch", "a node key cannot be an owner device key");
+  }
   const fp = await fingerprint(cert.body.device_pub);
   const existing = state.owner_devices[fp];
+  if (existing && !(await mayReAdd(state, authority, fp))) {
+    return refuse(
+      state,
+      "target_mismatch",
+      "an owner device may re-add only itself or a device it approved",
+    );
+  }
   // verifyOwnerStatement already held the grant within the signing device's recorded caps.
   // Re-adding a listed device through an owner device never raises what it already holds.
   if (
     existing &&
-    verified.authority.kind !== "root" &&
+    authority.kind !== "root" &&
     !cert.body.caps.every((cap) => existing.caps.includes(cap))
   ) {
     return refuse(
@@ -335,7 +585,7 @@ async function addOwnerDevice(
   const record: OwnerDeviceRecord = {
     cert,
     caps: [...cert.body.caps],
-    approved_by: verified.authority.kind === "root" ? "root" : await fingerprint(cert.signer),
+    approved_by: await approverFor(existing, authority, cert),
     last_seen: context.now,
     listed_seq: existing ? ownerDeviceListedSeq(existing) : state.seq,
     peer_listed_seq: cert.body.peer_keys.map((key) => peerKeyListedSeq(state, key) ?? state.seq),
@@ -356,7 +606,14 @@ async function addOwnerDevice(
   if (authority.kind === "root" && context.channel === "mailbox") {
     events.push({ type: "notify_owners", event: "kit_used", ref: fp });
   }
-  return applied({ ...state, owner_devices: { ...state.owner_devices, [fp]: record } }, events);
+  const listed = { ...state, owner_devices: { ...state.owner_devices, [fp]: record } };
+  if (!target.node) {
+    return applied(listed, events);
+  }
+  const approver: OwnerApprover =
+    authority.kind === "root" ? "root" : await fingerprint(cert.signer);
+  const bound = bindOwnerDeviceNode(listed, fp, target.node, approver, context.now);
+  return bound.ok ? applied(bound.state, [...bound.events, ...events]) : { ...bound, state };
 }
 
 /** Registers an InviteCap with its proof key. Owner devices do this directly at the Gateway. */
@@ -368,7 +625,7 @@ export async function registerInvite(
 ): Promise<AuthorityResult> {
   const parsed = parseStatement(input, "InviteCap");
   if (!parsed.ok) {
-    return refuse(state, "malformed", parsed.detail);
+    return refuse(state, parsed.code, parsed.detail);
   }
   if (context.channel === "mailbox") {
     return refuse(state, "not_direct", "invites are registered directly at the Gateway");
@@ -394,10 +651,10 @@ export async function registerInvite(
   }
   // Spent records go first, so the cap counts only invites that can still matter.
   const kept = withoutSpentInvites(state, context.now).state;
-  if (kept.invites[cap.invite_id]) {
+  if (kept.invites[cap.invite_id] || kept.node_invites[cap.invite_id]) {
     return refuse(state, "invite_used", "invite id already registered");
   }
-  if (Object.keys(kept.invites).length >= MAX_INVITES) {
+  if (Object.keys(kept.invites).length + Object.keys(kept.node_invites).length >= MAX_INVITES) {
     return refuse(
       state,
       "limit_reached",
@@ -421,22 +678,6 @@ export async function registerInvite(
   });
 }
 
-// Why an invite expiring at `expiresAt` cannot be registered at `now`, or null: it has already
-// expired, or it lasts longer than MAX_INVITE_LIFETIME_SECONDS (beyond the clock skew).
-function inviteLifetimeError(
-  expiresAt: UnixSeconds,
-  now: UnixSeconds,
-): { code: "expired" | "limit_reached"; detail: string } | null {
-  if (expiresAt <= now) {
-    return { code: "expired", detail: "invite expired" };
-  }
-  if (expiresAt > now + MAX_INVITE_LIFETIME_SECONDS + CERT_CLOCK_SKEW_SECONDS) {
-    const days = MAX_INVITE_LIFETIME_SECONDS / 86400;
-    return { code: "limit_reached", detail: `an invite lasts at most ${days} days` };
-  }
-  return null;
-}
-
 /**
  * Records a redemption request (usually from the mailbox) as **pending**. It reserves
  * the invite so it cannot be redeemed twice, admits nothing, and prompts the owners.
@@ -449,7 +690,7 @@ export async function submitRedemption(
 ): Promise<AuthorityResult> {
   const parsed = parseStatement(input, "InviteRedemption");
   if (!parsed.ok) {
-    return refuse(state, "malformed", parsed.detail);
+    return refuse(state, parsed.code, parsed.detail);
   }
   const invite = state.invites[parsed.statement.body.invite_id];
   if (!invite) {
@@ -475,6 +716,7 @@ export async function submitRedemption(
     pending: {
       account_id: body.account_id,
       device_pub: body.device_pub,
+      label: body.label,
       peer_key: body.peer_key,
       requested_at: now,
     },

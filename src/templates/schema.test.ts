@@ -5,12 +5,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { emptyPluginPlanEvidence } from "./packages.test-support.js";
 import { readTemplateManifestFile } from "./reader.js";
-import { parseTemplateManifest, parseTemplateOpenClawProfile } from "./schema.js";
-import type { TemplateManifest, TemplateOpenClawProfile, TemplateSourceIdentity } from "./types.js";
+import { parseTemplateManifest } from "./schema.js";
+import type { TemplateManifest, TemplateSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const minimalManifest = { schemaVersion: 1, agent: { id: "triage" } };
-const emptyGroups = "workspace: {}\npackages: []\nmcpServers: {}\ncronJobs: []";
+const emptyGroups = "workspace: {}\nskills: []\nplugins: []\nmcpServers: {}\nautomations: []";
 const markdown = (agent = "agent: { id: triage }", body = "", groups = emptyGroups) =>
   `---\nschemaVersion: 1\n${agent}\n${groups}\n---${body}`;
 const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
@@ -48,25 +48,13 @@ const baseManifest = {
     description: "Reviews incoming issues.",
     identity: { name: "Triage", emoji: "search" },
   },
-  metadata: { "openclaw.config": "profiles/openclaw.yml" },
+  metadata: {},
   workspace: {
     bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
     files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],
   },
-  packages: [
-    {
-      kind: "skill",
-      source: "clawhub",
-      ref: "@acme/triage",
-      version: "1.2.0",
-    },
-    {
-      kind: "plugin",
-      source: "clawhub",
-      ref: "@acme/github",
-      version: "2.0.1",
-    },
-  ],
+  skills: [{ ref: "@acme/triage", version: "1.2.0" }],
+  plugins: [{ ref: "@acme/github", version: "2.0.1" }],
   mcpServers: {
     github: {
       command: "npx",
@@ -76,7 +64,7 @@ const baseManifest = {
       timeout: 30,
     },
   },
-  cronJobs: [
+  automations: [
     {
       id: "weekday-triage",
       name: "Weekday triage",
@@ -88,16 +76,15 @@ const baseManifest = {
   ],
 } as const;
 
-const baseOpenClawProfile: TemplateOpenClawProfile = {
-  schemaVersion: 1,
-  agent: {
-    groupChat: { mentionPatterns: ["@triage"] },
-    sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
-    tools: { allow: ["read", "write"], deny: ["exec"] },
-    heartbeat: { every: "30m", lightContext: true },
-    humanDelay: { mode: "natural" },
-  },
+const baseAgentSettings = {
+  groupChat: { mentionPatterns: ["@triage"] },
+  sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
+  tools: { allow: ["read", "write"], deny: ["exec"] },
+  heartbeat: { every: "30m", lightContext: true },
+  humanDelay: { mode: "natural" },
 };
+const nativeManifest = () =>
+  requireManifest({ ...baseManifest, agent: { ...baseManifest.agent, ...baseAgentSettings } });
 
 function requireManifest(value: unknown = baseManifest): TemplateManifest {
   const result = parseTemplateManifest(value);
@@ -134,9 +121,10 @@ describe("parseTemplateManifest", () => {
       agent: { id: "minimal-agent" },
       metadata: {},
       workspace: { bootstrapFiles: {}, files: [] },
-      packages: [],
+      skills: [],
+      plugins: [],
       mcpServers: {},
-      cronJobs: [],
+      automations: [],
     });
   });
 
@@ -155,30 +143,42 @@ describe("parseTemplateManifest", () => {
     },
   );
 
-  it.each(["subagents", "groupChat", "sandbox", "tools", "memory", "heartbeat", "humanDelay"])(
-    "keeps harness-specific %s out of the portable agent object",
-    (field) => {
+  it.each(["subagents"])("keeps harness-specific %s out of the portable agent object", (field) => {
+    expect(
+      parseTemplateManifest({
+        schemaVersion: 1,
+        agent: { id: "worker", [field]: {} },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects extra dependency fields and retired configuration with migration guidance", () => {
+    for (const field of ["kind", "source", "required", "integrity"]) {
       expect(
         parseTemplateManifest({
-          schemaVersion: 1,
-          agent: { id: "worker", [field]: {} },
-        }).ok,
-      ).toBe(false);
-    },
-  );
-
-  it("rejects non-v1 package fields and connector packages", () => {
-    function rejectPackage(pkg: unknown, path = "$.packages[0]") {
-      const result = parseTemplateManifest({ ...baseManifest, packages: [pkg] });
-      expect(result.ok).toBe(false);
-      expect(result.diagnostics[0]?.path).toBe(path);
+          ...baseManifest,
+          skills: [{ ...baseManifest.skills[0], [field]: "value" }],
+        }),
+      ).toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ path: "$.skills[0]" })],
+      });
     }
-    rejectPackage(
-      { kind: "connector", source: "clawhub", ref: "@acme/chat", version: "1.0.0" },
-      "$.packages[0].kind",
-    );
-    rejectPackage({ ...baseManifest.packages[0], required: false });
-    rejectPackage({ ...baseManifest.packages[0], integrity: `sha256:${"a".repeat(64)}` });
+    for (const retired of [
+      { packages: [] },
+      { profiles: {} },
+      { metadata: { "openclaw.config": "profile.yml" } },
+    ]) {
+      expect(parseTemplateManifest({ ...baseManifest, ...retired })).toMatchObject({
+        ok: false,
+        diagnostics: [
+          expect.objectContaining({
+            code: "retired_template_configuration",
+            message: expect.stringContaining("keep schemaVersion: 1"),
+          }),
+        ],
+      });
+    }
   });
 
   it("rejects resolved MCP secrets", () => {
@@ -248,21 +248,21 @@ describe("parseTemplateManifest", () => {
   it("rejects duplicate packages and cron ids", () => {
     const duplicatePackage = parseTemplateManifest({
       ...baseManifest,
-      packages: [baseManifest.packages[0], baseManifest.packages[0]],
+      skills: [baseManifest.skills[0], baseManifest.skills[0]],
     });
     expect(duplicatePackage.ok).toBe(false);
 
     const duplicateCron = parseTemplateManifest({
       ...baseManifest,
-      cronJobs: [baseManifest.cronJobs[0], baseManifest.cronJobs[0]],
+      automations: [baseManifest.automations[0], baseManifest.automations[0]],
     });
     expect(duplicateCron.ok).toBe(false);
   });
 
   it("rejects invalid heartbeat durations and cron expressions", () => {
-    const heartbeat = parseTemplateOpenClawProfile({
+    const heartbeat = parseTemplateManifest({
       schemaVersion: 1,
-      agent: { heartbeat: { every: "eventually" } },
+      agent: { id: "worker", heartbeat: { every: "eventually" } },
     });
     expect(heartbeat.ok).toBe(false);
     expect(heartbeat.diagnostics).toContainEqual(
@@ -271,16 +271,16 @@ describe("parseTemplateManifest", () => {
 
     const cron = parseTemplateManifest({
       ...baseManifest,
-      cronJobs: [
+      automations: [
         {
-          ...baseManifest.cronJobs[0],
+          ...baseManifest.automations[0],
           schedule: { cron: "not a cron expression", timezone: "UTC" },
         },
       ],
     });
     expect(cron.ok).toBe(false);
     expect(cron.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.cronJobs[0].schedule.cron" }),
+      expect.objectContaining({ path: "$.automations[0].schedule.cron" }),
     );
   });
 });
@@ -389,7 +389,7 @@ describe("readTemplateManifestFile", () => {
       markdown(
         undefined,
         "\nPortable soul",
-        "workspace:\n  bootstrapFiles:\n    SOUL.md: { source: workspace/SOUL.md }\npackages: []\nmcpServers: {}\ncronJobs: []",
+        "workspace:\n  bootstrapFiles:\n    SOUL.md: { source: workspace/SOUL.md }\nskills: []\nplugins: []\nmcpServers: {}\nautomations: []",
       ),
     );
     expectDiagnostic(result, "template_body_soul_conflict");
@@ -536,7 +536,7 @@ describe("buildTemplateAddPlan", () => {
           ok: true,
           action: "install",
           integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
-          warning: `Review ${pkg.ref} before installation.`,
+          warning: `Review ${pkg.source === "bundled" ? pkg.path : pkg.ref} before installation.`,
           ...(pkg.kind === "plugin"
             ? {
                 installId: "github",
@@ -618,7 +618,7 @@ describe("buildTemplateAddPlan", () => {
 
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
     const canonicalWorkspace = join(await realpath(source.packageRoot), "new-workspace");
-    const plan = await buildPlan({ openClawProfile: baseOpenClawProfile });
+    const plan = await buildPlan({ manifest: nativeManifest() });
 
     expect(plan).toMatchObject({
       schemaVersion: "openclaw.templateAddPlan.v1",
@@ -811,7 +811,7 @@ describe("buildTemplateAddPlan", () => {
     expect(workspaceFileActions.every((action) => !Object.hasOwn(action, "digest"))).toBe(true);
   });
   it("binds plan integrity to the source and planned mutations", async () => {
-    const input = { openClawProfile: baseOpenClawProfile };
+    const input = { manifest: nativeManifest() };
     const first = await buildPlan(input);
     const repeated = await buildPlan(input);
     const changed = await buildPlan({
@@ -820,17 +820,13 @@ describe("buildTemplateAddPlan", () => {
     });
     const changedCapability = await buildPlan({
       ...input,
-      openClawProfile: {
-        ...baseOpenClawProfile,
-        agent: {
-          ...baseOpenClawProfile.agent,
-          tools: { allow: ["read", "exec"] },
-        },
-      },
+      manifest: requireManifest({
+        ...baseManifest,
+        agent: { ...baseManifest.agent, ...baseAgentSettings, tools: { allow: ["read", "exec"] } },
+      }),
     });
 
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
-    // Existing consent tokens bind this description for profiles without the new fields.
     expect(first.capabilityChanges.find((change) => change.kind === "agent")?.reason).toBe(
       "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
     );

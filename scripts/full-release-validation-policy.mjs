@@ -421,6 +421,25 @@ export function classifyReleaseGhTransportError(error) {
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
+export function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
+  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (
+    !isGet ||
+    attempt >= 3 ||
+    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
+    classifyReleaseGhTransportError(error) !== "transient"
+  ) {
+    throw error;
+  }
+  return 2_000 * 2 ** attempt;
+}
+
 // GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
 // rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
 // listing succeed. Each size reads the complete paginated listing, so results never
@@ -432,9 +451,29 @@ export function isReleaseGhServerError(error) {
   return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
 }
 
-export async function readReleaseJobListing(readListing) {
-  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
-    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+export function releaseWatcherJobName(name) {
+  switch (name) {
+    case "Release Decision / Watch":
+      return "Release Decision";
+    case "Diagnostic Drain / Watch":
+      return "Diagnostic Drain";
+    default:
+      return name;
+  }
+}
+
+export async function readReleaseJobListing(
+  readListing,
+  pageSizes = RELEASE_JOB_LISTING_PAGE_SIZES,
+) {
+  if (
+    !pageSizes.length ||
+    pageSizes.some((size) => !RELEASE_JOB_LISTING_PAGE_SIZES.includes(size))
+  ) {
+    throw new Error("Invalid release job page size");
+  }
+  for (const [index, perPage] of pageSizes.entries()) {
+    const smallerPageFallback = index < pageSizes.length - 1;
     try {
       return await readListing(perPage, { smallerPageFallback });
     } catch (error) {
@@ -1580,6 +1619,17 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   // can therefore need only this failed metadata job, never its passing workloads.
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
+  }
+  // The artifact seal depends on the entire npm stage. Retrying its one failed
+  // leaf also reruns the seal; neither failure is waived or posted separately.
+  const npmLeaf = failed.filter((name) => name.startsWith("Prepare npm artifacts / "));
+  if (
+    childKey === "artifact:npm" &&
+    failed.length === 2 &&
+    npmLeaf.length === 1 &&
+    failed.includes("Seal artifact producer receipt")
+  ) {
+    return { failed, jobName: npmLeaf[0], mode: "single-job" };
   }
   if (failed.length !== 1) {
     throw new Error(

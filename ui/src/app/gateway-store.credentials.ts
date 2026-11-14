@@ -14,6 +14,7 @@ import {
   type BootRecordOwner,
 } from "./boot-record.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
+import { retirePluginRecoveryStorage } from "./plugin-recovery-storage.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { clearWarmBootState } from "./warm-boot-retirement.ts";
 
@@ -88,6 +89,9 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
           ? bootRecordOwner(credentials)
           : undefined;
     },
+    acceptRecoveryScope(gatewayUrl: string, recoveryScope?: string): void {
+      retirePluginRecoveryStorage(gatewayUrl, recoveryScope);
+    },
     retire(clearCaches: boolean): void {
       const gatewayScope = scope;
       const owners = capturedOwner ? [capturedOwner] : [];
@@ -100,6 +104,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       if (!gatewayScope) {
         return;
       }
+      retirePluginRecoveryStorage(gatewayScope);
       const clear = clearCaches ? clearWarmBootState : clearBootRecords;
       for (const owner of owners) {
         void clear(gatewayScope, owner);

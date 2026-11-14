@@ -322,6 +322,20 @@ it("prepares deferred discovery guidance with the model tool projection", async 
   expect(guidance).not.toContain("Call a unique deferred tool name directly");
 });
 
+it("carries the run-granted listing that the cached deferred directory omits", async () => {
+  const { runtime } = fixture([], async () => ({
+    tools: [tool("web_fetch"), tool("skill_library")],
+    policy,
+    presentation: createToolSurfacePresentationForTest({
+      tools: { codeMode: false, toolSearch: { enabled: true, mode: "tools" } },
+    }),
+  }));
+  const projection = await runtime.getPromptProjection(identity);
+  expect(projection.toolSchemaDirectoryPrompt).toContain("- web_fetch");
+  expect(projection.toolSchemaDirectoryPrompt).not.toContain("skill_library");
+  expect(projection.runGrantedToolDirectory).toContain("- skill_library (core)");
+});
+
 it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
   const execute = vi.fn(async () => success);
   const remote = tool("remote", execute);
@@ -581,7 +595,7 @@ it("preserves error text through worker tool execution", async () => {
   const { invoke } = await issued([tool("remote", execute)]);
   const result = await invoke();
   expect(result).toEqual({
-    content: [{ type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify({ status: "error", error: message }) }],
     details: { status: "error", error: message },
     isError: true,
   });

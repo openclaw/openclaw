@@ -157,7 +157,12 @@ export function mutatePendingInput(
         }
         // Native SDK completion uses only "complete"; stage and finish execute in workers.
         if (input.kind === "stage") {
-          if (row?.input_id !== input.expected.existing?.input_id) {
+          // Compare-and-set: a restage may rebind run_id, so a concurrent reopen must lose.
+          if (
+            row?.input_id !== input.expected.existing?.input_id ||
+            row?.run_id !== input.expected.existing?.run_id ||
+            row?.state !== input.expected.existing?.state
+          ) {
             throw new SessionPendingInputCustodyError(
               "Pending input changed before staging committed",
             );
@@ -186,7 +191,12 @@ export function mutatePendingInput(
               current.db,
               getSessionKysely(current.db)
                 .updateTable("session_pending_inputs")
-                .set({ state: "queued", lifecycle_generation: input.lifecycleGeneration })
+                // Same-run restages keep run_id; a reclaimed channel source turn rebinds it.
+                .set({
+                  state: "queued",
+                  run_id: input.runId,
+                  lifecycle_generation: input.lifecycleGeneration,
+                })
                 .where("input_id", "=", row.input_id)
                 .returningAll(),
             );
@@ -215,7 +225,7 @@ export function mutatePendingInput(
               "Pending input staging omitted its postimage",
             );
           }
-          if (actor) {
+          if (actor && receipt.stagedInput.consumed_event_id === null) {
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }

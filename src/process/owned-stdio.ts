@@ -27,6 +27,7 @@ export type OwnedStdioProcessOptions = {
   stderrDestination?: Writable;
   secretInput?: SpawnSecretInput;
   assertCurrent?: () => void;
+  prepareTargetSpawn?: () => void | Promise<void>;
   /** Require explicit stdin.end(); host loss kills the child before input EOF. */
   terminateOnHostLoss?: true;
   stdoutConsumption?: "awaited";

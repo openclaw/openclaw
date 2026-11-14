@@ -34,6 +34,8 @@ import {
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 export { createCodexDynamicToolBridge };
+export { codexDynamicToolsFingerprint } from "./src/app-server/thread-fingerprints.js";
+export type { JsonObject };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
@@ -93,20 +95,21 @@ export async function buildCodexHarnessPromptSnapshot(params: {
     }),
     params.developerInstructionAdditions,
   );
-  return {
+  const threadStartParams = await buildThreadStartParams(params.attempt, {
+    cwd: params.cwd,
+    dynamicTools: params.dynamicTools,
+    appServer: params.appServer,
+    nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+    nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
     developerInstructions,
+    config: params.config,
+  });
+  return {
+    developerInstructions: threadStartParams.developerInstructions,
     parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
       personaInstructions: params.personaInstructions,
     }),
-    threadStartParams: await buildThreadStartParams(params.attempt, {
-      cwd: params.cwd,
-      dynamicTools: params.dynamicTools,
-      appServer: params.appServer,
-      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-      developerInstructions,
-      config: params.config,
-    }),
+    threadStartParams,
     threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
@@ -160,6 +163,9 @@ export const loadCodexDynamicToolBuildTestFixture = () =>
   import("./src/app-server/dynamic-tool-build.test-support.js");
 
 export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
+
+export const loadCodexNativeSearchAuthorityTestFixture = () =>
+  import("./src/app-server/native-search-authority.test-support.js");
 
 export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");
 

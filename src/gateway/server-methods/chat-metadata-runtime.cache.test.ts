@@ -1,6 +1,5 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { onTestFinished, assert, expect, test, vi } from "vitest";
+import { expectCollected } from "../../test-utils/retention.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -85,10 +84,14 @@ test.each(["neutral", "profile"] as const)(
     const harness = createChatMetadataHarness();
     onTestFinished(() => harness.runtime.stop());
     await harness.refresh();
-    const metadata = await harness.read({ sessionEntry: new SessionInput() });
-    await setImmediate();
-    expect(queryObjects(SessionInput)).toBe(0);
-    expect(control.deref()).toBeUndefined();
+    const { metadata, sessionEntry } = await (async () => {
+      const entry = new SessionInput();
+      return {
+        metadata: await harness.read({ sessionEntry: entry }),
+        sessionEntry: new WeakRef(entry),
+      };
+    })();
+    await expectCollected(sessionEntry, control);
     expect(await harness.read()).toMatchObject({ models: metadata.models });
     expect(metadata.models).toEqual([expect.objectContaining({ id: "first" })]);
   },

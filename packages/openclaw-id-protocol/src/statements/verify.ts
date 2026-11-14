@@ -1,5 +1,10 @@
 // Signature and authority verification for signed statements.
-import type { Ed25519PublicKey } from "../keys.js";
+import {
+  formatEd25519PublicKey,
+  rawPublicKey,
+  type Ed25519PublicKey,
+  type IrohEndpointKey,
+} from "../keys.js";
 import { hasValidSignature } from "./envelope.js";
 import type {
   OwnerCapability,
@@ -18,12 +23,18 @@ export type TrustAnchor = { root_pub: Ed25519PublicKey };
  */
 export type OwnerDeviceLookup = (devicePub: Ed25519PublicKey) => OwnerCapability[] | undefined;
 
+/** A listed member's account and peer key, looked up by its signing key D. */
+export type MemberDeviceLookup = (
+  devicePub: Ed25519PublicKey,
+) => { account_id: string; peer_key: IrohEndpointKey } | undefined;
+
 /** Verifier inputs that are not part of the statement. */
 export type VerifyOptions = {
   /** Current time, unix seconds. */
   now: UnixSeconds;
   /** The claw's current owner devices. Without it, only R's signatures verify. */
   owners?: OwnerDeviceLookup;
+  members?: MemberDeviceLookup;
   /** Tolerated clock skew for `issued_at` in seconds. Default 300. */
   clockSkew?: number;
 };
@@ -32,12 +43,20 @@ export type VerifyOptions = {
 export type Authority =
   | { kind: "root" }
   | { kind: "owner_device"; device_pub: Ed25519PublicKey; caps: OwnerCapability[] }
+  | {
+      kind: "member_device";
+      account_id: string;
+      device_pub: Ed25519PublicKey;
+      peer_key: IrohEndpointKey;
+    }
   | { kind: "gateway" }
   | { kind: "self" };
 
 /** Stable verification failure codes. Callers match codes, never detail text. */
 export type VerifyErrorCode =
   | "malformed"
+  /** A well-formed envelope or descriptor version this build does not implement: update required. */
+  | "unsupported_version"
   | "bad_signature"
   | "wrong_signer"
   | "not_an_owner"
@@ -45,6 +64,13 @@ export type VerifyErrorCode =
   | "caps_escalation"
   | "not_yet_valid"
   | "root_mismatch"
+  /**
+   * The pinned root was replaced by an owner reset that the claw's K_gw vouched for. Not an
+   * attack: the client dials nothing, keeps no pin and asks the user to set the browser up again.
+   */
+  | "owner_reset"
+  /** A root reset whose new binding does not keep K_srv, K_gw and the reset's binding_seq. */
+  | "reset_mismatch"
   | "wrong_claw"
   | "host_mismatch"
   | "rollback"
@@ -70,6 +96,7 @@ export type OwnerSignedType =
   | "OwnerDeviceCert"
   | "ServerBinding"
   | "InviteCap"
+  | "NodeInviteCap"
   | "MembershipChange"
   | "Revocation";
 
@@ -81,6 +108,7 @@ const REQUIRED_CAPABILITY: Record<
 > = {
   OwnerDeviceCert: "approve_device",
   InviteCap: "invite",
+  NodeInviteCap: "invite",
   MembershipChange: "manage_members",
   Revocation: null,
 };
@@ -120,6 +148,18 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
   }
   const caps = options.owners?.(statement.signer);
   if (!caps) {
+    if (statement.type === "MembershipChange") {
+      // SAFETY: the statement type fixes its validated body.
+      const op = (statement as SignedStatement<"MembershipChange">).body.target.op;
+      const member = options.members?.(statement.signer);
+      if (member && (op === "add_member_device" || op === "revoke_device")) {
+        return {
+          ok: true,
+          statement,
+          authority: { kind: "member_device", device_pub: statement.signer, ...member },
+        };
+      }
+    }
     return failure("not_an_owner", "signer is neither R nor a current owner device of this claw");
   }
   // SAFETY: the ServerBinding member of the union returned above.
@@ -159,12 +199,45 @@ export async function verifyMembershipSnapshot(
   return { ok: true, statement, authority: { kind: "gateway" } };
 }
 
+/**
+ * Verifies a RootReset's signature against a verified ServerBinding: signed by that binding's
+ * K_gw, for the same claw. `verifyRootReset` (reset.ts) checks the rest of the succession.
+ */
+export async function verifyRootResetSignature(
+  statement: SignedStatement<"RootReset">,
+  binding: ServerBindingBody,
+): Promise<VerifyResult<"RootReset">> {
+  if (statement.signer !== binding.k_gw) {
+    return failure("wrong_signer", "root reset is not signed by the binding's K_gw");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  if (statement.body.claw_id !== binding.claw_id) {
+    return failure("wrong_claw", "root reset is for another claw");
+  }
+  return { ok: true, statement, authority: { kind: "gateway" } };
+}
+
 /** Verifies that an InviteRedemption is self-signed by the device key it names. The proof is checked in invites.ts. */
 export async function verifyInviteRedemptionSignature(
   statement: SignedStatement<"InviteRedemption">,
 ): Promise<VerifyResult<"InviteRedemption">> {
   if (statement.signer !== statement.body.device_pub) {
     return failure("wrong_signer", "redemption must be signed by its own device key");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  return { ok: true, statement, authority: { kind: "self" } };
+}
+
+/** A node redemption proves possession of the exact W it asks to admit. */
+export async function verifyNodeRedemptionSignature(
+  statement: SignedStatement<"NodeRedemption">,
+): Promise<VerifyResult<"NodeRedemption">> {
+  if (statement.signer !== formatEd25519PublicKey(rawPublicKey(statement.body.peer_key))) {
+    return failure("wrong_signer", "node redemption must be signed by its own peer key");
   }
   if (!(await hasValidSignature(statement))) {
     return failure("bad_signature", "envelope signature does not verify");

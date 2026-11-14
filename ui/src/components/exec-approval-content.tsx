@@ -175,7 +175,7 @@ export function ExecApprovalBody(props: {
           triggerTitle={t("execApproval.requestDetails")}
           trigger={<Icon name="info" />}
           triggerClass={[
-            "btn btn--sm btn--icon btn--ghost exec-approval-info",
+            "oc-icon-button oc-icon-button--28 exec-approval-info",
             { "exec-approval-info--error": Boolean(props.lastError) },
           ]}
           class="exec-approval-details"

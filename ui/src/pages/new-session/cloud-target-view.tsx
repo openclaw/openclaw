@@ -4,10 +4,11 @@ import type { WorkerMachineOption } from "../../../../packages/gateway-protocol/
 import {
   compareCloudProfiles,
   resolveCloudProfileIconData,
-} from "../../components/provider-icon-data.ts";
+} from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { machineShapeText, type CloudChoiceMenuItemsOptions } from "./cloud-target.ts";
@@ -17,6 +18,7 @@ import {
   defaultCloudOs,
   type DraftCloudProfile,
 } from "./discovery.ts";
+import { pickerOptionRef } from "./picker-navigation.ts";
 
 type NativeSessionMenuItem = {
   value: string;
@@ -105,6 +107,7 @@ function DetailRow(props: { icon: IconName; text: string | undefined; capacity?:
 }
 
 export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting: boolean }) {
+  const optionRef = pickerOptionRef();
   let rowElement: HTMLButtonElement | undefined;
   const unavailableReason = () =>
     props.item.disabled ? props.item.title || props.item.description : undefined;
@@ -148,7 +151,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
       title={props.item.compact ? undefined : props.item.title}
       disabled={props.submitting || (Boolean(props.item.disabled) && !accessibleBlocker())}
       aria-disabled={accessibleBlocker() ? "true" : undefined}
-      ref={[select, (element) => (rowElement = element)]}
+      ref={[select, optionRef, (element) => (rowElement = element)]}
     >
       {props.item.icon ? (
         <span class="session-menu__icon" aria-hidden="true">
@@ -416,7 +419,7 @@ function CloudConfiguration(props: {
           <>
             {group().choices.length ? (
               <>
-                <div class="new-session-page__environment-heading">{group().label}</div>
+                <MenuHeading class="new-session-page__environment-heading" label={group().label} />
                 <div
                   class="new-session-page__cloud-choice-list"
                   role="group"

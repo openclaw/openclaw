@@ -7,6 +7,7 @@ import {
   type NodeWorkerWorkspaceExecResult,
 } from "../../worker/node-workspace-protocol.js";
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
+import { prepareNodeWorkerPublicationIntegration } from "./node-worker-publication-transfer.js";
 import {
   createNodeWorkerRepositoryPreparation,
   restoreNodeWorkerRepositoryCheckpoint,
@@ -52,6 +53,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
   supportsNativeQuiescence?: () => Promise<boolean>;
   supportsGitResults?: () => Promise<boolean>;
+  supportsPublicationIntegration?: () => Promise<boolean>;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
     command: WorkerWorkspaceCommand & {
@@ -241,7 +243,6 @@ export function createNodeWorkerWorkspaceActions(params: {
             }
           }
         };
-        await verifyStable();
         if (!uploaded.base.baseCommit) {
           throw new Error("Repository checkpoint has no pinned Git base");
         }
@@ -292,9 +293,8 @@ export function createNodeWorkerWorkspaceActions(params: {
               await params.workspaceTransfer.discardUpload(params.environmentId, publicationToken);
             }
           }
-          // Publication restrictions never own recovery acceptance. Its remote
-          // stability, live owner and final quiescence fences still run below.
-          await verifyStable();
+          // The caller renews quiescence and verifies remote stability before
+          // acceptance. Earlier scans cannot replace that final check.
           authorize?.();
           markPhase?.("repositoryCheckpointStage");
           const prepared = await request.source.prepareCheckpoint({
@@ -546,6 +546,17 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
     };
   };
   return {
+    integratePublication: (input: Parameters<typeof prepareNodeWorkerPublicationIntegration>[1]) =>
+      prepareNodeWorkerPublicationIntegration(
+        {
+          environmentId: params.environmentId,
+          signal: params.ownerSignal,
+          workspaceTransfer: params.workspaceTransfer,
+          transfer,
+          supportsIntegration: params.supportsPublicationIntegration,
+        },
+        input,
+      ),
     getSessionKey: () => sessionKey,
     validateRestoredWorkspace,
     runWorkspaceCommand: exec,

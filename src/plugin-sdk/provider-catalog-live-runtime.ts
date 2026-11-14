@@ -104,7 +104,7 @@ export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> 
     cacheKeyParts?: readonly unknown[];
     /**
      * Provider-owned projection for catalogs that publish richer metadata than model ids.
-     * Defaults to the shared chat classifier, which keeps unfamiliar listed chat models.
+     * Defaults to shared capability projection; non-chat rows retain inference.chat=false for pins.
      */
     projectRows?: LiveModelRowProjection<T>;
     /** Retry a rejected authenticated catalog request against the provider's public catalog. */
@@ -160,7 +160,7 @@ function matchesProviderCatalogScope(
 }
 
 // The id selector decides which rows are models and what they are called; the
-// shared classifier then drops non-chat rows and enriches catalogued ids.
+// shared classifier then records chat support and enriches catalogued ids.
 function projectSelectedLiveModelRows(
   readModelId: (row: unknown) => string | undefined,
 ): LiveModelRowProjection {

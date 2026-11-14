@@ -285,9 +285,7 @@ export { flush };
       [project.source]: 'export const loadPage = () => import("./page.js");',
     });
     await expect(buildPluginControlUi(project)).rejects.toThrow("will not be bundled");
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it.each([
@@ -299,12 +297,11 @@ export { flush };
   ])("rejects a retained external $name", async ({ source }) => {
     const project = await fixture();
     await write(project.rootDir, project.source, source);
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "must bundle their browser dependencies",
-    );
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    const reason = "must bundle their browser dependencies";
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(reason);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(reason));
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it("publishes complete immutable generations and detects stale source", async () => {
@@ -549,7 +546,9 @@ export { flush };
       path.join(project.rootDir, project.source),
       `export { loadDependency } from "./runtime/${file}";\n`,
     );
-    await expect(buildPluginControlUi(project)).rejects.toThrow(diagnostic);
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(diagnostic);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(diagnostic));
     expect(await fs.readFile(manifestPath, "utf8")).toBe(manifest);
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),

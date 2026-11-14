@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { callGatewayFromCli, isGatewayClientRequestError } from "../plugin-sdk/gateway-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
-  getGatewayTestPort,
   installGatewayTestHooks,
   setTestPluginRegistry,
   startTestGatewayServer,
@@ -29,10 +29,13 @@ describe("gateway-routed plugin CLI calls", () => {
     );
     setTestPluginRegistry(registry);
 
-    const port = await getGatewayTestPort();
+    const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const token = "voice-call-cli-routing-token";
-    const url = `ws://127.0.0.1:${port}`;
-    const server = await startTestGatewayServer(port, {
+    const url = `ws://127.0.0.1:${claim.port}`;
+    await expect(
+      acquireTestPortBlock({ port: claim.port, offsets: [0] }).then((other) => other.release()),
+    ).rejects.toMatchObject({ code: "EADDRINUSE" });
+    const server = await startTestGatewayServer(claim, {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
@@ -51,15 +54,12 @@ describe("gateway-routed plugin CLI calls", () => {
       });
       expect(handler).toHaveBeenCalledOnce();
 
-      let wrongTokenError: unknown;
-      await callGatewayFromCli(
+      const wrongTokenError = await callGatewayFromCli(
         "voicecall.status",
         { url, token: "wrong-token", json: true, timeout: "5000" },
         { callId: "call-1" },
         { progress: false },
-      ).catch((error: unknown) => {
-        wrongTokenError = error;
-      });
+      ).catch((error: unknown) => error);
 
       expect(isGatewayClientRequestError(wrongTokenError)).toBe(true);
       expect(wrongTokenError).toMatchObject({

@@ -82,6 +82,7 @@ const unbound = {
   custody: { kind: "unbound_workspace" },
   target: { kind: "unknown", reason: "not-qualified" },
   request: { kind: "none", selection: "current" },
+  remedies: [],
 };
 
 async function call(f: ReadFixture, params: Record<string, unknown> = {}, internal = false) {
@@ -159,7 +160,7 @@ async function cold() {
   await closeStateDatabaseForTest();
 }
 
-it("observes an unbound source through the validated publisher and registered Gateway", async () => {
+it("observes an unbound source without requiring a different bound session", async () => {
   await fixture(async (f) => {
     expect((await tool(f, { action: "readiness" })).details).toMatchObject(unbound);
   });

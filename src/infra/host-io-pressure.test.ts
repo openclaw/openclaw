@@ -24,8 +24,11 @@ async function kernelFixture() {
   vi.spyOn(fs, "readdir").mockImplementation((_target, options) => readdir(btrfs, options));
   return {
     probe: createHostIoPressureProbe(),
-    psi: (some: number, full: number) =>
-      fs.writeFile(psi, `some avg10=${some} avg60=0.00 total=42\nfull avg10=${full} total=0\n`),
+    psi: (some: number, full: number, sustained = 0) =>
+      fs.writeFile(
+        psi,
+        `some avg10=${some} avg60=${sustained} total=42\nfull avg10=${full} total=0\n`,
+      ),
     stats: (commits: number, total: number, last: number, current = 0) =>
       fs.writeFile(
         stats,
@@ -34,17 +37,27 @@ async function kernelFixture() {
   };
 }
 
-it("backs off for IO stalls, then resumes when recent pressure clears", async () => {
+it("admits background IO and spikes but brakes sustained host distress", async () => {
   const fixture = await kernelFixture();
   await fixture.stats(100, 5000, 2);
-  for (const [some, full, expected] of [
-    [10, 0, true],
-    [0, 1, true],
-    [0.01, 0, false],
+  for (const [some, full, sustained, expected] of [
+    [10, 1, 10, false],
+    [15, 5, 15, false],
+    [35, 30, 20, false],
+    [80, 60, 50, true],
+    [0.01, 0, 5, false],
   ] as const) {
-    await fixture.psi(some, full);
+    await fixture.psi(some, full, sustained);
     expect(await fixture.probe()).toBe(expected);
   }
+});
+
+it("brakes when the Gateway's own async IO probe stalls", async () => {
+  const fixture = await kernelFixture();
+  await fixture.psi(0, 0);
+  await fixture.stats(100, 5000, 2);
+  vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(1500);
+  expect(await fixture.probe()).toBe(true);
 });
 
 it("uses fresh and in-progress btrfs commits without retaining historical pressure", async () => {

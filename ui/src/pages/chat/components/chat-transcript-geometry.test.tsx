@@ -76,13 +76,19 @@ it("reserves only the matching width and appearance, including text scale, width
     chatMessageMaxWidth: "48rem",
   };
   const theme = { ...context.theme, settings, resolvedMode: "light" as const };
-  let cachedKey: string | undefined;
-  const widgetLayout: ChatWidgetLayout = {
-    read: (key) => {
-      cachedKey ??= key;
-      return key === cachedKey ? 300 : undefined;
+  let cachedKey: PropertyKey | undefined;
+  const heights = new Proxy<Record<string, number>>(
+    {},
+    {
+      get: (_target, key) => {
+        cachedKey ??= key;
+        return key === cachedKey ? 300 : undefined;
+      },
     },
-    readRows: () => undefined,
+  );
+  const widgetLayout: ChatWidgetLayout = {
+    read: (key) => heights[key],
+    readRows: () => heights,
     write: vi.fn(),
     writeRows: vi.fn(),
     invalidateRow: vi.fn(),
@@ -140,6 +146,39 @@ it("reserves only the matching width and appearance, including text scale, width
   // A repeated expansion counter cannot admit a footprint from another recovered message.
   cachedKey = undefined;
   expect(reserve(2)).toBe(0);
+});
+
+it("does not read viewport geometry without admitted row footprints", () => {
+  const cache: ChatMessageCache = new Map();
+  const target = { sessionKey: "agent:main:no-footprints" };
+  cacheChatSessionSnapshot(cache, {}, target, {
+    messages: [],
+    sessionId: "one",
+    pagination: { hasMore: false },
+  });
+  const layout = new TranscriptLayoutOwner(() => {});
+  layout.configureRows(
+    threadProps("no-footprints", target.sessionKey, [], {
+      widgetLayout: createChatWidgetLayout()(cache, {}, target),
+    }),
+    "gutter",
+    false,
+  );
+  layout.rows = [{ key: "notice", revision: "notice-v1" }];
+  layout.rowWidth = 768;
+  layout.paneWidth = 1100;
+  const originalHeight = Object.getOwnPropertyDescriptor(window, "innerHeight")!;
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    get: () => {
+      throw new Error("Unneeded viewport geometry read");
+    },
+  });
+  try {
+    expect(layout.rowMinimum(0)).toBe(0);
+  } finally {
+    Object.defineProperty(window, "innerHeight", originalHeight);
+  }
 });
 
 it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "raw-output"])(
@@ -350,10 +389,10 @@ it("measures newly committed rows before observer registration using fractional 
   }
 });
 
-it("settles retained rows whose fractional size is rounded by CSS serialization", () => {
+it("settles retained rows only after their measured size commits", () => {
   const container = transcriptContainer();
   const row = document.createElement("div");
-  row.style.setProperty("contain-intrinsic-block-size", "258.562px");
+  row.dataset.rowSize = "258.5625";
   row.dataset.preparedRow = "true";
   container.append(row);
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
@@ -369,7 +408,7 @@ it("settles retained rows whose fractional size is rounded by CSS serialization"
   virtualizer.elementsCache.set("fractional", row);
 
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(true);
-  row.style.setProperty("contain-intrinsic-block-size", "256px");
+  row.dataset.rowSize = "256";
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
   row.remove();
   expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
@@ -388,7 +427,7 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
     renderRows(rows);
     expect(transcriptSize(container)).toBe(401.5);
     for (const row of transcriptRows(container)) {
-      expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
+      expect(row.dataset.rowSize).toBe("100.375");
     }
   } finally {
     transcript.dispose();

@@ -16,7 +16,7 @@ import {
   oauth,
   snapshot,
 } from "./model-catalog-fixtures.test-support.js";
-import { prepareModelChoice } from "./model-runtime-choice.js";
+import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -714,6 +714,18 @@ describe("prepared model support admission", () => {
           ref: { provider, model: "claude-opus-5-5" },
         });
         expect(recheckNativeLogin).toHaveBeenCalledExactlyOnceWith({ force: true });
+        // Session model commands select through the published runtime choice.
+        Object.assign(owner, { authModes: {} });
+        recheckNativeLogin.mockClear();
+        await expect(
+          preparePublishedModelRuntimeChoice({
+            cfg: config,
+            agentId: "main",
+            provider,
+            model: row.id,
+          }),
+        ).resolves.toMatchObject({ kind: "ready" });
+        expect(recheckNativeLogin).toHaveBeenCalledOnce();
       } finally {
         cliBackendsTesting.resetDepsForTest();
       }

@@ -54,7 +54,7 @@ const roster: Config["agents"] = {
   entries: {
     alice: { identity: { name: "Alice", emoji: "🦉" } },
     bob: { identity: { name: "Bob" } },
-    carol: { identity: { name: "Carol" } },
+    carol: { identity: { name: `${"C".repeat(79)}🥐` } },
   },
 };
 
@@ -309,44 +309,24 @@ describe("agent group thread dispatch", () => {
   });
 
   it("continues from delivered streamed answers without sharing supplemental blocks", async () => {
+    const answer = `Bob, the streamed answer is ready.${"a".repeat(3_965)}🥐`;
     const run = await completed({
-      cfg: continuationConfig(),
+      cfg: config({ agents: ["carol", "bob"], maxRounds: 2, maxTurns: 4 }),
       reply: (turn, index) => {
         if (index === 0) {
           turn.dispatcher.sendBlockReply({ text: "Private reasoning", isReasoning: true });
           turn.dispatcher.sendBlockReply({ text: "Working on it", isCommentary: true });
-          turn.dispatcher.sendBlockReply({ text: "Bob, the streamed answer is ready." });
+          turn.dispatcher.sendBlockReply({ text: answer });
         }
         return [];
       },
     });
     expect(run.turns).toHaveLength(4);
     const digest = run.turns[3]?.ctx.BodyForAgent;
-    expect(digest).toContain("Bob, the streamed answer is ready.");
+    expect(digest).toContain(`${"C".repeat(79)} (carol):\n${answer.slice(0, -2)}`);
+    expect(digest).toMatch(/a$/);
     expect(digest).not.toContain("Private reasoning");
     expect(digest).not.toContain("Working on it");
-  });
-
-  it("keeps emoji whole when a display name or sibling reply hits the thread cap", async () => {
-    const name = `${"N".repeat(79)}😀`;
-    const reply = `Bob ${"a".repeat(3995)}😀tail`;
-    const cfg = config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 });
-    cfg.agents = {
-      entries: {
-        alice: { identity: { name, emoji: "🦉" } },
-        bob: { identity: { name: "Bob" } },
-      },
-    };
-    const run = await completed({
-      cfg,
-      reply: (_turn, index) => (index === 0 ? [reply] : []),
-    });
-    const digest = run.turns[3]?.ctx.BodyForAgent ?? "";
-    expect(digest).toContain(`${"N".repeat(79)} (alice)`);
-    expect(digest).toContain(`Bob ${"a".repeat(3995)}`);
-    expect(digest).not.toContain("😀");
-    expect(digest).not.toContain("tail");
-    expect(digest).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   });
 
   it("keeps continuation reply targets physical and transcript identities distinct", async () => {

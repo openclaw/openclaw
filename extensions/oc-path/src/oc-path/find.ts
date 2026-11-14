@@ -538,20 +538,8 @@ function walkMd(
     return;
   }
 
-  // Fields are leaves; recursive wildcards may match zero segments around the key.
   if (level.kind === "item") {
-    let field: SlotSub | undefined;
-    for (let j = i; j < subs.length; j++) {
-      const sub = expectDefined(subs[j], "Markdown field index checked above");
-      if (sub.value === WILDCARD_RECURSIVE) {
-        continue;
-      }
-      if (field) {
-        return;
-      }
-      field = sub;
-    }
-    walkMdItemField(level.item, field ?? cur, walked, context);
+    walkMdItemField(level.item, subs, i, walked, context);
     return;
   }
 
@@ -568,7 +556,8 @@ function walkMd(
 
 function walkMdItemField(
   item: AstItem,
-  cur: SlotSub,
+  subs: readonly SlotSub[],
+  i: number,
   walked: readonly SlotSub[],
   context: WalkContext,
 ): void {
@@ -576,34 +565,43 @@ function walkMdItemField(
     return;
   }
   const key = item.kv.key;
-  const emit = (): void => {
-    context.onMatch([...walked, { slot: cur.slot, value: quoteSeg(key) }]);
-  };
-  if (isUnionSeg(cur.value)) {
-    const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
-    for (const alt of alts) {
-      if (unquoteSeg(alt).toLowerCase() === key.toLowerCase()) {
-        emit();
+  let field: SlotSub | undefined;
+  let recursive: SlotSub | undefined;
+  const alternatives: string[] = [];
+  for (let j = i; j < subs.length; j++) {
+    const sub = expectDefined(subs[j], "Markdown field index checked above");
+    alternatives.length = 0;
+    alternatives.push(sub.value);
+    let canSkip = false;
+    let matches = false;
+    for (const alternative of alternatives) {
+      if (isUnionSeg(alternative)) {
+        alternatives.push(...(parseUnionSeg(alternative) ?? []));
+      } else if (alternative === WILDCARD_RECURSIVE) {
+        canSkip = true;
+      } else if (alternative === WILDCARD_SINGLE) {
+        matches = true;
+      } else if (isPredicateSeg(alternative)) {
+        const pred = parsePredicateSeg(alternative);
+        matches ||= pred !== null && mdItemMatchesPredicate(item, pred);
+      } else {
+        matches ||= key.toLowerCase() === unquoteSeg(alternative).toLowerCase();
       }
     }
-    return;
-  }
-  if (isPredicateSeg(cur.value)) {
-    const pred = parsePredicateSeg(cur.value);
-    if (pred !== null && mdItemMatchesPredicate(item, pred)) {
-      emit();
+    // A field is a leaf: every other selector must be able to consume zero segments.
+    // Classify each union once instead of expanding combinations of recursive alternatives.
+    if (canSkip) {
+      recursive ??= sub;
+    } else {
+      if (field || !matches) {
+        return;
+      }
+      field = sub;
     }
-    return;
   }
-  if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-    emit();
-    return;
-  }
-  if (key.toLowerCase() === unquoteSeg(cur.value).toLowerCase()) {
-    emit();
+  const selected = field ?? recursive;
+  if (selected) {
+    context.onMatch([...walked, { slot: selected.slot, value: quoteSeg(key) }]);
   }
 }
 

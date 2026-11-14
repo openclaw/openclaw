@@ -1,5 +1,7 @@
 import { Option, type Command } from "commander";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { normalizeSpeechProviderId } from "../../tts/provider-registry-core.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { runCapabilityCommand } from "./providers-command.js";
 
@@ -45,13 +47,13 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       const { runTtsConvert } = await import("./tts-runtime.js");
       const modelRef = resolveModelRefOverride(opts.model as string | undefined);
       if (opts.model && !modelRef.provider) {
-        throw new Error("TTS model overrides must use the form <provider/model>.");
+        throwExpectedCliError("TTS model overrides must use the form <provider/model>.");
       }
       const providerInput = typeof opts.provider === "string" ? opts.provider.trim() : "";
       const modelProvider = normalizeSpeechProviderId(modelRef.provider);
       const provider = providerInput ? normalizeSpeechProviderId(providerInput) : modelProvider;
       if (provider && modelProvider && provider !== modelProvider) {
-        throw new Error("TTS --provider must match the provider in --model.");
+        throwExpectedCliError("TTS --provider must match the provider in --model.");
       }
       return await runTtsConvert({
         text: String(opts.text),
@@ -110,6 +112,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
         const result = await callGateway({
           method: "tts.status",
           timeoutMs: 30_000,
+          signal: getAsyncWorkSignal(),
         });
         return { transport: "gateway", ...result };
       }),
@@ -156,7 +159,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
     "gateway",
     async (opts, transport) => {
       if (!opts.off && !opts.persona) {
-        throw new Error("--persona is required unless --off is set");
+        throwExpectedCliError("--persona is required unless --off is set");
       }
       const { runTtsStateMutation } = await import("./tts-runtime.js");
       return runTtsStateMutation({

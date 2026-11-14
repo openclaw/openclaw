@@ -5,6 +5,9 @@ import type {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
+/** Owner-only invalidation; readers fetch fresh authorized People state. */
+export const GATEWAY_EVENT_ID_PEOPLE_CHANGED = "openclawId.people.changed" as const;
+
 export const GATEWAY_EVENT_DEVICE_PAIR_CHANGED = "device.pair.changed" as const;
 
 export const GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED = "node.runnerInventory.changed" as const;
@@ -17,6 +20,7 @@ export const GATEWAY_EVENT_UPDATE_RUN_CHANGED = "update.run.changed" as const;
 /** Gateway event names that clients can subscribe to or receive over the wire. */
 export const GATEWAY_EVENTS = [
   "connect.challenge",
+  GATEWAY_EVENT_ID_PEOPLE_CHANGED,
   "agent",
   "agent.identity.changed",
   "chat",

@@ -208,6 +208,7 @@ jobs:
           path: .frv-tooling
           sparse-checkout: |
             scripts/frv-test-exclusions.mjs
+            scripts/lib/ci-blacksmith-capacity.mjs
             scripts/lib/release-upgrade-baseline.mjs
             scripts/lib/release-version.mjs
             scripts/lib/canonical-json.mjs
@@ -266,6 +267,7 @@ jobs:
         id: manifest
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ inputs.test_runtime_policy }}
           PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
@@ -275,7 +277,21 @@ jobs:
           import { appendFileSync, existsSync, globSync } from "node:fs";
           import path from "node:path";
 
-          const createMatrix = (include) => ({ include });
+          import { blacksmithRunnerLabel } from "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs";
+
+          const hourlyBoat = process.env.GITHUB_EVENT_NAME === "schedule" &&
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "boat";
+          const boatRunners = {
+            "blacksmith-2vcpu-ubuntu-2404": "boat",
+            "blacksmith-4vcpu-ubuntu-2404": "boat-large",
+          };
+          const createMatrix = (include) => ({
+            include: include.map((row) => {
+              const physicalLabel = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+              const label = hourlyBoat ? boatRunners[physicalLabel] ?? physicalLabel : physicalLabel;
+              return label ? { ...row, runner_label: label } : row;
+            }),
+          });
           const outputPath = process.env.GITHUB_OUTPUT;
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
           const hourly = process.env.GITHUB_EVENT_NAME === "schedule";
@@ -490,6 +506,10 @@ jobs:
                 configs: shard.configs,
                 includePatterns: shard.includePatterns,
                 runner: shard.runner,
+                runner_label: blacksmithRunnerLabel(
+                  shard.runner,
+                  Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+                ),
               }));
           } catch (error) {
             const errorCode =
@@ -604,7 +624,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')) }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner || 'ubuntu-24.04')))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner || 'ubuntu-24.04')) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -690,7 +710,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner) }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)) }}
     timeout-minutes: ${{ matrix.test_runtime_policy == 'dual-all' && 120 || 60 }}
     strategy:
       fail-fast: false

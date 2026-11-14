@@ -14,6 +14,7 @@ import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { createLazyRuntimeMethod } from "../../shared/lazy-runtime.js";
 import {
   executeMcpAppOperation,
@@ -27,6 +28,7 @@ import {
 } from "../mcp-app-operations.js";
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -272,9 +274,6 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
-        const ingress = client?.remoteControlUiIngress;
-        const configuredOrigin =
-          ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
         let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
         try {
           standalone = createMcpAppStandaloneTicket({
@@ -291,12 +290,26 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
         }
         assertRequestCurrent();
+        const catalog = active.runtime.peekCatalog();
+        const server = catalog?.servers[view.serverName];
+        const plugin = server?.pluginId
+          ? getGatewayPluginMetadataSnapshot()?.byPluginId.get(server.pluginId)
+          : undefined;
+        const tool = catalog?.tools.find(
+          (entry) => entry.serverName === view.serverName && entry.toolName === view.toolName,
+        );
         return {
-          sandboxUrl: ingress
-            ? new URL(buildMcpAppSandboxPath(view.csp), ingress.sandboxOrigin).href
-            : buildMcpAppSandboxPath(view.csp),
+          appIdentity: {
+            label: plugin?.name ?? server?.title ?? view.serverName,
+            icons: [...(tool?.appExtensions?.icons ?? []), ...(server?.icons ?? [])],
+            ...(plugin?.iconPath ? { pluginId: plugin.id } : {}),
+          },
+          ...resolveSandboxView(
+            buildMcpAppSandboxPath(view.csp),
+            client,
+            context.getRuntimeConfig().mcp?.apps?.sandboxOrigin,
+          ),
           sandboxPort,
-          ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
           html: view.html,
           ...(view.csp ? { csp: view.csp } : {}),
           toolInput: view.toolInput,

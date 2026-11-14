@@ -184,6 +184,10 @@ export const workerEnvironmentOperations = {
     "requestPreparedDestroy",
     (input, store) => store.requestPreparedDestroy(input),
   ),
+  "workerEnvironments.refreshPreparedProject": environmentMutation(
+    "refreshPreparedProject",
+    (input, store) => store.refreshPreparedProject(input),
+  ),
   "workerEnvironments.createSessionAttachmentIntent": mutation(
     "createSessionAttachmentIntent",
     ({ input }, { store, touch }) => {

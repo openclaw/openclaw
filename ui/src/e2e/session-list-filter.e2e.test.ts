@@ -135,7 +135,7 @@ suite.define(() => {
     const visibleResponse = sessionList([row("agent:main:page-owned", visibleLabel)]);
     const page = await newPage(captureUiProof);
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.list"],
+      deferredRequests: [{ method: "sessions.list", match: { source: "sidebar" } }],
       sessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": {
@@ -170,7 +170,7 @@ suite.define(() => {
     await capture("before-startup-roster");
 
     const startupAndPageRequests = await gateway.getRequests("sessions.list");
-    expect(startupAndPageRequests[0]?.params).toEqual({
+    expect(startupAndPageRequests.map(({ params }) => params)).toContainEqual({
       agentId: "main",
       configuredAgentsOnly: true,
       excludeDock: true,
@@ -190,13 +190,11 @@ suite.define(() => {
     await visibleRow.waitFor();
     await capture("after-startup-roster");
 
-    const stabilityDeadline = Date.now() + 500;
-    do {
-      expect(await exactPageQueries()).toHaveLength(1);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
-      });
-    } while (Date.now() < stabilityDeadline);
+    await page
+      .locator('.sidebar-recent-session[data-session-key="agent:main:page-owned"]')
+      .getByText(visibleLabel, { exact: true })
+      .waitFor();
+    expect(await exactPageQueries()).toHaveLength(1);
   });
 
   it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {

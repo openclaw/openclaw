@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { NativeHookRelaySharedState } from "./native-hook-relay-types.js";
+import type { NativeHookRelaySharedState } from "./native-hook-relay-contexts.js";
 
 export const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 

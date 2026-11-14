@@ -929,7 +929,11 @@ if (${Boolean(options.qualification)}) {
   }
   const responses = JSON.parse(fs.readFileSync(${JSON.stringify(join(temporary, "qualification-responses.json"))}, "utf8"));
   const key = JSON.stringify(args);
-  if (Object.hasOwn(responses, key)) { process.stdout.write(responses[key]); process.exit(0); }
+  if (Object.hasOwn(responses, key)) {
+    const response = JSON.parse(responses[key]);
+    process.stdout.write(JSON.stringify(response));
+    process.exit(0);
+  }
 }
 const expected = ${JSON.stringify(
       toolingFullRef === "refs/heads/main"
@@ -2512,10 +2516,7 @@ describe("publication source intent and durable binding", () => {
         expect(bindSource(fact)).toBe(fact);
         expect(publicationSourceJson(fact)).toBe(bytes);
       }
-      for (const [key, value] of [
-        ["known_flaky_jobs_json", '["normalCi:test"]'],
-        ["telegram_waiver", "legacy-omission"],
-      ] as const) {
+      for (const [key, value] of [["known_flaky_jobs_json", '["normalCi:test"]']] as const) {
         expect(() =>
           bindSource({
             ...retained,
@@ -2524,7 +2525,7 @@ describe("publication source intent and durable binding", () => {
         ).toThrow(`${key} must be empty`);
       }
       const withoutLegacyField = structuredClone(retained);
-      delete withoutLegacyField.coverage.telegram_waiver;
+      delete withoutLegacyField.coverage.known_flaky_jobs_json;
       expect(() => bindSource(withoutLegacyField)).toThrow("source admission digest mismatch");
       expect(() =>
         bindSource(historical, {

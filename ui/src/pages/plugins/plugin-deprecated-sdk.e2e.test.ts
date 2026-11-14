@@ -78,9 +78,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     const message = row.locator(".plugins-row-message--info");
     expect(await message.textContent()).toContain(notice.message);
     expect(await message.getAttribute("role")).toBe("status");
-    expect(
-      await message.locator("svg, .oc-banner-warning, .oc-banner-error, [role=alert]").count(),
-    ).toBe(0);
+    expect(await message.locator("svg, .warn, [role=alert]").count()).toBe(0);
     expect(await message.getByRole("link", { name: "Details" }).getAttribute("href")).toBe(
       notice.migrationGuideUrl,
     );

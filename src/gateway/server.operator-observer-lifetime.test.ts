@@ -21,6 +21,7 @@ import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import * as approvalStore from "./operator-approval-store.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import * as restartResume from "./session-restart-resume.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   connectOk,
@@ -145,6 +146,18 @@ async function proveObserverLifetime(
     const { admin, gateway, questionManager: questions, upgrades } = started;
     const entered = createDeferredCore();
     const releaseRead = createDeferredCore();
+    const markerEntered = createDeferredCore();
+    const releaseMarker = createDeferredCore();
+    if (mode === "queued-wake") {
+      const persistMarkers = restartResume.persistRunningSessionsForRestart;
+      vi.spyOn(restartResume, "persistRunningSessionsForRestart").mockImplementation(
+        async (params) => {
+          markerEntered.resolve();
+          await releaseMarker.promise;
+          await persistMarkers(params);
+        },
+      );
+    }
     const readPending = devicePairing.getPendingDevicePairing;
     const readPaired = devicePairing.getPairedDevice;
     const reads: Promise<unknown>[] = [];
@@ -177,6 +190,7 @@ async function proveObserverLifetime(
       );
     };
     const unblock = () => {
+      releaseMarker.resolve();
       releaseRead.resolve();
       if (question) {
         questions.close();
@@ -312,6 +326,17 @@ async function proveObserverLifetime(
           // Preserve failure-path cleanup if public close returns before the held read.
           releaseRead.resolve();
         });
+      if (mode === "queued-wake") {
+        await markerEntered.promise;
+        await nextTurn();
+        expect(postCloseReads).toBe(0);
+        await expect(observed).resolves.toMatchObject({
+          status: "rejected",
+          reason: { name: "AbortError" },
+        });
+        expect(atClose).toBeUndefined();
+        releaseMarker.resolve();
+      }
       if (expectHeldWork) {
         await expectHeldWork(closing);
         expect(atClose).toBeUndefined();

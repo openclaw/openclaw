@@ -642,12 +642,14 @@ export const CronDeclarativeAddResultSchema = closedObject({
   updated: Type.Optional(Type.Boolean()),
   job: CronJobSchema,
   deliveryPreview: Type.Optional(CronDeliveryPreviewSchema),
+  warning: Type.Optional(NonEmptyString),
 });
 
 /** Imperative create result: the public job plus an optional create-time preview. */
 export const CronAddJobResultSchema = closedObject({
   ...CronJobSchema.properties,
   deliveryPreview: Type.Optional(CronDeliveryPreviewSchema),
+  warning: Type.Optional(NonEmptyString),
 });
 
 /** Successful result from imperative create or declaration-key convergence. */
