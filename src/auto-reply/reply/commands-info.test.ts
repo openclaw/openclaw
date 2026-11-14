@@ -265,7 +265,7 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
   });
 
-  it.each([
+  it.each<{ channel: string; source: MsgContext["CommandSource"]; reply: string | undefined }>([
     {
       channel: "webchat",
       source: "text",
