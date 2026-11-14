@@ -22,7 +22,10 @@ import {
   readCodexLiveThreadEphemeralPolicy,
   waitForCodexAppServerThreadBackgroundCleanup,
 } from "./client-runtime.js";
-import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
+import {
+  CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+  wasCodexAppServerThreadClosed,
+} from "./client-thread-closure.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -315,7 +318,7 @@ export async function releaseCodexBoundLiveThread(
         await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
           raceWithTimeout(
             Promise.race(stopped),
-            CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+            CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
             () => {
               options.onExitWaitCancelled?.();
               throw new CodexAppServerStartupError(

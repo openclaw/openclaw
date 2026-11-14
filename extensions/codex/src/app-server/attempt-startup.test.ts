@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
   answerInitialize,
@@ -383,6 +382,30 @@ describe("startCodexAttemptThread", () => {
     resumed.releaseSharedClientLease();
   });
 
+  it("resumes after seven-second thread closure while the retired owner's peer stays alive", async () => {
+    const fixture = await bindToRetiredLeasedOwner();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const outcome = fixture.startOn(fixture.healthy, undefined, 60_000).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    try {
+      await fixture.exitWaitStarted;
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
+      fixture.owner.send({ method: "thread/closed", params: { threadId: "bound-thread" } });
+      const { value: resumed, error } = await outcome;
+      expect(error).toBeUndefined();
+      expect(resumed?.thread.threadId).toBe("bound-thread");
+      expect(fixture.ownerExitCodesAtResume).toEqual([null]);
+      expect(fixture.healthy.stdinDestroyed).toBe(false);
+      resumed?.turnRoute.release();
+      resumed?.releaseSharedClientLease();
+    } finally {
+      fixture.releaseOwnerPeer();
+    }
+  });
+
   it.each([
     { budget: 1_000, retiresClient: true },
     { budget: 60_000, retiresClient: false },
@@ -394,9 +417,7 @@ describe("startCodexAttemptThread", () => {
       const timedOut = readError(fixture.startOn(fixture.healthy, undefined, budget));
       try {
         await fixture.exitWaitStarted;
-        await vi.advanceTimersByTimeAsync(
-          Math.min(budget, CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS),
-        );
+        await vi.advanceTimersByTimeAsync(Math.min(budget, 10_000));
         expect(fixture.owner.process.exitCode).toBeNull();
         expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
       } finally {

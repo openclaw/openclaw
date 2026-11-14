@@ -1,0 +1,2 @@
+# Seven-second closure regression: real startup handoff must accept slow shutdown without process exit.
+21
