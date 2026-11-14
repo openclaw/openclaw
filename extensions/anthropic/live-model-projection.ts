@@ -10,6 +10,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type ClaudeListedCapabilities = {
   adaptiveThinking: boolean;
@@ -76,6 +77,8 @@ export const projectAnthropicLiveModels: LiveModelRowProjection = (rows, fallbac
       // Shipped rows are shared catalog objects; replace rather than mutate them.
       models[index] = {
         ...model,
+        // This projection consumes the native Anthropic listing, not a compatible host.
+        family: manifest.modelCatalog.providers.anthropic.family,
         thinkingLevelMap: {
           ...model.thinkingLevelMap,
           xhigh: claudeCapabilities.xhighEffort ? "xhigh" : null,

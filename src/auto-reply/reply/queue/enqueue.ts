@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import {
   diagnosticLogger,
   logMessageQueuedWithBacklogPolicy,
@@ -576,9 +577,8 @@ export function reserveSteerCandidate(
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;
-        // Failed original execution authority is cancellation, not a new
-        // runnable fallback. No native handoff has occurred in this frame.
-        finish(true);
+        // No native handoff occurred; an unavailable policy keeps queued custody.
+        finish(cancelled || !isOperatorAuthorityUnavailable(error));
         if (cancelled) {
           return "cancelled";
         }

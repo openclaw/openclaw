@@ -43,8 +43,12 @@ suite.define(() => {
       const { picker, trigger, search, runtime } = modelPicker(page);
       await page.getByRole("textbox", { name: "Chat composer", exact: true }).click();
       await trigger.click();
-      const agents = runtime("agentsapi");
-      const codex = runtime("codex");
+      const agents = picker.locator(
+        '.chat-controls__runtime-option[data-chat-model-runtime="agentsapi"]',
+      );
+      const codex = picker.locator(
+        '.chat-controls__runtime-option[data-chat-model-runtime="codex"]',
+      );
       await polledVisible(agents).toBe(true);
       const menu = picker.locator(".chat-controls__model-menu");
       await waitForControlUiProofSurface(menu, [agents, codex]);
@@ -63,9 +67,14 @@ suite.define(() => {
       expect(menuBox.x).toBeGreaterThanOrEqual(0);
       expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width);
       if (width === 1280) {
-        expect(menuBox.width).toBeCloseTo(440, 0);
+        expect(menuBox.width).toBeCloseTo(416, 0);
       }
-      for (const row of [picker.locator("[data-chat-model-default]"), agents, codex]) {
+      for (const id of ["openclaw", "agentsapi", "codex"]) {
+        await picker
+          .locator(`.chat-controls__runtime-option[data-chat-model-runtime="${id}"]`)
+          .click();
+        const row = runtime(id);
+        await polledVisible(row).toBe(true);
         const name = row.locator(".chat-controls__model-option-name");
         const meta = row.locator(".chat-controls__model-option-meta");
         const typography = await row.evaluate((element) => {
@@ -82,11 +91,11 @@ suite.define(() => {
           };
         });
         expect(typography).toEqual({
-          fontSize: "13px",
-          lineHeight: "20.15px",
-          fontWeight: "600",
-          rowHeight: 40,
-          padding: "6px 9px",
+          fontSize: width === 1280 ? "13px" : "14px",
+          lineHeight: width === 1280 ? "20.15px" : "21.7px",
+          fontWeight: "500",
+          rowHeight: width === 1280 ? 36 : 44,
+          padding: "0px 6px 0px 10px",
         });
         expect(await row.getAttribute("aria-label")).toContain("Atlas Pro Extended");
         if (width === 1280) {
@@ -99,28 +108,39 @@ suite.define(() => {
         const badge = row.locator(".chat-controls__model-state-label--default");
         const lastLabelBox = (await badge.count()) ? (await badge.boundingBox())! : nameBox;
         expect(metaBox.x - lastLabelBox.x - lastLabelBox.width).toBeGreaterThanOrEqual(4);
-        expect(metaBox.x - lastLabelBox.x - lastLabelBox.width).toBeLessThanOrEqual(8);
+        const favoriteSlotBox = (await row
+          .locator(".chat-controls__model-favorite-slot")
+          .boundingBox())!;
+        expect(favoriteSlotBox.width).toBe(28);
+        expect(favoriteSlotBox.x - metaBox.x - metaBox.width).toBe(width === 1280 ? 4 : 12);
         expect(
           Math.abs(metaBox.y + metaBox.height / 2 - nameBox.y - nameBox.height / 2),
         ).toBeLessThanOrEqual(1);
-        expect((await row.boundingBox())!.height).toBeLessThanOrEqual(width === 1280 ? 40 : 44);
         if (width === 1280) {
           expect(await meta.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
             true,
           );
         }
       }
-      await polledText(agents.locator(".chat-controls__model-option-meta")).toBe(
-        "922k active · 1M max · Agents API",
+      const agentsRow = runtime("agentsapi");
+      const beforeSelection = (await gateway.getRequests("sessions.patch")).length;
+      await picker
+        .locator('.chat-controls__runtime-option[data-chat-model-runtime="agentsapi"]')
+        .click();
+      const patch = await gateway.waitForRequest("sessions.patch", { after: beforeSelection });
+      await polledText(agentsRow.locator(".chat-controls__model-option-meta")).toBe(
+        "922k active · 1M max",
       );
+      expect(await agentsRow.getAttribute("aria-label")).toContain("Agents API");
       for (const query of ["Agents API", "agentsapi"]) {
         await search.fill(query);
-        await polledVisible(agents).toBe(true);
-        await polledVisible(codex).toBe(false);
+        await polledVisible(agentsRow).toBe(true);
+        await polledVisible(runtime("codex")).toBe(false);
       }
-      await search.press("Enter");
-      const patch = await gateway.waitForRequest("sessions.patch");
-      expect(patch.params).toMatchObject({ model: "openai/atlas-pro", agentRuntime: "agentsapi" });
+      expect(patch.params).toMatchObject({
+        model: "openai/atlas-pro",
+        agentRuntime: "agentsapi",
+      });
     });
   });
 });

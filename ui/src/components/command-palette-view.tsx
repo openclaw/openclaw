@@ -30,7 +30,7 @@ import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
 import { HumanMentionMenuView } from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { SelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.tsx";
 import {
-  PaletteSessionAddMenu,
+  PaletteSessionModel,
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
@@ -172,9 +172,7 @@ function handleKeydown(
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
-    if (props.mode === "compose") {
-      void props.draft.submit();
-    }
+    void props.draft.submit();
     return;
   }
   if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
@@ -292,6 +290,7 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !sessionSearchPending() &&
     !catalogSearchPending() &&
+    !isPending(props.modelRead) &&
     !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
@@ -445,7 +444,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
   const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
-  const error = createMemo(() => current().draft.error);
+  const error = createMemo(() => current().draft.error ?? current().draft.blockedSubmitNotice);
   const saving = createSubmissionAction(
     () => readCurrent().draft,
     current,
@@ -627,11 +626,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             <Show when={current().mode === "compose"}>
               <div class="agent-chat__composer-footer">
                 <div class="agent-chat__composer-lead">
-                  <PaletteSessionAddMenu draft={current().draft} revision={current()} />
+                  <PaletteSessionControls draft={current().draft} revision={current()} />
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-controls">
-                    <PaletteSessionControls draft={current().draft} revision={current()} />
+                    <PaletteSessionModel draft={current().draft} revision={current()} />
                   </div>
                   <div class="agent-chat__composer-actions">
                     <openclaw-tooltip prop:content={reason()} placement="bottom-end">
@@ -667,7 +666,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </div>
             </Show>
           </div>
-          <Show when={current().mode === "compose" && error()}>
+          <Show when={error()}>
             <div
               class="cmd-palette__creation-error agent-chat__composer-status agent-chat__composer-status-band agent-chat__composer-status-band--wrap"
               data-tone="danger"

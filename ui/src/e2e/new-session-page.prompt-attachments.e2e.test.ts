@@ -163,8 +163,8 @@ suite.define(() => {
       const identity = page.locator(
         ".agent-chat__welcome-clawd, .agent-chat__welcome-avatar, .agent-chat__avatar--text",
       );
-      const triggers = page.locator(".new-session-page__triggers");
-      const composer = page.locator(".new-session-page__composer");
+      const triggers = page.locator(".new-session-page__context-tray .new-session-page__triggers");
+      const composer = page.locator(".new-session-page__composer > .agent-chat__input");
       const [identityBox, triggersBox, composerBox] = await Promise.all([
         identity.boundingBox(),
         triggers.boundingBox(),
@@ -222,11 +222,15 @@ suite.define(() => {
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [
         [identityBox, expandedIdentityBox],
-        [triggersBox, expandedTriggersBox],
         [composerBox, expandedComposerBox],
       ]) {
         expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(2);
       }
+      // Placement follows the growing writing surface at the same tucked offset.
+      const trayOffset = triggersBox!.y - (composerBox!.y + composerBox!.height);
+      const expandedTrayOffset =
+        expandedTriggersBox!.y - (expandedComposerBox!.y + expandedComposerBox!.height);
+      expect(Math.abs(expandedTrayOffset - trayOffset)).toBeLessThanOrEqual(2);
       const start = page.getByRole("button", { name: "Start session" });
       await expect(start.isVisible()).resolves.toBe(true);
       await expect(start.isEnabled()).resolves.toBe(true);

@@ -20,6 +20,11 @@ export type OwnerDeviceView = {
  * "root" (the recovery kit) or the approving device's fingerprint.
  */
 export function describeOwnerDevices(state: AuthorityState, now: number) {
+  const nodeOf = new Map<string, string>(
+    Object.entries(state.nodes).flatMap(([peerKey, node]) =>
+      node.owner_device ? [[node.owner_device, peerKey] as const] : [],
+    ),
+  );
   return Object.entries(state.owner_devices)
     .filter(([, device]) => isOwnerDeviceActive(device, now))
     .map(([deviceFp, device]) => ({
@@ -28,6 +33,8 @@ export function describeOwnerDevices(state: AuthorityState, now: number) {
       label: device.cert.body.label,
       peerKeys: device.cert.body.peer_keys,
       approvedBy: device.approved_by,
+      // The node bound to this device's approval: it also runs tools for the claw.
+      nodePeerKey: nodeOf.get(deviceFp),
       lastSeen: device.last_seen,
       cert: device.cert,
     }));

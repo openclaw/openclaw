@@ -318,7 +318,8 @@ describe("handleFileFetch", () => {
     ["empty.png", "", "image/png"],
     ["LICENSE", "Permission is hereby granted\n", "text/plain"],
     ["opaque", Buffer.from([0x00, 0x01, 0x02, 0xff]), "application/octet-stream"],
-  ])("fetches %s with detected MIME and exact bytes", async (name, content, mimeType) => {
+    ...["é", "€", "🌍"].map((c) => [c, "a".repeat(8191) + c + " tail", "text/plain"] as const),
+  ] as const)("fetches %s with detected MIME and exact bytes", async (name, content, mimeType) => {
     const peer = duplexPeer();
     const result = await handleFileFetch({ path: await put(name, content) }, peer.io);
     assert(result.ok);
@@ -330,11 +331,7 @@ describe("handleFileFetch", () => {
       size: Buffer.byteLength(content),
       base64: Buffer.from(content).toString("base64"),
     });
-    if (name === "empty.png") {
-      expect(result.sha256).toBe(
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      );
-    }
+    expect(result.sha256).toBe(digest(Buffer.from(content)));
   });
   it.each([
     ["hard", [Number.MAX_SAFE_INTEGER], 16 * 1024 * 1024],

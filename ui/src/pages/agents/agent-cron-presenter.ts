@@ -135,7 +135,7 @@ export function createAgentCronPresenter(deps: {
       return undefined;
     }
     command = status = summary = null;
-    const admitted = read((current) => runCronJob(current, jobId, "force"));
+    const admitted = read((current) => runCronJob(current, jobId));
     const receipt = {
       ...admitted,
       completion: admitted.completion.then(() => scope.cronError ?? undefined),

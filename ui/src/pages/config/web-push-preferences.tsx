@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createUniqueId, For, Show } from "solid-js";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -116,15 +116,18 @@ function AgentIdsRow(props: {
   disabled?: boolean;
   onChange: (value: string[]) => void;
 }) {
+  const descriptionId = createUniqueId();
   return (
     <SettingsRow
       title={t("configView.notifications.onlyAgents")}
+      description={<span id={descriptionId}>{t("configView.notifications.onlyAgentsHint")}</span>}
       control={
         <input
           disabled={props.disabled}
           type="text"
           class="settings-input"
           aria-label={t("configView.notifications.onlyAgents")}
+          aria-describedby={descriptionId}
           value={props.agentIds.join(", ")}
           onChange={(event) =>
             props.onChange(

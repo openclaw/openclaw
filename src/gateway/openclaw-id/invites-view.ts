@@ -8,8 +8,21 @@ import {
   type InviteRecord,
   type MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import type { AuthorityRefusal } from "./authority-result.js";
 import type { InviteReport, StoredClaw } from "./claw-store.js";
 import { isPendingExpired } from "./invite-expiry.js";
+
+/** Decodes unsigned local invite metadata at either Gateway transport boundary. */
+export function decodeInviteProfile(
+  value: unknown,
+): { existingProfileId?: string } | AuthorityRefusal {
+  if (value === undefined) {
+    return {};
+  }
+  return typeof value === "string" && value.trim()
+    ? { existingProfileId: value }
+    : { ok: false, code: "malformed", detail: "existingProfileId must be a nonempty profile ID" };
+}
 
 /** One invite as listed to owners. */
 export type InviteView = {
@@ -20,6 +33,7 @@ export type InviteView = {
   createdAt: number;
   expiresAt: number;
   status: "open" | "pending" | "approved" | "denied" | "expired";
+  existingProfile?: InviteReport["existingProfile"];
   /** The redemption waiting for an owner decision. */
   pending:
     | {
@@ -67,6 +81,7 @@ function describeInvite(
     createdAt: invite.cap.created_at,
     expiresAt: invite.cap.expires_at,
     status,
+    ...(report?.existingProfile ? { existingProfile: report.existingProfile } : {}),
     pending: pending
       ? {
           accountId: pending.account_id,

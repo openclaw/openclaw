@@ -11,7 +11,6 @@ import "../../../styles/chat/composer-mobile.css";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
@@ -32,7 +31,12 @@ import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
+import {
+  ComposerQueue,
+  ComposerInputScope,
+  ComposerProgress,
+  ComposerWaiters,
+} from "./chat-composer-regions.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -364,6 +368,7 @@ export function renderChatComposerView(
               </div>
             )}
           </Show>
+          <ComposerWaiters composer={props} />
           <Show when={props.composerRecovery}>
             {(recovery) => {
               const Recovery = dynamic(() => recovery().component);
@@ -579,28 +584,11 @@ export function renderChatComposerView(
                 </span>
                 <Show when={context().predictionText}>
                   <span class="agent-chat__composer-prediction" aria-hidden="true">
-                    {context().predictionText}
+                    {context().predictionText}{" "}
+                    <span class="agent-chat__composer-prediction-hint">
+                      {t("chat.composer.predictionHint")}
+                    </span>
                   </span>
-                  <div class="agent-chat__composer-prediction-actions">
-                    <button
-                      type="button"
-                      aria-label={t("chat.composer.usePrediction")}
-                      aria-keyshortcuts="Tab"
-                      onClick={() => context().acceptPrediction()}
-                    >
-                      <Show when={keyboardHintsVisible()}>
-                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
-                      </Show>
-                      {t("chat.composer.usePrediction")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => context().dismissPrediction()}
-                      aria-label={t("chat.composer.dismissPrediction")}
-                    >
-                      {t("chat.composer.dismissPrediction")}
-                    </button>
-                  </div>
                 </Show>
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
                   {predictionAnnouncement()}

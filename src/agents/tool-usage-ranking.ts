@@ -47,6 +47,10 @@ export function hasToolUsageRanking(
 
 type ToolUsageRankingRow = { id: string; line: string; pinned: boolean };
 
+function compareRowIds(left: ToolUsageRankingRow, right: ToolUsageRankingRow): number {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
 /** Select membership by frozen ranking, but retain the caller's canonical row order. */
 export function selectUsageRankedToolRows<T extends ToolUsageRankingRow>(
   rows: readonly T[],
@@ -54,19 +58,39 @@ export function selectUsageRankedToolRows<T extends ToolUsageRankingRow>(
   maxChars: number,
   overheadChars: (included: number) => number,
 ): T[] {
-  const rank = new Map(snapshot.orderedToolIds.map((id, index) => [id, index]));
-  const selected = new Set<string>();
+  let included = 0;
   let lineChars = 0;
-  const include = (row: T): boolean => {
-    if (selected.has(row.id)) {
+  const selected = visitUsageRankedToolRows(rows, snapshot, maxChars, (row) => {
+    const chars = row.line.length + 1;
+    if (lineChars + chars + overheadChars(included + 1) > maxChars) {
       return false;
     }
-    const chars = row.line.length + 1;
-    if (lineChars + chars + overheadChars(selected.size + 1) > maxChars) {
+    included += 1;
+    lineChars += chars;
+    return true;
+  });
+  return rows.filter((row) => selected.has(row.id));
+}
+
+/**
+ * Offer rows to `tryInclude` in frozen priority order: pinned rows, newcomers within
+ * their share of `budget`, then learned usage. Rows without a rank follow in
+ * `compareUnranked` order (stable ids by default). Returns the accepted ids.
+ */
+export function visitUsageRankedToolRows<T extends ToolUsageRankingRow>(
+  rows: readonly T[],
+  snapshot: ToolUsageRankingSnapshot,
+  budget: number,
+  tryInclude: (row: T) => boolean,
+  compareUnranked: (left: T, right: T) => number = compareRowIds,
+): Set<string> {
+  const rank = new Map(snapshot.orderedToolIds.map((id, index) => [id, index]));
+  const selected = new Set<string>();
+  const include = (row: T): boolean => {
+    if (selected.has(row.id) || !tryInclude(row)) {
       return false;
     }
     selected.add(row.id);
-    lineChars += chars;
     return true;
   };
   for (const row of rows) {
@@ -74,7 +98,6 @@ export function selectUsageRankedToolRows<T extends ToolUsageRankingRow>(
       include(row);
     }
   }
-  const byId = (left: T, right: T) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
   const newcomers = rows
     .filter((row) => {
       const firstSeen = snapshot.newcomers?.[row.id];
@@ -86,9 +109,9 @@ export function selectUsageRankedToolRows<T extends ToolUsageRankingRow>(
         snapshot.at - firstSeen <= NEWCOMER_WINDOW_MS
       );
     })
-    .toSorted(byId);
+    .toSorted(compareUnranked);
   let newcomerChars = 0;
-  const newcomerBudget = Math.floor(maxChars * NEWCOMER_BUDGET_SHARE);
+  const newcomerBudget = Math.floor(budget * NEWCOMER_BUDGET_SHARE);
   for (const row of newcomers) {
     const chars = row.line.length + 1;
     if (newcomerChars + chars <= newcomerBudget && include(row)) {
@@ -100,9 +123,9 @@ export function selectUsageRankedToolRows<T extends ToolUsageRankingRow>(
   for (const row of rows.toSorted((left, right) => {
     const leftRank = rank.get(left.id) ?? Number.MAX_SAFE_INTEGER;
     const rightRank = rank.get(right.id) ?? Number.MAX_SAFE_INTEGER;
-    return leftRank - rightRank || byId(left, right);
+    return leftRank - rightRank || compareUnranked(left, right);
   })) {
     include(row);
   }
-  return rows.filter((row) => selected.has(row.id));
+  return selected;
 }

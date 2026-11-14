@@ -77,7 +77,13 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
           ];
         });
       });
-      return [[provider, { operatingSystems, machines }]];
+      // Crabbox owns canonical IDs and aliases; both select the same catalog.
+      const catalog = { operatingSystems, machines };
+      const selectors = [provider, ...(Array.isArray(entry.aliases) ? entry.aliases : [])];
+      return selectors.flatMap<[string, CrabboxCatalog]>((value) => {
+        const selector = nonEmptyString(value)?.toLowerCase();
+        return selector ? [[selector, catalog]] : [];
+      });
     }),
   );
 }

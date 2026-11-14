@@ -850,10 +850,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-radius: 0;
 }
 
-.settings-tab-icon__preview[data-avatar-shape="rounded"] {
-  clip-path: inset(0 round 25%);
-}
-
 .settings-tab-icon__preview[data-avatar-shape="circle"] {
   clip-path: circle(50%);
 }
@@ -1544,7 +1540,8 @@ textarea.settings-input {
 
   /* A lone icon fits beside the heading; stacking is for full-size controls. */
   .settings-section__header:has(.settings-section__copy):has(
-      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button
+      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button,
+      > .settings-section__actions > .refresh-button:only-child
     ) {
     align-items: flex-start;
     flex-direction: row;
