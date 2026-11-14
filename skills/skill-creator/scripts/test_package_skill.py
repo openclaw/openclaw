@@ -41,6 +41,20 @@ class TestPackageSkillSecurity(TestCase):
         with zipfile.ZipFile(result) as archive:
             return archive.namelist()
 
+    def test_packages_nan_metadata_keys(self):
+        skill_dir = self.create_skill("nan-skill")
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: nan-skill\n"
+            "description: Summarize meetings\n"
+            "metadata: {.nan: enabled, .NaN: active}\n"
+            "---\n"
+        )
+
+        names = self.package_names(skill_dir, self.temp_dir / "out")
+
+        self.assertIn("nan-skill/SKILL.md", names)
+
     def test_packages_regular_entry_and_rejects_linked_entry(self):
         skill_dir = self.create_skill("normal-skill")
         nested = skill_dir / "lib" / "helpers"
