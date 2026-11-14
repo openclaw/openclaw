@@ -1,0 +1,54 @@
+# frozen_main	1b947c9a9f61c260219ddf0a6f281854600b7bdd
+# original_pr	198796
+# original_delta	d912e011c2fc30841aada489d233dd5e9b6e7d85..0eefc829accaa4de8f74b4b5d378c673ba64e876
+rank	removed_lines	file	keeper_files	reason
+726	954	src/infra/git-read-cache.test.ts	src/sessions/session-diff-revisions.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+727	954	test/scripts/compose-installed-runtime.test.ts	test/scripts/package-acceptance-workflow.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+728	954	ui/src/pages/chat/components/chat-message-group.solid.test.tsx	ui/src/pages/chat/chat-view.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+729	953	src/agents/embedded-agent-runner/compact.delegate.test.ts	src/agents/embedded-agent-runner/compact.hooks.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+730	953	src/auto-reply/reply/abort.target-owner.test.ts	src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+731	953	test/scripts/macos-native-test-launch.test.ts	test/scripts/mac-runtime.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+732	952	extensions/workboard/src/gateway.test.ts	extensions/workboard/src/store.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+734	952	src/gateway/server-methods/approval-shared.test.ts	src/gateway/server-methods/approval.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+739	950	packages/ai/src/transports/openai-completions-params.test.ts	packages/ai/src/providers/openai-completions.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+740	950	src/state/openclaw-state-ownership.test.ts	src/state/openclaw-state-db.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+742	949	src/agents/sessions/session-manager-bounded.test.ts	src/agents/sessions/session-manager.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+743	948	src/gateway/server-methods/sessions.dispatch.test.ts	src/gateway/server-methods/server-methods.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+746	947	src/infra/update-runner-git-candidate.test.ts	test/scripts/openclaw-live-updater.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+748	947	ui/src/e2e/warm-boot.e2e.test.ts	ui/src/pages/chat/chat-state.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+749	946	src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts	src/gateway/server-reload-handlers.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+752	946	ui/src/e2e/chat-attributed-identity.e2e.test.ts	ui/src/pages/chat/chat-responsive.browser.test.ts;ui/src/pages/chat/chat-view.test.ts;ui/src/pages/chat/chat-send.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+757	944	test/scripts/ci-workflow-cost.test.ts	test/scripts/ci-workflow-planning.test.ts;test/scripts/ci-workflow-guards.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+760	943	ui/src/e2e/chat-run-lifecycle.e2e.test.ts	ui/src/pages/chat/chat-state.test.ts;ui/src/pages/chat/chat-send.test.ts;ui/src/pages/chat/chat-view.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+765	941	src/commands/doctor-gateway-daemon-flow.test.ts	src/flows/doctor-health-contributions.test.ts;src/daemon/systemd.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+767	941	test/scripts/ci-linux-git.test.ts	test/scripts/ci-git-owner.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+773	939	src/agents/subagents/registry/subagent-control.accepted-stop.test.ts	src/agents/subagents/registry/subagent-control.test.ts;src/agents/subagents/registry/subagent-registry-lifecycle.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+774	939	src/agents/worktrees/service.gc.test.ts	src/agents/worktrees/service.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+776	939	src/gateway/server/ws-connection.test.ts	src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+779	937	src/gateway/server-methods/control-ui.test.ts	src/gateway/control-ui-session-pr-access.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+780	937	src/node-host/node-worker-supervisor.recovery.test.ts	src/node-host/node-worker-supervisor.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+782	937	ui/src/pages/chat/components/chat-tool-cards.test.tsx	ui/src/pages/chat/chat-responsive.browser.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+783	936	src/daemon/schtasks-install-rollback.test.ts	src/daemon/schtasks.install.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+784	936	src/logging/diagnostic-stability-bundle.test.ts	src/logging/diagnostic-stability-bundle.runtime-identity.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+786	935	src/config/sessions/session-accessor.sqlite-bounded-context.test.ts	src/config/sessions/session-accessor.conformance.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+787	935	src/gateway/server-methods/memory-search.test.ts	extensions/memory-core/src/cli.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+788	935	src/gateway/session-utils-store-lookup.test.ts	src/gateway/session-utils.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+790	935	test/scripts/plugin-clawhub-recovery.test.ts	test/scripts/clawhub-postpublish.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+792	934	extensions/telegram/src/draft-stream.test.ts	extensions/telegram/src/bot-message-dispatch.preview.telegram-http.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+793	934	src/auto-reply/reply/session-event-permissions.test.ts	src/auto-reply/reply/session.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+794	933	src/sessions/session-controller.watchdog.test.ts	src/sessions/session-controller.lifecycle.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+796	932	src/auto-reply/reply/get-reply-inline-actions.skip-when-config-empty.test.ts	src/auto-reply/reply/get-reply-inline-actions.tool-dispatch.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+797	932	src/channels/plugins/outbound/interactive.test.ts	src/interactive/payload.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+798	931	src/config/sessions/session-accessor.sqlite-deletion.test.ts	src/config/sessions/session-accessor.conformance.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+800	930	extensions/discord/src/send.sends-basic-channel-messages.test.ts	extensions/discord/src/actions/runtime.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+801	930	src/agents/cli-runner/execute-plugin.policy.test.ts	src/agents/cli-runner/execute-plugin.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+802	930	src/agents/worktrees/service.gc-performance.test.ts	src/agents/worktrees/service.gc-lifecycle.test.ts;src/agents/worktrees/service.gc-inventory.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+803	930	test/scripts/bun-standalone-source-graph.test.ts	test/scripts/bun-standalone-metadata.test.ts;test/scripts/bun-standalone-source-entries.test.ts;test/scripts/bun-standalone-source-boundary.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+805	929	src/cli/update-cli.windows-lifecycle.test.ts	src/cli/update-cli/update-command.test.ts;src/cli/update-cli.test.ts	Approved file-level area consolidation; retained keepers are present on frozen main and final approved tip.
+736	0	src/gateway/server-methods/question.test.ts	src/gateway/server-methods/question.test.ts	Retained: New main membership-revocation assertions; no deletion credit.
+778	0	src/agents/mcp-http-transport.test.ts	src/agents/mcp-http-transport.test.ts	Retained: New main body-secret HTTP-error assertions; no deletion credit.
+815	0	src/gateway/node-invoke-system-run-approval.test.ts	src/gateway/node-invoke-system-run-approval.test.ts	Retained: New main allow-once replay assertions; no deletion credit.
+747	0	src/system-agent/setup-inference-activate.test.ts	src/system-agent/setup-inference-activate.test.ts	Retained: Measured storage-resource fixture requires this exact suite; no deletion credit.
+# deferred_to_b	806,807,808,809,810,811,812,813,814,817,818,819,820,821,822,824,825
+# fixture_closure	Policy and packing fixtures use eager-import-closure; Git-family fixtures use ci-git-owner; assertions unchanged. Native selection fixture provisions its own file.
+# historical_data	ci-measured-compact-jobs.json retains recorded ci-linux-git source-revision timing; no runtime target selection.

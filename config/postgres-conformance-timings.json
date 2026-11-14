@@ -112,10 +112,6 @@
       "group": "extension-database-workers",
       "seconds": 21.983
     },
-    "extensions/workboard/src/gateway.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 79.781
-    },
     "extensions/workboard/src/lifecycle-sync.archived-session.test.ts": {
       "group": "extension-database-workers",
       "seconds": 3.768

@@ -473,7 +473,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       configs: ["test/vitest/vitest.tooling.config.ts"],
       files: [
         "test/scripts/vitest-runtime-worker-selection.test.ts",
-        "test/scripts/ci-workflow-cost.test.ts",
         "test/scripts/vitest-isolated.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
         "test/scripts/eager-import-closure.test.ts",
@@ -493,7 +492,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/vitest-pr-exempt-retention.test.ts",
         "test/scripts/ci-test-timings.test.ts",
         "test/scripts/pr-wrapper-source-closure.test.ts",
-        "test/scripts/ci-workflow-cost.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
         "test/scripts/plugin-sdk-surface-report.test.ts",
       ],
