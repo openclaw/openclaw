@@ -1,0 +1,3 @@
+# Real guarded-fetch regression for self-hosted endpoint hostname confinement,
+# with direct/proxy redirect rejection and private endpoint success controls.
+57

@@ -12,12 +12,6 @@ import {
 } from "../../infra/net/ssrf.js";
 import { readPositiveIntegerParam } from "./common.js";
 
-const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
-  dangerouslyAllowPrivateNetwork: true,
-  allowRfc2544BenchmarkRange: true,
-  allowIpv6UniqueLocalRange: true,
-};
-
 type WebToolGuardedFetchOptions = Omit<
   GuardedFetchOptions,
   "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
@@ -84,12 +78,15 @@ export async function withTrustedWebToolsEndpoint<T>(
   );
 }
 
-/** Runs a fetch for configured self-hosted endpoints with private-network access allowed. */
+/** Runs a fetch with private-network access confined to the configured endpoint hostname. */
 export async function withSelfHostedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  return await withWebToolsNetworkGuard(params, run, WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY);
+  return await withWebToolsNetworkGuard(params, run, {
+    ...ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url),
+    dangerouslyAllowPrivateNetwork: true,
+  });
 }
 
 /** Runs a fetch under strict SSRF protection without env proxy trust. */
