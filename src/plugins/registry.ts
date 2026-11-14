@@ -17,6 +17,8 @@ import { resolveUserPath } from "../utils.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
+import { resolveEffectiveEnableState } from "./config-state.js";
+import { DIAGNOSTICS_EXPORTER_PLUGIN_IDS } from "./diagnostics-exporters.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
   clearPluginRunContext,
@@ -32,6 +34,7 @@ import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginCache, retirePluginCacheInstance } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetricsApi } from "./plugin-metrics.js";
 import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
 import { projectPluginContributions } from "./registry-contributions.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
@@ -256,6 +259,9 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
           ),
         );
       };
+    const instance =
+      getPluginInstance(record) ??
+      new PluginInstance(record.id, { record, registry: state.registry });
     const api = buildPluginApi({
       id: record.id,
       name: record.name,
@@ -282,6 +288,26 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
       ...(registrationCapabilities.capabilityHandlers && record.contracts?.subagentProfiles?.length
         ? {
             registerSubagentProfile,
+          }
+        : {}),
+      // Only the live registry owns the process-wide plugin metric families, and only
+      // while a diagnostics exporter that can subscribe to them is enabled.
+      ...(registrationMode === "full" &&
+      registryParams.activateGlobalSideEffects !== false &&
+      DIAGNOSTICS_EXPORTER_PLUGIN_IDS.some(
+        (id) =>
+          resolveEffectiveEnableState({ id, origin: "bundled", rootConfig: params.config }).enabled,
+      )
+        ? {
+            metrics: createPluginMetricsApi(record.id, registryParams.logger, {
+              onDispose: (dispose) => instance.lifecycle.onDispose(dispose),
+              captureAuthority: () =>
+                capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+                  registration: true,
+                }),
+              // Preparation may declare families; only the published instance delivers samples.
+              isPublished: () => isPluginRecordActive(registry, record),
+            }),
           }
         : {}),
       handlers: {
@@ -535,11 +561,7 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
             }),
       },
     });
-    return instrumentPluginInstanceApi(
-      api,
-      getPluginInstance(record) ??
-        new PluginInstance(record.id, { record, registry: state.registry }),
-    );
+    return instrumentPluginInstanceApi(api, instance);
   };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string, record: RegistryPluginRecord) => {

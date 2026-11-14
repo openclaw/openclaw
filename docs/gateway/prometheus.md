@@ -1348,6 +1348,36 @@ OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
 `openclaw.gc.kind`, `openclaw.gc.thread`, and optional `openclaw.gc.worker_slot`
 attributes.
 
+## Plugin metric families
+
+Plugins can add their own counters, gauges, and histograms to this scrape route instead of serving a second metrics endpoint. `api.metrics` is defined only while a diagnostics exporter plugin (`diagnostics-prometheus` or `diagnostics-otel`) is enabled, so plugins that use it stay optional-safe. Today only `diagnostics-prometheus` serves the families; with only `diagnostics-otel` enabled, samples are accepted and dropped:
+
+```ts
+const metrics = api.metrics?.register({
+  families: [
+    { name: "retain_total", type: "counter", help: "Retains by outcome", labels: ["outcome"] },
+    {
+      name: "recall_seconds",
+      type: "histogram",
+      help: "Recall latency",
+      buckets: [0.05, 0.1, 0.5, 1, 5],
+    },
+  ],
+});
+metrics?.counter("retain_total").inc({ outcome: "ok" });
+metrics?.histogram("recall_seconds").observe({}, 0.12);
+```
+
+- The host prefixes every family with `openclaw_plugin_<plugin id>_`; non `[a-z0-9_]` characters in the id become `_`. The example above exports `openclaw_plugin_my_plugin_retain_total` for a plugin with id `my-plugin`. Two plugins cannot register the same exported name, and a histogram also reserves its `_bucket`, `_sum` and `_count` names, so no other family (from the same plugin or another) can use them.
+- Names match `[a-z][a-z0-9_]*`, counters end in `_total`, label names are declared up front, and histogram buckets are finite and strictly ascending. `register()` throws on an invalid declaration, so the error shows up when the plugin loads.
+- Every sample must carry exactly the declared labels. A sample with other labels is dropped and the plugin logger warns once per family. Label values that fail the low-cardinality policy (`[A-Za-z0-9_.:-]`, up to 120 characters) are exported as `other`.
+- Plugin families have no reserve. They use the shared pool, each family keeps at most 128 label sets, and drops appear in `openclaw_prometheus_family_series_dropped_total{family="openclaw_plugin_..."}`. Core family reserves are unchanged, so plugin traffic cannot starve them.
+- Samples are recorded only while the exporter runs and reset when it stops, like core metrics. Record from runtime paths (routes, services, hooks): the exporter starts after plugins register.
+- Samples are accepted only while the recording plugin instance is the published one. During a reload the replacement instance can register the same families without disturbing the live one, but samples it records before the reload commits (from `register()` or a service start) are dropped, and the live instance keeps recording. If the reload fails and the previous instance is restored, its families and recorders keep working without registering again.
+- Calling `register()` again from the same instance replaces that instance's families: a family left out disappears from the next scrape, and recorders from the earlier call stop recording. A family whose type, help, labels or buckets changed across a reload starts over under its new shape once the reload commits: when the previous instance is disposed, or at the first new sample, whichever comes first.
+- When a plugin instance is disposed (disabled, uninstalled, or replaced by a committed reload), the families no other instance of that plugin still declares are dropped from the scrape and their names are released. Its retained recorders stop recording, and `register()` on its retained `api.metrics` throws.
+- The TypeScript type is `NonNullable<OpenClawPluginApi["metrics"]>`; the SDK exports no separate name for it.
+
 ## Label policy
 
 <AccordionGroup>
@@ -1383,7 +1413,7 @@ attributes.
 
     These budgets cover 170 RPC methods (including two client kinds per method), 400 worker request/queue label sets, 400 worker phase label sets, 200 WebSocket event names, 390 worker heap-space label sets, and 250 main/worker GC label sets without using the shared pool. Worker heap spaces multiply `script × space`; GC can multiply `thread × kind × reason × slot`. The GC `reason` and reusable Code Mode `slot` labels retain callback attribution and per-isolate correlation with heap samples. Worker phases multiply `kind × request_class × phase`: 400 fully timed request combinations would need 2,800 phase entries, exceeding that family's 1,024-entry limit. Reservations guarantee capacity, not unlimited cardinality.
 
-    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
+    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog or a host-admitted plugin family name, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
 
     Drop counters reset when the exporter stops. Drops can reflect legitimate combinations of bounded labels as well as an upstream cardinality leak. Inspect the named family before changing its labels or budget. The exporter never raises its cap automatically; the family reserve is a guarantee of capacity, not complete coverage for arbitrarily many label combinations.
 

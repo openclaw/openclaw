@@ -674,6 +674,7 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
           createWorkerRequestMetricsRecorder(store),
         ),
+        ctx.internalDiagnostics?.onPluginMetrics?.({ record: store.plugin, retire: store.retire }),
         subscribe(
           (event, metadata) => {
             try {

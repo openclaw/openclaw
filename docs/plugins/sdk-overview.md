@@ -92,6 +92,7 @@ and external URLs. Registering another provider replaces the current provider.
 | `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
 | `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                   |
 | `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
+| `api.metrics`            | `{ register }?`           | [Plugin metrics](/gateway/prometheus#plugin-metric-families), if an exporter is enabled   |
 | `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
 | `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
 

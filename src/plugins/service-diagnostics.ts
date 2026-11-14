@@ -14,6 +14,8 @@ import {
 } from "../logging/diagnostic-stability.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
+import { DIAGNOSTICS_EXPORTER_PLUGIN_IDS } from "./diagnostics-exporters.js";
+import { onPluginMetrics } from "./plugin-metrics.js";
 import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 
@@ -28,8 +30,7 @@ export function createPluginServiceDiagnostics(
   lease: PluginRuntimeCapabilityLease,
 ): TrustedExporterInternalDiagnostics | undefined {
   const isDiagnosticsExporter =
-    entry.pluginId === entry.id &&
-    (entry.id === "diagnostics-otel" || entry.id === "diagnostics-prometheus");
+    entry.pluginId === entry.id && DIAGNOSTICS_EXPORTER_PLUGIN_IDS.includes(entry.id);
   if (
     !isDiagnosticsExporter ||
     (entry.origin !== "bundled" && entry.trustedOfficialInstall !== true)
@@ -61,6 +62,10 @@ export function createPluginServiceDiagnostics(
     onWorkerRequestMetrics: (listener) => {
       lease.assertActive("worker request metrics listener");
       return lease.retain(onWorkerRequestMetrics(listener));
+    },
+    onPluginMetrics: (listener) => {
+      lease.assertActive("plugin metrics listener");
+      return lease.retain(onPluginMetrics(listener));
     },
     onEvent: (listener, filter, options) => {
       lease.assertActive("internal diagnostic listener");
