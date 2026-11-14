@@ -267,7 +267,7 @@ const enActivity = {
         },
         disconnected: {
           title: "Disconnected",
-          description: "Run identity is saved. Reconnect to view it.",
+          description: "Reconnect to check the Gateway’s retained identity evidence for this run.",
         },
         unauthorized: {
           title: "Operator read access required",
