@@ -119,6 +119,7 @@ import { runCliCleanup, sequenceCliCleanups, throwCliPreparationFailure } from "
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
+import { resolvePreparedCliChildEnv } from "./execution-env.js";
 import {
   resolveCliExecutionTarget,
   retainCliPluginExecutionConsumer,
@@ -1267,11 +1268,15 @@ async function prepareCliRunContextWithinReadFence(
       !nodeClaudePlacement &&
       candidateClaudeCliSessionId !== undefined &&
       isClaudeCliBackendId(params.provider);
+    const claudeTranscriptEnv = hasClaudeCliCandidate
+      ? resolvePreparedCliChildEnv(params, preparedBackendFinal)
+      : undefined;
     const claudeCliTranscriptMissing =
       hasClaudeCliCandidate &&
       !(await claudeCliSessionTranscriptHasContent({
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
+        env: claudeTranscriptEnv,
       }));
     const managedClaudeLiveSessionGeneration =
       claudeCliTranscriptMissing &&
@@ -1293,6 +1298,7 @@ async function prepareCliRunContextWithinReadFence(
       (await claudeCliSessionTranscriptHasOrphanedToolUse({
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
+        env: claudeTranscriptEnv,
       }));
     const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
       claudeCliTranscriptMissing && !hasManagedClaudeLiveSession

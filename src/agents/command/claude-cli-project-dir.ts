@@ -5,12 +5,15 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 
 const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
-export function resolveClaudeCliProjectsDir(homeDir?: string): string {
+export function resolveClaudeCliProjectsDir(
+  homeDir?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   // An explicit home scopes offline reads; ordinary runs share Claude's selected config root.
-  const configuredDir = homeDir === undefined ? process.env.CLAUDE_CONFIG_DIR?.trim() : undefined;
+  const configuredDir = homeDir === undefined ? env.CLAUDE_CONFIG_DIR?.trim() : undefined;
   const configDir = configuredDir
     ? path.resolve(configuredDir)
-    : path.join(normalizeOptionalString(homeDir) || process.env.HOME || os.homedir(), ".claude");
+    : path.join(normalizeOptionalString(homeDir) || env.HOME || os.homedir(), ".claude");
   return path.join(configDir.normalize("NFC"), "projects");
 }
 
@@ -46,10 +49,11 @@ function canonicalizeWorkspaceDir(workspaceDir: string): string {
 export function resolveClaudeCliProjectDirForWorkspace(params: {
   workspaceDir: string;
   homeDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
   const canonicalWorkspaceDir = canonicalizeWorkspaceDir(params.workspaceDir);
   return path.join(
-    resolveClaudeCliProjectsDir(params.homeDir),
+    resolveClaudeCliProjectsDir(params.homeDir, params.env),
     sanitizeClaudeCliProjectKey(canonicalWorkspaceDir),
   );
 }

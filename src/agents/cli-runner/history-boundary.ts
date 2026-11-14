@@ -28,7 +28,6 @@ import { bindAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -40,7 +39,7 @@ import {
   resolveNativeCliLoginOwner,
 } from "../cli-credentials.js";
 import { buildSessionContext, SessionManager } from "../sessions/session-manager.js";
-import { resolveCliChildEnv } from "./execution-env.js";
+import { resolveCliChildEnv, resolvePreparedCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion, resolveCliExecutionTarget } from "./execution-target.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -52,29 +51,6 @@ class CliHistoryOwnerChangedError extends Error {
   constructor() {
     super("CLI history owner changed before preparation");
     this.name = "CliHistoryOwnerChangedError";
-  }
-}
-
-/**
- * Execution layers the run's skill env overrides onto the process environment right before it
- * builds the child environment. Apply the same snapshot here, synchronously, so preparation
- * resolves the login the child will actually run under.
- */
-function resolvePreparedChildEnv(
-  params: PreparedCliRunContext["params"],
-  preparedBackend: Parameters<typeof resolveCliChildEnv>[0],
-): Record<string, string> {
-  const restoreSkillEnv =
-    params.skillsSnapshot && !params.controlOperation
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : undefined;
-  try {
-    return resolveCliChildEnv(preparedBackend, params).env;
-  } finally {
-    restoreSkillEnv?.();
   }
 }
 
@@ -207,7 +183,9 @@ async function prepareCliHistoryBoundaryOnce(
   const assertOwned = captureOwnedTranscriptWriteAssertion(requested);
   const { credential, preparedBackend } = identity;
   const childEnv =
-    !credential && preparedBackend ? resolvePreparedChildEnv(params, preparedBackend) : undefined;
+    !credential && preparedBackend
+      ? resolvePreparedCliChildEnv(params, preparedBackend)
+      : undefined;
   const provider = normalizeProviderId(params.provider);
   // A forwarded credential decides which account runs. Without one, the CLI runs under the
   // native login its own environment selects, unless it is node-placed and runs under the

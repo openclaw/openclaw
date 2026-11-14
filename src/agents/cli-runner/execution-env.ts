@@ -3,6 +3,7 @@ import {
   listKnownProviderAuthEnvVarNamesCore,
   type ProviderEnvVarLookupParams,
 } from "../../secrets/provider-env-vars.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
@@ -98,4 +99,30 @@ export function resolveCliChildEnv(
   // Claude's native login must never enter the separate host-managed usage tier.
   delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
   return { env, selectedClaudeClearEnv };
+}
+
+/**
+ * Execution layers the run's skill env overrides onto the process environment right before it
+ * builds the child environment. Apply the same snapshot here, synchronously, so preparation
+ * resolves the login the child will actually run under.
+ */
+export function resolvePreparedCliChildEnv(
+  params: Pick<
+    PreparedCliRunContext["params"],
+    "skillsSnapshot" | "controlOperation" | "config" | "workspaceDir" | "nativeAuthOnly"
+  >,
+  preparedBackend: Parameters<typeof resolveCliChildEnv>[0],
+): Record<string, string> {
+  const restoreSkillEnv =
+    params.skillsSnapshot && !params.controlOperation
+      ? applySkillEnvOverridesFromSnapshot({
+          snapshot: params.skillsSnapshot,
+          config: params.config,
+        })
+      : undefined;
+  try {
+    return resolveCliChildEnv(preparedBackend, params).env;
+  } finally {
+    restoreSkillEnv?.();
+  }
 }

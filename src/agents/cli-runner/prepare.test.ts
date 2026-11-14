@@ -3409,7 +3409,10 @@ describe("prepareCliRunContext", () => {
       controlOperation: testCase.controlOperation,
     });
 
-    const transcriptArgs = { sessionId: testCase.sessionId, workspaceDir: dir };
+    const transcriptArgs = expect.objectContaining({
+      sessionId: testCase.sessionId,
+      workspaceDir: dir,
+    });
     if (testCase.checksTranscript) {
       expect(transcriptCheck).toHaveBeenCalledWith(transcriptArgs);
     } else {
@@ -3425,6 +3428,109 @@ describe("prepareCliRunContext", () => {
       expect(context.params.prompt).toBe("/compact");
     }
   });
+
+  it.each(["skill", "gateway", "default", "missing", "orphaned"] as const)(
+    "validates cold Claude resume in the effective child root: %s",
+    async (source) => {
+      const { dir } = fixture.session;
+      const home = path.join(dir, "home");
+      const configDir = path.join(dir, "child-claude");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("CLAUDE_CONFIG_DIR", source === "gateway" ? configDir : undefined);
+      const skillOnly = ["skill", "missing", "orphaned"].includes(source);
+      const config: OpenClawConfig = skillOnly
+        ? { skills: { entries: { "claude-root": { env: { CLAUDE_CONFIG_DIR: configDir } } } } }
+        : {};
+      const sessionId = "stored-claude-session";
+      // Independent fixture path: do not use the resolver under test to create the transcript.
+      const root = source === "default" ? path.join(home, ".claude") : configDir;
+      const project = path.join(
+        root,
+        "projects",
+        fs.realpathSync(dir).replace(/[^a-zA-Z0-9]/g, "-"),
+      );
+      if (source !== "missing") {
+        fs.mkdirSync(project, { recursive: true });
+        fs.writeFileSync(
+          path.join(project, sessionId + ".jsonl"),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content:
+                source === "orphaned"
+                  ? [{ type: "tool_use", id: "unanswered", name: "Read", input: {} }]
+                  : [{ type: "text", text: "prior answer" }],
+            },
+          }) + "\n",
+        );
+      }
+      const calls: CliBackendExecuteContext[] = [];
+      const onMissingCliSessionTranscript = vi.fn(async () => {});
+      setCliBackendForPrepareTest({
+        command: process.execPath,
+        prepareExecution: async () => ({
+          async *execute(call) {
+            calls.push(call);
+            const nativeId = call.args.includes("--resume") ? sessionId : "fresh-claude-session";
+            fs.mkdirSync(project, { recursive: true });
+            fs.appendFileSync(
+              path.join(project, nativeId + ".jsonl"),
+              JSON.stringify({
+                type: "assistant",
+                message: { role: "assistant", content: "continued" },
+              }) + "\n",
+            );
+            yield {
+              type: "result",
+              subtype: "success",
+              result: "continued",
+              session_id: nativeId,
+            };
+          },
+        }),
+      });
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        model: "opus",
+        config,
+        skillsSnapshot: { prompt: "", skills: skillOnly ? [{ name: "claude-root" }] : [] },
+        onMissingCliSessionTranscript,
+        cliSessionBinding: { sessionId, cwdHash: hashCliSessionText(dir) },
+        cliSessionId: sessionId,
+      });
+      const invalidatedReason =
+        source === "missing"
+          ? "missing-transcript"
+          : source === "orphaned"
+            ? "orphaned-tool-use"
+            : undefined;
+      expect(context.reusableCliSession).toEqual(
+        invalidatedReason
+          ? { mode: "invalidate", invalidatedReason }
+          : { mode: "reuse", sessionId },
+      );
+      expect(process.env.CLAUDE_CONFIG_DIR).toBe(source === "gateway" ? configDir : undefined);
+      const { runPreparedCliAgent } = await import("../cli-runner.js");
+      const result = await runPreparedCliAgent(context);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.env.CLAUDE_CONFIG_DIR).toBe(source === "default" ? undefined : configDir);
+      if (invalidatedReason) {
+        expect(calls[0]?.args).not.toContain("--resume");
+      } else {
+        expect(calls[0]?.args).toEqual(expect.arrayContaining(["--resume", sessionId]));
+      }
+      expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe(
+        invalidatedReason ? "fresh-claude-session" : sessionId,
+      );
+      if (source === "missing") {
+        expect(onMissingCliSessionTranscript).toHaveBeenCalledExactlyOnceWith(sessionId);
+      } else {
+        expect(onMissingCliSessionTranscript).not.toHaveBeenCalled();
+      }
+      expect(process.env.CLAUDE_CONFIG_DIR).toBe(source === "gateway" ? configDir : undefined);
+    },
+  );
 
   it("keeps old-account history private after replacement and native-session clear", async () => {
     const account = "test:b";
@@ -3768,10 +3874,12 @@ describe("prepareCliRunContext", () => {
         sessionId: "session-test",
         sessionKey: "agent:main:main",
       });
-      expect(transcriptCheck).toHaveBeenCalledWith({
-        sessionId: "warm-claude-sid",
-        workspaceDir: dir,
-      });
+      expect(transcriptCheck).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "warm-claude-sid",
+          workspaceDir: dir,
+        }),
+      );
       expect(orphanCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({
         mode: "reuse",
