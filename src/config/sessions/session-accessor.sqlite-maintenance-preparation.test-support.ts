@@ -8,6 +8,7 @@ import { racePromiseWithAbortSignal as abortable } from "../../infra/abort-signa
 import * as sqlite from "../../infra/node-sqlite.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -65,6 +66,7 @@ export function registerSessionMaintenancePreparationTests() {
         maintenancePlan.input.preservation.providerKeys = [stale.sessionKey];
         maintenancePlan.input.maintenance.pruneAfterMs = 60 * 60 * 1000;
         const originalFile = statSync(database.path, { bigint: true });
+        const originalIdentity = readOpenClawAgentDatabaseIdentity(database);
         const plan: SqliteSessionReclamationPlan =
           operation === "statistics"
             ? statistics(databaseOptions)
@@ -96,6 +98,12 @@ export function registerSessionMaintenancePreparationTests() {
           expect(completed).toHaveBeenCalledExactlyOnceWith(
             result,
             `${originalFile.dev}:${originalFile.ino}`,
+            {
+              kind: "file",
+              physicalIdentity: `${originalFile.dev}:${originalFile.ino}`,
+              birthtime: originalIdentity.birthtime,
+              nativeLocation: originalIdentity.canonicalPath,
+            },
           );
           expect(published).toEqual([]);
           if (operation === "preservation") {

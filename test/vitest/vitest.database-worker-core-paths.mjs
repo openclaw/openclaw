@@ -586,6 +586,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/workspace-state-read.worker.test.ts",
   "src/agents/workspace-state-store.test.ts",
   "src/agents/workspace.test.ts",
+  "src/agents/workspace.bootstrap-read.worker.test.ts",
+  "src/agents/workspace.bootstrap-read-diagnostics.test.ts",
   "src/system-agent/operations.roles.test.ts",
   "src/system-agent/setup-apply.concurrency.test.ts",
   "src/agents/bash-tools.exec-authorization.integration.test.ts",

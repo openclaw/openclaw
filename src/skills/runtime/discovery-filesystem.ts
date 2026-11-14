@@ -1,5 +1,6 @@
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import type { resolveSandboxFsPathWithMounts } from "../../agents/sandbox/fs-paths.js";
 import type { SandboxMountPlanInput } from "../../agents/sandbox/mount-plan.prepare.js";
 import type { SandboxStateOwnerPath } from "../../agents/sandbox/state-owner-path.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
@@ -192,6 +193,19 @@ export function createSkillsFilesystemOperations(
     }
   }
 
+  async function prepareSandboxFsPath(input: Parameters<typeof resolveSandboxFsPathWithMounts>[0]) {
+    const nativeMode = getFsSafeNativeConfig().mode;
+    const worker = await getWorker();
+    const result = await worker.run(
+      { kind: "sandbox-path", nativeMode, input },
+      { timeoutMs: 120_000 },
+    );
+    if (result.kind !== "sandbox-path") {
+      throw new Error("Unexpected sandbox filesystem path response");
+    }
+    return result.path;
+  }
+
   async function prepareSandboxFsContext(sandbox: SandboxContext) {
     const nativeMode = getFsSafeNativeConfig().mode;
     const worker = await getWorker();
@@ -240,5 +254,6 @@ export function createSkillsFilesystemOperations(
     runSkillLibraryFilesystemTask,
     syncSkillsFilesystem,
     prepareSandboxFsContext,
+    prepareSandboxFsPath,
   };
 }

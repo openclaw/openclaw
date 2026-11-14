@@ -24,11 +24,11 @@ import {
 } from "./session-accessor.sqlite-entry-read.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
-  assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentAdmissionFacts,

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -85,7 +86,9 @@ it.each(["same", "replaced", "unknown"] as const)(
       store === "replaced"
         ? { session: { store: path.join(directory, "replacement.sqlite") } }
         : original;
+    using realpath = vi.spyOn(fs.realpathSync, "native");
     const prompt = await promptFor({ cfg });
+    expect(realpath).not.toHaveBeenCalled();
     if (store === "same") {
       expect(prompt).toContain("original store child result");
       expect(prompt).toContain("original store task");

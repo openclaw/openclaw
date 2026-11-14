@@ -3,6 +3,7 @@ import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { createMissingReplyNotice } from "../../agents/reply-completion.js";
 import {
   createSessionMaintenanceFollowup,
+  prepareSessionMaintenanceRequest,
   scheduleSessionMaintenance,
 } from "../../agents/session-maintenance/run.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -376,31 +377,35 @@ export async function finalizeReplyAgentRun(
         runtimePolicySessionKey,
       };
       // The descriptor has no foreground authority; delivery settlement gates its new owner.
-      scheduleSessionMaintenance(
-        {
-          prepared: maintenancePrepared,
-          followupRun: createSessionMaintenanceFollowup({
-            run: followupRun.run,
-            sessionEntry: activeSessionEntry,
-            cfg,
-            sessionKey,
-            runtimePolicySessionKey:
-              runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey,
-            provider: accounting.providerUsed,
-            model: accounting.modelUsed,
-            auth,
-          }),
-          sessionId: activeSessionEntry.sessionId,
-          lifecycleRevision: activeSessionEntry.lifecycleRevision,
-          lifecycleGeneration: replyOperation.lifecycleGeneration,
-          startedAt: replyOperation.startedAtMs,
-          agentHarnessId: meta.agentMeta.agentHarnessId,
-          compactionRequestBudget: current.execution.compactionRequestBudget,
-        },
-        replyOperation.ownerSettlement.then(
-          () => replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
-        ),
-      );
+      const maintenanceRequest = await prepareSessionMaintenanceRequest({
+        prepared: maintenancePrepared,
+        followupRun: createSessionMaintenanceFollowup({
+          run: followupRun.run,
+          sessionEntry: activeSessionEntry,
+          cfg,
+          sessionKey,
+          runtimePolicySessionKey:
+            runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey,
+          provider: accounting.providerUsed,
+          model: accounting.modelUsed,
+          auth,
+        }),
+        sessionId: activeSessionEntry.sessionId,
+        lifecycleRevision: activeSessionEntry.lifecycleRevision,
+        lifecycleGeneration: replyOperation.lifecycleGeneration,
+        startedAt: replyOperation.startedAtMs,
+        agentHarnessId: meta.agentMeta.agentHarnessId,
+        compactionRequestBudget: current.execution.compactionRequestBudget,
+      });
+      if (maintenanceRequest) {
+        scheduleSessionMaintenance(
+          maintenanceRequest,
+          replyOperation.ownerSettlement.then(
+            () =>
+              replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
+          ),
+        );
+      }
       return { result: reply, accounting };
     },
   );

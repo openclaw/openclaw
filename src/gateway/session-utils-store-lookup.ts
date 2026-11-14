@@ -7,8 +7,9 @@ import type { SessionEntryReadScope } from "../config/sessions/session-accessor.
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
-import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { captureSessionStoreTargetInventory } from "../config/sessions/session-store-target-routing.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -347,7 +348,7 @@ export async function withGatewaySessionStoreTarget<T>(
   if (identities.some((selected) => isIncognitoSessionKey(selected.canonicalKey))) {
     throw new Error("Related incognito rows require their captured actor");
   }
-  const inventory = prepareSessionStoreTargetInventory(
+  const capturedInventory = captureSessionStoreTargetInventory(
     params.cfg,
     [
       ...identities.map((selected) => selected.agentId),
@@ -357,6 +358,18 @@ export async function withGatewaySessionStoreTarget<T>(
     ],
     params.env,
   );
+  const preparedInventory = await prepareSessionStoreCandidatesInWorker({
+    inventory: true,
+    ...capturedInventory,
+  });
+  if (!preparedInventory.inventory) {
+    throw new Error("Session discovery worker did not return its prepared inventory");
+  }
+  const inventory = {
+    ...preparedInventory.inventory,
+    config: capturedInventory.config,
+    env: capturedInventory.env,
+  };
   const inventoryRead = prepareSessionStoreTargetInventoryRead(inventory);
   return inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();

@@ -15,7 +15,11 @@ import {
 } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseRegistryMutation } from "../../state/openclaw-agent-db-registry-listing.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isIncognitoOpenClawAgentSqlitePath,
+  type AgentDatabasePathIdentity,
+} from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -67,6 +71,14 @@ export type SessionStoreTargetPreparationRequest =
   | { storePath: string; captureIdentity?: false }
   | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv }
   | ({ inventory: true } & CapturedSessionStoreTargetInventory)
+  | {
+      observePaths: {
+        inventory?: CapturedSessionStoreTargetInventory;
+        requiredPaths?: readonly string[];
+        paths?: readonly string[];
+        observations?: readonly AgentDatabasePathIdentity[];
+      };
+    }
   | { write: { storePath: string } }
   | {
       resolveWrite: {
@@ -84,6 +96,41 @@ export type SessionStoreTargetPreparationRequest =
 
 /** Only filesystem qualification runs before FIFO; content discovery remains ordered. */
 export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetPreparationRequest) {
+  if ("observePaths" in request) {
+    const input = request.observePaths;
+    const paths = createOpenClawAgentDatabasePathMatcher(input.observations);
+    if (!paths.isCurrent()) {
+      throw new Error("Session store changed while preparing its metadata. Retry the request.");
+    }
+    const inventory = input.inventory && qualifySessionStoreTargetInventory(input.inventory);
+    const candidates = new Map<string, SessionStoreReadCandidate>();
+    const capture = (candidate: SessionStoreReadCandidate) => {
+      try {
+        paths.capture(candidate.path);
+      } catch (error) {
+        if (!shouldSkipDiscoveryError(error)) {
+          throw error;
+        }
+        return;
+      }
+      candidates.set(JSON.stringify(candidate), candidate);
+    };
+    for (const pathname of input.requiredPaths ?? []) {
+      paths.capture(pathname);
+    }
+    for (const candidate of inventory?.candidates ?? []) {
+      capture(candidate);
+    }
+    for (const pathname of [...(input.requiredPaths ?? []), ...(input.paths ?? [])]) {
+      capture(captureSessionStoreReadCandidate(pathname));
+    }
+    return {
+      kind: "session-target-prepare" as const,
+      candidates: [...candidates.values()],
+      inventory: undefined,
+      observations: paths.observations(),
+    };
+  }
   if ("write" in request) {
     const captured = captureSessionStoreWriteCandidates(request.write.storePath);
     return {
@@ -103,9 +150,9 @@ export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetP
     };
   }
   if ("validate" in request) {
-    for (const source of request.validate.readCustody ?? []) {
-      assertSessionStoreReadCandidate(source.sourcePath, source.candidates);
-    }
+    const readPaths = (request.validate.readCustody ?? []).map((source) =>
+      assertSessionStoreReadCandidate(source.sourcePath, source.candidates),
+    );
     if (!request.validate.candidates.every(isSessionStoreReadCandidateCurrent)) {
       throw new Error("Session database selector changed before effect preparation");
     }
@@ -116,6 +163,7 @@ export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetP
       kind: "session-target-prepare" as const,
       candidates: [...request.validate.candidates],
       inventory: undefined,
+      readPaths,
     };
   }
   const inventory =

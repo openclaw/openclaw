@@ -3,7 +3,10 @@ import { readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as createRoot } from "@openclaw/fs-safe/root";
 import type { WorkerTaskHandler } from "@openclaw/worker-runtime/worker";
-import { resolveSandboxFsPreparation } from "../../agents/sandbox/fs-paths.js";
+import {
+  resolveSandboxFsPreparation,
+  resolveSandboxFsPathWithMounts,
+} from "../../agents/sandbox/fs-paths.js";
 import { assertSandboxStateOwnerPathCurrent } from "../../agents/sandbox/state-owner-path.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -123,6 +126,10 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
       });
       return { kind: "companion" as const, buffer };
     })();
+  }
+  if (request.kind === "sandbox-path") {
+    control.throwIfCancelled();
+    return { kind: "sandbox-path", path: resolveSandboxFsPathWithMounts(request.input) };
   }
   if (request.kind === "sandbox-projection") {
     return { kind: "sandbox-projection", preparation: resolveSandboxFsPreparation(request.input) };

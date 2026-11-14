@@ -92,7 +92,12 @@ async function withdrawSessionPendingInputs(
   const withdraw = async () => {
     const resolved = await prepareSqliteScope(target);
     assertCurrent();
-    const { options, identity, assertCurrent: assertSourceCurrent } = captured.resolve(resolved);
+    const {
+      options,
+      identity,
+      assertCurrent: assertSourceCurrent,
+    } = await captured.resolve(resolved);
+    assertCurrent();
     if (!identity.key.startsWith("file:")) {
       return !("inputIds" in input)
         ? false
@@ -217,7 +222,7 @@ export async function listOrphanedSessionPendingInputTargets(
     "Orphaned input discovery changed its captured database owner",
   );
   const resolved = await prepareSqliteScope(captured);
-  const { options, identity, source, assertReadCurrent } = target.resolve(resolved);
+  const { options, identity, source, assertReadCurrent } = await target.resolve(resolved);
   if (!identity.key.startsWith("file:")) {
     return [];
   }

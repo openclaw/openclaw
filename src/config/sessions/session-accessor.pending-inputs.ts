@@ -205,6 +205,11 @@ export function bindSessionPendingInputSources(
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
+    assertReadCurrent() {
+      for (const source of sources) {
+        assertSessionPendingInputLifetimeCurrent(source);
+      }
+    },
     assertMentionInvitationCurrent: undefined,
     authority: undefined,
     requesterOrigin: undefined,
@@ -576,6 +581,10 @@ async function stagePreparedPendingInput(
           store.assertCurrent();
           options.assertCurrent();
         },
+        async assertReadCurrent() {
+          await store.assertReadCurrent();
+          options.assertCurrent();
+        },
         consumed: true,
         finish,
       };
@@ -659,6 +668,10 @@ async function stagePreparedPendingInput(
               messageJson: staged.message_json,
               assertCurrent: () => {
                 store.assertCurrent();
+                assertAdmittedCurrent();
+              },
+              async assertReadCurrent() {
+                await store.assertReadCurrent();
                 assertAdmittedCurrent();
               },
               ...(existing ? { dedupeRetryAvailable: true as const } : {}),

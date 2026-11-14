@@ -30,7 +30,7 @@ export async function captureSessionQueuedInputsForRestart(scope: Scope) {
     "Queued shutdown inputs changed their database owner",
   );
   const resolved = await prepareSqliteScope(scope);
-  const physical = captured.resolve(resolved);
+  const physical = await captured.resolve(resolved);
   physical.assertCurrent();
   const queuedInputs = listLiveSessionPendingInputs(
     physical.identity.canonicalPath,
@@ -124,7 +124,7 @@ async function readPendingInputRows(
     identity,
     source: readSource,
     assertReadCurrent,
-  } = target.resolve(resolved);
+  } = await target.resolve(resolved);
   const query = {
     ...options,
     sessionKey: resolved.sessionKey,

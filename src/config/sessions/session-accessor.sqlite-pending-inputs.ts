@@ -161,6 +161,7 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   // Timers can retain this owner through their async frame after settlement.
   // Keep replay facts, but release the admission and staging closures.
   owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.assertReadCurrent = owner.assertCurrent;
   owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
   owner.authority = undefined;
@@ -228,14 +229,11 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
 
 /** Capture the calling owner before physical database discovery yields. */
 export function captureForeignLiveSessionPendingInputReader() {
-  const currentOwner = owners.current.getStore();
-  return (scope: { databasePath: string; sessionId: string; sessionKey: string }) =>
-    collectForeignLiveSessionPendingInputEntries({
-      scope,
-      liveOwners: owners.live.values(),
-      currentOwner,
-      assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
-    });
+  return collectForeignLiveSessionPendingInputEntries.bind(undefined, {
+    readLiveOwners: () => owners.live.values(),
+    currentOwner: owners.current.getStore(),
+    assertActive: assertPendingInputOwnerActive,
+  });
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {

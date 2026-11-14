@@ -333,6 +333,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-transcript-title-reader.test.ts",
   "src/gateway/session-utils-read-lifetime.test.ts",
   "src/gateway/session-utils-store-lookup.test.ts",
+  "src/gateway/session-utils-store-sources.test.ts",
   "src/gateway/session-utils.agent-models.test.ts",
   "src/gateway/session-utils.deleted-agent.test.ts",
   "src/gateway/session-utils.permissions.test.ts",

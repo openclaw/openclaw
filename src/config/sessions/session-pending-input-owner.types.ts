@@ -19,6 +19,8 @@ export type SessionPendingInputOwner = Omit<
   workerDatabasePath: string;
   config?: OpenClawConfig;
   assertCurrent: () => void;
+  /** Foreign sampling retains each source locator and file generation through worker validation. */
+  assertReadCurrent: () => void | Promise<void>;
   assertMentionInvitationCurrent?: () => void;
   authority?: SessionPendingInputAuthority;
   /** Published only after the exact input was consumed by a committed transcript write. */

@@ -1,4 +1,7 @@
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -11,9 +14,9 @@ import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
 } from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
 
-/** Capture before discovery yields, then bind its selected physical database. */
+/** Prepare the original candidate identities before binding the selected physical database. */
 export async function captureSessionStoreReadTarget(
   scope: SessionAccessScope,
   changedMessage: string,
@@ -26,21 +29,43 @@ export async function captureSessionStoreReadTarget(
     path: storePath,
   });
   const prepared = admitted?.canonicalPath === storePath ? admitted : undefined;
-  const candidates = prepared ? [] : captureSessionStoreReadCandidates(storePath);
+  const candidates = prepared
+    ? []
+    : (await prepareSessionStoreCandidatesInWorker({ storePath })).candidates;
   const identities = captureSessionStoreCandidateIdentities(candidates);
+  const nativeCandidates = candidates.map((candidate) => ({
+    path: candidate.path,
+    physicalPath: candidate.physicalPath,
+    scope: candidate.scope,
+  }));
   return {
-    resolve(resolved: ResolvedSqliteScope) {
+    async resolve(resolved: ResolvedSqliteScope) {
       const options = {
         ...toDatabaseOptions(resolved),
         path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
       };
+      const validateRead = (sources: readonly { path: string; identity: DatabasePathIdentity }[]) =>
+        prepareSessionStoreCandidatesInWorker({
+          validate: {
+            readCustody: prepared
+              ? []
+              : [{ sourcePath: options.path, candidates: nativeCandidates }],
+            candidates: [],
+            sources,
+          },
+        });
+      const selected = prepared ? undefined : await validateRead([]);
+      const selectedPath =
+        selected && "readPaths" in selected ? selected.readPaths?.[0] : undefined;
       const identity = prepared
         ? {
             key: `file:${prepared.validation.identity}`,
             birthtime: prepared.validation.birthtime,
             canonicalPath: prepared.canonicalPath,
           }
-        : identities.get(assertSessionStoreReadCandidate(options.path, candidates));
+        : selectedPath
+          ? identities.get(selectedPath)
+          : undefined;
       if (!identity) {
         throw new Error(changedMessage);
       }
@@ -51,7 +76,7 @@ export async function captureSessionStoreReadTarget(
             throw new Error(changedMessage);
           }
         } else {
-          assertSessionStoreReadCandidate(options.path, candidates);
+          assertSessionStoreReadCandidate(options.path, nativeCandidates);
           assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
         }
       };
@@ -65,6 +90,22 @@ export async function captureSessionStoreReadTarget(
           databaseBirthtime: identity.birthtime,
         },
         assertReadCurrent,
+        async assertReadCurrentAsync() {
+          if (prepared) {
+            assertReadCurrent();
+          } else {
+            await validateRead([{ path: options.path, identity }]);
+          }
+        },
+        async assertCurrentAsync() {
+          if (prepared) {
+            assertReadCurrent();
+          }
+          await validateRead([{ path: options.path, identity }]);
+          if (prepared) {
+            assertReadCurrent();
+          }
+        },
         assertCurrent: () => {
           assertReadCurrent();
           // Privileged consumers retain direct identity checks before write admission.

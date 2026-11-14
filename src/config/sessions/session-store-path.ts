@@ -1,4 +1,7 @@
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../../infra/boundary-path.js";
 import {
   captureSystemEventStoreCurrentCheck,
   getSystemEventStorePath,
@@ -13,6 +16,7 @@ import {
   resolveSessionStorePathCore,
   type SessionStorePathScope,
 } from "./paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   prepareSqliteTargetFromSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
@@ -31,17 +35,19 @@ export function resolvePhysicalSessionStorePath(
   );
 }
 
-/** Prepare ownership in the read worker before resolving the physical path identity. */
+/** Exact locators already select a path; only legacy families need worker ownership discovery. */
 export async function preparePhysicalSessionStorePath(
   scope: SessionStorePathScope,
   cfg?: OpenClawConfig,
 ): Promise<string> {
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  const target = await prepareSqliteTargetFromSessionStorePath(
-    resolveSessionStorePathForScope(scope, cfg),
-    { agentId, env: scope.env },
-  );
-  return resolveIdentityPathViaExistingAncestorSync(target.path);
+  const storePath = resolveSessionStorePathForScope(scope, cfg);
+  const exact = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  const target =
+    exact.agentId || exact.shared
+      ? exact
+      : await prepareSqliteTargetFromSessionStorePath(storePath, { agentId, env: scope.env });
+  return resolveIdentityPathViaExistingAncestor(target.path);
 }
 
 export function publishSystemEventStoreConfig(cfg: OpenClawConfig): void {

@@ -1,7 +1,7 @@
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import type {
   CapturedSessionEntryCurrentRead,
   SessionEntryCurrentSource,

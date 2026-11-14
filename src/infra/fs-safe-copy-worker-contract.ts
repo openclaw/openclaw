@@ -4,6 +4,8 @@ import type { FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 import type { DarwinAclInspection } from "@openclaw/fs-safe/permissions";
 import type {
   WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
   WorkspaceFilesystemReply,
 } from "../agents/workspace-filesystem.types.js";
 import type { WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
@@ -34,9 +36,15 @@ export type FsSafeStoreRemove = {
   nativeMode: FsSafeNativeMode;
 };
 
-export type FsSafeFilesystemCommand = WorkspaceFilesystemCommand | FsSafeStoreRemove;
+export type FsSafeFilesystemCommand =
+  | WorkspaceFilesystemCommand
+  | WorkspaceFilesystemReadCommand
+  | FsSafeStoreRemove;
 export type FsSafeStoreReply = Extract<FsSafeCopyReply, { type: "written" | "failed" }>;
-export type FsSafeFilesystemReply = WorkspaceFilesystemReply | FsSafeStoreReply;
+export type FsSafeFilesystemReply =
+  | WorkspaceFilesystemReply
+  | WorkspaceFilesystemReadReply
+  | FsSafeStoreReply;
 
 export type FsSafeProvisionCopy = FsSafeProvisionCopyInput & { decision: SharedArrayBuffer };
 
@@ -70,6 +78,7 @@ export type FsSafeCopyReply =
   | ScratchTreeResult
   | { type: "captures-reclaimed"; failures: number; firstFailure?: string }
   | WorkspaceFilesystemReply
+  | WorkspaceFilesystemReadReply
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }
   | { type: "metadata"; entries: (CloneFileMetadata | undefined)[] }
   | { type: "acl"; acl: DarwinAclInspection }

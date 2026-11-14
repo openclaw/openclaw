@@ -20,10 +20,6 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
 import { resolveBootstrapFilesForPreparation as bootstrap } from "./bootstrap-files.js";
-import {
-  readWorkspaceFileCache as readCache,
-  writeWorkspaceFileCache as writeCache,
-} from "./workspace-file-cache.js";
 import { assertConfiguredWorkspaceStateReady as assertReady } from "./workspace-state-dirs.js";
 import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
@@ -199,7 +195,6 @@ it.each(["merge", "delete"] as const)("rejects revoked %s", async (operation) =>
 it("refuses expiry when content is restored before the commit observation", async () => {
   const initial = await seed();
   const filePath = path.join(dir, "AGENTS.md");
-  writeCache({ filePath, content: "cached", identity: "identity" });
   let restored = false;
   const spy = probe.admission(workerAdmission, (request, grant, admit) => {
     if (!restored && request.stage === "transaction") {
@@ -212,7 +207,6 @@ it("refuses expiry when content is restored before the commit observation", asyn
   spy.mockRestore();
   expect(restored).toBe(true);
   expect(await read(dir)).toEqual(initial);
-  expect(readCache(filePath, "identity")).toBe("cached");
 });
 
 it("refuses commit when its owner retires during the worker filesystem observation", async ({
@@ -248,24 +242,24 @@ it("refuses commit when its owner retires during the worker filesystem observati
   expect(await read(dir)).toEqual(initial);
 });
 
-it.each(["expiry", "deletion"] as const)("retires %s cache on lost reply", async (cleanup) => {
-  await seed();
-  const filePath = path.join(dir, "AGENTS.md");
-  writeCache({ filePath, content: "cached", identity: "identity" });
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  const spy = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementationOnce(async (...args) => {
-      await execute(...args);
-      throw new Error("workspace cleanup reply lost");
-    });
-  await expect(
-    cleanup === "deletion" ? remove(await deletionPlan(dir)) : expire(dir, expiredAt),
-  ).rejects.toThrow("workspace cleanup reply lost");
-  spy.mockRestore();
-  expect(readCache(filePath, "identity")).toBeUndefined();
-  expect((await read(dir)).setupExists).toBe(false);
-});
+it.each(["expiry", "deletion"] as const)(
+  "preserves committed %s cleanup on lost reply",
+  async (cleanup) => {
+    await seed();
+    const execute = stateWorker.runOpenClawStateWorkerOperation;
+    const spy = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        await execute(...args);
+        throw new Error("workspace cleanup reply lost");
+      });
+    await expect(
+      cleanup === "deletion" ? remove(await deletionPlan(dir)) : expire(dir, expiredAt),
+    ).rejects.toThrow("workspace cleanup reply lost");
+    spy.mockRestore();
+    expect((await read(dir)).setupExists).toBe(false);
+  },
+);
 
 it("keeps captured first-writer setup milestones across queued merges and reopen", async () => {
   await seed();

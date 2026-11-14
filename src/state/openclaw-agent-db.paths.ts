@@ -84,11 +84,11 @@ export function resolveExplicitIncognitoAgentSqliteTarget(
   return { agentId, env, path: resolved };
 }
 
-type AgentDatabasePathIdentity = { lexicalPath: string } & (
-  | { realPath: string; device: bigint; inode: bigint }
+export type AgentDatabasePathIdentity = { lexicalPath: string } & (
+  | { realPath: string; device: string; inode: string }
   | {
-      parentDevice: bigint;
-      parentInode: bigint;
+      parentDevice: string;
+      parentInode: string;
       parentRealPath: string;
       unresolvedSuffix: string;
     }
@@ -114,8 +114,8 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
 function areMissingSuffixAliases(params: {
   left: string;
   right: string;
-  parentDevice: bigint;
-  parentInode: bigint;
+  parentDevice: string;
+  parentInode: string;
   parentRealPath: string;
 }): boolean {
   if (params.left === params.right) {
@@ -133,8 +133,8 @@ function areMissingSuffixAliases(params: {
   }
   const suffixPair = [params.left, params.right].toSorted();
   const cacheKey = JSON.stringify([
-    params.parentDevice.toString(),
-    params.parentInode.toString(),
+    params.parentDevice,
+    params.parentInode,
     params.parentRealPath,
     ...suffixPair,
   ]);
@@ -196,8 +196,8 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     return {
       lexicalPath,
       realPath,
-      device: stat.dev,
-      inode: stat.ino,
+      device: stat.dev.toString(),
+      inode: stat.ino.toString(),
     };
   } catch (error) {
     if (!hasErrnoCode(error, "ENOENT")) {
@@ -213,8 +213,8 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     const parentStat = statSync(parentRealPath, { bigint: true });
     return {
       lexicalPath,
-      parentDevice: parentStat.dev,
-      parentInode: parentStat.ino,
+      parentDevice: parentStat.dev.toString(),
+      parentInode: parentStat.ino.toString(),
       parentRealPath,
       unresolvedSuffix: observed.unresolvedSegments.join(path.sep),
     };
@@ -251,12 +251,18 @@ function areSameAgentDatabasePathIdentities(
 }
 
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
-export function createOpenClawAgentDatabasePathMatcher(): {
+export function createOpenClawAgentDatabasePathMatcher(
+  observations: readonly AgentDatabasePathIdentity[] = [],
+): {
   (left: string, right: string): boolean;
+  capture(pathname: string): void;
+  observations(): AgentDatabasePathIdentity[];
   createIndex(): (pathname: string) => string;
   isCurrent(): boolean;
 } {
-  const identities = new Map<string, AgentDatabasePathIdentity>();
+  const identities = new Map<string, AgentDatabasePathIdentity>(
+    observations.map((identity) => [identity.lexicalPath, identity]),
+  );
   const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
     const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
     const cached = identities.get(lexicalPath);
@@ -272,6 +278,10 @@ export function createOpenClawAgentDatabasePathMatcher(): {
     (left: string, right: string) =>
       areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right)),
     {
+      capture(pathname: string) {
+        resolveIdentity(pathname);
+      },
+      observations: () => [...identities.values()],
       // Independent groups share observations, but retain their own first path spelling.
       createIndex() {
         const keys = new Map<string, string>();

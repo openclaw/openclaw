@@ -14,7 +14,10 @@ import {
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
 import { fileStore } from "@openclaw/fs-safe/store";
-import type { WorkspaceFilesystemCommand } from "../agents/workspace-filesystem.types.js";
+import type {
+  WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+} from "../agents/workspace-filesystem.types.js";
 import { hasErrnoCode } from "./errno.js";
 import type {
   FsSafeCopyRead,
@@ -119,6 +122,7 @@ if (parentPort) {
     | FsSafeCopyRead
     | FsSafeProvisionCopy
     | WorkspaceFilesystemCommand
+    | WorkspaceFilesystemReadCommand
     | FsSafeStoreRemove
     | ScratchTreeRequest
   >(async (command, channel, control) => {
@@ -152,6 +156,14 @@ if (parentPort) {
               return { type: "written" };
             }),
           );
+        case "workspace-read":
+          return await control.runNativeSection(async () => {
+            const { executeWorkspaceFilesystemRead } =
+              await import("../agents/workspace-filesystem.worker.js");
+            return withWorkerFsSafeNativeMode(command.nativeMode, () =>
+              executeWorkspaceFilesystemRead(command),
+            );
+          });
         case "workspace": {
           if (!channel) {
             throw new Error("Workspace filesystem requires its live host channel");
@@ -251,6 +263,17 @@ if (parentPort) {
           throw new Error("Unknown native worktree read operation");
       }
     } catch (error) {
+      if (command.type === "workspace-read") {
+        return {
+          type: "workspace-read",
+          result: {
+            ok: false,
+            reason: error instanceof RangeError ? "validation" : "io",
+            error: encodeNativeWorkerFailure(error),
+            ...(error instanceof FsSafeError ? { fsCode: error.code, details: error.details } : {}),
+          },
+        };
+      }
       if (command.type === "workspace") {
         return { type: "workspace-failed", error: encodeNativeWorkerFailure(error) };
       }

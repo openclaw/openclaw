@@ -31,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { observeBootstrapWorkers } from "./bootstrap-worker-telemetry.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -40,12 +41,22 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     workload: { type: "string", default: "snapshot" },
     iterations: { type: "string", default: "1000" },
+    "expected-bootstrap-warm-bytes": { type: "string" },
+    "expected-bootstrap-workers": { type: "string" },
   },
 });
 assert(values.root && global.gc, "Use --root and --expose-gc");
 assert(["counts", "timing", "allocation"].includes(values.mode));
 assert(
-  ["snapshot", "setup", "publication", "deletion-plan", "legacy-reset"].includes(values.workload),
+  [
+    "snapshot",
+    "setup",
+    "publication",
+    "deletion-plan",
+    "legacy-reset",
+    "bootstrap-small",
+    "bootstrap-large",
+  ].includes(values.workload),
 );
 assert(values.workload !== "snapshot" || values.workspace, "Snapshot requires --workspace");
 const iterations = parseStrictIntegerOption({
@@ -54,6 +65,22 @@ const iterations = parseStrictIntegerOption({
   min: 1,
   fallback: 1000,
 });
+const bootstrap = values.workload.startsWith("bootstrap-");
+const expectedBootstrapWorkers = bootstrap
+  ? parseStrictIntegerOption({
+      raw: values["expected-bootstrap-workers"],
+      label: "expected-bootstrap-workers",
+      min: 0,
+      fallback: -1,
+    })
+  : 0;
+if (bootstrap) {
+  assert(
+    values["expected-bootstrap-workers"] !== undefined,
+    "Declare the qualified expected worker population",
+  );
+}
+const bootstrapFileBytes = values.workload === "bootstrap-large" ? 512 * 1024 : 4096;
 const root = path.resolve(values.root);
 const workspace =
   values.workload === "snapshot"
@@ -66,6 +93,9 @@ process.env.OPENCLAW_HOME = root;
 if (values.workload === "legacy-reset") {
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
 }
+const bootstrapObservation = bootstrap
+  ? await observeBootstrapWorkers(values.mode, root)
+  : undefined;
 const load = (file: string) => import(pathToFileURL(path.join(checkout, file)).href);
 const source = [
   "workspace-state-read.ts",
@@ -77,6 +107,10 @@ const source = [
     ? []
     : [
         "workspace.ts",
+        "workspace-file-read.ts",
+        "workspace-file-cache.ts",
+        "workspace-bootstrap-read.ts",
+        "workspace-filesystem.types.ts",
         "workspace-preparation.ts",
         "workspace-bootstrap-publish.ts",
         "workspace-filesystem.ts",
@@ -134,7 +168,24 @@ try {
     operation = async () => assert.deepEqual(await read(workspace), expected);
   } else {
     await fs.promises.mkdir(workspace);
-    if (values.workload === "legacy-reset") {
+    if (bootstrap) {
+      const { loadWorkspaceBootstrapFiles } = (await load(
+        "src/agents/workspace.js",
+      )) as typeof import("../../src/agents/workspace.js");
+      const names = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "BOOTSTRAP.md"] as const;
+      const content = "x".repeat(bootstrapFileBytes);
+      for (const name of names) {
+        await fs.promises.writeFile(path.join(workspace, name), content);
+      }
+      operation = async () => {
+        const files = await loadWorkspaceBootstrapFiles(workspace, names);
+        assert.equal(files.length, names.length);
+        for (const file of files) {
+          assert.equal(file.missing, false);
+          assert.equal(file.content, content);
+        }
+      };
+    } else if (values.workload === "legacy-reset") {
       const {
         prepareLegacyWorkspaceStateReset,
         removeLegacyWorkspaceStateForReset,
@@ -232,14 +283,25 @@ try {
   const coldCpu = process.cpuUsage();
   const coldThread = process.threadCpuUsage();
   const coldStart = performance.now();
+  bootstrapObservation?.beginCounts();
   if (values.workload !== "snapshot") {
     await operation();
+  }
+  const coldDescriptorReads = bootstrapObservation?.endCounts();
+  if (bootstrap && values.mode === "counts") {
+    assert(coldDescriptorReads);
+    assert.equal(
+      coldDescriptorReads.main.bytes + coldDescriptorReads.workers.bytes,
+      4 * bootstrapFileBytes,
+      "Cold read observer did not capture all four actual files",
+    );
   }
   const coldElapsedMs = performance.now() - coldStart;
   const coldThreadUsed = process.threadCpuUsage(coldThread);
   const coldCpuUsed = process.cpuUsage(coldCpu);
   const cold = {
     elapsedMs: coldElapsedMs,
+    descriptorReads: coldDescriptorReads,
     mainCpuUs: coldThreadUsed.user + coldThreadUsed.system,
     processCpuUs: coldCpuUsed.user + coldCpuUsed.system,
     workerCounts: countDelta(coldWorkers, workerCounts()),
@@ -250,7 +312,9 @@ try {
     await operation();
   }
   if (values.mode === "counts") {
-    for (const [method, value] of Object.entries(fs)) {
+    for (const method of Object.getOwnPropertyNames(fs)) {
+      const ownDescriptor = Object.getOwnPropertyDescriptor(fs, method);
+      const value = ownDescriptor?.value;
       if (!method.endsWith("Sync") || typeof value !== "function") {
         continue;
       }
@@ -300,8 +364,9 @@ try {
     }
     syncBuiltinESMExports();
   }
+  const observedWorkerPopulation = bootstrapObservation?.assertPopulation(expectedBootstrapWorkers);
   global.gc();
-  if (values.mode === "allocation") {
+  if (values.mode === "allocation" && !bootstrap) {
     inspector.connect();
     await inspector.post("HeapProfiler.startSampling", {
       samplingInterval: 4096,
@@ -309,6 +374,11 @@ try {
       includeObjectsCollectedByMinorGC: true,
     });
   }
+  const allocationBefore =
+    bootstrap && values.mode === "allocation"
+      ? await bootstrapObservation!.memory(expectedBootstrapWorkers)
+      : undefined;
+  bootstrapObservation?.beginCounts();
   const hostLoad = loadavg();
   const workersBefore = workerCounts();
   const cpuBefore = process.cpuUsage();
@@ -323,11 +393,39 @@ try {
   const elapsedMs = performance.now() - start;
   const thread = process.threadCpuUsage(threadBefore);
   const cpu = process.cpuUsage(cpuBefore);
+  bootstrapObservation?.assertPopulation(expectedBootstrapWorkers);
   const workerWork = countDelta(workersBefore, workerCounts());
+  const descriptorReads = bootstrapObservation?.endCounts();
+  if (bootstrap && values.mode === "counts") {
+    assert(
+      values["expected-bootstrap-warm-bytes"] !== undefined,
+      "Counts require an explicit expected byte total for the selected revision",
+    );
+    const expectedBytes = parseStrictIntegerOption({
+      raw: values["expected-bootstrap-warm-bytes"],
+      label: "expected-bootstrap-warm-bytes",
+      min: 0,
+      fallback: 0,
+    });
+    assert(descriptorReads);
+    assert.equal(
+      descriptorReads.main.bytes + descriptorReads.workers.bytes,
+      expectedBytes,
+      "Warm bounded read bytes differ from the declared workload",
+    );
+    assert.equal(descriptorReads.main.errors + descriptorReads.workers.errors, 0);
+  }
+  const allocationAfter = allocationBefore
+    ? await bootstrapObservation!.memory(expectedBootstrapWorkers)
+    : undefined;
+  const heapAllocation =
+    allocationBefore && allocationAfter
+      ? bootstrapObservation!.allocationDelta(allocationBefore, allocationAfter)
+      : undefined;
   const filesystemCounts = { ...counts };
   const hostLoadAfter = loadavg();
   const allocatedBytes =
-    values.mode === "allocation"
+    values.mode === "allocation" && !bootstrap
       ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
   const sorted = latencies.toSorted((a, b) => a - b);
@@ -337,12 +435,28 @@ try {
       mode: values.mode,
       workload: values.workload,
       iterations,
+      bootstrapFixture: bootstrap
+        ? {
+            files: 4,
+            fileBytes: bootstrapFileBytes,
+            returnedBytesPerTurn: 4 * bootstrapFileBytes,
+            readBoundPerFile: 2 * 1024 * 1024,
+          }
+        : undefined,
       sourceSha256: createHash("sha256").update(source).digest("hex"),
       elapsedMs,
       mainCpuUs: thread.user + thread.system,
       processCpuUs: cpu.user + cpu.system,
       allocatedBytes,
-      allocationScope: "main-thread sampled allocation; worker allocation unmeasured",
+      heapAllocation,
+      observedWorkerPopulation,
+      descriptorReads,
+      descriptorReadScope: bootstrap
+        ? "Actual fs-safe bounded descriptor callback/sync read results, main and workers separated; bytes returned by OS, not storage-media traffic. Counts-only preload. No path probes."
+        : undefined,
+      allocationScope: bootstrap
+        ? "Exact V8 main+worker heap allocation in allocation mode; external Buffer backing-store allocation excluded"
+        : "main-thread sampled allocation; worker allocation unmeasured",
       cpuScope: "process includes worker threads; child process CPU excluded",
       cold: values.workload === "snapshot" ? undefined : cold,
       medianMs: sorted[Math.floor(sorted.length / 2)],
@@ -362,7 +476,11 @@ try {
   }
   syncBuiltinESMExports();
   inspector.disconnect();
-  await close();
-  await drainGlobalSingletonLifecycleState("restart", { retainSharedState: true });
-  await fs.promises.rm(root, { recursive: true, force: true });
+  try {
+    await close();
+    await drainGlobalSingletonLifecycleState("restart", { retainSharedState: true });
+  } finally {
+    await bootstrapObservation?.close();
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
 }

@@ -11,7 +11,7 @@ import { readSessionEntryRowScan } from "./session-accessor.sqlite-entry-read.js
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 /** Lazy session identity creation, including the original admission's first writer claim. */
 import type { InitialSessionEntryCommit } from "./session-manager-write-contract.js";
 import {

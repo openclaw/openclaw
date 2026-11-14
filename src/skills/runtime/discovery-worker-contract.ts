@@ -1,7 +1,10 @@
 import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
 import type { FsSafeErrorCode, FsSafeErrorDetails } from "@openclaw/fs-safe/errors";
 import type { SandboxFsPreparation } from "../../agents/sandbox/fs-bridge.types.js";
-import type { resolveSandboxFsPreparation } from "../../agents/sandbox/fs-paths.js";
+import type {
+  resolveSandboxFsPreparation,
+  resolveSandboxFsPathWithMounts,
+} from "../../agents/sandbox/fs-paths.js";
 import type {
   SandboxMountPlan,
   SandboxMountPlanInput,
@@ -85,6 +88,11 @@ export type SkillsDiscoveryInput =
       nativeMode: FsSafeNativeMode;
       input: Parameters<typeof resolveSandboxFsPreparation>[0];
     }
+  | {
+      kind: "sandbox-path";
+      nativeMode: FsSafeNativeMode;
+      input: Parameters<typeof resolveSandboxFsPathWithMounts>[0];
+    }
   | (({ kind: "sandbox-mounts" } | { kind: "sandbox-mount-sources" }) & {
       stateOwnerPath?: SandboxStateOwnerPath;
       input: SandboxMountPlanInput;
@@ -133,6 +141,7 @@ export type SkillsDiscoveryResult = {
 export type SkillsDiscoveryOutput =
   | { kind: "companion"; buffer: Uint8Array }
   | { kind: "sandbox-projection"; preparation: SandboxFsPreparation }
+  | { kind: "sandbox-path"; path: ReturnType<typeof resolveSandboxFsPathWithMounts> }
   | { kind: "sandbox-mounts"; plan: SandboxMountPlan }
   | { kind: "sandbox-mount-sources"; created: boolean }
   | { kind: "sandbox-mounts-error"; error: NativeWorkerFailure }

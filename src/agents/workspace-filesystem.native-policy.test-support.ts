@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 
 assert.ok(process.versions.bun, "native cleanup policy must execute in Bun");
 const root = await fs.realpath(process.argv[2]!);
@@ -15,6 +16,7 @@ const {
 } = await import("./workspace-legacy-state.js");
 const { getTrackedWorkerLifecycleSnapshot } = await import("../infra/worker-cpu.js");
 const { publishBootstrapFile } = await import("./workspace-bootstrap-publish.js");
+const { readWorkspaceFileWithGuards } = await import("./workspace-file-read.js");
 const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
 const started = () =>
   getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
@@ -27,6 +29,8 @@ await fs.mkdir(workspace);
 const sibling = `${workspace}.attested`;
 const marker = `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\nsynthetic\n`;
 await fs.writeFile(sibling, marker);
+const readPath = path.join(workspace, "AGENTS.md");
+await fs.writeFile(readPath, marker);
 const plan = await prepareLegacyWorkspaceStateReset(workspace);
 try {
   for (const [index, mode] of (["require", "off", "require"] as const).entries()) {
@@ -52,6 +56,20 @@ try {
     } else {
       await assert.rejects(publishBootstrapFile(publication, marker), /native fs-safe helper/);
       await assert.rejects(fs.lstat(publication), { code: "ENOENT" });
+    }
+    const read = readWorkspaceFileWithGuards({ filePath: readPath, workspaceDir: workspace });
+    configureFsSafeNative({ mode: mode === "off" ? "require" : "off" });
+    const loaded = await read;
+    configureFsSafeNative({ mode });
+    if (mode === "off") {
+      assert.ok(loaded.ok);
+      assert.equal(loaded.content, marker);
+      assert.equal(typeof loaded.sourceIdentity[1]?.ino, "bigint");
+    } else {
+      assert.ok(!loaded.ok);
+      assert.equal(loaded.reason, "validation");
+      assert.ok(loaded.error instanceof FsSafeError);
+      assert.equal(loaded.error.code, "helper-unavailable");
     }
   }
   assert.equal(started() - before, 1, "workspace effects must reuse their filesystem worker");

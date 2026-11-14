@@ -30,7 +30,6 @@ type WorkspaceStateInput = {
 };
 
 export type WorkspaceStateDeletionPlan = {
-  cacheRoot: string;
   lexicalAlias: WorkspaceStateIdentity;
   currentCanonicalIdentity: WorkspaceStateIdentity;
   pathEntryExisted: boolean;

@@ -1,5 +1,4 @@
 import "./session-entry-patch-delivery.test-support.js";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { MessageChannel } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
@@ -325,77 +324,6 @@ it.each([false, true])(
     });
   },
 );
-
-it("keeps updater context, FIFO and publication ordering while the host executes no session SQL", async () => {
-  await withFixture(async (f) => {
-    const context = new AsyncLocalStorage<string>();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const events: string[] = [];
-    const stopRows = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && change.sessionKey === f.scope.sessionKey) {
-        events.push("row");
-      }
-    });
-    const stopIdentity = onSessionIdentityMutation((change) => {
-      if (change.kind !== "delete" && change.current.sessionKeys.includes(f.scope.sessionKey)) {
-        events.push(`identity:${change.current.sessionId}`);
-      }
-    });
-    const sql = observeHostDataSql();
-    const first = context.run("first", () =>
-      patchSessionEntryCore(
-        f.scope,
-        async () => {
-          events.push(`update:${context.getStore()}`);
-          entered.resolve();
-          await release.promise;
-          return { sessionId: "first" };
-        },
-        { onCommitted: () => events.push(`commit:${context.getStore()}`) },
-      ),
-    );
-    let second: Promise<unknown> | undefined;
-    try {
-      await awaitGateBeforeSettlement(entered.promise, first, "Patch ended before its updater");
-      second = context.run("second", () =>
-        patchSessionEntryCore(
-          f.scope,
-          (entry) => {
-            events.push(`update:${context.getStore()}:${entry.sessionId}`);
-            return { sessionId: "second" };
-          },
-          { onCommitted: () => events.push(`commit:${context.getStore()}`) },
-        ),
-      );
-      expect(events).toEqual(["update:first"]);
-      release.resolve();
-      await Promise.all([first, second]);
-      expect(events).toEqual([
-        "update:first",
-        "row",
-        "commit:first",
-        "identity:first",
-        "update:second:first",
-        "row",
-        "commit:second",
-        "identity:second",
-      ]);
-      expect(
-        sql.queries.filter((query) =>
-          /session_nodes|session_entry_snapshots|\bCOMMIT\b|\bBEGIN IMMEDIATE\b/i.test(query),
-        ),
-      ).toEqual([]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([first, second]);
-      sql.restore();
-      stopRows();
-      stopIdentity();
-    }
-    expect(f.read()?.sessionId).toBe("second");
-  });
-});
 
 it.each(["after updater", "final grant"] as const)(
   "rejects revoked host authority %s without committing",

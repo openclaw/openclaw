@@ -1,5 +1,7 @@
 import type {
   WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
   WorkspaceFilesystemReply,
 } from "../agents/workspace-filesystem.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -20,6 +22,10 @@ type Runtime = {
 };
 type Options = Pick<WorkerTaskOptions<FsSafeFilesystemCommand>, "onNotification" | "inputBytes">;
 
+export function runFsSafeFilesystemTask(
+  command: WorkspaceFilesystemReadCommand,
+  options?: Options,
+): Promise<WorkspaceFilesystemReadReply>;
 export function runFsSafeFilesystemTask(
   command: WorkspaceFilesystemCommand,
   options?: Options,

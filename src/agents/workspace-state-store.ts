@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  createSqliteWorkerOperationAdmission,
-  observeSqliteWorkerCommittedFacts,
-} from "../infra/sqlite-worker-operation-admission.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -14,7 +10,6 @@ import {
 } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
-import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import { assertNoUnmigratedWorkspaceState } from "./workspace-legacy-state.js";
 import { readCachedWorkspaceStateSnapshot } from "./workspace-state-cache.js";
 import {
@@ -124,15 +119,6 @@ async function runWorkspaceStateOperation<
           installWorkspaceFilesystemEvidence(capturedCommand.input.filesystem, facts.filesystem);
           grant();
         });
-        if (command.type === "workspace.expire") {
-          // Retire at native COMMIT, inside the existing writer's FIFO interval.
-          observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
-            const expiredRoot = readWorkspaceStateReceipt(facts).result;
-            if (typeof expiredRoot === "string") {
-              retireWorkspaceFileCache(expiredRoot);
-            }
-          });
-        }
         return { admission, nativeLocations: [context.admission.databasePath] };
       }),
     },
@@ -281,10 +267,9 @@ export async function clearExpiredWorkspaceStateForVanishedWorkspace(
 export async function prepareWorkspaceStateDeletion(
   workspaceDir: string,
 ): Promise<WorkspaceStateDeletionPlan> {
-  const cacheRoot = await resolveCanonicalWorkspacePathAsync(workspaceDir);
-  const aliases = createWorkspaceStateAliases(workspaceDir, cacheRoot);
+  const canonicalRoot = await resolveCanonicalWorkspacePathAsync(workspaceDir);
+  const aliases = createWorkspaceStateAliases(workspaceDir, canonicalRoot);
   return {
-    cacheRoot,
     lexicalAlias: aliases[0]!,
     currentCanonicalIdentity: aliases.at(-1)!,
     pathEntryExisted: await fs.lstat(path.resolve(resolveUserPath(workspaceDir))).then(
@@ -302,17 +287,6 @@ export async function deleteWorkspaceState(
     deletion?: AgentDeletionWorkerAuthority;
   } = {},
 ): Promise<void> {
-  const publish = (facts: ReturnType<typeof readWorkspaceStateReceipt>) => {
-    const result = facts.result;
-    if (
-      !isRecord(result) ||
-      result.kind !== "workspace-deleted" ||
-      typeof result.workspacePath !== "string"
-    ) {
-      throw new Error("Workspace deletion has no committed result");
-    }
-    retireWorkspaceFileCache(result.workspacePath);
-  };
   const deletionOwner = options.deletion;
   if (deletionOwner) {
     let publication: ReturnType<typeof workspaceStatePublication.begin> | undefined;
@@ -329,7 +303,6 @@ export async function deleteWorkspaceState(
           onCommitted: (facts) => {
             const receipt = readWorkspaceStateReceipt(facts);
             publication?.committed(receipt.receipt);
-            publish(receipt);
           },
         },
       );
@@ -350,30 +323,23 @@ export async function deleteWorkspaceState(
     assertHost?.();
   };
   assertCurrent();
-  const result = await runOpenClawStateWorkerOperation(
+  await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "workspace.delete", input: { plan } }),
     {
       existingOnly: true,
       assertCurrent,
-      createAdmission: withWorkspaceStatePublication(
-        context,
-        () => {
-          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            if (request.stage !== "transaction" && request.stage !== "commit") {
-              throw new Error("Workspace deletion requires transaction admission");
-            }
-            assertCurrent();
-            grant();
-          });
-          return { admission, nativeLocations: [context.admission.databasePath] };
-        },
-        publish,
-      ),
+      createAdmission: withWorkspaceStatePublication(context, () => {
+        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+          if (request.stage !== "transaction" && request.stage !== "commit") {
+            throw new Error("Workspace deletion requires transaction admission");
+          }
+          assertCurrent();
+          grant();
+        });
+        return { admission, nativeLocations: [context.admission.databasePath] };
+      }),
     },
   );
   assertCurrent();
-  if (result === undefined) {
-    retireWorkspaceFileCache(plan.cacheRoot);
-  }
 }

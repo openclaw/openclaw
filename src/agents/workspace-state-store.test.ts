@@ -19,11 +19,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  readWorkspaceFileCache,
-  retireWorkspaceFileCache,
-  writeWorkspaceFileCache,
-} from "./workspace-file-cache.js";
-import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
@@ -49,7 +44,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  retireWorkspaceFileCache(dir);
   closeOpenClawStateDatabaseForTest();
   await testState.cleanup();
 });
@@ -212,8 +206,6 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
   await seed();
   await attest(1_000, [["AGENTS.md", "a".repeat(64)]]);
   const before = await read(dir);
-  const filePath = path.join(dir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
   const pending = deleteWorkspaceState(await prepareWorkspaceStateDeletion(dir), captured);
   owner.release();
   const successor = acquireGatewayStateOwner({ databasePath, payload });
@@ -223,13 +215,11 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
     databasePath,
   });
   expect(await read(dir)).toEqual(before);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
   await deleteWorkspaceState(
     await prepareWorkspaceStateDeletion(dir),
     captureGatewayStateOwner(databasePath)!,
   );
   expect((await read(dir, { readOnly: true })).setupExists).toBe(false);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("registers and retires aliases in the captured caller-selected state database", async () => {
@@ -284,10 +274,8 @@ it("cleans current state and only the stale association for a repointed alias", 
   expect(staleAlias).toBeUndefined();
 });
 
-it.each(["delete", "expire"])("keeps %s cache entries when the commit fails", async (cleanup) => {
+it.each(["delete", "expire"])("keeps %s state when the commit fails", async (cleanup) => {
   await seed();
-  const filePath = path.join(dir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
   const db = openOpenClawStateDatabase().db;
   db.exec(`CREATE TABLE workspace_commit_guard (
         workspace_key TEXT REFERENCES workspace_setup_state(workspace_key)
@@ -303,17 +291,13 @@ it.each(["delete", "expire"])("keeps %s cache entries when the commit fails", as
 
   await expect(remove()).rejects.toThrow(/FOREIGN KEY constraint failed/u);
   expect((await read(dir)).setupExists).toBe(true);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
 
   db.exec("DELETE FROM workspace_commit_guard");
   await remove();
   expect((await read(dir)).setupExists).toBe(false);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("does not recreate a missing database during delete-only cleanup", async () => {
-  const filePath = path.join(dir, "AGENTS.md");
-  writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
   const databasePath = resolveOpenClawStateSqlitePath();
   closeOpenClawStateDatabaseForTest();
   fs.rmSync(path.dirname(databasePath), { recursive: true, force: true });
@@ -322,7 +306,6 @@ it("does not recreate a missing database during delete-only cleanup", async () =
 
   expect(fs.existsSync(databasePath)).toBe(false);
   expect(fs.existsSync(path.dirname(databasePath))).toBe(false);
-  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("deletes migration receipts owned by the workspace", async () => {

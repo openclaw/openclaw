@@ -66,10 +66,12 @@ it.each([false, true])(
         );
         expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
         const readForeign = await prepareForeignLiveSessionPendingInputEntries(target);
-        expect(readForeign().has(receipt.inputId)).toBe(true);
+        expect((await readForeign()).has(receipt.inputId)).toBe(true);
         expect(
           await receipt.run(async () =>
-            (await prepareForeignLiveSessionPendingInputEntries(target))().has(receipt.inputId),
+            (await (await prepareForeignLiveSessionPendingInputEntries(target))()).has(
+              receipt.inputId,
+            ),
           ),
         ).toBe(false);
         const events = await loadTranscriptEvents(target);
@@ -77,10 +79,10 @@ it.each([false, true])(
         if (collected) {
           firstSource.finish("interrupted");
           await firstSource.settled?.();
-          expect(readForeign().has(receipt.inputId)).toBe(true);
+          expect((await readForeign()).has(receipt.inputId)).toBe(true);
         }
         receipt.finish("cancelled");
-        expect(readForeign().has(receipt.inputId)).toBe(false);
+        expect((await readForeign()).has(receipt.inputId)).toBe(false);
         await expect(
           withSessionPendingInputPersistence(receipt, () =>
             manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {

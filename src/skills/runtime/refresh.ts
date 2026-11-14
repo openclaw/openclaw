@@ -136,6 +136,7 @@ export const {
   runSkillLibraryFilesystemTask,
   syncSkillsFilesystem,
   prepareSandboxFsContext,
+  prepareSandboxFsPath,
 } = createSkillsFilesystemOperations(async () => {
   if (state.closing) {
     await state.closing;

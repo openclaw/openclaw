@@ -109,7 +109,7 @@ it("replays a committed native prompt without duplicating the mirrored input", a
   expect(receipt.state).toBe("queued");
   expect(receipt.message).toEqual(committed);
   const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
-  expect(readForeign()).toEqual(new Map([[receipt.inputId, committed.idempotencyKey]]));
+  expect(await readForeign()).toEqual(new Map([[receipt.inputId, committed.idempotencyKey]]));
   expect(
     await receipt.runAsync!(async () =>
       (await prepareForeignLiveSessionPendingInputEntries(scope))(),
@@ -121,7 +121,7 @@ it("replays a committed native prompt without duplicating the mirrored input", a
   expect(await loadTranscriptEvents(scope)).toEqual(transcript);
   receipt.finish("interrupted");
   await receipt.settled?.();
-  expect(readForeign()).toEqual(new Map());
+  expect(await readForeign()).toEqual(new Map());
 });
 
 it("still rejects changed completion content and requester facts against a native prompt", async () => {

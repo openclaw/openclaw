@@ -10,7 +10,6 @@ const proc = vi.hoisted(() => ({
   supported: vi.fn<() => boolean>(),
   inspect: vi.fn<(pid: number) => ChildWaitState>(),
   wait: vi.fn<(pid: number) => ChildExit | null>(),
-  alive: vi.fn<() => boolean>(),
 }));
 
 // Count synchronous filesystem work too, so restoring the old scan cannot evade the budget.
@@ -26,7 +25,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     readdir: proc.entries,
     readFile,
-    default: { ...actual.default, readdir: proc.entries, readFile },
+    default: { ...actual, readdir: proc.entries, readFile },
   };
 });
 vi.mock("@openclaw/proc-safe/reaper", async (importOriginal) => ({
@@ -41,7 +40,6 @@ vi.mock("../infra/windows-install-roots.js", () => ({
   },
 }));
 vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: () => null }));
-vi.mock("./child-process-tree.js", () => ({ isChildProcessTreeAlive: proc.alive }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 vi.mock("./exec-spawn.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./exec-spawn.js")>()),
@@ -108,7 +106,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   Object.defineProperty(process, "platform", { value: "linux" });
   proc.supported.mockReturnValue(true);
-  proc.alive.mockImplementation(() => processRows.some((row) => row.pgid === ROOT));
   proc.inspect.mockImplementation((pid) => ({ kind: "exited", pid }));
   proc.wait.mockImplementation((pid) => {
     setProcesses(processRows.filter((row) => row.pid !== pid));

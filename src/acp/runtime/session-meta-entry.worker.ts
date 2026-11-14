@@ -1,7 +1,7 @@
 import { writeSessionEntryPatchInDatabase } from "../../config/sessions/session-accessor.sqlite-entry-mutation.js";
 import { readSessionEntrySelectionSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-replacement-publication.js";
-import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-row.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import {

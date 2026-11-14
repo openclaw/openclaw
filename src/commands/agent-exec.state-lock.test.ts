@@ -44,7 +44,7 @@ afterEach(() => {
     vi.restoreAllMocks();
   }
 });
-const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
+const success = () => ({ payloads: [{ text: "done", mediaUrl: null }], meta: { durationMs: 1 } });
 function stateFixture() {
   return { stateDir: tempDirs.make("openclaw-agent-exec-lock-") };
 }

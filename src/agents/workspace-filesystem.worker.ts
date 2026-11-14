@@ -18,9 +18,11 @@ import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
 } from "./workspace-bootstrap-read.js";
-import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
+import { readLocalWorkspaceFileWithGuards } from "./workspace-file-read.js";
 import type {
   WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
   WorkspaceFilesystemReply,
   WorkspaceLegacyResetOperation,
 } from "./workspace-filesystem.types.js";
@@ -182,10 +184,9 @@ export async function executeWorkspaceFilesystemOperation(
       case "purpose": {
         created = await publish(operation.name, operation.content, operation.kind === "seed");
         if (!created) {
-          const existing = await readWorkspaceFileWithGuards({
+          const existing = await readLocalWorkspaceFileWithGuards({
             filePath: path.join(dir, operation.name),
             workspaceDir: dir,
-            useCache: false,
           });
           assertCurrent();
           if (
@@ -309,4 +310,24 @@ export async function executeWorkspaceFilesystemOperation(
         : {}),
     };
   }
+}
+
+export async function executeWorkspaceFilesystemRead(
+  command: WorkspaceFilesystemReadCommand,
+): Promise<WorkspaceFilesystemReadReply> {
+  const result = await readLocalWorkspaceFileWithGuards(command.input);
+  if (result.ok) {
+    return { type: "workspace-read", result };
+  }
+  return {
+    type: "workspace-read",
+    result: {
+      ok: false,
+      reason: result.reason,
+      ...(result.error === undefined ? {} : { error: encodeNativeWorkerFailure(result.error) }),
+      ...(result.error instanceof FsSafeError
+        ? { fsCode: result.error.code, details: result.error.details }
+        : {}),
+    },
+  };
 }

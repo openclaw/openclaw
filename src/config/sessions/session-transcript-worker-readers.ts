@@ -560,7 +560,12 @@ export function prepareSessionStoreTargetDiscovery(request: SessionStoreTargetPr
     inputBytes:
       "inventory" in prepared
         ? measureSessionStoreTargetInventoryInputBytes(prepared)
-        : JSON.stringify(prepared).length * 2,
+        : "observePaths" in prepared && prepared.observePaths.inventory
+          ? measureSessionStoreTargetInventoryInputBytes({
+              ...prepared,
+              paths: prepared.observePaths.inventory.paths,
+            })
+          : JSON.stringify(prepared).length * 2,
   };
 }
 

@@ -12,6 +12,10 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
+import {
+  prepareForeignLiveSessionPendingInputEntries,
+  readSessionSubmittedInput,
+} from "./session-accessor.pending-inputs.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -64,6 +68,9 @@ it("carries admitted transcript identity into watermark reads without synchronou
             const synchronousCalls = stat.mock.calls.length + realpath.mock.calls.length;
             await expect(pending).resolves.toMatchObject({ maxSeq: 0 });
             expect(synchronousCalls).toBe(0);
+            const foreign = await prepareForeignLiveSessionPendingInputEntries(scope);
+            expect(await foreign()).toEqual(new Map());
+            expect(stat.mock.calls.length + realpath.mock.calls.length).toBe(0);
           } finally {
             stat.mockRestore();
             realpath.mockRestore();
@@ -107,7 +114,16 @@ it("settles detached watermark and stats reads without synchronous filesystem wo
         storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
       };
       await replaceTranscriptEvents(scope, [
-        { type: "message", id: "question", message: { role: "user", content: "synthetic" } },
+        {
+          type: "message",
+          id: "question",
+          message: {
+            role: "user",
+            content: "synthetic",
+            timestamp: 1,
+            idempotencyKey: "detached:user",
+          },
+        },
       ]);
       expect(getOwnedSessionTranscriptReader(scope)).toBeUndefined();
       await readSessionTranscriptWatermarkAsync(scope);
@@ -118,6 +134,11 @@ it("settles detached watermark and stats reads without synchronous filesystem wo
       try {
         watermark = await readSessionTranscriptWatermarkAsync(scope);
         stats = await readTranscriptStatsAsync(scope);
+        expect(await readSessionSubmittedInput(scope, "detached:user")).toMatchObject({
+          role: "user",
+          content: "synthetic",
+          idempotencyKey: "detached:user",
+        });
       } finally {
         calls[Symbol.dispose]();
       }
