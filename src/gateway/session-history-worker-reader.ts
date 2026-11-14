@@ -10,12 +10,14 @@ import type {
 import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
 import { resolveCronStoreSelectionInDatabase } from "../cron/store/paths.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
 import { getUserProfileDisplaysNative } from "../state/user-profile-list.native.js";
 import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
 import {
   projectForwardedMessages,
   readForwardedCronJobIds,
 } from "./chat-display-projection.history.js";
+import { prepareLinkedChannelSenderDisplay } from "./chat-display-projection.linked-senders.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
@@ -38,6 +40,17 @@ export async function readSessionHistoryRequest(
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
+    prepareLinkedChannelDisplay: (messages: readonly unknown[]) => {
+      const state = readTarget.stateDatabase;
+      const source = state ? { path: state.path, env: state.environment } : undefined;
+      return prepareLinkedChannelSenderDisplay(messages, {
+        resolveDisplay: (id) =>
+          resolveCurrentUserProfileDisplay(id, (profileId) =>
+            getUserProfileDisplaysNative([profileId], source).get(profileId),
+          ),
+        readLink: (identity) => resolveUserChannelIdentity(identity, source)?.profileId,
+      });
+    },
   };
   if (request.kind === "recent-usage") {
     return {

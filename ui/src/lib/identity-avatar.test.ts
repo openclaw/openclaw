@@ -22,6 +22,27 @@ afterEach(() => {
 });
 
 describe("resolveAvatar", () => {
+  it("uses a linked display portrait without promoting the observation identity", () => {
+    const identity = {
+      type: "observation" as const,
+      id: "person",
+      pluginId: "telegram",
+      accountId: "default",
+      senderKind: "human" as const,
+    };
+    const sender = {
+      identity,
+      id: "person",
+      name: "Person",
+      profileAvatarUrl: "/api/users/person/avatar",
+    };
+    expect(resolveAvatar(sender).kind).toBe("initials");
+    expect(resolveAvatar({ ...sender, displayProfileId: "person" })).toEqual({
+      kind: "profile",
+      url: "/api/users/person/avatar",
+    });
+  });
+
   it("falls back to initials for a non-email id", () => {
     expect(resolveAvatar({ id: "profile_123" })).toMatchObject({
       kind: "initials",

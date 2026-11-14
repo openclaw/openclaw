@@ -94,7 +94,12 @@ export function resolveIdentityHue(input: IdentityAvatarInput): number {
  */
 export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvatar {
   const identity = input.identity;
-  if (identity && identity.type !== "profile" && identity.type !== "agent") {
+  if (
+    identity &&
+    identity.type !== "profile" &&
+    identity.type !== "agent" &&
+    !(identity.type === "observation" && input.displayProfileId)
+  ) {
     return resolveAvatarInitials(input);
   }
   // Trusted origin comes only from the app connection, never from `input`.

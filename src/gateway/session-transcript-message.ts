@@ -7,6 +7,7 @@ import {
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import type { LinkedChannelSenderDisplayResolver } from "./chat-display-projection.linked-senders.js";
 import { readChatHistoryReplyMessageId } from "./chat-history-reply-messages.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
@@ -40,6 +41,7 @@ export function projectSessionMessagePayload(params: {
   projectionState?: SessionMessageProjectionState;
   projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
   resolveCronJobName?: (jobId: string) => string | undefined;
+  resolveLinkedChannelSenderDisplay?: LinkedChannelSenderDisplayResolver;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
@@ -67,6 +69,7 @@ export function projectSessionMessagePayload(params: {
         includePluginSteering: params.includePluginSteering,
         subagentCoordination: params.subagentCoordination,
         resolveCronJobName: params.resolveCronJobName,
+        resolveLinkedChannelSenderDisplay: params.resolveLinkedChannelSenderDisplay,
         includeCommentaryFallbacks: true,
         maxChars: params.maxChars,
         toolResultMaxChars: params.toolResultMaxChars,
@@ -104,6 +107,7 @@ export function projectSessionMessagePayload(params: {
             toolResultMaxChars: params.toolResultMaxChars,
             subagentCoordination: params.subagentCoordination,
             resolveCronJobName: params.resolveCronJobName,
+            resolveLinkedChannelSenderDisplay: params.resolveLinkedChannelSenderDisplay,
           })
         : {
             messages: [
@@ -111,6 +115,7 @@ export function projectSessionMessagePayload(params: {
                 includePluginSteering: params.includePluginSteering,
                 subagentCoordination: params.subagentCoordination,
                 resolveCronJobName: params.resolveCronJobName,
+                resolveLinkedChannelSenderDisplay: params.resolveLinkedChannelSenderDisplay,
               }),
             ],
             assistantErrorPending: isPendingAssistantError(rawMessage),

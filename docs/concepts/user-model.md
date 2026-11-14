@@ -330,6 +330,8 @@ Use the exact configured account ID and immutable sender ID. An identical sender
 
 Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
 
+Chat displays a linked human sender with the profile's presentation only when the current exact link agrees with the message's recorded canonical requester. The channel identity and source indicator remain intact. This association is computed when reading messages, not written into history or used for permissions. Unlinking stops the association on subsequent reads, and relinking to another person does not relabel earlier messages. Unsupported historical rows and Shared Owner remain separate.
+
 An authenticated personal requester can use a linked channel identity to steer
 their exact active session across the Control UI and channels, even when the
 channel has fewer permissions or collaborative steering is disabled. The active

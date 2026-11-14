@@ -16,7 +16,11 @@ export function isOwnSenderGroup(
   userId: string | null | undefined,
 ): boolean {
   const identity = group.sender?.identity;
-  return identity?.type === "profile" && identity.id === userId;
+  return Boolean(
+    userId &&
+    ((identity?.type === "profile" && identity.id === userId) ||
+      group.sender?.displayProfileId === userId),
+  );
 }
 
 export function isSourceOnlyUserGroup(

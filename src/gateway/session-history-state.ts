@@ -22,6 +22,10 @@ import {
   createSubagentCoordinationHistoryProjection,
   projectForwardedMessages,
 } from "./chat-display-projection.history.js";
+import {
+  prepareLinkedChannelSenderDisplay,
+  type LinkedChannelSenderDisplayResolver,
+} from "./chat-display-projection.linked-senders.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
   createPreparedSessionHistorySubagentProjection,
@@ -215,6 +219,7 @@ export class SessionHistorySseState {
       ...this.sentHistory.messages,
       message,
     ]);
+    const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay([message]);
     // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
     return () => {
       memory?.assertCurrent();
@@ -223,6 +228,7 @@ export class SessionHistorySseState {
         messageSeq,
         subagentCoordination,
         resolveCronJobName,
+        resolveLinkedChannelSenderDisplay,
       );
     };
   }
@@ -232,6 +238,7 @@ export class SessionHistorySseState {
     messageSeq: number,
     subagentCoordination: SubagentCoordinationDisplayResolver | undefined,
     resolveCronJobName: (jobId: string) => string | undefined,
+    resolveLinkedChannelSenderDisplay: LinkedChannelSenderDisplayResolver,
   ): InlineSessionHistoryAppend | null {
     subagentCoordination?.assertCurrent?.();
     const hadPendingTurnBoundary = this.turnBoundaryPending;
@@ -244,6 +251,7 @@ export class SessionHistorySseState {
       turnBoundaryPending: hadPendingTurnBoundary,
       assistantErrorPending: this.assistantErrorPending,
       resolveCronJobName,
+      resolveLinkedChannelSenderDisplay,
     });
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
@@ -255,6 +263,7 @@ export class SessionHistorySseState {
         maxChars: this.maxChars,
         resolveCurrentUserProfileDisplay,
         resolveCronJobName,
+        resolveLinkedChannelSenderDisplay,
       },
     );
     subagentCoordination?.assertCurrent?.();

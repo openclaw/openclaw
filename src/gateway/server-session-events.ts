@@ -23,6 +23,7 @@ import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
 import { readPluginSteeringId } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
+import { requiresLinkedChannelSenderDisplayRead } from "./chat-display-projection.linked-senders.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
@@ -597,7 +598,9 @@ async function handleTranscriptUpdateBroadcast(
       const historyReset =
         message === undefined ||
         projected?.requiresHistoryReset ||
-        (Boolean(projected?.payload) && requiresChannelMentionDisplayRead(message));
+        (Boolean(projected?.payload) &&
+          (requiresChannelMentionDisplayRead(message) ||
+            requiresLinkedChannelSenderDisplayRead(message)));
       if (!historyReset && projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
         return;

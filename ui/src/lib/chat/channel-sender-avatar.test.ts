@@ -78,5 +78,8 @@ describe("observed sender channel portraits", () => {
       resolveChannelSenderAvatarUrl({ name: sender.name, id: "1000000001" }, session),
     ).toBeNull();
     expect(resolveChannelSenderAvatarUrl(sender, undefined)).toBeNull();
+    expect(
+      resolveChannelSenderAvatarUrl({ ...sender, displayProfileId: "person" }, session),
+    ).toBeNull();
   });
 });

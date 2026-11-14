@@ -12,6 +12,7 @@ import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
 } from "../chat-display-projection.js";
+import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-senders.js";
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,
@@ -136,6 +137,7 @@ async function projectChatHistoryDelta(
       ? undefined
       : projectTranscriptEntryMessage(row.event, row.messageSeq, row.displayPosition),
   );
+  const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay(entryMessages);
   const displayed = displayProjector
     ? await displayProjector.project(entryMessages)
     : entryMessages;
@@ -196,6 +198,7 @@ async function projectChatHistoryDelta(
       transcriptPosition: row.displayPosition,
       projectionState,
       projectCurrentUserProfile,
+      resolveLinkedChannelSenderDisplay,
       subagentCoordination,
       resolveCronJobName,
       sessionKey: params.sessionKey,
