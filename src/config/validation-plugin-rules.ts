@@ -37,7 +37,10 @@ import {
   collectChannelDmPolicyDependencyWarnings,
   hasChannelDmPolicyDependencyWarningCandidates,
 } from "./validation-channel-rules.js";
-import { collectRedactPatternWarnings } from "./validation-core.js";
+import {
+  collectEmptyAllowPolicyWarnings,
+  collectRedactPatternWarnings,
+} from "./validation-core.js";
 import {
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
@@ -157,6 +160,7 @@ export function validatePreparedConfigWithPlugins(
   );
   warnings.push(
     ...collectRedactPatternWarnings(config),
+    ...collectEmptyAllowPolicyWarnings(config),
     ...collectUtilityModelWarnings(config, () => ({
       plugins: ensureLoadedRegistryInfo().registry.plugins,
     })),
