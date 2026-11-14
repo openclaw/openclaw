@@ -7,7 +7,8 @@ import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
 const { connectMock } = vi.hoisted(() => ({
   connectMock: vi.fn<(transport: ConnectOverCDPTransport) => Promise<Browser>>(),
 }));
-vi.mock("./playwright-core.runtime.js", () => ({
+vi.mock("./playwright-core.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./playwright-core.runtime.js")>()),
   getPlaywrightCore: () => ({ chromium: { connectOverCDP: connectMock } }),
 }));
 afterEach(() => {

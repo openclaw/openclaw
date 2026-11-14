@@ -44,7 +44,7 @@ import { prepareMeetPlaybackObservation } from "./pw-session-meet-playback.js";
 import {
   isConnectionScopedTargetId,
   markConnectionScopedBrowser,
-  pageTargetInfo,
+  pageTargetId,
 } from "./pw-session-page-target.js";
 import {
   bindRoleRefsTarget,
@@ -534,7 +534,7 @@ async function getAccessiblePages(opts: {
         return { page, targetId: null };
       }
       ensurePageState(page);
-      const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+      const targetId = await pageTargetId(page).catch(() => null);
       return { page, targetId };
     }),
   );
