@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { Type } from "typebox";
@@ -336,7 +337,6 @@ export function createImageGenerateTool(
           model,
           options,
           signal,
-          findDuplicate: createImageGenerateDuplicateGuardResult,
           acquire: (config) =>
             acquireMediaGenerationToolProviders("imageGenerationProviders", {
               cfg: config,
@@ -416,35 +416,6 @@ export function createImageGenerateTool(
                 message: `count must be between 1 and ${MAX_COUNT}`,
                 max: MAX_COUNT,
               }) ?? DEFAULT_COUNT;
-            const requestKey = buildMediaGenerationRequestKey({
-              tool: "image_generate",
-              prompt,
-              provider:
-                selectedProvider?.id ?? explicitModelRef?.provider ?? primaryModelRef?.provider,
-              model:
-                model !== undefined
-                  ? (explicitModelRef?.model ?? model)
-                  : (primaryModelRef?.model ??
-                    imageGenerationModelConfig.primary ??
-                    selectedProvider?.defaultModel),
-              count,
-              imageInputs,
-              size,
-              aspectRatio,
-              resolution: explicitResolution,
-              quality,
-              outputFormat,
-              background,
-              filename,
-              providerOptions,
-            });
-            const duplicateGuardResult = await createImageGenerateDuplicateGuardResult(
-              options?.agentSessionKey,
-              { prompt, requestKey, agentId: options?.requesterAgentId },
-            );
-            if (duplicateGuardResult) {
-              return { kind: "result" as const, result: duplicateGuardResult };
-            }
             signal?.throwIfAborted();
             acquired.assertOpen();
             if (selectedProvider) {
@@ -481,6 +452,11 @@ export function createImageGenerateTool(
               }),
             });
             const inputImages = loadedReferenceImages.map((entry) => entry.source);
+            const referenceInputs = inputImages.map(({ buffer, mimeType }) => ({
+              sha256: createHash("sha256").update(buffer).digest("hex"),
+              bytes: buffer.byteLength,
+              mimeType,
+            }));
             const modeCaps =
               inputImages.length > 0
                 ? selectedProvider?.capabilities.edit
@@ -499,6 +475,49 @@ export function createImageGenerateTool(
                   ?.length === 0)
                 ? undefined
                 : inferredResolution);
+            const requestKey = buildMediaGenerationRequestKey({
+              tool: "image_generate",
+              prompt,
+              provider:
+                selectedProvider?.id ?? explicitModelRef?.provider ?? primaryModelRef?.provider,
+              model:
+                model !== undefined
+                  ? (explicitModelRef?.model ?? model)
+                  : (primaryModelRef?.model ??
+                    imageGenerationModelConfig.primary ??
+                    selectedProvider?.defaultModel),
+              count,
+              imageInputs,
+              referenceInputs,
+              timeoutMs,
+              fallbacks:
+                model === undefined && imageGenerationModelConfig.fallbacks?.length
+                  ? imageGenerationModelConfig.fallbacks
+                  : undefined,
+              size,
+              aspectRatio,
+              resolution,
+              quality,
+              outputFormat,
+              background,
+              filename,
+              providerOptions,
+            });
+            const duplicateGuardResult = await createImageGenerateDuplicateGuardResult(
+              options?.agentSessionKey,
+              { prompt, requestKey, agentId: options?.requesterAgentId },
+            );
+            if (duplicateGuardResult) {
+              return {
+                kind: "result" as const,
+                result: {
+                  ...duplicateGuardResult,
+                  details: { ...duplicateGuardResult.details, referenceInputs },
+                },
+              };
+            }
+            signal?.throwIfAborted();
+            acquired.assertOpen();
             return {
               kind: "task" as const,
               params: {
@@ -510,6 +529,7 @@ export function createImageGenerateTool(
 
                 detailExtras: {
                   ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
+                  referenceInputs,
                   ...(model ? { model } : {}),
                   ...(resolution ? { resolution } : {}),
                   ...(size ? { size } : {}),
@@ -610,6 +630,7 @@ export function createImageGenerateTool(
                     taskHandle,
                     details: {
                       ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
+                      referenceInputs,
                       requested,
                       outputs,
                       ...(filename ? { filename } : {}),

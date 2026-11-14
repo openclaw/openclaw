@@ -718,28 +718,32 @@ describePosix("explicit prior-CI admin landing", () => {
     expectNoIntent(f);
   });
 
-  it("lands one pinned REST squash and retains honest historical CI and scoped proof", () => {
-    const f = candidate();
-    const state = f.state();
-    state.priorCi.workflowPath = ".github/workflows/ci.yml@refs/heads/topic";
-    f.save(state);
-    const result = f.adminPriorCi(f.path);
-    expectResult(f, result, undefined, 1);
-    expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
-    expect(f.record()).toMatchObject({
-      phase: "complete",
-      route: "admin",
-      head: f.head,
-      priorCiAdmin: {
+  it.each(["workflow_dispatch", "pull_request"])(
+    "lands a pinned REST squash from historical %s CI",
+    (event) => {
+      const f = candidate();
+      const state = f.state();
+      state.priorCi.event = event;
+      state.priorCi.workflowPath = ".github/workflows/ci.yml@refs/heads/topic";
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      expectResult(f, result, undefined, 1);
+      expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
+      expect(f.record()).toMatchObject({
+        phase: "complete",
+        route: "admin",
         head: f.head,
-        priorHead: f.evidence.priorHead,
-        runId: 501,
-        runAttempt: 2,
-        dispatchTransport: "rest",
-      },
-    });
-    expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
-  });
+        priorCiAdmin: {
+          head: f.head,
+          priorHead: f.evidence.priorHead,
+          runId: 501,
+          runAttempt: 2,
+          dispatchTransport: "rest",
+        },
+      });
+      expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
+    },
+  );
 
   it.each([
     "head",
@@ -763,7 +767,7 @@ describePosix("explicit prior-CI admin landing", () => {
       delta: { deltaSha256: "0".repeat(64) },
     };
     const ciChanges: Record<string, Partial<typeof state.priorCi>> = {
-      "prior-run": { runHead: f.base },
+      "prior-run": { runHead: f.base, event: "pull_request" },
       "wrong-branch": { branch: "unrelated" },
       review: { reviewDecision: "REVIEW_REQUIRED" },
       "null-review": { reviewDecision: null },

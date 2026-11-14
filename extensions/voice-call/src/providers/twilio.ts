@@ -46,6 +46,21 @@ export interface TwilioProviderOptions {
 const TWILIO_CALL_NOT_IN_PROGRESS_CODE = 21220;
 const TWILIO_CALL_UPDATE_RETRY_DELAYS_MS = [250, 750] as const;
 
+function buildSpeechGather(webhookUrl: string, language?: string, turnToken?: string): string {
+  const actionUrl = new URL(webhookUrl);
+  if (turnToken) {
+    actionUrl.searchParams.set("turnToken", turnToken);
+  }
+  const locale = language || "en-US";
+  const redirectUrl = new URL(actionUrl);
+  redirectUrl.searchParams.set("flow", "listen");
+  // Consecutive silence callbacks have identical forms; give each Gather its own replay identity.
+  redirectUrl.searchParams.set("gatherToken", crypto.randomUUID());
+  redirectUrl.searchParams.set("language", locale);
+  return `<Gather input="speech" speechTimeout="auto" timeout="120" language="${escapeXml(locale)}" action="${escapeXml(actionUrl.toString())}" method="POST"></Gather>
+  <Redirect method="POST">${escapeXml(redirectUrl.toString())}</Redirect>`;
+}
+
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
     return verifiedRequestKey;
@@ -240,12 +255,15 @@ export class TwilioProvider implements VoiceCallProvider {
       const callIdFromQuery = normalizeOptionalString(ctx.query?.callId);
       const turnTokenFromQuery = normalizeOptionalString(ctx.query?.turnToken);
       const dedupeKey = createTwilioRequestDedupeKey(ctx, options?.verifiedRequestKey);
-      const event = this.normalizeEvent(params, {
+      let event = this.normalizeEvent(params, {
         callIdOverride: callIdFromQuery,
         dedupeKey,
         turnToken: turnTokenFromQuery,
         amdCallback: normalizeOptionalString(ctx.query?.type) === "amd",
       });
+      if (ctx.query?.flow === "listen" && event?.type === "call.answered") {
+        event = null;
+      }
 
       if (
         event?.direction === "inbound" &&
@@ -392,6 +410,15 @@ export class TwilioProvider implements VoiceCallProvider {
     }
     if (isStatusCallback) {
       return TwilioProvider.EMPTY_TWIML;
+    }
+    if (ctx.query?.flow === "listen") {
+      const webhookUrl = callSid ? this.callWebhookUrls.get(callSid) : undefined;
+      if (!webhookUrl) {
+        return TwilioProvider.EMPTY_TWIML;
+      }
+      return `<?xml version="1.0" encoding="UTF-8"?><Response>
+  ${buildSpeechGather(webhookUrl, normalizeOptionalString(ctx.query?.language), normalizeOptionalString(ctx.query?.turnToken))}
+</Response>`;
     }
     if (direction === "inbound") {
       if (this.callStreamMap.size > 0) {
@@ -591,12 +618,15 @@ export class TwilioProvider implements VoiceCallProvider {
     );
 
     const pollyVoice = mapVoiceToPolly(input.voice);
+    const gather = input.listenAfterPlayback
+      ? buildSpeechGather(webhookUrl, input.locale, input.turnToken)
+      : `<Gather input="speech" speechTimeout="auto" action="${escapeXml(webhookUrl)}" method="POST">
+    <Say>.</Say>
+  </Gather>`;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${pollyVoice}" language="${input.locale || "en-US"}">${escapeXml(input.text)}</Say>
-  <Gather input="speech" speechTimeout="auto" action="${escapeXml(webhookUrl)}" method="POST">
-    <Say>.</Say>
-  </Gather>
+  ${gather}
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "playTts");
@@ -695,15 +725,8 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   async startListening(input: StartListeningInput): Promise<void> {
-    const actionUrl = new URL(this.requireCallWebhookUrl(input.providerCallId));
-    if (input.turnToken) {
-      actionUrl.searchParams.set("turnToken", input.turnToken);
-    }
-
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(actionUrl.toString())}" method="POST">
-  </Gather>
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response>
+  ${buildSpeechGather(this.requireCallWebhookUrl(input.providerCallId), input.language, input.turnToken)}
 </Response>`;
 
     await this.updateLiveCallTwiml(input.providerCallId, twiml, "startListening");

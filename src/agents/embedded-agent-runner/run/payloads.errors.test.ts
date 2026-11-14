@@ -16,11 +16,13 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveCronPayloadOutcome } from "../../../cron/isolated-agent/helpers.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   buildPayloads,
   makePayloadAssistant as makeAssistant,
@@ -104,6 +106,33 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
 });
 
 describe("buildEmbeddedRunPayloads", () => {
+  it.each(["selected", "earlier", "aborted"] as const)(
+    "binds provider-error observations only to the selected assistant (%s)",
+    (source) => {
+      const assistant = makeAssistant({
+        content: [],
+        stopReason: "error",
+        errorMessage: "400 invalid request schema",
+      });
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: false,
+      });
+      const payloads = buildPayloads({
+        lastAssistant: assistant,
+        currentAssistant: source === "earlier" ? null : assistant,
+        agentTerminal,
+        runAborted: source === "aborted",
+        isCronTrigger: true,
+      });
+      const outcome = resolveCronPayloadOutcome({ payloads });
+      expect(outcome.hasFatalStructuredErrorPayload).toBe(true);
+      expect(outcome.agentTerminal).toEqual(source === "selected" ? agentTerminal : undefined);
+    },
+  );
+
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
   const REDACTED_TEST_MODEL_FAILURE_TEXT =

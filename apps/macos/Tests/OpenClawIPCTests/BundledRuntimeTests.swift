@@ -563,19 +563,25 @@ struct BundledRuntimeTests {
                 .filter { $0 != "bun" }
         }
 
+        func stage(_ runtime: BundledRuntime, published: Bool) async throws {
+            let prepared = try await runtime.prepareServiceBun()
+            defer { prepared.discard() }
+            try prepared.publish()(published)
+        }
+
         // A first move can fail after the installer published the service; its executable must remain.
-        try await old.stageServiceBun()(false)
+        try await stage(old, published: false)
         #expect(serviceMatches(old))
         // A real file, not a link: macOS records the resolved executable path for privacy grants.
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: service.path)) == nil)
         #expect(FileManager.default.isExecutableFile(atPath: service.path))
         #expect(serviceMatches(old))
 
-        try await new.stageServiceBun()(false)
+        try await stage(new, published: false)
         #expect(serviceMatches(old))
         #expect(try leftovers().isEmpty)
 
-        try await new.stageServiceBun()(true)
+        try await stage(new, published: true)
         #expect(serviceMatches(new))
         #expect(try leftovers().isEmpty)
 

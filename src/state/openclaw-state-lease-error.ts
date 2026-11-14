@@ -1,6 +1,7 @@
 import { extractErrorCode, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
-import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+import { formatStateLeaseLoss } from "../shared/state-lease-loss-format.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 
 /** Renewal diagnostics omit error prose, stacks, and database paths. */
 export function formatLeaseRenewalError(error: unknown): string {
@@ -100,7 +101,7 @@ export function createOpenClawStateLeaseLostError(
   const diagnostic =
     loss?.reason === "expired" && lateByMs > 0 ? { ...loss, renewalTimerLateByMs: lateByMs } : loss;
   return new OpenClawStateLeaseError(
-    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}`,
+    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}; retry the operation`,
     { code: "OPENCLAW_STATE_LEASE_LOST", cause, loss: diagnostic },
   );
 }

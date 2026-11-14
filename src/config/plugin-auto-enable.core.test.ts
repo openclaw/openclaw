@@ -1,13 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as pluginNormalization from "../plugins/config-normalization-shared.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import {
   applyPluginAutoEnable,
+  applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates,
 } from "./plugin-auto-enable.js";
 import {
@@ -55,6 +59,7 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
 });
 
 const setupRegistryMock = vi.hoisted(() => ({
+  resolvePluginSetupRegistryAsync: vi.fn(async (_params: { pluginIds?: readonly string[] }) => {}),
   resolvePluginSetupAutoEnableReasons: vi.fn(
     (params: { config?: OpenClawConfig; pluginIds?: readonly string[] }) => {
       const pluginIds = new Set(params.pluginIds ?? []);
@@ -72,7 +77,26 @@ const setupRegistryMock = vi.hoisted(() => ({
 vi.mock("../plugins/setup-registry.js", () => ({
   clearPluginSetupRegistryCache: vi.fn(),
   resolvePluginSetupAutoEnableReasons: setupRegistryMock.resolvePluginSetupAutoEnableReasons,
+  resolvePluginSetupRegistryAsync: setupRegistryMock.resolvePluginSetupRegistryAsync,
 }));
+
+it("prepares the selected setup probes before applying auto-enable policy", async () => {
+  const prepared = createDeferred();
+  setupRegistryMock.resolvePluginSetupRegistryAsync.mockReturnValueOnce(prepared.promise);
+  setupRegistryMock.resolvePluginSetupAutoEnableReasons.mockClear();
+  const operation = applyPluginAutoEnableAsync({
+    config: { plugins: { entries: { browser: {} } } },
+    manifestRegistry: makeRegistry([{ id: "browser", channels: [] }]),
+    env: makeIsolatedEnv(),
+  });
+  expect(setupRegistryMock.resolvePluginSetupRegistryAsync).toHaveBeenCalledWith(
+    expect.objectContaining({ pluginIds: ["browser"] }),
+  );
+  expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).not.toHaveBeenCalled();
+  prepared.resolve();
+  await operation;
+  expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalled();
+});
 
 const env = makeIsolatedEnv();
 type ManifestPlugin = Parameters<typeof makeRegistry>[0][number];
@@ -124,6 +148,48 @@ afterAll(() => resetPluginAutoEnableTestState());
 afterEach(() => vi.restoreAllMocks());
 
 describe("applyPluginAutoEnable core", () => {
+  it.each([
+    { frozen: false, rewrite: false, normalizations: 8 },
+    { frozen: true, rewrite: false, normalizations: 1 },
+    { frozen: true, rewrite: true, normalizations: 9 },
+  ])("reuses plugin policy during materialization: %j", ({ frozen, rewrite, normalizations }) => {
+    const ids = ["clickclack", "discord", "nextcloud-talk", "reef", "slack", "x"];
+    const entries = Object.fromEntries(
+      [...ids, ...Array.from({ length: 33 }, (_, i) => `fixture-${i}`)].map((id) => [
+        id,
+        { enabled: id === ids[0] && rewrite ? undefined : true },
+      ]),
+    );
+    const config: OpenClawConfig = {
+      channels: Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
+      plugins: { entries: { ...entries, "team-reports": { enabled: false } } },
+    };
+    if (frozen) {
+      freezeTrustedJsonSnapshot(config);
+    }
+    const normalize = vi.spyOn(pluginNormalization, "normalizePluginsConfigWithResolverCore");
+    const params = {
+      config,
+      env,
+      candidates: ids.map((id) => ({
+        kind: "channel-configured" as const,
+        pluginId: id,
+        channelId: id,
+      })),
+      manifestRegistry: makeRegistry(ids.map((id) => ({ id, channels: [id] }))),
+    };
+    for (let run = 0; run < 8; run++) {
+      const result = materializePluginAutoEnableCandidates(params);
+      expect(result.config.plugins?.entries?.clickclack?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["team-reports"]?.enabled).toBe(false);
+      if (!rewrite) {
+        expect(result.config).toBe(config);
+      }
+      expect(result.changes).toHaveLength(rewrite ? 1 : 0);
+    }
+    expect(normalize).toHaveBeenCalledTimes(normalizations);
+  });
+
   it("keeps first-write catalog opt-outs inactive under a restrictive allowlist", () => {
     const config = initializeNativeSessionCatalogPreferences({ plugins: { allow: ["existing"] } });
     const result = applyPluginAutoEnable({ config, env, manifestRegistry: nativeCatalogRegistry });

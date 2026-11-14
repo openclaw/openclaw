@@ -153,12 +153,13 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-node-reject-",
     );
+    // iOS uses the node-only setup handoff; Android remains approval-bound for this profile.
     const client = {
-      id: "openclaw-ios",
+      id: "openclaw-android",
       version: "2026.3.30",
-      platform: "iOS 26.3.1",
+      platform: "Android 16",
       mode: "node",
-      deviceFamily: "iPhone",
+      deviceFamily: "Android",
     };
 
     try {

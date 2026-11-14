@@ -183,7 +183,6 @@ describe("chat pane header", () => {
     expect(menu.querySelector('[data-value="layout:side-panel"]')).toBeNull();
     await selectNativeMenu(menu, "layout:close-pane");
     expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
-    await selectNativeMenu(menu, "compact:open-advanced");
     await selectNativeMenu(menu, "compact:open-open-in");
     await selectNativeMenu(menu, "split-below");
     expect(onSplitDown).toHaveBeenCalledExactlyOnceWith("pane-1");
@@ -654,7 +653,7 @@ describe("chat pane header", () => {
     expect(indicator.getAttribute("aria-label")).toBe("Incognito");
     expect(indicator.textContent?.trim()).toBe("");
     expect(tooltip.content).toBe(
-      "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+      "History expires after 24 hours or a Gateway restart, whichever comes first.",
     );
     expect(tooltip.openOnClick).toBe(true);
     expect(mountHeader().container.querySelector(".chat-pane__incognito")).toBeNull();

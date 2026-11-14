@@ -7,7 +7,7 @@ import { isMalformedApiKeyInput } from "../../agents/auth-profiles/credential-st
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderNonInteractiveApiKeyResult } from "../../plugins/provider-authentication.types.js";
+import type { ProviderNonInteractiveApiKeyResult } from "../../plugins/provider-auth-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { rejectOnboardingOption } from "../onboard-options.js";

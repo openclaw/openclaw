@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock, reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import {
@@ -23,6 +23,7 @@ import {
   pluginMethods,
   readOnlyConnectResponse,
   server,
+  setupPluginPage as setup,
   setupPluginsE2e,
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
@@ -39,22 +40,6 @@ const renamedPlugin = (plugin: (typeof discoveryResult.items)[number], name: str
   ...plugin,
   catalog: { ...plugin.catalog, name },
 });
-
-async function setup(
-  methodResponses: Record<string, unknown> = {},
-  options: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
-  viewport?: Parameters<typeof newContext>[0],
-) {
-  const context = await newContext(viewport);
-  onTestFinished(() => context.close());
-  const page = await context.newPage();
-  const gateway = await installMockGateway(page, {
-    featureMethods: pluginMethods,
-    methodResponses: { ...pluginMethodResponses(), ...methodResponses },
-    ...options,
-  });
-  return { page, gateway, context };
-}
 
 async function expectBrowse(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,

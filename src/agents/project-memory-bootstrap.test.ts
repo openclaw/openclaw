@@ -1,6 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import type { MemoryProviderHandle, MemorySearchHit } from "../plugins/memory-provider-types.js";
+import type {
+  MemoryProviderHandle,
+  MemorySearchHit,
+} from "../plugins/memory-provider-runtime-types.js";
 import {
   filterProjectScopedCuratedContextFiles,
   prepareProjectMemoryBootstrap,
@@ -442,6 +446,10 @@ it.each(["legacy", "native", "open", "close"])(
       runtimeMocks.listCurated.mockResolvedValue({ hits: nativeEntries });
     }
     const caller = new AbortController();
+    const outcomes: unknown[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => outcomes.push(event), {
+      include: ["diagnostic.phase.completed"],
+    });
     let result: string[] | undefined;
     const preparation = bootstrap({
       context: {
@@ -457,6 +465,13 @@ it.each(["legacy", "native", "open", "close"])(
       await vi.advanceTimersByTimeAsync(1_000);
       expect(result).toEqual([]);
       expect(logMocks.warn).toHaveBeenCalledWith(expect.stringContaining("1000ms budget"));
+      expect(outcomes).toEqual([
+        expect.objectContaining({
+          type: "diagnostic.phase.completed",
+          name: "project-memory.recall",
+          details: { outcome: "skipped", reason: "budget_exceeded", budgetMs: 1_000 },
+        }),
+      ]);
       expect(caller.signal.aborted).toBe(false);
       caller.abort();
       if (stage !== "legacy") {
@@ -465,6 +480,7 @@ it.each(["legacy", "native", "open", "close"])(
         expect(() => context?.assertCurrent()).toThrow();
       }
     } finally {
+      stop();
       pending.resolve();
       await preparation;
       if (stage !== "legacy") {

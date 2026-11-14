@@ -1,6 +1,7 @@
 import { createMemo, Show } from "solid-js";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -94,7 +95,11 @@ export function CreationComposer(props: {
         const questions = createComposerQuestions("creation-" + composer.id, prepared);
         const error = () => {
           owner()?.read();
-          return composer.error;
+          return composer.error ?? composer.recovery?.error;
+        };
+        const errorAction = () => {
+          owner()?.read();
+          return composer.recovery;
         };
         return (
           <section
@@ -103,9 +108,24 @@ export function CreationComposer(props: {
             aria-label={t("newSession.followUps")}
           >
             <Show when={error()}>
-              <div class="callout danger" role="alert">
+              <InlineAlert
+                tone="danger"
+                role="alert"
+                action={
+                  <Show when={errorAction()}>
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      disabled={errorAction()?.pending}
+                      onClick={() => errorAction()?.retry()}
+                    >
+                      {errorAction()?.label}
+                    </button>
+                  </Show>
+                }
+              >
                 {error()}
-              </div>
+              </InlineAlert>
             </Show>
             <ChatComposer
               {...prepared()}

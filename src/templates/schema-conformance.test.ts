@@ -36,14 +36,30 @@ describe("portable Template schema conformance", () => {
     ).toBe(true);
   });
 
+  it("accepts automations and rejects retired or mixed cronJobs declarations", () => {
+    const job = {
+      id: "daily",
+      schedule: { cron: "0 9 * * *", timezone: "UTC" },
+      session: "isolated",
+      message: "Summarize status.",
+    };
+    expect(parseTemplateManifest({ ...baseManifest, automations: [job] })).toMatchObject({
+      ok: true,
+      manifest: { automations: [job] },
+    });
+    for (const declarations of [{ cronJobs: [job] }, { automations: [], cronJobs: [] }]) {
+      expectInvalid(parseTemplateManifest({ ...baseManifest, ...declarations }), "$.cronJobs");
+    }
+  });
+
   it("requires exact package versions", () => {
     const result = parseTemplateManifest({
       ...baseManifest,
-      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "latest" }],
+      skills: [{ ref: "demo", version: "latest" }],
     });
 
     expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toBe("$.packages[0].version");
+    expect(result.diagnostics[0]?.path).toBe("$.skills[0].version");
   });
 
   it("requires pinned package-manager MCP commands and safe environment keys", () => {
@@ -121,7 +137,7 @@ describe("portable Template schema conformance", () => {
       { ...valid, delivery: { mode: "none", channel: "last" } },
       { ...valid, delivery: { mode: "announce" } },
     ]) {
-      expect(parseTemplateManifest({ ...baseManifest, cronJobs: [cronJob] }).ok).toBe(false);
+      expect(parseTemplateManifest({ ...baseManifest, automations: [cronJob] }).ok).toBe(false);
     }
   });
 });

@@ -81,13 +81,13 @@ digests already carry the active runtime agent context.
 
 Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 ### `wiki doctor`
 
 Run wiki health checks and report actionable fixes. Exits non-zero when unhealthy.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 Typical issues:
 
@@ -221,6 +221,13 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+For `apply metadata`, each supplied `--source-id`, `--contradiction`, or
+`--question` list replaces the entire stored list. Read the page with `wiki get`
+first and repeat each flag for every value you want to retain; omitted lists
+stay unchanged. Successful output reports before/after counts for supplied lists
+(`metadataListChanges` in JSON). To clear a list explicitly, use `wiki_apply`
+with an empty array; the CLI has no list-clear flag.
+
 Metadata updates preserve comments and numeric spellings on untouched keys in ordinary string-keyed YAML mappings. Pages containing anchors, aliases, explicit tags, or non-string keys retain the existing value-rendering behavior instead; their parsed values remain authoritative, but source formatting is not preserved.
 
 Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
@@ -271,7 +278,7 @@ Export files and existing source pages must resolve to regular files. Named pipe
 and other special files are rejected without waiting for data. Replace the affected
 path with a regular file and retry.
 
-Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
+Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. Markers inside transcript code blocks or inline code remain part of the transcript and do not prevent it from refreshing. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`
 

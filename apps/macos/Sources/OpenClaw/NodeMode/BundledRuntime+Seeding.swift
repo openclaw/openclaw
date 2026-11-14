@@ -107,39 +107,84 @@ extension BundledRuntime {
         try fileManager.copyItem(at: source, to: destination)
     }
 
-    /// Publishes this build's Bun at `serviceBun` with an atomic rename; a running service keeps its
-    /// old inode. Call the result with whether the installed service now runs this build: if it does
-    /// not, the previous clone comes back so that service never restarts on another build's Bun.
-    /// Without a previous clone the new one stays; nothing else names the path, and deleting it could
-    /// strand a service the installer published before failing.
+    struct PreparedServiceBun: Sendable {
+        struct Identity: Equatable, Sendable {
+            let device: dev_t
+            let inode: ino_t
+
+            static func read(_ url: URL) throws -> Self? {
+                var info = stat()
+                guard lstat(url.path, &info) == 0 else {
+                    if errno == ENOENT { return nil }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                return Self(device: info.st_dev, inode: info.st_ino)
+            }
+        }
+
+        let staged: URL
+        let target: URL
+        let backup: URL?
+        let previous: Identity?
+        let replacement: Identity
+        let matchesPrevious: Bool
+
+        func discard() {
+            try? FileManager.default.removeItem(at: self.staged)
+            if let backup { try? FileManager.default.removeItem(at: backup) }
+        }
+
+        /// Call synchronously after the installation's live authority checks. All copying is
+        /// already finished; a running service keeps its old inode across this atomic replacement.
+        func publish() throws -> @Sendable (_ published: Bool) -> Void {
+            guard try Identity.read(self.target) == self.previous else {
+                throw GatewayHostingError(message: "The Gateway service executable changed before installation; retry.")
+            }
+            if self.matchesPrevious { return { _ in } }
+            guard rename(self.staged.path, self.target.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return { published in
+                // With no previous executable, retain the new one: install may have partially succeeded.
+                guard let backup else { return }
+                defer { try? FileManager.default.removeItem(at: backup) }
+                // Settlement owns only this attempt's executable, never a later replacement.
+                guard !published, (try? Identity.read(self.target)) == self.replacement else { return }
+                _ = rename(backup.path, self.target.path)
+            }
+        }
+    }
+
+    /// Prepare privately; only the install owner may publish after rechecking live authority.
     @concurrent
-    func stageServiceBun() async throws -> @Sendable (_ published: Bool) -> Void {
+    func prepareServiceBun() async throws -> PreparedServiceBun {
         let fileManager = FileManager.default
         let target = self.serviceBun
-        if fileManager.contentsEqual(atPath: target.path, andPath: self.bun.path) { return { _ in } }
         let directory = target.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let staged = directory.appendingPathComponent(".bun-\(UUID().uuidString)")
-        defer { try? fileManager.removeItem(at: staged) }
-        try Self.cloneRuntimeTree(from: self.bun, to: staged)
-        let backup: URL? = if fileManager.fileExists(atPath: target.path) {
-            directory.appendingPathComponent(".bun-previous-\(UUID().uuidString)")
-        } else {
-            nil
-        }
-        if let backup { try Self.cloneRuntimeTree(from: target, to: backup) }
-        guard rename(staged.path, target.path) == 0 else {
-            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        let previous = try PreparedServiceBun.Identity.read(target)
+        let backup = previous.map { _ in directory.appendingPathComponent(".bun-previous-\(UUID().uuidString)") }
+        do {
+            try Self.cloneRuntimeTree(from: self.bun, to: staged)
+            if let backup { try Self.cloneRuntimeTree(from: target, to: backup) }
+            guard let replacement = try PreparedServiceBun.Identity.read(staged) else {
+                throw POSIXError(.ENOENT)
+            }
+            let matchesPrevious = backup.map {
+                fileManager.contentsEqual(atPath: $0.path, andPath: staged.path)
+            } ?? false
+            return PreparedServiceBun(
+                staged: staged,
+                target: target,
+                backup: backup,
+                previous: previous,
+                replacement: replacement,
+                matchesPrevious: matchesPrevious)
+        } catch {
+            try? fileManager.removeItem(at: staged)
             if let backup { try? fileManager.removeItem(at: backup) }
             throw error
-        }
-        return { published in
-            guard let backup else { return }
-            if published {
-                try? FileManager.default.removeItem(at: backup)
-            } else {
-                _ = rename(backup.path, target.path)
-            }
         }
     }
 

@@ -23,6 +23,13 @@ SecurityAgent prompt during unattended work. The primary Gateway route still
 comes from the normal environment/config endpoint. Combine it with
 `--attach-only` when an external process owns the local Gateway.
 
+Gateway ownership and GUI presentation are independent: `--attach-only` does
+not require `--background-only` or `--no-activate`. Use those presentation flags
+only for an intentional unattended or nonactivating launch, not merely because
+an agent task runs in the background or should stay quiet. When an interactive
+app relaunch is authorized, preserve its normal windows, onboarding, and
+permission UI unless a different presentation mode is intended.
+
 For background Accessibility automation and window-ID capture, launch the app
 binary with `--no-activate --chat` (or `--dashboard`). Windows remain behind the
 active app; macOS permission/file dialogs and interactive Keychain access are
@@ -87,6 +94,39 @@ The disposable runner owns default preferences and system-service state; a named
 profile gets a fresh preferences domain. The launcher itself is not a sandbox.
 Local `scripts/prepush-ci.sh` keeps Swift lint/build checks but reports native
 test proof as incomplete and requires the exact commit's `macos-swift` CI result.
+
+## Onboarding development
+
+The hosting question has two routes: **On this Mac** and **On another computer**.
+The remote finder reuses network discovery, trusted connection settings, and
+browser Gateway sign-in. Discovery advertisements never establish trust.
+Local setup retains the runtime and live inference gates, then offers optional
+OpenClaw ID setup before the final page. **Set up later** starts no Gateway.
+
+Native OpenClaw ID enrollment is not implemented in this build. The production
+`OnboardingOpenClawIDService` reports that limitation; it cannot report a linked
+claw or an approved device. The native views support injected service results
+for design/testing. Recovery-kit saving, account sign-in, and native node/operator
+transports still need their credential-owning implementations. Node approval and
+chat approval are separate stages: the six-digit node code does not grant chat
+or Gateway administration. Existing address/discovery routes retain their own
+authentication instead of displaying a fabricated OpenClaw ID ceremony.
+
+`OnboardingRenderTests` captures the real page views without launching the app,
+using the default 630×752-point content rectangle and production mascot metrics.
+The 535-point page area vertically centers shorter pages in production; the
+resulting title gaps are not compressed for screenshots. Navigation is omitted
+rather than presenting an unverified connection as complete. The evidence label
+sits below the content rectangle.
+`OnboardingOpenClawIDRenderTests` captures the actual 574-point-wide sheet view
+at its intrinsic height, including Close and without an onboarding mascot. Its
+synthetic service states and missing dependencies are labeled explicitly; they
+are not successful enrollment evidence. Both are opt-in through
+`OPENCLAW_ONBOARDING_RENDER_DIR` and require `CFFIXED_USER_HOME` plus an unreadable
+`OPENCLAW_ONBOARDING_DENIED_FILE` canary. Use the native render sandbox
+(`scripts/macos-health-render.sb`) with private home/state/output directories;
+never treat those environment variables alone as isolation. No Screen Recording
+permission is required for NSHostingView bitmap capture.
 
 ## Packaging flows
 

@@ -80,6 +80,12 @@ Direct Anthropic Messages append-only replay also keeps failed and recovered
 assistant frames separate, along with consecutive user turns. Strict routes
 retain their role-merging behavior.
 
+User-row merging happens at submission, after the current input is resolved.
+Runtime-context carriers and operator updates remain separate from user input,
+preserving their authority and cache boundaries. Bedrock Converse still merges
+all adjacent user rows to satisfy its alternation requirement, including `/btw`
+requests. History limits count adjacent input rows as one turn on merging routes.
+
 ## Global rule: runtime context is not user transcript
 
 Runtime/system context can be added to the model prompt for a turn, but it is
@@ -326,7 +332,7 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
-- Prefix-binding Claude models, such as Fable 5.1, persist runtime-context carriers
+- Prefix-binding Claude models persist runtime-context carriers
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
@@ -335,8 +341,12 @@ inter-session user turns that only have provenance metadata.
   authority their protocol supports; Anthropic-family and external plugin adapters
   retain the labeled user representation, while OpenAI-compatible adapters use
   system or developer authority.
-  Carriers are excluded from chat history and compaction summarization. Other
-  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  Every Claude model binds the prefix except a closed list of older generations
+  (Claude 3, Claude 4.x, Opus 5, Sonnet 5, Fable 5, Mythos 5, Mythos Preview), so
+  newly released Claude models, such as Fable 5.2, are prefix-binding without an
+  OpenClaw update.
+  Carriers are excluded from chat history and compaction summarization. Those
+  older Claude models and Anthropic-compatible models keep transient carriers, avoiding
   repeated cache-read charges and context use for old carriers when nothing binds
   the prefix.
 - Tool result pairing repair and synthetic tool results.

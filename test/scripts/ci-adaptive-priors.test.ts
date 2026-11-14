@@ -22,9 +22,23 @@ const env = {
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function bareRepository() {
+  const root = tempDirs.make("ci-prior-tree-");
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, {
+      cwd: root,
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  git(["init", "--bare"]);
+  return { root, git };
+}
+
 function fixture(
   options: {
     artifacts?: number;
+    auditCli?: boolean;
     compact?: boolean;
     consumerFork?: boolean;
     wrongConsumer?: boolean;
@@ -88,6 +102,14 @@ function fixture(
     digest: `sha256:${options.digestMismatch ? "0".repeat(64) : sha256(archive)}`,
     workflow_run: { id: run.id, head_sha: revision },
   }));
+  if (options.auditCli) {
+    artifacts.push({
+      ...artifacts[0]!,
+      id: 999,
+      name: "ci-test-observations-audit-cli-20-1-0",
+      created_at: new Date(Date.parse(cutoff) - 1_000).toISOString(),
+    });
+  }
   const requests: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -147,15 +169,7 @@ function fixture(
 
 describe("adaptive CI prior restore", () => {
   it.each([486, 599, 600])("compares %i paths without the prior commit locally", async (count) => {
-    const root = tempDirs.make("ci-prior-tree-");
-    const git = (args: string[], input?: string) =>
-      execFileSync("git", args, {
-        cwd: root,
-        input,
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
-    git(["init", "--bare"]);
+    const { root, git } = bareRepository();
     const blob = git(["hash-object", "-w", "--stdin"], "content");
     const paths = Array.from({ length: count - 6 }, (_, index) => `file-${index}`);
     const entries = [
@@ -244,11 +258,31 @@ describe("adaptive CI prior restore", () => {
     },
     { padding: "x".repeat(32 * 1024 * 1024) },
   ])("rejects incomplete or invalid large-diff trees ($truncated)", async (change) => {
-    const f = fixture({
-      comparison: { files: Array.from({ length: 300 }, () => ({ filename: "partial" })) },
-      treeResponse: { sha: tree, truncated: false, tree: [], ...change },
-    });
-    expect((await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl })).candidates).toEqual([]);
+    const { root, git } = bareRepository();
+    const headTree = git(["mktree"], "");
+    const head = git(
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit-tree",
+        headTree,
+      ],
+      "fixture\n",
+    );
+    git(["update-ref", "HEAD", head]);
+    const restore = (treeChange: Record<string, unknown> = {}) => {
+      const f = fixture({
+        checkoutRevision: head,
+        comparison: { files: Array.from({ length: 300 }, () => ({ filename: "partial" })) },
+        treeResponse: { sha: tree, truncated: false, tree: [], ...treeChange },
+      });
+      return restoreCiAdaptivePriors({ env, repositoryRoot: root, fetchImpl: f.fetchImpl });
+    };
+    // Keep the valid diff below the path limit so only the changed guard can reject it.
+    expect((await restore()).candidates).toHaveLength(2);
+    expect((await restore(change)).candidates).toEqual([]);
   });
 
   it("retains verified observations from a failed workflow without admitting cancelled runs", async () => {
@@ -269,7 +303,7 @@ describe("adaptive CI prior restore", () => {
   });
 
   it.each([false, true])("restores bounded source-bound archives (compact=%s)", async (compact) => {
-    const f = fixture({ artifacts: 3, compact });
+    const f = fixture({ artifacts: 3, compact, auditCli: true });
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });
     expect(bundle.consumer).toEqual({
       runId: "30",
@@ -281,6 +315,7 @@ describe("adaptive CI prior restore", () => {
     expect(bundle.candidates).toHaveLength(4);
     expect(bundle.fallbackReasons).toEqual([]);
     expect(f.requests.filter((request) => request.endsWith("/zip"))).toHaveLength(2);
+    expect(f.requests.some((request) => request.includes("/artifacts/999/"))).toBe(false);
     expect(f.requests.filter((request) => request.includes("/compare/"))).toHaveLength(1);
     expect(bundle.candidates[0]).toEqual({
       artifactId: 102,
@@ -311,7 +346,10 @@ describe("adaptive CI prior restore", () => {
     ["archive digest", { digestMismatch: true }],
     ["completion after cutoff", { updatedAt: later }],
     ["divergent history", { comparison: { merge_base_commit: { sha: "c".repeat(40) } } }],
-    ["wrong comparison base", { comparison: { base_commit: { sha: "c".repeat(40) } } }],
+    [
+      "wrong comparison base",
+      { comparison: { base_commit: { sha: "c".repeat(40), commit: { tree: { sha: tree } } } } },
+    ],
     ["behind comparison", { comparison: { status: "behind", behind_by: 1 } }],
     [
       "saturated comparison",
@@ -361,6 +399,37 @@ describe("adaptive CI prior restore", () => {
     });
     expect(failed.candidates).toEqual([]);
     expect(failed.fallbackReasons).toEqual(["restore-unavailable"]);
+    expect(failed.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "metadata-unavailable",
+      status: 503,
+    });
     expect(calls).toBe(1);
+  });
+
+  it("distinguishes invalid consumer metadata from transport failure without retaining error text", async () => {
+    const invalid = fixture({ wrongConsumer: true });
+    const rejected = await restoreCiAdaptivePriors({ env, fetchImpl: invalid.fetchImpl });
+    expect(rejected.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "consumer-run-unavailable",
+      status: null,
+    });
+    const failed = await restoreCiAdaptivePriors({
+      env,
+      fetchImpl: async () => {
+        throw new Error(`transport error with ${env.GITHUB_TOKEN}`);
+      },
+    });
+    expect(failed.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "request-failed",
+      status: null,
+    });
+    for (const bundle of [rejected, failed]) {
+      expect(bundle.cutoffAt).toBeNull();
+      expect(bundle.candidates).toEqual([]);
+      expect(JSON.stringify(bundle)).not.toContain(env.GITHUB_TOKEN);
+    }
   });
 });

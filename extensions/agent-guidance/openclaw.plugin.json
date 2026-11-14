@@ -45,5 +45,9 @@
     "agents": { "label": "Agent IDs", "help": "Only these exact agent IDs receive guidance." },
     "prepend": { "label": "Prepend files", "help": "Relative files added before the system prompt. Reload after edits." },
     "append": { "label": "Append files", "help": "Relative files added after the system prompt. Reload after edits." }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan one shared instruction file for my agents.",
+    "Draft a short shared working guide for my agents."
+  ]
 }

@@ -14,6 +14,7 @@ on:
       # CI planners are Linux-owned; retain inputs used by native worker preparation.
       - "!scripts/lib/ci-*.mts"
       - "!scripts/lib/ci-*.mjs"
+      - "scripts/lib/ci-adaptive-markdown.mjs"
       - "scripts/lib/ci-test-timings.mts"
       - "scripts/lib/ci-test-timings-schema.mts"
       - "scripts/lib/ci-test-timings-refit.mts"
@@ -32,14 +33,20 @@ on:
       - "test/scripts/pr-materialized-anchor.test.ts"
       - "test/scripts/pr-operation-lock.test.ts"
       - "test/scripts/pr-git-invocation.test.ts"
+      - "test/scripts/package-mac-dist.test.ts"
+      - "scripts/package-mac-dist.sh"
+      - "scripts/notarize-mac-artifact.sh"
+      - "src/infra/directory-walk.ts"
       - "!test/scripts/pr-ci-sweeper*"
       - "test/scripts/exited-descendant-reaper.test-support.ts"
       - "test/helpers/**"
       - "!test/helpers/**/*.test.ts"
       - "test/vitest/**"
+      - "config/ci-adaptive-markdown.json"
       - "test/setup*.ts"
       - "test/test-home-policy.mts"
       - "src/test-utils/**"
+      - "!src/test-utils/**/*.test.ts"
       - "vitest.config.ts"
       - "tsconfig*.json"
       - "test/tsconfig.json"
@@ -126,17 +133,13 @@ jobs:
       - name: Test native Darwin process identity
         run: python3 -I -B test/scripts/pr-darwin-process-identity.test.py
 
-      - name: Test dependency cache lifetime
-        run: node scripts/run-vitest.mjs test/scripts/pr-dependency-cache.test.ts --maxWorkers=1
-
-      - name: Test PR wrappers
-        run: node scripts/run-vitest.mjs test/scripts/pr-wrappers.test.ts --maxWorkers=1
-
-      - name: Test materialized anchors
-        run: node scripts/run-vitest.mjs test/scripts/pr-materialized-anchor.test.ts --maxWorkers=1
-
-      - name: Test operation locks
-        run: node scripts/run-vitest.mjs test/scripts/pr-operation-lock.test.ts --maxWorkers=1
-
-      - name: Test selected Git with native GitHub CLI
-        run: node scripts/run-vitest.mjs test/scripts/pr-git-invocation.test.ts --maxWorkers=1
+      - name: Test native Darwin tooling
+        run: >-
+          node scripts/run-vitest.mjs
+          test/scripts/pr-dependency-cache.test.ts
+          test/scripts/pr-wrappers.test.ts
+          test/scripts/pr-materialized-anchor.test.ts
+          test/scripts/pr-operation-lock.test.ts
+          test/scripts/pr-git-invocation.test.ts
+          test/scripts/package-mac-dist.test.ts
+          --maxWorkers=1

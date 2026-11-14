@@ -15,8 +15,10 @@ import {
 } from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
+  createLinkedPackageSwapFixture,
   createPackageSwapFixture,
   createRetainedPackageSwap,
+  symlinkDirectory,
 } from "./package-update-swap.test-support.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -36,29 +38,6 @@ async function expectCompletion(
   expect(await transaction.complete({ activationVerified }, () => {})).toEqual(
     exitCode === undefined ? undefined : expect.objectContaining({ exitCode }),
   );
-}
-
-const symlinkDirectory = (target: string, link: string) =>
-  fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
-
-async function createLinkedPackageSwapFixture(rootDir: string, relative = false) {
-  const fixture = await createPackageSwapFixture(rootDir);
-  const checkout = path.join(rootDir, "checkout");
-  await fs.rename(fixture.packageRoot, checkout);
-  await fs.writeFile(path.join(checkout, "operator.txt"), "operator-owned checkout\n");
-  // A linked checkout can reference dependencies outside the package root.
-  await symlinkDirectory(rootDir, path.join(checkout, "external"));
-  await symlinkDirectory(
-    relative ? path.relative(path.dirname(fixture.packageRoot), checkout) : checkout,
-    fixture.packageRoot,
-  );
-  return {
-    ...fixture,
-    checkout,
-    target: await fs.readlink(fixture.packageRoot),
-    linkIdentity: (await fs.lstat(fixture.packageRoot)).ino,
-    checkoutIdentity: (await fs.stat(checkout)).ino,
-  };
 }
 
 function afterLinkObservation(root: string, action: () => Promise<void> | void) {

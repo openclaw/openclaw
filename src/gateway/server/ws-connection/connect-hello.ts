@@ -22,6 +22,7 @@ import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { NODE_MCP_ELICITATION_CAPABILITY } from "../../../infra/node-commands.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
+import { isOpenClawIdEnabled } from "../../../shared/openclaw-id-policy.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
 import {
   resolveRuntimeServiceBuildId,
@@ -49,6 +50,7 @@ import { projectHealthSummary } from "../../health/presentation.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { resolveOpenClawIdClawOrigin } from "../../openclaw-id/claw-origin.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
@@ -176,6 +178,14 @@ export async function sendGatewayHello(
   const controlUiLocation = ingress
     ? { origin: ingress.publicOrigin, basePath: controlUiBasePath }
     : resolveControlUiLinkLocation(context.configSnapshot);
+  // A browser that came through the OpenClaw ID tunnel is on the linked claw's origin, and the
+  // tunnel forwards paths unchanged. Member links use that address; controlUiUrl stays the public
+  // one because the tunnel admits members only.
+  const clawOrigin =
+    context.handler.ingressAttribution.kind === "openclaw-id-tunnel" &&
+    context.configSnapshot.gateway?.controlUi?.enabled !== false
+      ? resolveOpenClawIdClawOrigin()
+      : undefined;
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
@@ -217,10 +227,18 @@ export async function sendGatewayHello(
       connId,
     },
     features: {
-      methods: resolveBrowserAuthOrigin(context.browserOrigin)
-        ? gatewayMethods
-        : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
-      events,
+      methods: gatewayMethods.filter(
+        (method) =>
+          (method !== "mcp.authLogin" ||
+            Boolean(
+              resolveBrowserAuthOrigin(context.browserOrigin, { authPolicy: state.authPolicy }),
+            )) &&
+          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+            !method.startsWith("openclawId.")),
+      ),
+      events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
+        ? events
+        : events.filter((event) => !event.startsWith("openclawId.")),
       capabilities: [
         GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
@@ -285,6 +303,7 @@ export async function sendGatewayHello(
     ...(controlUiLocation
       ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
       : {}),
+    ...(clawOrigin ? { controlUiClawUrl: `${clawOrigin}${controlUiBasePath}` } : {}),
     ...(controlUiBasePath && context.configSnapshot.gateway?.controlUi?.enabled !== false
       ? { controlUiBasePath }
       : {}),
@@ -373,17 +392,20 @@ export async function sendGatewayHello(
     if (role === "operator") {
       const identity = resolveControlUiIdentity(context.configSnapshot, resolvedAuth);
       if (identity) {
-        snapshot.controlUiIdentityUrl = identity.url;
+        if (identity.url) {
+          snapshot.controlUiIdentityUrl = identity.url;
+        }
         if (identity.signal && !context.handler.isClosed()) {
           const signal = identity.signal;
-          const withdraw = () => {
-            setCloseCause("browser-identity-route-withdrawn");
+          const renew = () => {
+            setCloseCause("browser-identity-route-changed");
             close(1012, "browser identity route changed");
           };
           // Hello is frozen for this connection. Bind its route lifetime before
-          // delivery can await, so a vanished claim cannot remain advertised.
-          signal.addEventListener("abort", withdraw, { once: true });
-          context.handler.socket.once("close", () => signal.removeEventListener("abort", withdraw));
+          // delivery can await, so a vanished claim cannot remain advertised
+          // and a returning one cannot stay unadvertised.
+          signal.addEventListener("abort", renew, { once: true });
+          context.handler.socket.once("close", () => signal.removeEventListener("abort", renew));
         }
       }
     }

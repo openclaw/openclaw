@@ -1,4 +1,5 @@
 import {
+  createServer as createHttpServer,
   request as httpRequest,
   ServerResponse,
   type ClientRequest,
@@ -46,7 +47,7 @@ export function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSA
   res.end(body);
 }
 
-export function handleUpgradeRequest(
+function handleUpgradeRequest(
   handler: RequestHandler,
   request: IncomingMessage,
   head: Buffer,
@@ -106,6 +107,12 @@ export function handleUpgradeRequest(
     return;
   }
   handler(request, response, { stream, stopBuffering });
+}
+
+export function createRequestServer(handleRequest: RequestHandler) {
+  return createHttpServer(handleRequest).on("upgrade", (request, _socket, head) =>
+    handleUpgradeRequest(handleRequest, request, head),
+  );
 }
 
 /** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */
@@ -174,6 +181,7 @@ function sendSecretEgressRequest(
             statusCode,
             toForwardableResponseHeaders(upstreamResponse.headers),
           );
+          forward.response.flushHeaders();
         } catch {
           // This callback runs outside any caller's try block; a throw here
           // would exit the Gateway. Keep the failure on this one request.

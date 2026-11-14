@@ -1,0 +1,68 @@
+name: iroh native binding audit
+
+# Guards the libc pin and checks the locked dependencies against RustSec. The weekly
+# run catches advisories published while the crate itself is unchanged.
+on:
+  push:
+    branches: [main]
+    paths: &iroh_ffi_audit_paths
+      - ".github/workflows/iroh-ffi-audit.yml"
+      - "crates/openclaw-iroh-ffi/Cargo.lock"
+      - "crates/openclaw-iroh-ffi/Cargo.toml"
+      - "crates/openclaw-iroh-ffi/scripts/check-pins.sh"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: *iroh_ffi_audit_paths
+  schedule:
+    - cron: "23 8 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: iroh-ffi-audit-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUSTUP_TOOLCHAIN: "1.99.0"
+  CARGO_AUDIT_VERSION: "0.22.2"
+
+jobs:
+  audit:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: crates/openclaw-iroh-ffi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Check dependency pins
+        run: scripts/check-pins.sh
+
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked --root "$RUNNER_TEMP/cargo-audit"
+
+      # Vulnerabilities fail the job; unmaintained-crate notices are reported as warnings.
+      - name: Audit locked dependencies
+        run: '"$RUNNER_TEMP/cargo-audit/bin/cargo-audit" audit --file Cargo.lock'
