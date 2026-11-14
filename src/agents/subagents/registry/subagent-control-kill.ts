@@ -477,8 +477,10 @@ export async function killAllControlledSubagentRuns(params: {
         selectPublishedRoot: params.requestSelection.selectPublishedRoot,
       }
     : params;
+  // Completed roots remain discovery anchors while a sibling's Stop drains.
+  const bulkSelection = { ...selection, skipInertSessionPreparation: true };
   if (!params.requestSelection?.sessionGeneration && !params.requestSelection?.prepare) {
-    return killSelectedSubagentRuns(selection);
+    return killSelectedSubagentRuns(bulkSelection);
   }
   let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
   const assertCurrent = () => {
@@ -504,7 +506,7 @@ export async function killAllControlledSubagentRuns(params: {
   };
   try {
     return await killSelectedSubagentRuns({
-      ...selection,
+      ...bulkSelection,
       assertCurrent,
       prepareRead,
       beforeKill: async (sealRootSelection) => {
