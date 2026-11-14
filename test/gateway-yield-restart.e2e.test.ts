@@ -1,31 +1,47 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
+import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
   connectRestartClient,
+  connectProxiedRestartOperator,
   readRestartSession,
   restartEnv,
   restartProviderServer,
   restartToolNames,
   writeRestartJsonText,
   writeRestartToolCall,
+  writeRestartPlugin,
 } from "./gateway-restart.test-support.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-stopped"] as const)(
+it
+  .skipIf(process.platform === "win32")
+  .for([
+    "continue",
+    "finish",
+    "root-source-stopped",
+    "other-agent",
+    "retired-message",
+    "completed-before",
+    "policy-unavailable",
+  ] as const)(
   "preserves yielded work through an actual Gateway restart (%s)",
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
-    const parkedRoot = action === "root-source-stopped";
+    const parkedRoot = action === "root-source-stopped" || action === "retired-message";
+    const restartRoot = parkedRoot || action === "completed-before";
+    const childAgent = action === "other-agent" ? "other" : "main";
     const rootKey = parkedRoot
       ? "agent:main:dashboard:yield-restart"
       : "agent:main:main:thread:yield-restart";
@@ -39,8 +55,12 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
     let rootResumes = 0;
     let sequence = 0;
     let sentContinuation = false;
+    let yieldRoot: (() => void) | undefined;
     let continueChild: (() => void) | undefined;
     let finishRequester: (() => void) | undefined;
+    let finishChild: (() => void) | undefined;
+    let yieldRequester: (() => void) | undefined;
+    let yieldedAfterOutage = false;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -75,8 +95,12 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           };
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
-            if (text.includes("CONTINUE_PARKED_CHILD")) {
-              reply("PARKED_CHILD_COMPLETED");
+            if (action === "completed-before" || text.includes("CONTINUE_PARKED_CHILD")) {
+              if (action === "policy-unavailable") {
+                finishChild = () => reply("PARKED_CHILD_COMPLETED");
+              } else {
+                reply("PARKED_CHILD_COMPLETED");
+              }
               return;
             }
             if (action === "root-source-stopped") {
@@ -96,6 +120,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           if (!spawned) {
             call("sessions_spawn", {
               taskName: "message_waiting_child",
+              agentId: childAgent,
               task: childPrompt,
               context: "isolated",
               visible: true,
@@ -110,7 +135,11 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           if (text.includes("The Gateway restarted while you were working.")) {
             rootResumes++;
           }
-          if (parkedRoot) {
+          if (action === "retired-message" && rootResumes === 0) {
+            yieldRoot = () => call("sessions_yield", {});
+            return;
+          }
+          if (action === "root-source-stopped") {
             if (rootResumes > 0) {
               reply("ROOT_RECONCILED_STOPPED_CHILD");
               return;
@@ -125,10 +154,25 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
               return;
             }
             if (sentContinuation) {
-              call("sessions_yield", {});
+              if (action === "policy-unavailable" && !yieldedAfterOutage) {
+                yieldRequester = () => {
+                  yieldedAfterOutage = true;
+                  call("sessions_yield", {});
+                };
+                return;
+              }
+              if (text.includes("already_pending") || text.includes("nothing_pending")) {
+                reply("WAITING_FOR_CHILD_COMPLETION");
+              } else {
+                call("sessions_yield", {});
+              }
               return;
             }
             continueChild = () => {
+              if (action === "completed-before") {
+                call("sessions_history", { sessionKey: childKey });
+                return;
+              }
               sentContinuation = true;
               call("sessions_send", {
                 sessionKey: childKey,
@@ -137,22 +181,104 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
               });
             };
           }
-          // The requester remains alive before and after restart. Only an explicit
-          // continuation message should resume its parked child.
+          // Hold the model response until the fixture chooses yield, restart, or continuation.
         }),
     });
     const model = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${reservation.claim.port}/v1`);
     const base = restartResumeConfig(model);
+    const origin = "https://control.restart.example.test";
+    const user = "person@restart.example.test";
+    const scopes: OperatorScope[] = ["operator.admin", "operator.read", "operator.write"];
+    if (action === "policy-unavailable") {
+      base.gateway = {
+        ...base.gateway,
+        trustedProxies: ["127.0.0.1", "::1"],
+        auth: {
+          mode: "trusted-proxy",
+          token: undefined,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+            deviceAutoApprove: { enabled: true, scopes },
+          },
+          identityScopes: { [user]: scopes },
+        },
+        controlUi: { enabled: false, allowedOrigins: [origin] },
+      };
+    }
     const instance = await createOpenClawTestInstance({
       name: "gateway-yield-restart",
       signal,
       config: {
         ...base,
-        tools: { ...base.tools, allow: ["sessions_spawn", "sessions_yield", "sessions_send"] },
+        agents: {
+          ...base.agents,
+          entries: { main: { subagents: { allowAgents: ["main", "other"] } }, other: {} },
+        },
+        tools: {
+          ...base.tools,
+          allow: ["sessions_spawn", "sessions_yield", "sessions_send", "sessions_history"],
+        },
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
-    let client: GatewayClient | undefined;
+    if (action === "policy-unavailable") {
+      const pluginDir = instance.state.path("recovery-access");
+      await writeRestartPlugin(
+        pluginDir,
+        {
+          id: "recovery-access",
+          activation: { onStartup: true },
+          configSchema: { type: "object", properties: {} },
+        },
+        `import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+        export default { id: "recovery-access", register(api) {
+          const marker = ${JSON.stringify(instance.state.path("policy-unavailable"))};
+          const grant = (recovered) => ({ grantId: "recovery-proof-grant", signal: new AbortController().signal,
+            assertCurrent() {
+              if (recovered && existsSync(marker + ".ready")) {
+                unlinkSync(marker + ".ready");
+                api.logger.info("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+                throw new Error("synthetic transient policy outage");
+              }
+            }
+          });
+          api.registerGatewayAccessPolicy({ authorize: () => grant(false), resume: () => grant(true) });
+          api.on("subagent_delivery_target", () => {
+            if (existsSync(marker)) {
+              unlinkSync(marker);
+              writeFileSync(marker + ".ready", "one unavailable evaluation");
+            }
+          });
+        } };`,
+      );
+      await instance.state.writeConfig({
+        ...JSON.parse(await readFile(instance.configPath, "utf8")),
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginDir] },
+          allow: ["recovery-access", "openai"],
+          slots: { memory: "none" },
+          entries: {
+            "recovery-access": { enabled: true, hooks: { allowConversationAccess: true } },
+          },
+        },
+      });
+    }
+    const connect = async () => {
+      if (action !== "policy-unavailable") {
+        return connectRestartClient(instance, {}, signal);
+      }
+      const connection = await connectProxiedRestartOperator(instance, {
+        user,
+        origin,
+        scopes,
+        signal,
+      });
+      return { request: connection.call, stopAndWait: connection.close };
+    };
+    let client: Pick<GatewayClient, "request" | "stopAndWait"> | undefined;
     let phase = "startup";
     onTestFailed(() => {
       process.stderr.write(`yield restart phase=${phase}\n${instance.logs()}\n`);
@@ -160,7 +286,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
+        client = await connect();
         if (parkedRoot) {
           await client.request("sessions.create", { key: rootKey, agentId: "main" });
         }
@@ -183,9 +309,15 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
         if (action !== "root-source-stopped") {
           expect(
             await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
-          ).toMatchObject({ status: "ok", yielded: true });
+          ).toMatchObject(
+            action === "completed-before" ? { status: "ok" } : { status: "ok", yielded: true },
+          );
         } else {
           await vi.waitFor(() => expect(childCalls).toBe(1), { timeout: 30_000 });
+        }
+        if (action === "retired-message") {
+          assert(yieldRoot);
+          yieldRoot();
         }
         if (parkedRoot) {
           expect(
@@ -193,18 +325,23 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           ).toMatchObject({ status: "ok", yielded: true });
           // agent.wait observes the yielded terminal before controller cleanup.
           // Restart only after the real root execution and terminal write have drained.
-          await vi.waitFor(
-            async () => {
-              const history = await client!.request<{
-                sessionInfo: { hasActiveRun: boolean };
-              }>("chat.history", { sessionKey: rootKey });
-              expect(history.sessionInfo.hasActiveRun).toBe(false);
-            },
-            { timeout: 15_000 },
-          );
+          if (action !== "retired-message") {
+            await vi.waitFor(
+              async () => {
+                const history = await client!.request<{
+                  sessionInfo: { hasActiveRun: boolean };
+                }>("chat.history", { sessionKey: rootKey });
+                expect(history.sessionInfo.hasActiveRun).toBe(false);
+              },
+              { timeout: 15_000 },
+            );
+          }
         }
-        const parkedKey = parkedRoot ? rootKey : childKey;
-        const parked = readRestartSession(instance.state.agentDir("main"), parkedKey);
+        const parkedKey = restartRoot ? rootKey : childKey;
+        const parked = readRestartSession(
+          instance.state.agentDir(restartRoot ? "main" : childAgent),
+          parkedKey,
+        );
         expect(parked?.lifecycleRunId).toEqual(expect.any(String));
         expect(parked?.status).toBeUndefined();
         const callsBeforeRestart = childCalls;
@@ -213,16 +350,28 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
         await client.stopAndWait();
         client = undefined;
         expect
-          .soft(readRestartSession(instance.state.agentDir("main"), parkedKey)?.resumeAfterRestart)
+          .soft(
+            readRestartSession(
+              instance.state.agentDir(restartRoot ? "main" : childAgent),
+              parkedKey,
+            )?.resumeAfterRestart,
+          )
           .toBeDefined();
+        if (action === "retired-message") {
+          expect(readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId).toBe(
+            root.runId,
+          );
+        }
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
+        client = await connect();
         await vi.waitFor(
           () =>
-            parkedRoot
+            action === "root-source-stopped"
               ? expect(
-                  readRestartSession(instance.state.agentDir("main"), parkedKey)
-                    ?.resumeAfterRestart,
+                  readRestartSession(
+                    instance.state.agentDir(restartRoot ? "main" : childAgent),
+                    parkedKey,
+                  )?.resumeAfterRestart,
                 ).toBeUndefined()
               : expect(rootResumes).toBe(1),
           { timeout: 20_000 },
@@ -248,7 +397,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           return;
         }
         phase = "restored parked child";
-        const restored = readRestartSession(instance.state.agentDir("main"), parkedKey);
+        const restored = readRestartSession(instance.state.agentDir(childAgent), childKey);
         process.stdout.write(
           `[yield-restart-proof] ${JSON.stringify({
             childKey,
@@ -258,8 +407,12 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
             rootResumes,
           })}\n`,
         );
-        expect(restored?.status).toBeUndefined();
-        expect(restored?.lifecycleRunId).toBe(parked?.lifecycleRunId);
+        if (action === "completed-before") {
+          expect(restored).toMatchObject({ status: "done", lastRunId: childRunId });
+        } else {
+          expect(restored?.status).toBeUndefined();
+          expect(restored?.lifecycleRunId).toBe(childRunId);
+        }
         expect(restored?.resumeAfterRestart).toBeUndefined();
         expect(childCalls).toBe(callsBeforeRestart);
         if (action === "finish") {
@@ -280,7 +433,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
             { timeout: 15_000 },
           );
           // An unclaimed restored wait survives this committed requester turn.
-          const retained = readRestartSession(instance.state.agentDir("main"), childKey);
+          const retained = readRestartSession(instance.state.agentDir(childAgent), childKey);
           expect(retained?.status).toBeUndefined();
           expect(retained?.lifecycleRunId).toBe(parked?.lifecycleRunId);
           expect(retained?.activeWriterRunId).toBe(parked?.activeWriterRunId);
@@ -297,8 +450,40 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           });
         }
         phase = "requester continues child";
-        assert(continueChild);
-        continueChild();
+        if (action === "completed-before") {
+          // Recovery may already see the durable result in the parent transcript.
+          continueChild?.();
+        } else {
+          assert(continueChild);
+          continueChild();
+          if (action === "policy-unavailable") {
+            await vi.waitFor(
+              () => {
+                expect(finishChild).toBeDefined();
+                expect(yieldRequester).toBeDefined();
+              },
+              { timeout: 15_000 },
+            );
+            await writeFile(instance.state.path("policy-unavailable"), "one transient outage");
+            finishChild!();
+            await vi.waitFor(
+              () => {
+                expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+                expect(instance.logs()).toContain(
+                  "Subagent announce failed: GatewayOperatorAccessUnavailableError",
+                );
+              },
+              { timeout: 15_000 },
+            );
+            const active = await client.request<{ sessionInfo: { hasActiveRun?: boolean } }>(
+              "chat.history",
+              { sessionKey: rootKey },
+            );
+            expect(active.sessionInfo.hasActiveRun).toBe(true);
+            assert(yieldRequester);
+            yieldRequester();
+          }
+        }
         await vi.waitFor(
           async () => {
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
@@ -310,6 +495,13 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           },
           { timeout: 30_000 },
         );
+        if (action === "completed-before") {
+          expect(childCalls).toBe(callsBeforeRestart);
+        }
+        if (action === "policy-unavailable") {
+          expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+          expect(instance.logs()).not.toContain("Restart recovery operator authority changed");
+        }
       },
       async () => {
         await client?.stopAndWait();

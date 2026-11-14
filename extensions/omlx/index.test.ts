@@ -297,7 +297,9 @@ it("connects the registered setup and catalog hooks to the inference models endp
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => {
-      return Response.json({ data: [{ id: "Qwen2.5-3B-Instruct-4bit", max_model_len: 32768 }] });
+      return Response.json({
+        data: [{ id: "Qwen2.5-3B-Instruct-4bit", model_type: "llm", max_model_len: 32768 }],
+      });
     }),
   );
   const provider = capturePluginRegistration(plugin).providers[0];

@@ -28,7 +28,10 @@ import type {
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
-import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
+import {
+  requesterSettleWakeScope,
+  scheduleRequesterSettleWake,
+} from "./subagent-registry-lifecycle-wake.js";
 import {
   getCurrentSubagentRunOwner,
   getSubagentSweepRuns,
@@ -153,7 +156,12 @@ export function suspendReplacedStoreNotifications(
   if (!entries.length) {
     return Promise.all(pending).then(() => {});
   }
+  const batches = new Map<string, SubagentRunRecord[]>();
   for (const entry of entries) {
+    const scope = requesterSettleWakeScope(entry);
+    const batch = batches.get(scope) ?? [];
+    batch.push(entry);
+    batches.set(scope, batch);
     subagentRuns.retireCompletionAuthority(entry);
     retireSubagentControllerInputs(entry);
   }
@@ -169,6 +177,7 @@ export function suspendReplacedStoreNotifications(
           reason: "store replaced",
           suspendedReason: "permanent_failure",
           storeReplaced: true,
+          requesterBatch: batches.get(requesterSettleWakeScope(entry)),
         }))
       ) {
         continue;

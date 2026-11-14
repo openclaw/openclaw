@@ -133,7 +133,7 @@ export async function createOffsiteBackupArchive(
       result.warnings = [...scratchWarnings, ...(result.warnings ?? [])];
     }
     const { verifyBackupArchive } = await import("./backup-verify.js");
-    await verifyBackupArchive(result.archivePath);
+    await verifyBackupArchive(result.archivePath, [], opts.onProgress);
     result.verified = true;
     const plaintextBytes = (await fs.stat(result.archivePath)).size;
     const key = createRemoteBackupKey(Date.parse(result.createdAt));
@@ -298,7 +298,12 @@ export async function backupRemoteVerifyCommand(
 
 export async function backupRemoteRestoreCommand(
   runtime: RuntimeEnv,
-  opts: RemoteBackupOptions & { archive: string; target?: string; localCompanion?: boolean },
+  opts: RemoteBackupOptions & {
+    archive: string;
+    target?: string;
+    localCompanion?: boolean;
+    postgresConnectionEnv?: string;
+  },
 ) {
   return await withDownloadedBackup(runtime, opts, async (archive) => {
     const { backupRestoreCommand } = await import("./backup-restore.js");
@@ -307,6 +312,7 @@ export async function backupRemoteRestoreCommand(
       target: opts.target,
       json: opts.json,
       localCompanion: opts.localCompanion,
+      postgresConnectionEnv: opts.postgresConnectionEnv,
     });
   });
 }

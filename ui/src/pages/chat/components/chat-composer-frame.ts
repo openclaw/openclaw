@@ -593,6 +593,7 @@ export function createChatComposerContext(
     isBusy,
     followUpMode: props.followUpMode,
     alternateFollowUpMode,
+    sendShortcut,
     suggestionComposer: props.suggestionComposer,
     submissionLabel: replacingRunningGoal ? t("chat.goals.replace") : goalComposer.submissionLabel,
     sending: props.sending && !replacingRunningGoal,

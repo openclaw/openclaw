@@ -13,7 +13,7 @@ import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR =
-  "a[href],button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='menu'],[role='listbox'],[role='option']";
+  "a[href],button,input,select,textarea,summary,[popover],[contenteditable='true'],[role='button'],[role='menu'],[role='listbox'],[role='option']";
 
 type ComposerTextareaResizeObserverState = {
   observer: ResizeObserver | null;

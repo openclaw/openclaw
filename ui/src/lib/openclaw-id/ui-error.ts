@@ -50,6 +50,7 @@ const CODE_KEYS: Record<string, string> = {
   invalid_statement: "errorVerification",
   unauthorized: "errorNotOwner",
   not_owner: "errorNotOwner",
+  not_admin: "makeReachableAdminOnly",
   not_direct: "errorNotOwner",
   expired: "errorExpired",
   not_yet_valid: "errorNotYetValid",

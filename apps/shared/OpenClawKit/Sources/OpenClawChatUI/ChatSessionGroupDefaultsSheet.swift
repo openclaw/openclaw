@@ -337,7 +337,6 @@ public struct ChatSessionGroupDefaultsSheet: View {
                         self.model.closeBrowser()
                     }
                 } } label: { Image(systemName: "arrow.up") }
-                    .help("Parent folder")
                 TextField("Folder", text: Binding(get: { self.model.draft }, set: { self.model.editDraft($0) }))
                     .onSubmit { Task { await self.model.activate() } }
                     .onKeyPress(.downArrow) { self.model.moveHighlight(1)
@@ -349,7 +348,7 @@ public struct ChatSessionGroupDefaultsSheet: View {
                     .onKeyPress(keys: [.tab]) { press in
                         !press.modifiers.contains(.shift) && self.model.completeHighlighted() ? .handled : .ignored
                     }
-                Button { self.model.closeBrowser() } label: { Image(systemName: "xmark") }.help("Close")
+                Button { self.model.closeBrowser() } label: { Image(systemName: "xmark") }
             }
             if self.model.browsing { ProgressView() }
             if let error = self.model.browserError {

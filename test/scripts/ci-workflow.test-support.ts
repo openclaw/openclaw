@@ -149,6 +149,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerOs?: "" | "Linux" | "macOS" | "Windows";
+    runnerArch?: "X64" | "ARM64";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
@@ -261,6 +262,7 @@ export function evaluateWorkflowExpression(
     matrix: context.matrix ?? {},
     runner: {
       os: context.runnerOs ?? "",
+      arch: context.runnerArch ?? "",
       environment: context.runnerEnvironment ?? "",
       temp: context.runnerTemp ?? "",
     },

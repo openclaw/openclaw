@@ -1099,9 +1099,9 @@
   }
 }
 
-/* The phone menu carries Refresh even when portaled; the tooltip uses display: contents. */
+/* The phone menu carries Refresh even when portaled. */
 @media (max-width: 640px) {
-  .agents-toolbar-actions > openclaw-tooltip > .agents-refresh-btn {
+  .agents-toolbar-actions > .agents-refresh-btn {
     display: none;
   }
 }

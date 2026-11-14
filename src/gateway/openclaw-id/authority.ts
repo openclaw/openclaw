@@ -50,14 +50,13 @@ import {
 } from "./claw-store.js";
 import { nextPeopleExpiry } from "./invite-expiry.js";
 import { withSweptInvites, resolveReport, resolvedInvite } from "./invite-sweep.js";
-import { listInviteViews } from "./invites-view.js";
 import {
   canonicalMemberProfiles,
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
-import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
-import type { OwnerDeviceView } from "./owner-devices-view.js";
+import { readMemberView, readOwnerView } from "./membership-views.js";
+import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
@@ -330,6 +329,8 @@ export function createOpenClawIdAuthority(
       kSrv: IrohEndpointKey;
       kGw: Ed25519PublicKey;
       hostname: string;
+      /** Throws once the caller's ceremony authority is gone; checked at the write. */
+      guard?: () => void;
     }): Promise<LinkPreparation | AuthorityRefusal> {
       return serialize(async () => {
         const current = await load();
@@ -339,7 +340,7 @@ export function createOpenClawIdAuthority(
         const next = current ?? emptyRecord(bytesToHex(randomBytes(16)));
         const hostname = params.hostname;
         if (next !== current || next.hostname !== hostname) {
-          await commit({ ...next, hostname });
+          await commit({ ...next, hostname }, params.guard);
         }
         return {
           claw_id: next.claw_id,
@@ -354,12 +355,14 @@ export function createOpenClawIdAuthority(
 
     /**
      * Pins R for good, admits owner device D1 and stores the ServerBinding.
-     * Only over direct loopback: relayed traffic never runs a root ceremony.
+     * Only on the `local_operator` ceremony channel: relayed traffic never runs a root
+     * ceremony. `expected.guard` throws once the caller's live ceremony authority is gone;
+     * it is checked at the write, which then rejects.
      */
     commitLink(
       input: LinkCommit,
       channel: Channel | undefined,
-      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey },
+      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey; guard?: () => void },
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
       return serialize(async () => {
         if (channel !== "local_operator") {
@@ -391,7 +394,11 @@ export function createOpenClawIdAuthority(
         if (!binding.ok) {
           return binding;
         }
-        await commit({ ...current, authority: added.state, binding: binding.statement });
+        // The caller's live ceremony authority is checked at the durable write itself.
+        await commit(
+          { ...current, authority: added.state, binding: binding.statement },
+          expected.guard,
+        );
         return {
           ok: true,
           status: "applied",
@@ -619,6 +626,13 @@ export function createOpenClawIdAuthority(
       });
     },
 
+    /** Only this member account's devices, without owner, invite or other-account details. */
+    async memberView(peerKey: string) {
+      const current = await load();
+      const view = await readMemberView(current, currentPeer(peerKey));
+      return record === current ? view : undefined;
+    },
+
     /**
      * What an owner device reaching the claw over the tunnel may read: the seq to
      * sign the next change at, the binding, every active owner device with who
@@ -627,44 +641,8 @@ export function createOpenClawIdAuthority(
      */
     async ownerView(peerKey: string) {
       const current = await load();
-      const state = current?.authority;
-      if (!state) {
-        return undefined;
-      }
-      const nodeInvites = await listNodeInviteViews(current, nowSeconds());
-      // Hashing comparison codes may yield; disclose only the same committed owner view.
-      if (record !== current) {
-        return undefined;
-      }
-      const now = nowSeconds();
-      const owners = activeOwnerDevices(state, now);
-      if (
-        // SAFETY: peerKey is compared by string equality only; a malformed key matches no certificate.
-        !owners.some((device) => device.cert.body.peer_keys.includes(peerKey as IrohEndpointKey))
-      ) {
-        return undefined;
-      }
-      return {
-        claw_id: state.claw_id,
-        seq: state.seq,
-        root_pub: state.anchor.root_pub,
-        binding: current.binding,
-        owner_devices: owners.map((device): OwnerDeviceView => ({
-          cert: device.cert,
-          caps: device.caps,
-          approved_by: device.approved_by,
-        })),
-        members: Object.entries(state.members).map(([account_id, member]) => ({
-          account_id,
-          role: member.role,
-          peer_keys: member.peer_keys,
-        })),
-        invites: listInviteViews(current, now),
-        nodes: Object.entries(state.nodes).map(([peer_key, node]) =>
-          Object.assign({ peer_key }, node),
-        ),
-        node_invites: nodeInvites,
-      };
+      const view = await readOwnerView(current, peerKey);
+      return record === current ? view : undefined;
     },
 
     /**
@@ -760,14 +738,15 @@ export function createOpenClawIdAuthority(
       return due.length > 0 ? Math.min(...due) : undefined;
     },
 
-    /** Peer keys of listed owner devices no longer admitted because their certificate expired. */
+    /** Peer keys of inactive owner devices and their bound nodes, for expiry teardown. */
     async expiredOwnerPeers(): Promise<IrohEndpointKey[]> {
       const state = (await load())?.authority;
       if (!state) {
         return [];
       }
       const now = nowSeconds();
-      const expired = new Set<IrohEndpointKey>();
+      // SAFETY: nodes is keyed by IrohEndpointKey; the admission filter below removes active nodes.
+      const expired = new Set(Object.keys(state.nodes) as IrohEndpointKey[]);
       for (const device of Object.values(state.owner_devices)) {
         if (!isOwnerDeviceActive(device, now)) {
           device.cert.body.peer_keys.forEach((key) => expired.add(key));
