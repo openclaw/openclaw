@@ -262,7 +262,7 @@ const enSettings = {
     lastError: "Last error",
     refreshingStaleSnapshot: "Refreshing channel status… Showing the last available status.",
     hub: {
-      connectedTitle: "Connected channels",
+      connectedTitle: "Your channels",
       addTitle: "Add a channel",
       addSubtitle: "Choose a messaging app to set up.",
       updatedAgo: "Updated {ago}",
