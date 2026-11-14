@@ -186,6 +186,14 @@ nothing else. There are no certificate chains and no list of revoked keys.
   redemption is still pending on it: registration and redemption already refuse an expired
   cap, so nothing is left to replay. Removing an owner device also deletes the open invites
   it registered (`created_by`).
+- **Approved invite replays are no-ops.** Until the invite expires, a verified redemption
+  matching its recorded approved account, device key and peer key is accepted without a
+  write or events, provided that account still lists that peer key. Approval records this
+  tuple on the invite; it is deleted with the invite, not retained as membership history.
+  Pending, denied and consumed invites without an approved tuple, different accounts or
+  keys, and removed member peers remain `invite_used`. Existing consumed records without
+  the tuple cannot prove the device key and are not inferred from current membership.
+  Matching replays still require a valid self-signature, proof and asserted audience.
 - **Inactivity.** The Gateway records `last_seen` per owner device and per member browser
   whenever the tunnel admits it (at most once an hour). Owner devices unused for 90 days and
   member browsers unused for 30 days are dropped (Gateway config

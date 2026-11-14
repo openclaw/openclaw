@@ -81,6 +81,12 @@ export type InviteRecord = {
    * invite while it is still open. Absent on invites registered before this was recorded.
    */
   created_by?: OwnerApprover;
+  /** Approved redemption identity, retained only for this invite's lifetime to recognize replays. */
+  approved?: {
+    account_id: string;
+    device_pub: Ed25519PublicKey;
+    peer_key: IrohEndpointKey;
+  };
 };
 
 /**

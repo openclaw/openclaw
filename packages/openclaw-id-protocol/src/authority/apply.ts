@@ -302,7 +302,16 @@ function addMember(
       members: { ...state.members, [target.account_id]: member },
       invites: {
         ...state.invites,
-        [target.invite_id]: { ...invite, status: "consumed", pending: null },
+        [target.invite_id]: {
+          ...invite,
+          status: "consumed",
+          pending: null,
+          approved: {
+            account_id: pending.account_id,
+            device_pub: pending.device_pub,
+            peer_key: pending.peer_key,
+          },
+        },
       },
     },
     [
@@ -547,8 +556,24 @@ export async function submitRedemption(
   if (!invite) {
     return refuse(state, "invite_unknown", "no such invite");
   }
+  const body = parsed.statement.body;
   if (invite.status !== "open") {
-    return refuse(state, "invite_used", "invite already redeemed");
+    const member = state.members[identity.account_id];
+    const keysMatch =
+      invite.approved?.device_pub === body.device_pub && invite.approved.peer_key === body.peer_key;
+    if (
+      invite.status !== "consumed" ||
+      invite.approved?.account_id !== body.account_id ||
+      identity.account_id !== body.account_id ||
+      !keysMatch ||
+      !member?.peer_keys.includes(body.peer_key)
+    ) {
+      return refuse(
+        state,
+        "invite_used",
+        `invite already redeemed: invite_id=${body.invite_id} already_member=${Boolean(member)} keys_match=${keysMatch}`,
+      );
+    }
   }
   const verified = await verifyInviteRedemption(
     parsed.statement,
@@ -560,7 +585,9 @@ export async function submitRedemption(
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
   }
-  const body = parsed.statement.body;
+  if (invite.status === "consumed") {
+    return applied(state, []);
+  }
   const record = {
     ...invite,
     status: "pending" as const,

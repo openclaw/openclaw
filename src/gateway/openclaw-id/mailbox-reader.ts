@@ -132,8 +132,12 @@ export function startMailboxReader(params: {
             params.sink,
             async (result) => {
               if (!result.ok) {
+                const detail =
+                  message.payload.kind === "invite_redemption" && result.code === "invite_used"
+                    ? `: ${result.detail}`
+                    : "";
                 params.log.warn(
-                  `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})`,
+                  `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})${detail}`,
                 );
                 await params
                   .onRefused?.(message, result)
