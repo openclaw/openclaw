@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
@@ -173,6 +174,42 @@ describe("gateway register option collisions", () => {
 
     expect(mocks.gatewayAuthTokenCommand).toHaveBeenCalledWith(defaultRuntime);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not print a gateway call reply that lands after Ctrl+C aborts the read", async () => {
+    const work = new AsyncWorkScope();
+    mocks.callGatewayCli.mockImplementationOnce(async () => {
+      work.beginClose();
+      throw new Error("gateway request aborted");
+    });
+    await work.run(() => parse("call", "system-presence", "--json"));
+    // Ctrl+C owns the exit; an aborted read neither prints a reply nor exits nonzero.
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("still prints a generic gateway call receipt that settles during cleanup", async () => {
+    const work = new AsyncWorkScope();
+    const job = { id: "job-1", name: "nightly", enabled: true };
+    mocks.callGatewayCli.mockImplementationOnce(async (method, _opts, params) => {
+      work.beginClose();
+      return { ok: true, job: { ...(params as { job: object }).job, id: "job-1" } };
+    });
+    let output: unknown;
+    await defaultRuntime.writeJson.withImplementation(
+      (value: unknown) => {
+        output = value;
+      },
+      async () => {
+        await work.run(() =>
+          parse("call", "cron.add", "--params", JSON.stringify({ job }), "--json"),
+        );
+      },
+    );
+    // Generic calls may execute writes (cron.add); an already settled mutation
+    // keeps its receipt even when Ctrl+C closes the work scope.
+    expect(output).toEqual({ ok: true, job: { id: "job-1", name: "nightly", enabled: true } });
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
