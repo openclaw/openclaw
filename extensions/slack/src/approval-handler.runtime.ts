@@ -250,7 +250,9 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
             client,
             writeClient: getSlackListenerWriteClient({
               listenerClient: client,
-              teamId: preparedTarget.teamId,
+              // A workspace install shares app.client with streaming, which scopes its
+              // writer without a team. Asking with the team would miss that writer.
+              teamId: resolved.context.enterprise ? preparedTarget.teamId : undefined,
               clientOptions: resolved.context.app.webClientOptions,
             }),
           }
