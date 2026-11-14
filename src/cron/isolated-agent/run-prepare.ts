@@ -30,6 +30,7 @@ import {
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
+import { readCronOperatorSnapshot } from "../operator-source-snapshot.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
@@ -230,7 +231,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     const sandbox =
       resolveCreatorSandbox(runtimeCfg, {
         actor: cronExecutionActor(input.job),
-        openclawIdPrincipal: input.job.operatorSource?.source.snapshot.openclawIdPrincipal,
+        openclawIdPrincipal: readCronOperatorSnapshot(input.job)?.openclawIdPrincipal,
       }) ?? input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession: MutableCronSession = await prepareCronSession({
