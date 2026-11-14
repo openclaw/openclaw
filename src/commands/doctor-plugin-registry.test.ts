@@ -354,6 +354,30 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(fs.existsSync(managed.packageDir)).toBe(true);
   });
 
+  it("warns about stale managed npm packages whose manifest is JSON5", async () => {
+    const { stateDir, managed, params } = createBundledNpmFixture();
+    // The bundled plugin manifest accepts JSON5, so a managed npm package whose
+    // manifest uses comments/trailing commas must still be recognized as stale.
+    fs.writeFileSync(
+      path.join(managed.packageDir, "openclaw.plugin.json"),
+      [
+        "// JSON5 manifest with a trailing comma and unquoted key",
+        "{ id: 'bundled-demo', name: 'bundled-demo', configSchema: { type: 'object' }, }",
+      ].join("\n") + "\n",
+    );
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    await maybeRepairPluginRegistryState({
+      ...params,
+      prompter: { shouldRepair: false },
+    });
+
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("Managed npm plugin packages shadow bundled plugins");
+    expect(notes).toContain("@openclaw/bundled-demo@2026.5.2");
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
+  });
+
   it("reports the supported manual recovery for invalid persisted records", async () => {
     const stateDir = makeTempDir();
     const config: OpenClawConfig = {};
