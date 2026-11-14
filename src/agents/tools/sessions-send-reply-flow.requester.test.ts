@@ -77,7 +77,7 @@ async function requesterAuthority(
   return { client, device, source, origin, release };
 }
 
-it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
+it.each(["allowed", "revoked", "session changed", "selected Bob", "empty result"] as const)(
   "preserves requester selection and separate-turn return after invocation closure: %s",
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -147,7 +147,10 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           await releasePeer.promise;
           return {
             status: "ok",
-            terminalReply: sanitizeAgentRunTerminalReply(fullReply),
+            terminalReply:
+              boundary === "empty result"
+                ? { disposition: "empty" }
+                : sanitizeAgentRunTerminalReply(fullReply),
           } as T;
         }
         request.sessionMutationCommitGuard?.();
@@ -283,6 +286,16 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
                             replyTimeoutMs: 1_000,
                             requesterSessionKey: sessionKey,
                             requesterAgentId: "main",
+                            ...(boundary === "empty result"
+                              ? {
+                                  requesterOrigin: {
+                                    channel: "telegram",
+                                    to: "synthetic-test-chat",
+                                    accountId: "synthetic-account",
+                                    threadId: "synthetic-topic",
+                                  },
+                                }
+                              : {}),
                           },
                         });
                         await startSessionsSendReplyFlow({
@@ -320,7 +333,9 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         }
         expect(effects).toHaveLength(1);
         expect(effects[0]?.request.params).toMatchObject({
-          message: expect.stringContaining(fullReply),
+          message: expect.stringContaining(
+            boundary === "empty result" ? "without a final result" : fullReply,
+          ),
         });
         expect(effects[0]).toMatchObject({
           origin: expectedOrigin,
@@ -335,7 +350,11 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           delivery: {
             source: { sessionKey: peerKey, sessionId: peerEntry.sessionId },
             target: { sessionKey, sessionId: requesterEntry.sessionId },
-            returnedResult: { extraSystemPrompt: expect.stringContaining("delivered once") },
+            returnedResult: {
+              extraSystemPrompt: expect.stringContaining(
+                boundary === "empty result" ? "Do not repeat completed actions" : "delivered once",
+              ),
+            },
           },
           request: {
             replyExpectation: "optional",
