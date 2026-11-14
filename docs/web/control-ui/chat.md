@@ -1147,6 +1147,23 @@ designation, and the Gateway checks installation status; the agent cannot assign
 those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
 
+When the agent already knows the exact plugin, for example one that a Template
+declares, it names the ClawHub package instead of searching:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "plugin": "@expediagroup/expedia-openclaw" }
+}
+```
+
+`plugin` is the exact package name and cannot be combined with `query` or
+`kind`. The chat shows only that plugin's card, never a similar search result.
+A community plugin is shown without the official badge, and its button reads
+**View details** instead of **Install**; install it from the plugin overview.
+A name that ClawHub does not know, or that is not a plugin, shows no card and
+returns an explanation. Searches still return official plugins and skills only.
+
 ### Source previews and copying code
 
 Hover over a `SKILL.md` link in chat to preview the installed skill's current
