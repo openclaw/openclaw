@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
+import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
@@ -187,7 +188,7 @@ it
     const base = restartResumeConfig(model);
     const origin = "https://control.restart.example.test";
     const user = "person@restart.example.test";
-    const scopes = ["operator.admin", "operator.read", "operator.write"];
+    const scopes: OperatorScope[] = ["operator.admin", "operator.read", "operator.write"];
     if (action === "policy-unavailable") {
       base.gateway = {
         ...base.gateway,
