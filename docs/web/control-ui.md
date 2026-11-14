@@ -128,7 +128,8 @@ Each newly added attachment switches the palette to **Compose**, including after
 you return to Search with an attachment still in the draft.
 Add optional instructions, choose the agent, project, and model, then send
 or press **Cmd/Ctrl+Enter**. The agent selector appears only when more than one
-agent is available; the **New worktree** switch sits beside the project. Dropping a
+agent is available. The **New worktree** switch stays inside the project menu, and
+the project shows a branch icon while it is on. Dropping a
 file does not start the session by itself. Images can still be pasted and files
 dropped without an attachment button.
 Files remain visible while preparing. If a file is rejected, an error toast

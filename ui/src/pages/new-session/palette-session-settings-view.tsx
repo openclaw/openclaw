@@ -231,6 +231,11 @@ export function PaletteSessionSettingsView(properties: {
     place().selectWorktree(!place().worktree);
     properties.options.onChange();
   });
+  // The switch lives in the menu; the closed chip still says when it is on.
+  const placeLabel = (separator: string) =>
+    [view().machineLabel, folderLabel(), place().worktree && t("newSession.checkoutWorktree")]
+      .filter(Boolean)
+      .join(separator);
   return (
     <>
       <Show when={place().agents().length > 1}>
@@ -261,11 +266,11 @@ export function PaletteSessionSettingsView(properties: {
       <Popover
         triggerId={properties.id + "-settings-trigger"}
         triggerClass="palette-session-settings__trigger palette-session-settings__chip"
-        triggerTitle={`${view().machineLabel} · ${folderLabel()}`}
-        triggerAriaLabel={`${t("commandPalette.newSessionSettings")}: ${view().machineLabel}, ${folderLabel()}`}
+        triggerTitle={placeLabel(" · ")}
+        triggerAriaLabel={`${t("commandPalette.newSessionSettings")}: ${placeLabel(", ")}`}
         trigger={
           <>
-            <Icon name="folder" />
+            <Icon name={place().worktree ? "gitBranch" : "folder"} />
             <span class="palette-session-settings__chip-label">{folderLabel()}</span>
             <span class="palette-session-settings__chip-chevron" aria-hidden="true">
               <Icon name="chevronDown" />
@@ -292,31 +297,38 @@ export function PaletteSessionSettingsView(properties: {
           ) : (
             <SettingsPlaces />
           )}
+
+          {!view().placementLocked && place().checkoutVisible && !place().remoteRepository ? (
+            <button
+              class="palette-session-settings__row palette-session-settings__worktree"
+              type="button"
+              role="switch"
+              aria-checked={place().worktree ? "true" : "false"}
+              aria-label={t("newSession.checkoutWorktree")}
+              title={
+                place().remotePlacement
+                  ? t("newSession.checkoutRemoteLocked")
+                  : !place().worktreeAvailable()
+                    ? (repositoryIssueText(place().repository) ??
+                      t("newSession.gitCheckUnavailable"))
+                    : undefined
+              }
+              disabled={view().locked || place().remotePlacement}
+              ref={[controlRef(), worktree]}
+            >
+              <span class="palette-session-settings__icon">
+                <Icon name="gitBranch" />
+              </span>
+              <span class="palette-session-settings__label">
+                {t("newSession.checkoutWorktree")}
+              </span>
+              <span class="palette-session-settings__check">
+                {place().worktree ? <Icon name="check" /> : undefined}
+              </span>
+            </button>
+          ) : undefined}
         </div>
       </Popover>
-      {!view().placementLocked && place().checkoutVisible && !place().remoteRepository ? (
-        <button
-          class="palette-session-settings__chip palette-session-settings__worktree"
-          type="button"
-          role="switch"
-          aria-checked={place().worktree ? "true" : "false"}
-          aria-label={t("newSession.checkoutWorktree")}
-          title={
-            place().remotePlacement
-              ? t("newSession.checkoutRemoteLocked")
-              : !place().worktreeAvailable()
-                ? (repositoryIssueText(place().repository) ?? t("newSession.gitCheckUnavailable"))
-                : undefined
-          }
-          disabled={view().locked || place().remotePlacement}
-          ref={worktree}
-        >
-          <Icon name="gitBranch" />
-          <span class="palette-session-settings__chip-label">
-            {t("newSession.checkoutWorktree")}
-          </span>
-        </button>
-      ) : undefined}
     </>
   );
 }

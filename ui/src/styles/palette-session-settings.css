@@ -52,7 +52,6 @@
 
 .palette-session-settings__chip:hover:not(:disabled),
 .palette-session-settings__chip[aria-expanded="true"],
-.palette-session-settings__worktree[aria-checked="true"],
 .cmd-palette
   .palette-session-settings__agent
   .agent-select--compact
@@ -65,26 +64,15 @@
   color: var(--text-strong);
 }
 
-.palette-session-settings__worktree[aria-checked="true"] svg {
-  color: var(--text-strong);
-}
-
 .palette-session-settings__chip:disabled {
   opacity: 0.5;
 }
 
-/* Keep the project readable; the worktree switch keeps its glyph and chevrons are omitted. */
+/* Keep the project readable; only the agent name and narrow chevrons are omitted. */
 @media (max-width: 560px) {
-  .palette-session-settings__worktree .palette-session-settings__chip-label,
   .palette-session-settings__chip-chevron,
   .cmd-palette .palette-session-settings__agent .agent-select__chevron {
     display: none;
-  }
-
-  /* Glyph only: a round target, so the on state is a circle and not a sliver. */
-  .palette-session-settings__worktree {
-    justify-content: center;
-    aspect-ratio: 1;
   }
 
   /* The tooltip host has no box; inset the select so the avatar meets the prompt's text edge. */
@@ -234,4 +222,10 @@
 
 .cmd-palette .palette-session-settings__chip-label {
   max-width: min(180px, 25vw);
+}
+
+.palette-session-settings__worktree {
+  margin-top: 5px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--menu-item-radius) var(--menu-item-radius);
 }
