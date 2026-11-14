@@ -8,7 +8,7 @@ import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import { projectMessageMedia } from "./chat-message-media-projection.ts";
-import { releaseChatMediaResourceOwner, type ImageRenderOptions } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
