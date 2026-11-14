@@ -88,6 +88,14 @@ async function reject(args: readonly string[], message: string, reads: string[] 
   expect(methods()).toEqual(reads);
 }
 
+it("rejects an on-exit cwd on a stream metadata edit before sending a patch", async () => {
+  existing({ schedule: { kind: "stream", command: ["node", "events.mjs"], mode: "line" } });
+  await rejectEdit(
+    ["--stream-cwd", "/new-stream", "--on-exit-cwd", "/watch"],
+    "--on-exit-cwd requires --on-exit",
+  );
+});
+
 beforeEach(() => {
   callGatewayFromCli.mockReset().mockImplementation(async (method: string) => gatewayReply(method));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});

@@ -74,9 +74,6 @@ export function resolveCronCreateScheduleFromArgs(
       normalized.at = normalized.cronExpr ? "" : positionalSchedule;
     }
   }
-  if (normalized.onExitCwd && !normalized.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
-  }
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
     throw new CronCliError(
@@ -190,6 +187,11 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
       throw new CronCliError("Schedule values must not be blank");
     }
   }
+  const onExitCommand = readNonBlankString(options.onExit) ?? "";
+  const onExitCwd = readNonBlankString(options.onExitCwd);
+  if (onExitCwd && !onExitCommand) {
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+  }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
@@ -217,8 +219,8 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
-    onExitCommand: readNonBlankString(options.onExit) ?? "",
-    onExitCwd: readNonBlankString(options.onExitCwd),
+    onExitCommand,
+    onExitCwd,
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: readNonBlankString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
@@ -260,9 +262,6 @@ function resolveDirectSchedule(
   options: NormalizedScheduleOptions,
   behavior: { deferStreamMetadataValidation?: boolean } = {},
 ): CronSchedule | undefined {
-  if (options.onExitCwd && !options.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
-  }
   if (hasStreamSchedulePatch(options) && !options.streamCommand) {
     throw new CronCliError("Stream options require --stream-command.");
   }
