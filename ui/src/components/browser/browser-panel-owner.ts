@@ -287,13 +287,14 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       }
       const epoch = operations.epoch;
       const current = () => operations.isLive(epoch, client);
+      const startedAt = Date.now();
       try {
         if (!passive) {
           panel.setState("errorText", null);
         }
         await action(client);
         if (current() && refreshView) {
-          snapshots.scheduleRefresh(epoch, current);
+          snapshots.scheduleRefresh(epoch, current, Date.now() - startedAt);
         }
         return current();
       } catch (error) {

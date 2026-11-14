@@ -6,6 +6,14 @@ import {
 } from "./browser-panel-controller-test-support.ts";
 import { createBrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 
+const tabA = {
+  kind: "remote" as const,
+  id: "tab-a",
+  targetId: "raw-a",
+  title: "A",
+  url: "https://a.example",
+};
+
 describe("BrowserPanelOperations", () => {
   it("releases navigation commits when tabs reconcile, close, or leave an accepted snapshot", () => {
     const { client } = createBrowserClient(async () => ({}));
@@ -13,15 +21,7 @@ describe("BrowserPanelOperations", () => {
     ownership.markNavigationCommitted(client, "tab-a");
     ownership.markNavigationCommitted(client, "tab-b");
 
-    ownership.retainTabSnapshot(client, [
-      {
-        kind: "remote" as const,
-        id: "tab-a",
-        targetId: "raw-a",
-        title: "A",
-        url: "https://a.example",
-      },
-    ]);
+    ownership.retainTabSnapshot(client, [tabA]);
     expect(ownership.hasUnreconciledNavigation(client, "tab-a")).toBe(true);
     expect(ownership.hasUnreconciledNavigation(client, "tab-b")).toBe(false);
 
@@ -32,27 +32,10 @@ describe("BrowserPanelOperations", () => {
   it("reconciles captured metadata without replacing an unchanged tab list", () => {
     const { client } = createBrowserClient(async () => ({}));
     const ownership = createBrowserPanelOperations(new TestBrowserPanelHost(client));
-    const tabs = [
-      {
-        kind: "remote" as const,
-        id: "tab-a",
-        targetId: "raw-a",
-        title: "A",
-        url: "https://a.example",
-      },
-    ];
     const metrics = createBrowserPanelTestMetrics("https://b.example", "B").result;
 
-    const reconciled = ownership.capturedTabs(tabs, "tab-a", metrics, metrics.url);
-    expect(reconciled).toEqual([
-      {
-        kind: "remote" as const,
-        id: "tab-a",
-        targetId: "raw-a",
-        title: "B",
-        url: "https://b.example",
-      },
-    ]);
+    const reconciled = ownership.capturedTabs([tabA], "tab-a", metrics, metrics.url);
+    expect(reconciled).toEqual([{ ...tabA, title: "B", url: "https://b.example" }]);
     expect(ownership.capturedTabs(reconciled, "tab-a", metrics, metrics.url)).toBe(reconciled);
     expect(
       ownership.capturedTabs(
