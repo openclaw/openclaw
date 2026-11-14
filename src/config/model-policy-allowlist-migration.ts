@@ -1,6 +1,7 @@
 // Shared legacy model allowlist detection for runtime, doctor, and config writes.
 import { isRecord } from "../utils.js";
 import { createModelPolicyRefValidator } from "./model-policy-ref.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
@@ -15,6 +16,26 @@ export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean 
 /** A per-agent policy replaces inherited defaults only when it owns `allow`. */
 export function hasExplicitModelPolicyAllow(value: unknown): boolean {
   return isRecord(value) && Object.hasOwn(value, "allow");
+}
+
+/**
+ * Resolves the legacy default model allowlist from the config the operator authored.
+ *
+ * A provider's runtime defaults add keys to `agents.defaults.models` that nobody authored
+ * (for example Anthropic's `cacheRetention` entries). Those keys are metadata, not a sender
+ * allowlist, so reading the runtime config would turn them into an accidental restriction.
+ */
+export function computeAuthoredModelPolicyAllowlist(
+  cfg: OpenClawConfig | undefined,
+): string[] | null {
+  if (!cfg) {
+    return null;
+  }
+  const authored = projectConfigOntoRuntimeSourceSnapshot(cfg);
+  return computeModelPolicyAllowlist({
+    root: authored,
+    defaults: authored.agents?.defaults,
+  });
 }
 
 export function computeModelPolicyAllowlist(params: {
