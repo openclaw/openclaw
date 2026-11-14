@@ -680,10 +680,16 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     threadId: resolvedThreadId ?? undefined,
   });
 
-  // Local plugin acceptance commits through onSendAccepted. Gateway-relayed core
-  // sends may return no identified platform result locally; their successful
-  // return still commits the route unless the payload proves non-delivery.
-  if (send.handledBy === "core") {
+  // Local plugin acceptance commits through onSendAccepted. Local core sends
+  // may return no identified platform result; their successful return still
+  // commits the route unless the payload proves non-delivery. A core send the
+  // Gateway delivered for this process (`via: "gateway"` without Gateway-owned
+  // delivery) was committed by the Gateway's send handler before it answered;
+  // committing it again here reopens the agent database from this process for
+  // a route that already exists (#187355).
+  const relayedThroughGateway =
+    send.sendResult?.via === "gateway" && input.gatewayOwnedDelivery !== true;
+  if (send.handledBy === "core" && !relayedThroughGateway) {
     const coreDeliveryStatus = send.sendResult?.deliveryStatus;
     const deliveryFact = projectPluginMessageDeliveryFact(send.payload);
     if (
