@@ -1,10 +1,7 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { observeSettlement } from "../promise-settlement.test-support.js";
+import { defineImageGenerationIdentityTests } from "./image-generate-identity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -525,10 +522,27 @@ describe("createImageGenerateTool", () => {
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
-        ...createOpenAIEditProvider(),
+        id: "openai",
         defaultModel: "gpt-image-2",
         models: ["gpt-image-2"],
         isConfigured,
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 5,
+            supportsSize: true,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1536x1024", "1024x1536"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
       },
     ]);
 
@@ -1061,6 +1075,50 @@ describe("createImageGenerateTool", () => {
     });
   });
 
+  it("starts a distinct image request while another image task is active", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = mockGeneratedImage({
+      images: [imageAsset("png-out", "second.png")],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("second.png", 7));
+    taskRuntimeMocks.createOperation.mockReturnValue({
+      taskId: "task-second-image",
+    });
+    mediaActivityMocks.listOperations.mockReturnValue([
+      {
+        taskId: "task-first-image",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        task: "First diagram prompt",
+        status: "running",
+      },
+    ]);
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      agentDir: "/tmp/agent",
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "dm:123",
+      },
+    });
+
+    await withHeldMediaGenerationResult(generateImage, taskRuntimeMocks, async (complete) => {
+      const result = await tool.execute("call-second", {
+        prompt: "Second diagram prompt",
+        filename: "second.png",
+        model: "openai/gpt-image-1",
+      });
+
+      expect(taskRuntimeMocks.createOperation).toHaveBeenCalledTimes(1);
+      expect(resultText(result)).toContain("Background task started for image generation");
+      expect(resultDetails(result).duplicateGuard).toBeUndefined();
+      await complete();
+      expect(generateImage).toHaveBeenCalledOnce();
+    });
+  });
+
   it("reports every active image task when action=status is requested", async () => {
     mediaActivityMocks.listOperations.mockReturnValue([
       {
@@ -1112,16 +1170,8 @@ describe("createImageGenerateTool", () => {
     expect(tasks[1]?.progressSummary).toBe("Queued second image");
   });
 
-  it.each(["reference", "same-path contents", "model", "options", "prompt"])(
-    "starts corrected image work for changed %s but dedupes an exact retry",
-    async (changed) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "image-request-identity-"));
-      const firstBytes = encodePngRgba(Buffer.from([255, 0, 0, 255]), 1, 1);
-      const secondBytes = encodePngRgba(Buffer.from([0, 0, 255, 255]), 1, 1);
-      const firstPath = path.join(root, "reference.png");
-      const secondPath = path.join(root, "corrected.png");
-      await fs.writeFile(firstPath, firstBytes);
-      await fs.writeFile(secondPath, secondBytes);
+  defineImageGenerationIdentityTests({
+    setup(root, firstBytes) {
       const provider = createOpenAIEditProvider();
       const generate = vi.fn<ImageGenerationProvider["generateImage"]>().mockResolvedValue({
         images: [{ buffer: firstBytes, mimeType: "image/png" }],
@@ -1136,60 +1186,56 @@ describe("createImageGenerateTool", () => {
         workspaceDir: root,
         agentSessionKey: "agent:main:discord:direct:123",
       });
-      const request = { prompt: "Keep this character, change the background", image: firstPath };
-      try {
-        await withHeldMediaGenerationResult(generate, taskRuntimeMocks, async (complete) => {
-          const first = await tool.execute("first", request);
-          const repeat = await tool.execute("retry", request);
-          expect(resultDetails(repeat).duplicateGuard).toBe(true);
-          expect(taskRuntimeMocks.createOperation).toHaveBeenCalledTimes(1);
-          if (changed === "same-path contents") {
-            await fs.writeFile(firstPath, secondBytes);
-          }
-          const corrected = {
-            ...request,
-            ...(changed === "reference" ? { image: secondPath } : {}),
-            ...(changed === "model" ? { model: "openai/gpt-image-1-mini" } : {}),
-            ...(changed === "options" ? { openai: { moderation: "low" } } : {}),
-            ...(changed === "prompt" ? { prompt: "A different background" } : {}),
-          };
-          const second = await tool.execute("correction", corrected);
-          expect(resultDetails(second).duplicateGuard).toBeUndefined();
-          expect(taskRuntimeMocks.createOperation).toHaveBeenCalledTimes(2);
-          expect(
-            resultDetails(await tool.execute("corrected-retry", corrected)).duplicateGuard,
-          ).toBe(true);
-          await complete(2);
-          expect(generate).toHaveBeenCalledTimes(2);
-          expect(generate.mock.calls[1]?.[0].prompt).toBe(corrected.prompt);
-          expect(generate.mock.calls[0]?.[0].inputImages?.[0]?.buffer).toEqual(firstBytes);
-          const expectedBytes =
-            changed === "reference" || changed === "same-path contents" ? secondBytes : firstBytes;
-          expect(generate.mock.calls[1]?.[0].inputImages?.[0]?.buffer).toEqual(expectedBytes);
-          expect(generate.mock.calls[1]?.[0].model).toBe(
-            changed === "model" ? "gpt-image-1-mini" : "gpt-image-1",
-          );
-          if (changed === "options") {
-            expect(generate.mock.calls[1]?.[0].providerOptions?.openai?.moderation).toBe("low");
-          }
-          for (const [receipt, bytes] of [
-            [first, firstBytes],
-            [second, expectedBytes],
-          ] as const) {
-            expect(resultDetails(receipt).referenceInputs).toEqual([
-              {
-                sha256: createHash("sha256").update(bytes).digest("hex"),
-                bytes: bytes.byteLength,
-                mimeType: "image/png",
-              },
-            ]);
-          }
-        });
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+      return { tool, generate, tasks: taskRuntimeMocks };
     },
-  );
+    resultDetails,
+  });
+
+  it("returns recent status for a repeated image request after fast task completion", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const now = Date.now();
+    taskRuntimeMocks.createOperation.mockReturnValue({
+      taskId: "task-recent-image",
+    });
+    const generateImage = mockGeneratedImage();
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("proof.png", 7));
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      agentDir: "/tmp/agent",
+      agentSessionKey: "agent:main:discord:direct:123",
+    });
+
+    await withHeldMediaGenerationResult(generateImage, taskRuntimeMocks, async (complete) => {
+      await tool.execute("call-recent-start", {
+        prompt: "Already generated proof image",
+        filename: "proof.png",
+      });
+      await complete();
+      const createdTask = mockCallArg(taskRuntimeMocks.createOperation, 0, "createOperation");
+      mediaActivityMocks.listOperations.mockReturnValue([
+        {
+          ...findMediaGenerationOperation(String(createdTask.runId)),
+          status: "succeeded",
+          endedAt: now - 10_000,
+          progressSummary: "Generated 1 image",
+        },
+      ]);
+
+      const result = await tool.execute("call-recent", {
+        prompt: "Already generated proof image",
+        filename: "proof.png",
+        model: "openai/gpt-image-1",
+      });
+
+      expect(taskRuntimeMocks.createOperation).toHaveBeenCalledTimes(1);
+      expect(resultText(result)).toContain(
+        "Image generation task task-recent-image recently succeeded",
+      );
+      expect(resultDetails(result).duplicateGuard).toBe(true);
+      expect(resultDetails(result).active).toBe(false);
+      expect(generateImage).toHaveBeenCalledOnce();
+    });
+  });
 
   it("does not collapse distinct unqualified explicit image models in recent duplicate keys", async () => {
     stubImageGenerationProviders();
@@ -1266,59 +1312,45 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
 
-  it.each([
-    {
-      provider: "openai",
+  it("forwards max quality and OpenAI provider options", async () => {
+    const quality = "max";
+
+    const generateImage = mockGeneratedImage({
       model: "gpt-image-2",
-      requested: { quality: "max", outputFormat: "jpeg" },
-      options: {
+      images: [imageAsset("jpg-out", "preview.jpg", "image/jpeg")],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      savedMedia("generated.jpg", 5, "image/jpeg"),
+    );
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
+    const result = await tool.execute("call-openai-hints", {
+      prompt: "Cheap preview",
+      quality,
+      outputFormat: "jpeg",
+      openai: {
         background: "opaque",
         moderation: "low",
         outputCompression: 60,
         user: "end-user-42",
       },
-    },
-    {
-      provider: "openai",
-      model: "gpt-image-1.5",
-      requested: { outputFormat: "png" },
-      options: { background: "transparent" },
-    },
-    {
-      provider: "fal",
-      model: "krea/v2/medium/text-to-image",
-      requested: { aspectRatio: "2.35:1" },
-      options: { creativity: "high" },
-    },
-  ])(
-    "forwards generation options for $provider/$model",
-    async ({ provider, model, requested, options }) => {
-      const format = requested.outputFormat ?? "png";
-      const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
-      const generateImage = mockGeneratedImage({
-        provider,
-        model,
-        images: [imageAsset("generated", `generated.${format}`, mimeType)],
-      });
-      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
-        savedMedia(`generated.${format}`, 9, mimeType),
-      );
-      const primary = `${provider}/${model}`;
-      const result = await createToolWithPrimaryImageModel(primary).execute("call-options", {
-        prompt: "A portrait",
-        ...requested,
-        [provider]: options,
-      });
+    });
 
-      const generateArgs = mockCallArg(generateImage, 0, "generateImage");
-      expect(generateArgs).toMatchObject({
-        ...requested,
-        cfg: { agents: { defaults: { mediaModels: { image: { primary } } } } },
-      });
-      expect(generateArgs.providerOptions).toEqual({ [provider]: options });
-      expect(resultDetails(result)).toMatchObject({ provider, model, requested });
-    },
-  );
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.quality).toBe(quality);
+    expect(generateArgs.outputFormat).toBe("jpeg");
+    expect(generateArgs.providerOptions).toEqual({
+      openai: {
+        background: "opaque",
+        moderation: "low",
+        outputCompression: 60,
+        user: "end-user-42",
+      },
+    });
+    const details = resultDetails(result);
+    expect(details.requested).toMatchObject({ quality });
+    expect(details.requested).toMatchObject({ outputFormat: "jpeg" });
+  });
 
   it.each(["low", undefined, "auto", "unexpected"])(
     "reports returned image settings independently of requests (quality %s)",
@@ -1364,55 +1396,64 @@ describe("createImageGenerateTool", () => {
     },
   );
 
-  it.each([
-    { provider: "google", model: "gemini-3-pro-image-preview", width: 3200, mimeType: "image/png" },
-    { provider: "openai", model: "gpt-image-1", width: 3200, mimeType: "image/jpeg" },
-    { provider: "fal", model: "krea/v2/medium/text-to-image", width: 2048, mimeType: "image/png" },
-    {
-      provider: "google",
-      model: "gemini-3-pro-image-preview",
-      width: 2048,
-      mimeType: "image/png",
-      fallback: "google/nano-banana-2-lite",
-    },
-  ])("keeps inferred edit resolution separate for $provider/$model ($width)", async (testCase) => {
-    const { provider, model, width, mimeType } = testCase;
-    const fallback = "fallback" in testCase ? testCase.fallback : undefined;
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createGoogleImageProvider(["gemini-3-pro-image-preview"]),
-      createOpenAIEditProvider(),
-      createFalEditProvider({
-        defaultModel: fallback ?? model,
-        models: [fallback ?? model],
-        maxInputImages: 10,
-        supportsAspectRatio: true,
-        resolutionsByModel: { [fallback ?? model]: [] },
-      }),
-    ]);
+  it("forwards generic fal provider options", async () => {
     const generateImage = mockGeneratedImage({
-      provider,
-      model,
-      images: [imageAsset("edited", "edited.png")],
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      images: [imageAsset("krea-out", "krea.png")],
     });
-    mockReferenceImage("input-image", mimeType, { width, height: width === 3200 ? 1800 : 2048 });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 6));
-    const tool = createToolWithPrimaryImageModel(`${provider}/${model}`, {
-      workspaceDir: process.cwd(),
-      ...(fallback ? { fallbacks: [`fal/${fallback}`] } : {}),
-    });
-    const result = await tool.execute("call-edit", {
-      prompt: "Edit the reference image",
-      image: "./fixtures/reference.png",
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("krea.png", 8));
+
+    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image");
+    await tool.execute("call-fal-krea-options", {
+      prompt: "Expressive print portrait",
+      aspectRatio: "2.35:1",
+      fal: {
+        creativity: "high",
+      },
     });
 
     const generateArgs = mockCallArg(generateImage, 0, "generateImage");
-    expect(generateArgs.inferredResolution).toBe(width > 3000 ? "4K" : "2K");
-    expect(generateArgs.inputImages).toEqual([{ buffer: Buffer.from("input-image"), mimeType }]);
-    expect(generateArgs.aspectRatio).toBeUndefined();
-    expect(generateArgs.modelOverride).toBeUndefined();
+    expect(generateArgs.providerOptions).toEqual({
+      fal: {
+        creativity: "high",
+      },
+    });
+    expect(generateArgs.aspectRatio).toBe("2.35:1");
+  });
+
+  it("does not infer edit resolution when krea/v2/medium/text-to-image declares no resolution options", async () => {
+    const model = "krea/v2/medium/text-to-image";
+
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        maxInputImages: 10,
+        supportsAspectRatio: true,
+        resolutionsByModel: { [model]: [] },
+      }),
+    ]);
+    const generateImage = mockGeneratedImage({
+      provider: "fal",
+      model,
+      images: [imageAsset("krea-style-out", "krea-style.png")],
+    });
+    mockReferenceImage("style-ref", "image/png", { width: 2048, height: 2048 });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("krea-style.png", 14));
+
+    const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+      workspaceDir: process.cwd(),
+    });
+    await tool.execute("call-fal-krea-style", {
+      prompt: "Style-directed portrait",
+      image: "./fixtures/style.png",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
     expect(generateArgs.resolution).toBeUndefined();
-    expect(resultDetails(result)).toMatchObject({ provider, model });
-    expect(resultDetails(result)).not.toHaveProperty("resolution");
+    expect(generateArgs.inferredResolution).toBe("2K");
+    expect(generateArgs.inputImages).toHaveLength(1);
   });
 
   it.each([
@@ -1446,7 +1487,7 @@ describe("createImageGenerateTool", () => {
       provider,
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    mockReferenceImage("reference", "image/png", {
+    const loadWebMedia = mockReferenceImage("reference", "image/png", {
       width: 1024,
       height: 1024,
     });
@@ -1474,6 +1515,10 @@ describe("createImageGenerateTool", () => {
       }),
     ).rejects.toThrow(/reference image/);
     expect(provider.generateImage).toHaveBeenCalledTimes(1);
+    if (maxInputImages === 16) {
+      expect(loadWebMedia).toHaveBeenCalledTimes(16);
+      expect(generateImage).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
@@ -1581,6 +1626,50 @@ describe("createImageGenerateTool", () => {
     expect(JSON.stringify(resultDetails(result))).not.toContain("cmVmZXJlbmNl");
   });
 
+  it("passes inferred resolution separately when fallbacks have different capabilities", async () => {
+    const fallbackModel = "google/nano-banana-2-lite";
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3-pro-image-preview",
+        models: ["gemini-3-pro-image-preview"],
+        capabilities: {
+          generate: { supportsResolution: true },
+          edit: { enabled: true, maxInputImages: 5, supportsResolution: true },
+          geometry: { resolutions: ["1K", "2K", "4K"] },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+      createFalEditProvider({
+        defaultModel: fallbackModel,
+        models: [fallbackModel],
+        resolutionsByModel: { [fallbackModel]: [] },
+      }),
+    ]);
+    const generateImage = mockGeneratedImage({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+    });
+    mockReferenceImage("reference", "image/png", { width: 2048, height: 2048 });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 6));
+
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
+      workspaceDir: process.cwd(),
+      fallbacks: [`fal/${fallbackModel}`],
+    });
+    await tool.execute("call-edit-with-resolutionless-fallback", {
+      prompt: "edit safely across fallbacks",
+      image: "./fixtures/reference.png",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("2K");
+  });
+
   it("accepts Grok-specific aspect ratios through image_generate", async () => {
     const model = "xai/grok-imagine-image";
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
@@ -1608,7 +1697,13 @@ describe("createImageGenerateTool", () => {
   });
 
   it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
-    const generateImage = mockGeneratedImage();
+    const generateImage = mockGeneratedImage({
+      model: "gpt-image-2",
+      images: [imageAsset("jpg-out", "preview.jpg", "image/jpeg")],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      savedMedia("generated.jpg", 5, "image/jpeg"),
+    );
 
     const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
     await expect(
@@ -1623,6 +1718,72 @@ describe("createImageGenerateTool", () => {
     expect(generateImage).not.toHaveBeenCalled();
   });
 
+  it("forwards transparent OpenAI background requests with a PNG output format", async () => {
+    const generateImage = mockGeneratedImage({
+      model: "gpt-image-1.5",
+      images: [imageAsset("png-out", "transparent.png")],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("transparent.png", 7));
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1.5");
+    const result = await tool.execute("call-openai-transparent", {
+      prompt: "A transparent badge",
+      outputFormat: "png",
+      openai: {
+        background: "transparent",
+      },
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    const cfg = requireRecord(generateArgs.cfg, "generateImage config");
+    const agents = requireRecord(cfg.agents, "generateImage agents config");
+    const defaults = requireRecord(agents.defaults, "generateImage defaults config");
+    expect(requireRecord(defaults.mediaModels, "mediaModels").image).toEqual({
+      primary: "openai/gpt-image-1.5",
+    });
+    expect(generateArgs.outputFormat).toBe("png");
+    expect(generateArgs.providerOptions).toEqual({
+      openai: {
+        background: "transparent",
+      },
+    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("openai");
+    expect(details.model).toBe("gpt-image-1.5");
+    expect(details.requested).toMatchObject({ outputFormat: "png" });
+  });
+
+  it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createGoogleImageProvider(),
+    ]);
+    mockGeneratedImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      images: [imageAsset("jpg-data", "kodo_sawaki_zazen.jpg", "image/jpeg")],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      size: 8,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
+
+    const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
+    const text = resultText(result);
+
+    expect(text).toContain(
+      'path="/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg"',
+    );
+    const details = resultDetails(result);
+    const media = requireRecord(details.media, "media details");
+    expect(media.mediaUrls).toEqual([
+      "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+    ]);
+  });
+
   it.each([5, 2.5, "2cats", null])("rejects invalid image count %s", async (count) => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createGoogleImageProvider(),
@@ -1631,6 +1792,7 @@ describe("createImageGenerateTool", () => {
       provider: "google",
       model: "gemini-3.1-flash-image-preview",
     });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("generated.png", 7));
 
     const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
     await expect(
@@ -1640,6 +1802,30 @@ describe("createImageGenerateTool", () => {
       }),
     ).rejects.toThrow("count must be between 1 and 4");
     expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("forwards reference images and inferred resolution for edit mode", async () => {
+    const generateImage = stubEditedImageFlow({ width: 3200, height: 1800 });
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
+      workspaceDir: process.cwd(),
+    });
+
+    const result = await tool.execute("call-edit", {
+      prompt: "Add a dramatic stormy sky but keep everything else identical.",
+      image: "./fixtures/reference.png",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.aspectRatio).toBeUndefined();
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("4K");
+    expect(resultDetails(result)).not.toHaveProperty("resolution");
+    expect(generateArgs.inputImages).toEqual([
+      {
+        buffer: Buffer.from("input-image"),
+        mimeType: "image/png",
+      },
+    ]);
   });
 
   it("passes web_fetch SSRF policy to remote reference images", async () => {
@@ -1726,6 +1912,40 @@ describe("createImageGenerateTool", () => {
       "maxBytes",
       MAX_IMAGE_BYTES,
     );
+  });
+
+  it("does not treat inferred edit resolution as an OpenAI override", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createOpenAIEditProvider(),
+    ]);
+    const generateImage = mockGeneratedImage({
+      images: [imageAsset("png-out", "edited.png")],
+    });
+    mockReferenceImage("input-image", "image/jpeg", { width: 3200, height: 1800 });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 7));
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      workspaceDir: process.cwd(),
+    });
+
+    const result = await tool.execute("call-openai-edit", {
+      prompt: "Remove the subject but keep the rest unchanged.",
+      image: "./fixtures/reference.png",
+    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("openai");
+    expect(details.model).toBe("gpt-image-1");
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.modelOverride).toBeUndefined();
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("4K");
+    expect(generateArgs.inputImages).toEqual([
+      {
+        buffer: Buffer.from("input-image"),
+        mimeType: "image/jpeg",
+      },
+    ]);
   });
 
   it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {

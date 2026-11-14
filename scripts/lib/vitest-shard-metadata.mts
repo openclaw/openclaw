@@ -142,7 +142,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // seconds balance files; complete shard spans still own elapsed admission.
   ["src/gateway/server-methods/agent.test.ts", 82],
   ["src/gateway/server-methods/chat.directive-tags.test.ts", 38],
-  ["src/gateway/server-methods/sessions-rewind.storage.test.ts", 33],
   ["src/gateway/server-methods/sessions-rewind.test.ts", 32],
   ["src/gateway/server-methods/session-catalog-privacy.test.ts", 24],
   ["src/gateway/server-methods/chat.reset-visible-yield.test.ts", 24],
@@ -189,9 +188,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/commands/doctor-config-flow.test.ts", 21.1],
   ["src/commands/doctor-config-flow.workspace-persistence.test.ts", 22.5],
   ["src/commands/doctor-config-preflight.admission.process.test.ts", 23.7],
-  ["src/commands/doctor-config-preflight.plugin-deferral.test.ts", 79.4],
   ["src/commands/doctor-config-preflight.pristine.process.test.ts", 32.1],
-  ["src/commands/doctor-config-preflight.process.test.ts", 37.4],
   // Testbox run 35529032951: the expanded rollback corpus takes 194.3s serial.
   ["src/commands/doctor-config-preflight.refusal.process.test.ts", 194.3],
   ["src/commands/doctor-config-preflight.state-migration-input.test.ts", 27.5],
@@ -317,7 +314,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/update-cli.target-schema.test.ts", 186],
   ["test/scripts/pr-worktree-provision.test.ts", 206],
   ["src/gateway/managed-image-attachments.test.ts", 24],
-  ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
   ["test/scripts/test-projects-routing.test.ts", 21],
   // Single-worker Node file spans after splitting the sidebar's serial case groups.
@@ -328,7 +324,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
-  ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
   // Preserved case maxima from PR runs 36394634707, 36394423189 and
@@ -336,7 +331,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Policy retains the tooling-owner table; process owners also cover leaf configs.
   // Keep cold projections until complete split-file CI walls arrive.
   ["test/scripts/ci-changed-node-test-plan.test.ts", 143],
-  ["test/scripts/ci-changed-node-test-plan.source-owners.test.ts", 130],
   ["test/scripts/ci-changed-node-test-plan.policy.test.ts", 130],
   // Two-CPU / 7.65-GiB native replay took 146.24s plus the outer shard wrapper.
   ["test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts", 148],
@@ -356,7 +350,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/write-plugin-sdk-entry-dts.test.ts", 74],
   ["test/scripts/ci-workflow-guards.test.ts", 38],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
-  ["test/scripts/find-reusable-release-validation.test.ts", 8],
   ["test/scripts/install-sh.test.ts", 6],
   ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
   ["test/scripts/managed-child-process.test.ts", 42],

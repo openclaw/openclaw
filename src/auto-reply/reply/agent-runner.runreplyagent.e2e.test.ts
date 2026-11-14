@@ -1193,48 +1193,49 @@ describe("runReplyAgent active steering", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    "runtime_rejected",
-  ] as const)("queues a follow-up when active steering fails with %s", async (reason) => {
-    state.beforeAgentReplyHasHooksMock.mockImplementation(
-      (hookName) => hookName === "before_agent_reply",
-    );
-    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
-    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    state.backendQueueMessageMock.mockReturnValueOnce({
-      queued: false,
-      reason,
-    });
-    const onAdopted = vi.fn();
-    const onBlockReply = vi.fn();
-    const active = createMainSessionOperation();
-    active.setPhase("running");
-    const { run } = createMinimalRun({
-      opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-    });
+  it.each(["runtime_rejected"] as const)(
+    "queues a follow-up when active steering fails with %s",
+    async (reason) => {
+      state.beforeAgentReplyHasHooksMock.mockImplementation(
+        (hookName) => hookName === "before_agent_reply",
+      );
+      state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+      state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+      state.backendQueueMessageMock.mockReturnValueOnce({
+        queued: false,
+        reason,
+      });
+      const onAdopted = vi.fn();
+      const onBlockReply = vi.fn();
+      const active = createMainSessionOperation();
+      active.setPhase("running");
+      const { run } = createMinimalRun({
+        opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
+        isActive: true,
+        shouldSteer: true,
+        shouldFollowup: true,
+        resolvedQueueMode: "steer",
+      });
 
-    try {
-      await expect(run()).resolves.toBeUndefined();
+      try {
+        await expect(run()).resolves.toBeUndefined();
 
-      expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
-      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-      expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
-      expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(onBlockReply).not.toHaveBeenCalled();
-      expect(onAdopted).not.toHaveBeenCalled();
-      expect(parkedSteer.fallback).toHaveBeenCalledOnce();
-      expect(parkedSteer.consume).not.toHaveBeenCalled();
-      active.complete();
-      expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
-    } finally {
-      active.complete();
-    }
-  });
+        expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
+        expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+        expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+        expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+        expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(onBlockReply).not.toHaveBeenCalled();
+        expect(onAdopted).not.toHaveBeenCalled();
+        expect(parkedSteer.fallback).toHaveBeenCalledOnce();
+        expect(parkedSteer.consume).not.toHaveBeenCalled();
+        active.complete();
+        expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+      } finally {
+        active.complete();
+      }
+    },
+  );
 
   it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};

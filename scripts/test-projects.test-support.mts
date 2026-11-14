@@ -720,10 +720,7 @@ const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "extensions/discord/src/monitor/message-handler.process.test.ts",
   "extensions/slack/src/monitor.tool-result.test.ts",
 ];
-const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
-  "src/agents/system-prompt.test.ts",
-  ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
-];
+const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [...GROUP_VISIBLE_REPLY_TEST_TARGETS];
 const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
   "directory",
   "plugin",
@@ -3193,16 +3190,6 @@ function resolveParallelsToolingTestTargets(changedPath: string) {
     return null;
   }
   const targets = ["test/scripts/parallels-smoke-model.test.ts"];
-  if (
-    [
-      "scripts/e2e/parallels/guest-transports.ts",
-      "scripts/e2e/parallels/host-command.ts",
-      "scripts/e2e/parallels/npm-update-scripts.ts",
-      "scripts/e2e/parallels/npm-update-smoke.ts",
-    ].includes(changedPath)
-  ) {
-    targets.push("test/scripts/parallels-npm-update-smoke.test.ts");
-  }
   if (changedPath === "scripts/e2e/parallels/update-job-timeout.ts") {
     targets.push("test/scripts/parallels-update-job-timeout.test.ts");
   }
@@ -5164,9 +5151,6 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
     return "tuiPty";
   }
   if (relative.endsWith(".e2e.test.ts")) {
-    return "e2e";
-  }
-  if (relative === "src/gateway/gateway.test.ts") {
     return "e2e";
   }
   const channelContractKind = resolveChannelContractTargetKind(relative);

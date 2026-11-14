@@ -2075,38 +2075,35 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     expect(collected.stderr).not.toContain("Warning:");
   }
 
-  itPosix.each(["hold"])(
-    "recovers the next scripts/pr invocation after SIGKILL during %s",
-    () => {
-      const fixture = makeFrozenDependencyFixture();
-      const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
-      let anchor;
-      ({ anchor } = materializeAnchor(fixture, {
-        ...fixture.env,
-        OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
-      }));
-      expect(prCacheEntries(cache)).toHaveLength(1);
-      expect(readPrCacheState(join(cache, prCacheEntries(cache)[0]!)).anchors).toEqual([anchor]);
-      fixture.git(fixture.canonical, ["checkout", "main"]);
-      const resumed = runWrapper(fixture, ["unknown-command"], "canonical", { env: fixture.env });
-      expect(resumed.status, resumed.stdout + resumed.stderr).toBe(2);
-      expect(resumed.stderr).not.toContain("dependency cache cleanup failed");
-      expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
-      expect(prCacheEntries(cache)).toHaveLength(1);
-      for (const key of prCacheEntries(cache)) {
-        expect(readPrCacheState(join(cache, key))).toEqual({
-          registered: true,
-          settled: true,
-          anchors: [],
-        });
-      }
-      expect(
-        readdirSync(cache).some((name) =>
-          /^(?:install-|retired-|lifetime-|\.metadata-lock)/.test(name),
-        ),
-      ).toBe(false);
-    },
-  );
+  itPosix.each(["hold"])("recovers the next scripts/pr invocation after SIGKILL during %s", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    let anchor;
+    ({ anchor } = materializeAnchor(fixture, {
+      ...fixture.env,
+      OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
+    }));
+    expect(prCacheEntries(cache)).toHaveLength(1);
+    expect(readPrCacheState(join(cache, prCacheEntries(cache)[0]!)).anchors).toEqual([anchor]);
+    fixture.git(fixture.canonical, ["checkout", "main"]);
+    const resumed = runWrapper(fixture, ["unknown-command"], "canonical", { env: fixture.env });
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(2);
+    expect(resumed.stderr).not.toContain("dependency cache cleanup failed");
+    expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
+    expect(prCacheEntries(cache)).toHaveLength(1);
+    for (const key of prCacheEntries(cache)) {
+      expect(readPrCacheState(join(cache, key))).toEqual({
+        registered: true,
+        settled: true,
+        anchors: [],
+      });
+    }
+    expect(
+      readdirSync(cache).some((name) =>
+        /^(?:install-|retired-|lifetime-|\.metadata-lock)/.test(name),
+      ),
+    ).toBe(false);
+  });
 
   itPosix(
     "keeps a live package reader after its creator exits, then releases its finished hold",

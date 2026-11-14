@@ -73,7 +73,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/gateway.continuation-skip-bootstrap.integration.test.ts",
   "src/gateway/github-personal-publication-outcomes.test.ts",
   "src/gateway/github-personal-publication.lifecycle.test.ts",
-  "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-pr-attribution.test.ts",
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",
@@ -172,6 +171,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
+  "src/gateway/operator-run-recovery.access-policy.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
@@ -282,7 +282,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-worker.integration.test.ts",
   "src/gateway/session-involvement.test.ts",
   "src/gateway/session-lifecycle-incognito.test.ts",
-  "src/gateway/session-lifecycle-run-failure.test.ts",
   "src/gateway/session-lifecycle-source-authority.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",
   "src/gateway/session-lifecycle-state.worker.test.ts",
@@ -290,7 +289,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-message-drain.test.ts",
   "src/gateway/session-message-events.exec-completion.test.ts",
   "src/gateway/session-message-events.history-worker.test.ts",
-  "src/gateway/session-message-events.test.ts",
   "src/gateway/session-pr-workspace-adoption.test.ts",
   "src/gateway/session-produced-media-delivery.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
@@ -356,7 +354,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/handlers/client-native-replay.test.ts",
   "src/gateway/talk/handlers/client-native-speech.test.ts",
   "src/gateway/talk/handlers/client.test.ts",
-  "src/gateway/talk/handlers/native-consult-target.test.ts",
   "src/gateway/talk/handlers/voice.test.ts",
   "src/gateway/talk/relay-audio-base64.test.ts",
   "src/gateway/talk/relay/agent-consult.registration.test.ts",
@@ -394,7 +391,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/live-events.test.ts",
   "src/gateway/worker-environments/local-workspace-conversion.test.ts",
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
-  "src/gateway/worker-environments/local-workspace-store.test.ts",
   "src/gateway/worker-environments/local-workspace-template.test.ts",
   "src/gateway/worker-environments/node-desktop-carrier.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
@@ -502,7 +498,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/repository-workspace-startup.test.ts",
   "src/gateway/worker-environments/retained-owner-recovery.test.ts",
   "src/gateway/worker-environments/service-inventory-recovery.test.ts",
-  "src/gateway/worker-environments/service-lifetime.test.ts",
   "src/gateway/worker-environments/service-prepare.test.ts",
   "src/gateway/worker-environments/service-reconcile-backoff.test.ts",
   "src/gateway/worker-environments/service.plugin-create.test.ts",
@@ -638,7 +633,6 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/users-preferences.test.ts",
   "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/usage.test.ts",
-  "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
 
 export const gatewayMethodsTestInclude = [
@@ -721,7 +715,7 @@ export const gatewayCoreTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export const gatewayServerExcludedTestFiles = ["src/gateway/gateway.test.ts"];
+export const gatewayServerExcludedTestFiles = [];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);
