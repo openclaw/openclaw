@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const spawnSync = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ spawnSync }));
 
+// mock-isolation: route spawns by executable basename; host install roots differ per runner.
 vi.mock("./windows-install-roots.js", () => ({
   getWindowsPowerShellExePath: () => "powershell.exe",
   getWindowsSystem32ExePath: (name: string) => `C:\\Windows\\System32\\${name}`,
