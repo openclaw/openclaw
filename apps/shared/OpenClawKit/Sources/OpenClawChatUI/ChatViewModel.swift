@@ -665,16 +665,6 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    @discardableResult
-    public func resumeFromForeground() -> Task<Void, Never> {
-        // Reconcile wall-clock expiry before presenting controls, even if a sleeping task has not resumed yet.
-        let now = Date()
-        for model in self.questionCards where model.localExpiryDelay(at: now) == 0 {
-            self.expireQuestionIfNeeded(model, at: now)
-        }
-        return Task { await self.refreshRunStateAfterForeground() }
-    }
-
     public func abort() {
         guard !self.usesWebConversation else { return }
         Task { await self.performAbort() }
@@ -1006,37 +996,6 @@ extension OpenClawChatViewModel {
         if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
             self.errorText = nil
         }
-    }
-
-    private func refreshRunStateAfterForeground() async {
-        if self.usesWebConversation { self.loadWebConversationChrome()
-            return
-        }
-        let context = self.beginHistoryRequest()
-        let refresh = await refreshHistoryAfterRun(historyRequest: context)
-        guard self.isCurrentSession(context.session) else { return }
-        if refresh.applied,
-           refresh.runSnapshotApplied,
-           context.runOwnershipGeneration == self.runOwnershipGeneration,
-           !self.isSending,
-           refresh.supportsInFlightRunState,
-           !refresh.hasInFlightRun
-        {
-            if refresh.sessionHasActiveRun,
-               Self.hasUnansweredLatestUser(in: self.messages)
-            {
-                self.clearStreamingActivity()
-                // Keep a known run ID authoritative so its stream and terminal
-                // events still route here. Synthesize activity only after the
-                // client has no run identity to preserve.
-                self.updateActiveSessionRunWithoutChatSnapshot(self.pendingRuns.isEmpty)
-            } else {
-                self.updateActiveSessionRunWithoutChatSnapshot(false)
-                clearPendingRuns(hapticEvent: assistantHapticEventAfterLatestUser())
-                self.clearStreamingActivity()
-            }
-        }
-        await pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
     }
 
     private func performAbort() async {
