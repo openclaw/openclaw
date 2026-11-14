@@ -86,6 +86,7 @@ const enProfile = {
         "Verified sign-in identity, not permission to publish. Manage publishing access separately.",
       githubVerified: "Verified",
       githubUnavailable: "Unavailable",
+      githubSetup: "Sign in with GitHub through Cloudflare Access or Tailscale Serve to verify it.",
       githubUnavailableDescription:
         "No single verified GitHub sign-in account is available to display.",
       ownerGithubDescription:

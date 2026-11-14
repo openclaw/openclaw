@@ -429,6 +429,9 @@ export function ProfilePage() {
                             : "profilePage.identity.githubUnavailable",
                         )}
                       />
+                      <Show when={!profile().githubIdentity}>
+                        <span>{t("profilePage.identity.githubSetup")}</span>
+                      </Show>
                       <Show when={profile().githubIdentity}>
                         {(identity) => (
                           <a
