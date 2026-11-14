@@ -452,7 +452,8 @@ describe("CodexNativeSubagentMonitor", () => {
       submissionId: "followup-turn",
     });
     expect(claimDirectChild).toHaveBeenCalledTimes(2);
-    expect(onDirectChildAccepted).toHaveBeenCalledOnce();
+    // Promotion refreshes acceptance with the surviving custody handle.
+    expect(onDirectChildAccepted).toHaveBeenCalledTimes(2);
     await expect(
       invokeNativeHookRelay(
         {

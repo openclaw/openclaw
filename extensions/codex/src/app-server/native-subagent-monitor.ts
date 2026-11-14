@@ -1989,7 +1989,6 @@ class Monitor {
       return undefined;
     }
     let claimOwner = owner;
-    let transitioned = false;
     while (known.pendingTurns.length > 0) {
       const pending = known.pendingTurns[0]!;
       const currentTurnId = child?.nativeTurnId;
@@ -2040,7 +2039,6 @@ class Monitor {
         for (const continuation of continuations) {
           continuation.modelSource?.release();
         }
-        transitioned = true;
         this.completionDelivery.applyReceipts(
           known.parent,
           known.deliveryReceipts.resumeAssignment(
@@ -2090,7 +2088,6 @@ class Monitor {
         pending.modelSource = undefined;
       }
       claimOwner = pending.admittedOwner;
-      transitioned = true;
       known.pendingTurns.shift();
       releaseCompletionCustody(pending);
     }
@@ -2130,9 +2127,10 @@ class Monitor {
         child.directOwner = claimOwner;
         child.releaseDirectChild = claimOwner.claimDirectChild?.(child.childThreadId);
       }
-      if (!transitioned) {
-        claimOwner.onDirectChildAccepted?.();
-      }
+      claimOwner.onDirectChildAccepted?.({
+        runId: child.runId,
+        completionCustody: child.completionCustody,
+      });
     }
     this.observeActiveChild(child);
     this.admissionCustody.bindEventSink(child);

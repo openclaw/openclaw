@@ -39,6 +39,7 @@ import {
 export {
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
+  registerAgentHarnessCompletionHandoff,
 } from "../agents/agent-harness-completion-custody.js";
 export type { AgentHarnessCompletionCustody, AgentHarnessCompletionScope };
 

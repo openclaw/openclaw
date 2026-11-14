@@ -5,6 +5,7 @@ import {
   hasCompletionMessageSessionSpawn,
   mergeAcceptedSessionSpawnsForRun,
 } from "./accepted-session-spawn.js";
+import { hasAgentHarnessCompletionHandoff } from "./agent-harness-completion-scope.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { recordModelFallbackStop } from "./failover-error.js";
@@ -86,7 +87,8 @@ export async function settleRequesterRun(
   }
   if (
     !params.sessionKey ||
-    !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns) ||
+    (!hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns) &&
+      !(instance && hasAgentHarnessCompletionHandoff(instance))) ||
     params.abortSignal?.aborted ||
     result.meta.aborted ||
     result.requesterContinuationSettled === true
@@ -117,6 +119,12 @@ export async function settleRequesterRun(
       scheduledToolTargets: readScheduledToolTargets({ operationalRunInstance: instance }),
     });
   try {
+    if (!hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns)) {
+      if (result.meta.yielded && !result.meta.error && !result.meta.continuationPending) {
+        result.requesterContinuationSettled = true;
+      }
+      return;
+    }
     if (result.meta.continuationPending) {
       // The outbox transfers this batch only after its waiting status is delivered.
       if ((await markRequesterTurnYielded(requester)) === 0) {
