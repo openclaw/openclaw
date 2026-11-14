@@ -33,6 +33,7 @@ import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-suppor
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import type { CronStoredJob } from "../../cron/types.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { bindPluginGatewayAccessPolicy } from "../../plugins/gateway-access-policy-registration.js";
 import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import {
@@ -49,6 +50,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import * as agentExecution from "./agent-runner-execution.js";
 import * as routedReplies from "./route-reply.js";
 import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
@@ -162,6 +164,90 @@ it("executes a recovery event after its producer's plugin scope closes", async (
       } finally {
         invocations.release();
         await Promise.allSettled([receipt?.settled]);
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
+
+it("finalizes a failed-before-reply event after its visitor policy scope closes", async ({
+  signal,
+}) => {
+  await withOpenClawTestState(
+    { label: "session-event-visitor-finalization", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:visitor-finalization" };
+      await replaceSessionEntry(target, {
+        sessionId: "visitor-finalization",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
+      });
+      const plugin = createOwnedTestInstance("visitor-access");
+      const invocations = new PluginInvocationScope(plugin.owner!.registry!, [plugin]);
+      const execute = agentExecution.executeAgentTurn;
+      using executionScope = vi
+        .spyOn(agentExecution, "executeAgentTurn")
+        .mockImplementation((params) => invocations.run(() => execute(params)));
+      let closed = false;
+      const check = vi.fn(() => {
+        signal.throwIfAborted();
+        return closed;
+      });
+      const policy = bindPluginGatewayAccessPolicy(
+        {
+          authorize: () => ({ signal, assertCurrent: check }),
+        },
+        plugin,
+      );
+      const access = policy.authorize({
+        config,
+        profile: { profileId: "visitor", emails: [], assignedRole: null },
+        requiredByRole: true,
+      })!;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "visitor",
+        scopes: ["operator.write"],
+        signal: access.signal,
+        assertCurrent: access.assertCurrent,
+      });
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        await startEmbeddedTurn(params, "reply admission");
+        invocations.release();
+        closed = true;
+        throw new Error("accepted continuation children could not transfer terminal delivery");
+      });
+      try {
+        const expectedTarget = await captureSessionEventTargetForHost(
+          target.agentId,
+          target.sessionKey,
+          { operatorAuthority },
+        );
+        const receipt = invocations.run(() =>
+          enqueueSessionEventForHost("Resume required work", {
+            ...target,
+            source: "restart",
+            expectedTarget,
+            abortSignal: signal,
+            deliver: false,
+          }),
+        );
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(executionScope).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(outcome).toMatchObject({ status: "failed", executionStarted: true });
+        expect(outcome.error).not.toContain("Plugin invocation scope is closed");
+        expect(outcome.error).toContain("couldn't finish this reply");
+        expect(check.mock.results.some((result) => result.type === "return" && result.value)).toBe(
+          true,
+        );
+      } finally {
+        invocations.release();
         await drainGlobalSingletonLifecycleState("restart");
         resetSystemEventsForTest();
       }
