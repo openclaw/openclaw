@@ -1063,7 +1063,9 @@ openclaw worktrees retire-snapshot <id> --expected-ref <ref> --expected-oid <oid
 
 The Control UI **Worktrees** page under Settings provides creation with a base-branch picker, ordinary removal and restoration, and garbage collection. It shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
-Leave **Base branch** empty to fetch and use the remote default branch, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Automatic selection also fast-forwards a clean, strictly older local default branch. For repositories with `origin`, failed fetches use the cached remote default with a warning; unavailable remote defaults require repairing `origin` or choosing an explicit ref.
+In **Worktrees → New worktree**, choose a repository from existing managed-worktree records or enter another path. **Base branch** offers discovered branches and custom branch, tag, or commit references. Changing repositories clears the previous branch selection and its suggestions; choosing either field does not create a checkout until you click **Create**.
+
+Choose **Automatic base** to fetch and use the remote default branch, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Automatic selection also fast-forwards a clean, strictly older local default branch. For repositories with `origin`, failed fetches use the cached remote default with a warning; unavailable remote defaults require repairing `origin` or choosing an explicit ref.
 
 `--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The qualified Gateway removal contract preserves this outcome.
 
