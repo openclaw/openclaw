@@ -12,11 +12,14 @@ import { setSlackRuntime } from "./runtime.js";
 import {
   clearSlackThreadFailureNotice,
   clearSlackThreadParticipationCache,
+  hasInboundSlackThreadParticipation,
+  hasInboundSlackThreadParticipationWithPersistence,
   hasSlackThreadFailureNotice,
   hasSlackThreadParticipation,
   hasSlackThreadParticipationWithPersistence,
   recordSlackThreadFailureNotice,
   recordSlackThreadParticipation,
+  resolveSlackParticipationTeamId,
 } from "./sent-thread-cache.js";
 
 const thread = { accountId: "A1", channelId: "C123", threadTs: "1700000000.000001" };
@@ -49,6 +52,106 @@ describe("slack sent-thread-cache", () => {
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001", "T1")).toBe(true);
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001", "T2")).toBe(false);
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+  });
+
+  it("accepts workspace-scoped send records when inbound has no event scope", () => {
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001", { teamId: "T1" });
+
+    expect(
+      hasInboundSlackThreadParticipation({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000001",
+        workspaceTeamId: "T1",
+      }),
+    ).toBe(true);
+    expect(
+      hasInboundSlackThreadParticipation({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000001",
+        eventTeamId: "T2",
+        workspaceTeamId: "T1",
+      }),
+    ).toBe(false);
+    expect(resolveSlackParticipationTeamId({ workspaceTeamId: "T1" })).toBe("T1");
+    expect(resolveSlackParticipationTeamId({ eventTeamId: "T2", workspaceTeamId: "T1" })).toBe(
+      "T2",
+    );
+  });
+
+  it("keeps unscoped inbound records working when the monitor has a workspace id", async () => {
+    recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+
+    await expect(
+      hasInboundSlackThreadParticipationWithPersistence({
+        accountId: "A1",
+        channelId: "C123",
+        threadTs: "1700000000.000001",
+        workspaceTeamId: "T1",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("reads a pre-upgrade unscoped store record after restart with a monitor workspace id", async () => {
+    await withOpenClawTestState(
+      {
+        label: "slack-thread-participation-unscoped-upgrade",
+        layout: "state-only",
+        applyEnv: false,
+      },
+      async (state) => {
+        resetPluginStateStoreForTests();
+        const repliedAt = 1_711_406_400_000;
+        const threadTs = "1700000000.000006";
+        const unscopedKey = `A1:C123:${threadTs}`;
+        const preUpgradeStore = createPluginStateKeyedStoreForTests<{ repliedAt: number }>(
+          "slack",
+          {
+            namespace: "slack.thread-participation",
+            maxEntries: 1000,
+            env: state.env,
+          },
+        );
+        await preUpgradeStore.register(unscopedKey, { repliedAt });
+        expect((await preUpgradeStore.entries()).some((entry) => entry.key === unscopedKey)).toBe(
+          true,
+        );
+        resetPluginStateStoreForTests();
+        clearSlackThreadParticipationCache();
+
+        const openKeyedStoreV2 = vi.fn((options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreV2ForTests<{ repliedAt: number }>(
+            "slack",
+            { ...options, env: state.env },
+            { assertCurrent() {} },
+          ),
+        );
+        installStore(openKeyedStoreV2);
+
+        await expect(
+          hasInboundSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            channelId: "C123",
+            threadTs,
+            workspaceTeamId: "T1",
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          hasInboundSlackThreadParticipationWithPersistence({
+            accountId: "A1",
+            channelId: "C123",
+            threadTs,
+            eventTeamId: "T2",
+            workspaceTeamId: "T1",
+          }),
+        ).resolves.toBe(false);
+        expect(openKeyedStoreV2).toHaveBeenCalledWith({
+          namespace: "slack.thread-participation",
+          maxEntries: 1000,
+        });
+      },
+    );
   });
 
   it("announces a repeated thread failure only once until its message changes", () => {

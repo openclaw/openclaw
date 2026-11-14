@@ -59,6 +59,7 @@ export {
   slackQaReactionGlyphNativeScenario,
   slackQaTableInvalidBlocksFallbackScenario,
   slackQaTablePresentationNativeScenario,
+  slackQaThreadParticipationWorkspaceScenario,
   slackQaTopLevelReplyShapeScenario,
 } from "./slack-live.scenario-implementations.js";
 
