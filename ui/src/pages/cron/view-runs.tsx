@@ -425,6 +425,8 @@ function Run(props: {
     props.entry.summary || formatUiExternalText(props.entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = () => Boolean(props.entry.error) && Boolean(props.entry.summary);
   const suppressionReason = () => formatUiExternalText(props.entry.deliverySuppressionReason);
+  // Warn-level diagnostics stay a muted note; execution/delivery errors keep RunError.
+  const diagnosticNote = () => formatUiExternalText(props.entry.diagnostics?.summary);
   const facts = createMemo(() =>
     [
       delivery(),
@@ -490,6 +492,11 @@ function Run(props: {
           {props.entry.deliveryError ? <RunError error={props.entry.deliveryError} /> : undefined}
         </div>
       </div>
+      {diagnosticNote() ? (
+        <div class="muted cron-run-entry__diagnostic" data-test-id="cron-run-diagnostic-note">
+          {t("cron.runEntry.diagnosticNote", { note: diagnosticNote() })}
+        </div>
+      ) : undefined}
       <SanitizedHtml
         tag="div"
         class="cron-run-entry__body chat-text"

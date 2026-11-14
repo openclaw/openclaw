@@ -1,6 +1,10 @@
 import { sql } from "kysely";
 import { beginEngineStoreReadSnapshot } from "../../infra/database-engine/adapters.js";
-import { jsonPickObject, jsonValid } from "../../infra/database-engine/json-values.js";
+import {
+  jsonPickObject,
+  jsonRemovePaths,
+  jsonValid,
+} from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -47,29 +51,42 @@ const RESPONSE_KEYS = [
   "usage",
 ];
 const TRACE_KEYS = ["diagnostics", "delivery", "failureNotificationDelivery"];
+// Summary pages keep the operator-facing diagnostic note; entry payloads stay full-view only.
+const SUMMARY_KEYS = [...RESPONSE_KEYS, "diagnostics"];
 const CANDIDATE_BATCH_SIZE = 512;
 
-function historyQuery(db: EngineConnection, keys: string[], search: boolean) {
+function historyQuery(
+  db: EngineConnection,
+  keys: string[],
+  search: boolean,
+  stripDiagnosticEntries = false,
+) {
   const query = getNodeSqliteKysely<Pick<DB, "task_runs">>(db);
   return query
     .selectFrom("task_runs")
-    .select((eb) => [
-      "task_id",
-      "source_id",
-      "run_id",
-      "agent_id",
-      "child_session_key",
-      "created_at",
-      "started_at",
-      "ended_at",
-      "last_event_at",
-      "status",
-      // Released malformed JSON is ignored by the history codec, not a query failure.
-      /* kysely-allow-raw: Portable CASE bounds large JSON before it crosses the driver. */
-      sql<string | null>`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
-      THEN ${jsonPickObject(db, eb.ref("detail_json"), keys)} END`.as("detail_json"),
-      ...(search ? (["error", "terminal_summary"] as const) : []),
-    ])
+    .select((eb) => {
+      const picked = jsonPickObject(db, eb.ref("detail_json"), keys);
+      const projected = stripDiagnosticEntries
+        ? jsonRemovePaths(db, picked, [sql.lit("$.diagnostics.entries")])
+        : picked;
+      return [
+        "task_id",
+        "source_id",
+        "run_id",
+        "agent_id",
+        "child_session_key",
+        "created_at",
+        "started_at",
+        "ended_at",
+        "last_event_at",
+        "status",
+        // Released malformed JSON is ignored by the history codec, not a query failure.
+        /* kysely-allow-raw: Portable CASE bounds large JSON before it crosses the driver. */
+        sql<string | null>`CASE WHEN ${jsonValid(db, eb.ref("detail_json"))}
+      THEN ${projected} END`.as("detail_json"),
+        ...(search ? (["error", "terminal_summary"] as const) : []),
+      ];
+    })
     .where("runtime", "=", "cron");
 }
 
@@ -180,10 +197,11 @@ export function readCronRunHistoryRecordsInDatabase(
   if (taskIds.length === 0) {
     return [];
   }
-  const keys = view === "summary" ? RESPONSE_KEYS : [...RESPONSE_KEYS, ...TRACE_KEYS];
+  const summary = view === "summary";
+  const keys = summary ? SUMMARY_KEYS : [...RESPONSE_KEYS, ...TRACE_KEYS];
   return executeSqliteQuerySync(
     db,
-    historyQuery(db, keys, true).where("task_id", "in", taskIds).limit(taskIds.length),
+    historyQuery(db, keys, true, summary).where("task_id", "in", taskIds).limit(taskIds.length),
   )
     .rows.map(decodeHistoryRow)
     .filter((row) => cronRunRecordStoreKey(row) === storeKey);

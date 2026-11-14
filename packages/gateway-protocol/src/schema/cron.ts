@@ -710,7 +710,7 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
 /** Query params for cron run history. */
 export const CronRunsParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
-  /** Summary pages omit diagnostics and delivery traces; full is the default. */
+  /** Summary pages keep a bounded diagnostics note but omit diagnostic entries and delivery traces; full is the default. */
   view: Type.Optional(stringLiteralUnion(["full", "summary"])),
   scope: Type.Optional(stringLiteralUnion(["job", "all"])),
   id: Type.Optional(CronRunLogJobIdSchema),

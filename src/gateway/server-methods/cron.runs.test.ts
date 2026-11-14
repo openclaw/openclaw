@@ -323,12 +323,11 @@ describe("cron.runs session visibility", () => {
               nextOffset: null,
             });
             const page = respond.mock.calls[0]?.[1];
-            for (const field of ["diagnostics", "delivery", "failureNotificationDelivery"]) {
-              if (view === "summary") {
-                expect(page).not.toHaveProperty(`entries.0.${field}`);
-              } else {
-                expect(page).toHaveProperty(`entries.0.${field}`);
-              }
+            const note = { summary: "Diagnostic-only search", entries: [] };
+            expect(page).toHaveProperty("entries.0.diagnostics", note);
+            const trace = view === "summary" ? expect(page).not : expect(page);
+            for (const field of ["delivery", "failureNotificationDelivery"]) {
+              trace.toHaveProperty(`entries.0.${field}`);
             }
           }
         }
