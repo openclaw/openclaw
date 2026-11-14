@@ -46,6 +46,7 @@ it.each([
   "package-publication-recovery",
   "package-verification-recovery",
   "package-stranded-first-hop",
+  "auth-profile-v2026-7-2-beta-5",
 ])("keeps %s live package journals on runtime storage, not the artifact mount", (scenario) => {
   const paths = readUpgradeSurvivorPaths("/tmp/package-recovery-paths", {
     OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
