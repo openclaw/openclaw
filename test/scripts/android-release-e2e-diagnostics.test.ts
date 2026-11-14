@@ -3,6 +3,7 @@ import {
   androidReleaseCommandFacts as commandFacts,
   androidReleaseErrorFacts as errorFacts,
   androidReleaseNativeFacts as nativeFacts,
+  androidReleaseReaderFacts as readerFacts,
 } from "../../scripts/lib/android-release-e2e-diagnostics.js";
 
 const phases = ["initial", "relaunch", "phone-restart", "long-reply", "reader"];
@@ -105,4 +106,64 @@ it.each([
     [expected]: true,
     phaseReady: phaseReady(true),
   });
+});
+
+it("projects reader geometry without private capture fields", () => {
+  const node = {
+    textLength: 13,
+    sentinelIndex: 0,
+    visible: true,
+    bounds: "0 32 384 352",
+    characterRefresh: true,
+    characterBoxes: [[10, 20, 30, 40], null],
+    ancestors: [{ scrollable: true, visible: true, bounds: "0 32 384 352" }],
+  };
+  const reader = {
+    displayWidth: 384,
+    displayHeight: 384,
+    round: true,
+    sentinels: { "HEAD SENTINEL": [node], "TRAILING SENTINEL": [] },
+  };
+  const capture = {
+    transport: "private-token",
+    reader: {
+      ...reader,
+      activePackage: "private-package",
+      sentinels: {
+        ...reader.sentinels,
+        "HEAD SENTINEL": [
+          {
+            ...node,
+            text: "private-message",
+            package: "private-package",
+            ancestors: [{ ...node.ancestors[0], resource: "private-resource" }],
+          },
+        ],
+      },
+    },
+  };
+  expect(readerFacts(capture)).toEqual(reader);
+  expect(JSON.stringify(readerFacts(capture))).not.toMatch(
+    /private|token|message|package|resource/u,
+  );
+  expect(readerFacts({ reader: { ...reader, displayWidth: "private" } })).toBeUndefined();
+  expect(
+    readerFacts({
+      reader: {
+        ...reader,
+        sentinels: { ...reader.sentinels, "HEAD SENTINEL": [{ ...node, bounds: "private-token" }] },
+      },
+    }),
+  ).toBeUndefined();
+  expect(
+    readerFacts({
+      reader: {
+        ...reader,
+        sentinels: {
+          ...reader.sentinels,
+          "HEAD SENTINEL": Array.from({ length: 9 }, () => ({ ...node })),
+        },
+      },
+    }),
+  ).toBeUndefined();
 });

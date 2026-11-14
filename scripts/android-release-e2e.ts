@@ -24,6 +24,7 @@ import {
   androidReleaseCommandFacts,
   androidReleaseErrorFacts,
   androidReleaseNativeFacts,
+  androidReleaseReaderFacts,
 } from "./lib/android-release-e2e-diagnostics.js";
 import {
   ANDROID_RELEASE_APPLICATION_ID,
@@ -907,7 +908,10 @@ export async function main(argv = process.argv.slice(2)) {
               10_000,
               { cleanup: true },
             );
-            JSON.parse(facts);
+            const reader = androidReleaseReaderFacts(JSON.parse(facts));
+            if (reader) {
+              diagnostic("reader", { role: device.role, ...reader });
+            }
             await writeFile(path.join(root, `${captureName}.private.json`), facts);
             await command(
               adb,
