@@ -182,6 +182,11 @@ it.each(scenarios)(
     });
 
     expect(mocks.dispatch).not.toHaveBeenCalled();
+    // The picker post is a UI container, so it must never seed a thread session of its own.
+    expect(mocks.buildEventPlan).toHaveBeenCalledWith(
+      monitor,
+      expect.objectContaining({ postId: "picker-post-1", interactionPost: true }),
+    );
     if (catalogStatus === "removed-model" || catalogStatus === "unlisted-provider") {
       expect(response).toEqual({
         ephemeral_text: "That model is no longer available: openai/gpt-5.4",
