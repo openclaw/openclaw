@@ -91,6 +91,20 @@ it("shares an oversized download and rejects callers only after cancellation set
   await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
 });
 
+it.each([
+  ["db.mmdb.gz", true],
+  ["db.mmdb.gz?version=1", true],
+  ["db.mmdb.gz#release", true],
+  ["db.mmdb?filename=other.gz", false],
+] as const)("reads database compression from the URL path: %s", async (filename, compressed) => {
+  const store = createStore(compressed ? gzipSync(vienna) : vienna, {
+    databaseUrl: `https://host.test/${filename}`,
+  });
+
+  expect(cityOf(await store.load())).toBe("Vienna");
+  await expectPublished(store, vienna);
+});
+
 it("refuses a gzip source that inflates past the on-disk ceiling", async () => {
   const store = createStore(gzipSync(Buffer.alloc(700 * 1024 * 1024, 0)), {
     databaseUrl: "https://host.test/db.mmdb.gz",
