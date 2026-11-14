@@ -254,35 +254,12 @@ export async function rewindChatHistory(
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
     const editorText = result.editorText ?? "";
     clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");
-    // The restored prompt is the user's next action, so refill the composer as
-    // soon as the cut commits. Reloading the transcript must not delay it.
-    let applied = false;
-    if (connectionIsCurrent() && ownsComposer() && readComposer() === composerSignature) {
-      persistChatComposerState(state, sessionKey, {
-        agentId: agentParams.agentId,
-        draft: editorText,
-        mentions: [],
-        goalMode: null,
-        replyTarget: null,
-        expectedDraftRevision: loadChatComposerState(state, sessionKey, agentParams.agentId)
-          .revisions.committed,
-      });
-      if (viewMatches()) {
-        state.chatGoalDraftMode = null;
-        state.chatReplyTarget = null;
-        state.chatAttachments = replaceChatAttachmentsFromEditor(
-          state.chatAttachments,
-          result.editorAttachments,
-        );
-        state.handleChatDraftChange(editorText, []);
-        // Publish the complete restored draft before cancellation notifies the pane.
-        if (attachmentReads.readSignal === attachmentReadSignal) {
-          attachmentReads.abortReads();
-        }
-        applied = true;
+    // The restored prompt is the user's next action, so every exit refills the
+    // composer first and reloads the transcript after.
+    const reload = async () => {
+      if (!viewMatches()) {
+        return;
       }
-    }
-    if (viewMatches()) {
       const entries = getChatSessionProjection(state).entries;
       const rewindIndex = entries.findIndex((entry) => entry.identity?.id === entryId);
       const retainedHistory = entries
@@ -291,8 +268,39 @@ export async function rewindChatHistory(
         .map((entry) => entry.message);
       resetChatHistoryProjection(state, agentParams.agentId, retainedHistory);
       await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    };
+    // Rewind commits history independently; only its unchanged composer package
+    // receives the restored prompt.
+    if (!connectionIsCurrent() || !ownsComposer() || readComposer() !== composerSignature) {
+      await reload();
+      return null;
     }
-    return applied ? result : null;
+    persistChatComposerState(state, sessionKey, {
+      agentId: agentParams.agentId,
+      draft: editorText,
+      mentions: [],
+      goalMode: null,
+      replyTarget: null,
+      expectedDraftRevision: loadChatComposerState(state, sessionKey, agentParams.agentId).revisions
+        .committed,
+    });
+    if (!viewMatches()) {
+      await reload();
+      return null;
+    }
+    state.chatGoalDraftMode = null;
+    state.chatReplyTarget = null;
+    state.chatAttachments = replaceChatAttachmentsFromEditor(
+      state.chatAttachments,
+      result.editorAttachments,
+    );
+    state.handleChatDraftChange(editorText, []);
+    // Publish the complete restored draft before cancellation notifies the pane.
+    if (attachmentReads.readSignal === attachmentReadSignal) {
+      attachmentReads.abortReads();
+    }
+    await reload();
+    return result;
   } catch (error) {
     if (viewIsCurrent()) {
       setChatError(state, formatUiError(error));
