@@ -1,0 +1,2 @@
+# A present blank --url must fail loudly in `gateway status` and `gateway probe` instead of silently probing the configured default Gateway.
+18
