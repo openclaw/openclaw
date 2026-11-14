@@ -30,6 +30,8 @@ import { prepareGitHubPublicationRequesterV2 } from "./github-publication-reques
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
+  BRANCH,
+  NEW_HEAD,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   overrideCommands,
@@ -56,6 +58,26 @@ export const publicationGuestEmail = "publication-guest@example.test";
 export const publicationBackends = ["local", "repository"] as const;
 export const forPublicationBackends = <T extends string>(changes: readonly T[]) =>
   publicationBackends.flatMap((backend) => changes.map((change) => ({ backend, change })));
+
+export const publicationPullRequest = (
+  overrides: Partial<{
+    url: string;
+    state: string;
+    body: string;
+    headSha: string;
+    baseRef: string;
+  }> = {},
+  backend: Backend = "local",
+) => ({
+  url: `https://github.com/${backend === "local" ? "openclaw/openclaw/pull/125200" : "owner/repository/pull/1"}`,
+  userId: 42,
+  state: "open",
+  body: "",
+  headSha: NEW_HEAD,
+  headRef: BRANCH,
+  baseRef: "main",
+  ...overrides,
+});
 
 export function createPublicationRepositories(fork = false) {
   const baseRepo = {

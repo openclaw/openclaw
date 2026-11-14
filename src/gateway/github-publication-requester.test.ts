@@ -3,7 +3,6 @@ import { registerPublicationCredentialFixture } from "./github-publication-crede
 // Install shared transport mocks before publication owners enter the module cache.
 // oxfmt-ignore
 import {
-  BRANCH,
   NEW_HEAD,
   OLD_HEAD,
   WORKSPACE_TREE,
@@ -47,6 +46,7 @@ import {
   guestScopes,
   holdWorkerTurn,
   publicationBackends as backends,
+  publicationPullRequest as pullRequest,
   publicationGuestEmail as email,
   queueGuestPublication as queueGuest,
   requireVisitorPublicationPolicy,
@@ -74,28 +74,6 @@ type Fixture = Awaited<ReturnType<typeof fixture>>;
 const request = (f: Fixture, key: string, requester = f.guest) =>
   f.coordinator.requestForSessionV2(f.request(key, requester));
 const identityChanged = { status: "failed", code: "identity_changed" } as const;
-const publicationUrl = (backend: (typeof backends)[number]) =>
-  backend === "local"
-    ? "https://github.com/openclaw/openclaw/pull/125200"
-    : "https://github.com/owner/repository/pull/1";
-const pullRequest = (
-  overrides: Partial<{
-    url: string;
-    state: string;
-    body: string;
-    headSha: string;
-    baseRef: string;
-  }> = {},
-) => ({
-  url: publicationUrl("local"),
-  userId: 42,
-  state: "open",
-  body: "",
-  headSha: NEW_HEAD,
-  headRef: BRANCH,
-  baseRef: "main",
-  ...overrides,
-});
 const jsonResult = (value: unknown) => commandResult(JSON.stringify(value));
 function interceptTransport(
   intercept: (
@@ -735,7 +713,7 @@ describe("shared GitHub publication requester authority", () => {
         }
       } else {
         expect(result.status).toBe("published");
-        expect(receipt.pull_request_url).toBe(publicationUrl(backend));
+        expect(receipt.pull_request_url).toBe(pullRequest({}, backend).url);
       }
       const writes = [...f.externalWrites];
       const acceptedEffects = local && [...local.effects];
@@ -846,7 +824,7 @@ describe("shared GitHub publication requester authority", () => {
       if (is("accepted", "advanced-closed")) {
         await expectResult(coordinator, requestId, {
           status: "published",
-          url: publicationUrl("local"),
+          url: pullRequest().url,
           headCommit: NEW_HEAD,
         });
       } else {
@@ -944,7 +922,7 @@ describe("shared GitHub publication requester authority", () => {
       await restarted.resumeSessionRequests();
       await expectResult(restarted, requestId, {
         status: "published",
-        url: publicationUrl(backend),
+        url: pullRequest({}, backend).url,
       });
       expect(writes).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["lost-pr-response"]);
