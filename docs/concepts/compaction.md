@@ -330,8 +330,9 @@ characters (never more than `maxSummaryChars`) outside the summary ceiling. It
 shrinks or is dropped when the active model's token budget has no room for it.
 Each compaction replaces the previous record instead of summarizing it again.
 The same credential redaction applies to every text the summary quotes from the
-conversation: preserved recent turns, split-turn context, the latest request, and
-extracted identifiers. The stored transcript keeps the original text.
+conversation: preserved recent turns, split-turn context, the latest request,
+extracted identifiers, and the output it lists for failed tool calls. The stored
+transcript keeps the original text.
 
 ### Identifier preservation
 

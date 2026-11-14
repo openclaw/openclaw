@@ -30,15 +30,15 @@ describe("compaction-safeguard tool failures", () => {
   });
   it.each([
     {
-      name: "accepted spawn exclusion and look-alike failures",
+      name: "accepted spawn exclusion, look-alike failures and credential redaction",
       messages: [
         failure("call-spawn-accepted", "accepted", acceptedDetails, "sessions_spawn"),
-        failure("call-exec-failed", "boom", { status: "failed", exitCode: 1 }),
+        failure("call-exec-failed", "boom token=FAKEtok12345", { status: "failed", exitCode: 1 }),
         failure("call-spawn-error", "spawn rejected", { status: "error" }, "sessions_spawn"),
         failure("call-other-lookalike", "real failure", acceptedDetails, "some_other_tool"),
       ],
       ids: ["call-exec-failed", "call-spawn-error", "call-other-lookalike"],
-      expected: ["exec (status=failed exitCode=1): boom"],
+      expected: ["exec (status=failed exitCode=1): boom [redacted]"],
       firstSummary: undefined,
     },
     {

@@ -1,7 +1,7 @@
 /** Collects failed tool results and renders the bounded Tool Failures summary section. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractCompactionMessageText } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
-import { collectTextContentBlocks } from "../content-blocks.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const MAX_TOOL_FAILURES = 8;
@@ -71,7 +71,7 @@ export function collectToolFailures(messages: Iterable<AgentMessage>): ToolFailu
         : "tool";
     const meta = formatToolFailureMeta(toolResult.details);
     const failureText =
-      collectTextContentBlocks(toolResult.content).join("\n").replace(/\s+/g, " ").trim() ||
+      extractCompactionMessageText(message).replace(/\s+/g, " ").trim() ||
       (meta ? "failed" : "failed (no output)");
     const summary =
       failureText.length > MAX_TOOL_FAILURE_CHARS
