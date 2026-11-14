@@ -1,0 +1,4 @@
+# Regression row and phase assertion for ChatGPT OAuth refresh: a DNS failure before connect
+# reports the refresh as not attempted (keeps the sign-in); a proxy failure stays unknown.
+# Exact net growth for PR #196959.
+9
