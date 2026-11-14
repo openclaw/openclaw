@@ -22,7 +22,6 @@ import {
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -51,7 +50,32 @@ function buildOwners(): PluginMetadataSnapshotOwnerMaps {
 describe("AI transport prepared provider routes", () => {
   it("retains guarded defaults and configured observers across native SDK loading", async () => {
     const originalHost = getDefaultAiTransportHost();
-    expect(originalHost.buildModelFetch).toBe(buildGuardedModelFetch);
+    const model = attachModelProviderRequestRouteFacts(
+      makeProviderModelFixture<"openai-completions">({
+        id: "prepared-model",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://prepared.example/v1",
+      }),
+      buildOwners(),
+    );
+    // The process default may come from an earlier module graph. Prove its guard
+    // behavior rather than comparing it with this graph's function identity.
+    const networkFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Unexpected network request from private-address probe"));
+    try {
+      const guardedFetch = originalHost.buildModelFetch?.(model);
+      if (!guardedFetch) {
+        throw new Error("OpenClaw guarded model fetch was not installed");
+      }
+      await expect(guardedFetch("http://127.0.0.1/private")).rejects.toThrow(
+        "Blocked hostname or private/internal/special-use IP address",
+      );
+      expect(networkFetch).not.toHaveBeenCalled();
+    } finally {
+      networkFetch.mockRestore();
+    }
     const requests: unknown[] = [];
     const fetchObserver = vi.fn<typeof fetch>(async (input, init) => {
       requests.push(await new Request(input, init).json());
@@ -62,15 +86,6 @@ describe("AI transport prepared provider routes", () => {
     });
     const buildModelFetch = () => fetchObserver;
     configureAiTransportHost({ ...originalHost, buildModelFetch });
-    const model = attachModelProviderRequestRouteFacts(
-      makeProviderModelFixture<"openai-completions">({
-        id: "prepared-model",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://prepared.example/v1",
-      }),
-      buildOwners(),
-    );
     try {
       const plugin = path.join(temp.make("native-fetch-observer-"), "index.cjs");
       fs.writeFileSync(plugin, `module.exports = require("openclaw/plugin-sdk/llm");`);

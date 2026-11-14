@@ -1,9 +1,15 @@
-import type { Context, Model } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  getDefaultAiTransportHost,
+  type Context,
+  type Model,
+} from "@openclaw/ai";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 // OpenAI-compatible auth tests cover API key and base URL normalization.
-// Lives in core: it proves the facade-installed guarded fetch routes provider
-// requests through OpenClaw's SSRF guard.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Lives in core: it proves the real guarded fetch routes provider requests
+// through OpenClaw's SSRF guard.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { captureEnv } from "../test-utils/env.js";
 // Importing the facade installs the OpenClaw AI transport host ports.
@@ -24,8 +30,16 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
 });
 
 const originalEnv = captureEnv(["OPENAI_API_KEY"]);
+const originalHost = getDefaultAiTransportHost();
+
+beforeEach(() => {
+  // A previous file may have initialized the process host with another module
+  // graph. Bind the real transport to this file's guard mock, then restore it.
+  configureAiTransportHost({ ...originalHost, buildModelFetch: buildGuardedModelFetch });
+});
 
 afterEach(() => {
+  configureAiTransportHost(originalHost);
   originalEnv.restore();
   mocks.fetchWithSsrFGuard.mockReset();
 });
@@ -95,7 +109,10 @@ describe("OpenAI-compatible provider credentials", () => {
     });
     const result = await stream.result();
 
-    expect(result.stopReason).toBe("stop");
+    expect(
+      result.stopReason,
+      `${result.errorMessage}; guarded fetch calls=${mocks.fetchWithSsrFGuard.mock.calls.length}`,
+    ).toBe("stop");
     expect(capturedHeaders?.get("authorization")).toBe("Bearer sk-third-party");
   });
 
