@@ -514,7 +514,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       ? {}
       : {
           overrideAuthErrorHint:
-            "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+            "Fix: pass --url together with --token or --password, or gatewayToken in tools.",
         }),
   });
   ensureRemoteModeUrlConfigured({

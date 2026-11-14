@@ -79,7 +79,8 @@ export async function gatewayStatusCommand(
     urlOverride: opts.url?.trim(),
     urlOverrideSource: "cli",
     explicitAuth: resolveExplicitGatewayAuth(opts),
-    errorHint: "Fix: pass --token or --password with --url.",
+    // End the flag list with punctuation: error redaction masks a word after --password.
+    errorHint: "Fix: pass --url together with --token or --password.",
   });
   const startedAt = monotonicNow();
   const cfg = await readBestEffortConfig();

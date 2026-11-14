@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -138,8 +139,10 @@ it("requires explicit auth and drops the configured TLS pin for a mismatched tar
     }),
   );
   const opts = { url: "wss://other.example/gateway", allowConfiguredAuthForExactTarget: true };
-  await expect(connect(opts)).rejects.toThrow(
-    /pass --token or --password once to request pairing/i,
+  // The remedy must stay readable after the shared error redaction.
+  const message = formatErrorMessage(await connect(opts).catch((err: unknown) => err));
+  expect(message).toContain(
+    "Fix: to request pairing, run once with --token or --password, approve",
   );
   const connection = await connect({ ...opts, token: "explicit-token" });
   expect(connection.token).toBe("explicit-token");

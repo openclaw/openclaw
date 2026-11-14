@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayStoredDeviceAuthUnavailableError, GatewayTransportError } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { formatErrorMessage } from "../infra/errors.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -250,7 +251,7 @@ describe("session target resolution", () => {
     ],
     [
       new GatewayStoredDeviceAuthUnavailableError("No stored device auth"),
-      "Pass --token or --password once",
+      "Run once with --token or --password, approve the pairing request",
     ],
     [
       Object.assign(new Error("connect ENOTFOUND"), { code: "ENOTFOUND" }),
@@ -260,6 +261,12 @@ describe("session target resolution", () => {
     callGatewayMock.mockRejectedValue(error);
     await expect(resolveRemote()).rejects.toThrow(expected);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the stored-device-auth remedy readable after error redaction", async () => {
+    callGatewayMock.mockRejectedValue(new GatewayStoredDeviceAuthUnavailableError("No auth"));
+    const message = formatErrorMessage(await resolveRemote().catch((err: unknown) => err));
+    expect(message).toContain("Run once with --token or --password, approve the pairing request");
   });
 
   it("uses transport connection details for configured-remote bare refs", async () => {

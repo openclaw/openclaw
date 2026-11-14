@@ -302,9 +302,10 @@ it("renders a devices list URL override without explicit credentials as expected
   });
 
   expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
-  // The shared console redaction masks the word after "--password"; assert around it.
-  expect(result.stderr).toContain("Fix: pass --token or --password");
-  expect(result.stderr).toContain("--url (or gatewayToken in tools).");
+  // The whole remedy must survive the shared console redaction.
+  expect(result.stderr).toContain(
+    "Fix: pass --url together with --token or --password, or gatewayToken in tools.",
+  );
   expect(result.stderr).toContain("remove --url to use the configured target.");
   expect(result.stderr).toContain(`Config: ${configPath}`);
   expectGuidance(result.stderr, "gateway url override requires explicit credentials");
