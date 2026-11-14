@@ -235,7 +235,7 @@ export function createUsageControls(
         <UsageQueryFilter
           filterKey={filterKey}
           label={t(`usage.filters.${filterKey}`)}
-          options={filterOptions()[filterKey]}
+          options={props.data.filterOptions?.[filterKey]}
           counts={
             props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[filterKey]
           }
