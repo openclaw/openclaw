@@ -120,6 +120,16 @@ it("renders device codes and sends selection answers on the admitted session", a
   expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
 });
 
+it("keeps the line breaks of a multi-line step message and strips controls per line", async () => {
+  const message = "This will open a device login.\nRequires an \u001b[2Kactive\r subscription.";
+  const h = gateway([step({ id: "intro", type: "note", title: "Copilot", message }), done]);
+  await h.run();
+  expect(prompts.note).toHaveBeenCalledWith(
+    "This will open a device login.\nRequires an active\\r subscription.",
+    "Copilot",
+  );
+});
+
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
   prompts.select.mockRejectedValueOnce(new WizardCancelledError());
   const h = gateway([step({ id: "choice", type: "select", options: [] })]);
