@@ -370,22 +370,24 @@ function draftAuthority(
 }
 
 function draftError(error: unknown, publishing = false, publicationStarted = false) {
-  const known =
-    error instanceof TemplateProjectError || error instanceof TemplatesLabsDisabledError;
-  const code = error instanceof TemplateProjectError ? error.code : "templates_disabled";
+  const code =
+    error instanceof TemplateProjectError
+      ? error.code
+      : error instanceof TemplatesLabsDisabledError
+        ? "templates_disabled"
+        : "publish_failed";
   const unconfirmed = publicationStarted || code === "publication_unconfirmed";
-  const publication =
-    publishing && known
-      ? {
-          retryable: !unconfirmed,
-          details: {
-            templatePublication: {
-              effect: unconfirmed ? "unconfirmed" : "none",
-              code,
-            },
+  const publication = publishing
+    ? {
+        retryable: !unconfirmed,
+        details: {
+          templatePublication: {
+            effect: unconfirmed ? "unconfirmed" : "none",
+            code,
           },
-        }
-      : {};
+        },
+      }
+    : {};
   if (
     error instanceof TemplatesLabsDisabledError ||
     (error instanceof TemplateProjectError &&
@@ -393,13 +395,13 @@ function draftError(error: unknown, publishing = false, publicationStarted = fal
   ) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message, publication);
   }
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
+  const message =
     error instanceof TemplateProjectError
       ? error.message
-      : "The Template draft could not be processed. Check its contents and try again.",
-    publication,
-  );
+      : publishing && !publicationStarted
+        ? "Could not reach ClawHub before upload. Verify your ClawHub sign-in and connection, then try again."
+        : "The Template draft could not be processed. Check its contents and try again.";
+  return errorShape(ErrorCodes.INVALID_REQUEST, message, publication);
 }
 
 export const templatesDraftsHandlers: GatewayRequestHandlers = {

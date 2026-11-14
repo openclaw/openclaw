@@ -167,7 +167,7 @@ async function publicationFixture(name = "@maker/research-brief") {
   const connections = new Set(["draft-author"]);
   const uploads: Buffer[] = [];
   let posts = 0;
-  const identity = { publisher: "maker", revoke: false };
+  const identity = { publisher: "maker", revoke: false, status: 200 };
   const registry = {
     visible: true,
     digest: "",
@@ -190,6 +190,9 @@ async function publicationFixture(name = "@maker/research-brief") {
     if (request.url.endsWith("/whoami")) {
       if (identity.revoke) {
         connections.delete("draft-author");
+      }
+      if (identity.status !== 200) {
+        return new Response("Unauthorized", { status: identity.status });
       }
       return Response.json({ user: { handle: identity.publisher } });
     }
@@ -613,4 +616,20 @@ Research public sources.
       expect(fixture.posts).toBe(0);
     },
   );
+
+  it("marks pre-upload publish failures as retryable with effect none instead of unconfirmed", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.identity.status = 401;
+    const result = await fixture.publish(review.reviewToken);
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      retryable: true,
+      message:
+        "Could not reach ClawHub before upload. Verify your ClawHub sign-in and connection, then try again.",
+      details: { templatePublication: { effect: "none", code: "publish_failed" } },
+    });
+    expect(fixture.posts).toBe(0);
+  });
 });
