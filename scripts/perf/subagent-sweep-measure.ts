@@ -43,7 +43,7 @@ const { values } = parseArgs({
     "observe-stalls": { type: "boolean", default: false },
   },
 });
-const integer = (name: keyof typeof values, min: number) =>
+const integer = (name: "operations" | "runs" | "yield-ms" | "start-at", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const operations = integer("operations", 1);
 const runCount = integer("runs", 10);
