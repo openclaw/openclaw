@@ -160,7 +160,11 @@ export async function buildCodexPluginThreadConfig(
     policy.pluginPolicies.length > 0
       ? await readInventory(true)
       : { policy, records: [], diagnostics: [] };
-  const refreshInventory = async (options: { forceRefetch: boolean; reason: string }) => {
+  const refreshInventory = async (options: {
+    forceRefetch: boolean;
+    reason: string;
+    reuseRecentForcedRefresh?: boolean;
+  }) => {
     await refreshCodexPluginAppInventory(params, appCache, {
       ...options,
       targetAppIds: collectCodexPluginOwnedAppIds(inventory),
@@ -218,6 +222,9 @@ export async function buildCodexPluginThreadConfig(
   if (shouldForceRefreshCodexNotReadyPluginApps(params, policy, inventory)) {
     await refreshInventory({
       forceRefetch: true,
+      // A missing/inaccessible connector is not evidence that the last forced
+      // refresh failed. Bound repeated repair while retaining periodic recovery.
+      reuseRecentForcedRefresh: true,
       reason: "not_ready_plugin_apps",
     });
   }

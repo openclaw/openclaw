@@ -517,6 +517,36 @@ describe("Codex app inventory across physical process restart", () => {
     },
   );
 
+  it("reuses a negative readiness repair across unchanged warm turns", async () => {
+    const f = await fixture(false);
+    f.revokeAccount();
+    const process = await f.createProcess();
+    const first = await process.run();
+    expect(first.pluginAppPolicyContext?.apps).toEqual({});
+    const boundary = f.calls.length;
+    let current = first;
+    for (let turn = 0; turn < 3; turn++) {
+      expect(
+        await retainCodexAppServerLiveThread(
+          process.client,
+          current.threadId,
+          current.liveThreadOwnership?.release,
+          current.liveThreadConfigFingerprint,
+        ),
+      ).toBe(true);
+      const next = await process.run();
+      expect(next.threadId).toBe(first.threadId);
+      expect(next.pluginAppPolicyContext?.apps).toEqual({});
+      current = next;
+    }
+    expect(
+      f.calls
+        .slice(boundary)
+        .filter((call) => call.method === "app/installed" && call.params.forceRefresh === true),
+    ).toHaveLength(1);
+    expect(f.readBinding()?.pluginAppPolicyContext?.apps).toEqual({});
+  });
+
   it("preserves excluded native app denials on non-ask warm continuation", async () => {
     const f = await continuation(false, "warm", codexPluginConfig({ allow_all_plugins: true }), {
       excluded: { enabled: true },

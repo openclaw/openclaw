@@ -476,6 +476,14 @@ combined inventory in memory for one hour and refreshes stale or missing
 entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
+When a configured plugin's app remains missing or inaccessible, readiness repair
+reuses a successful forced refresh for up to one minute within the same account,
+thread, and covered app set. The next turn after that interval can retry, so an
+unavailable connector does not force hosted discovery on every message or stay
+excluded indefinitely. Initial cold-runtime repair, installation, explicit cache
+invalidation, and `/codex plugins refresh` still refresh immediately. Native app
+policy checks continue on enabled-policy turns; reusing inventory grants no access.
+
 Missing inventory methods, authentication errors, transport failures, and
 connector refresh failures do not admit app tools. Ordinary turns, including
 those using `allow_destructive_actions: "ask"`, can continue with native apps

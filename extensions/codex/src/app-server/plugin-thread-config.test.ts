@@ -9,7 +9,10 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
-import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import {
+  createCodexAppInventoryRequest,
+  resolveRecoverableCodexPluginConfigKeys,
+} from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -21,6 +24,7 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { resolveCodexPluginThreadAppCacheKey } from "./plugin-thread-app-admission.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
@@ -1713,6 +1717,87 @@ describe("Codex plugin thread config", () => {
         ...(cold ? [{ forceRefresh: false }] : []),
         { forceRefresh: true },
       ]);
+    },
+  );
+
+  it.each(["missing", "inaccessible", "ready"] as const)(
+    "bounds readiness repair for an initially %s app without relaxing policy",
+    async (unavailable) => {
+      const appCache = new CodexAppInventoryCache();
+      const metadataCache = new CodexPluginMetadataCache();
+      const initiallyReady = unavailable === "ready";
+      let ready = initiallyReady;
+      let denied = false;
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "plugin/installed") {
+          return pluginInstalled([
+            pluginSummary("google-calendar", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        if (method === "app/installed" || method === "app/read") {
+          return codexAppInventoryResponse(
+            method,
+            !ready && unavailable === "missing" ? [] : [appInfo("google-calendar-app", ready)],
+            params as CodexAppServerRequestParams<typeof method>,
+          );
+        }
+        if (method === "config/read") {
+          const config = { apps: { "google-calendar-app": { enabled: !denied } } };
+          return { config, layers: [{ name: { type: "user" }, config }] };
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
+      const threadId = "same-native-thread";
+      const appCacheKey = "same-account";
+      const key = resolveCodexPluginThreadAppCacheKey({ appCacheKey, threadId });
+      await appCache.refreshNow({
+        key,
+        request: createCodexAppInventoryRequest({ request, threadId }),
+        nowMs: 0,
+        forceRefetch: false,
+      });
+      request.mockClear();
+      const build = (nowMs: number) =>
+        buildCodexPluginThreadConfig({
+          pluginConfig: calendarPluginConfig(),
+          appCache,
+          metadataCache,
+          appCacheKey,
+          threadId,
+          nowMs,
+          request,
+        });
+
+      for (const nowMs of [1, 2, 3]) {
+        const config = await build(nowMs);
+        expect(Object.hasOwn(config.policyContext.apps, "google-calendar-app")).toBe(
+          initiallyReady,
+        );
+        if (!initiallyReady) {
+          expect(config.configPatch).toEqual(disabledAppsConfig);
+        }
+      }
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual(
+        initiallyReady ? [] : [["app/installed", { forceRefresh: true, threadId }]],
+      );
+      if (initiallyReady) {
+        return;
+      }
+
+      ready = true;
+      const recovered = await build(60_001);
+      expect(recovered.policyContext.apps).toHaveProperty("google-calendar-app");
+      expect(recovered.provisionalAppIds).toEqual(["google-calendar-app"]);
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toHaveLength(2);
+      denied = true;
+      const revoked = await build(60_002);
+      expect(revoked.policyContext.apps).toEqual({});
+      expect(revoked.configPatch).toEqual(disabledAppsConfig);
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
     },
   );
 
