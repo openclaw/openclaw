@@ -1467,6 +1467,9 @@ When the pane becomes too narrow, automatically opened Details collapses. Select
 **Details** to open it as an overlay on narrower screens. Closing it explicitly
 keeps it closed while that conversation remains open, including through progress
 updates, resizing, and temporarily hiding its pane. Selecting **Details** reopens it.
+Interacting with a tool panel in the same chat pane, including closing its tab,
+leaves Details open. Clicking the conversation or another chat pane still dismisses
+undocked Details.
 
 Details groups the available environment, context, people, pull requests,
 subagents, automations, outputs, and task progress. Expandable sections keep
