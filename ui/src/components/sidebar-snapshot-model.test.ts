@@ -219,7 +219,8 @@ it("keeps display data without persisting authority, executable plugins, or watc
   });
   expect(admitted?.footer).toEqual(model.footer);
   expect(admitted?.plugins).toEqual([plugin]);
-  expect(admitted?.cards).toEqual([card]);
+  expect(admitted?.cards).toEqual([{ ...card, lastActiveAt: 99 }]);
+  expect(parse({ cards: [card] })?.cards).toEqual([card]);
   expect(admitted).not.toHaveProperty("token");
   expect(
     parse({ onlineUsers: [{ id: "operator", watchedSessions: ["private-session"] }] }),

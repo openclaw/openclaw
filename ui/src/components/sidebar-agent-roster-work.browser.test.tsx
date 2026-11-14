@@ -1,9 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { patchSettings } from "../app/settings.ts";
+import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import {
+  agentIds,
   mountRoster,
+  patchRows,
   roster,
+  session,
   settleRoster,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
@@ -13,6 +17,8 @@ import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SidebarAgentRoster } from "./sidebar-agent-roster.tsx";
 import { SidebarScrollContext } from "./sidebar-context-controller.ts";
+import { parseSidebarSnapshot } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshot } from "./sidebar-snapshot.test-support.ts";
 import "../test-helpers/load-styles.ts";
 
 setupSidebarTest();
@@ -59,6 +65,92 @@ async function mountViewport(pinnedAgentIds: string[] = []) {
   ));
   return { ...mounted, viewport };
 }
+
+it("sorts agents by conversation activity while preserving ties, pins, focus, and main navigation", async () => {
+  const { sidebar, context, result, sessions } = await mountRoster(roster, [
+    session("main", 9_000, { lastActivityAt: 100 }),
+    session("recent", 80, { lastActivityAt: 80 }),
+    session("recent", 200, { key: "agent:recent:work", isMain: false, lastActivityAt: 200 }),
+    session("working", 100, { lastActivityAt: 100 }),
+    session("working", 10_000, {
+      key: "agent:working:archive",
+      archived: true,
+      lastActivityAt: 10_000,
+    }),
+  ]);
+  sidebar.sidebarAgentsMode = "roster";
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  owner.setSessionSortMode("created");
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]));
+  const main = sidebar.querySelector<HTMLAnchorElement>(
+    '.sidebar-agent-roster__row[data-agent-id="main"]',
+  )!;
+  main.focus();
+  owner.setSessionSortMode("updated");
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(agentIds(sidebar)).toEqual(["recent", "main", "working"]));
+  expect(document.activeElement).toBe(main);
+  expect(sidebar.querySelector('.sidebar-agent-roster__row[data-agent-id="main"]')).toBe(main);
+  const openMain = vi.spyOn(owner, "openMainSession").mockImplementation(() => {});
+  sidebar
+    .querySelector<HTMLAnchorElement>('.sidebar-agent-roster__row[data-agent-id="recent"]')!
+    .click();
+  expect(openMain).toHaveBeenCalledWith("recent");
+  context.navigation.update({ pinnedAgentIds: ["working"] });
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(agentIds(sidebar)).toEqual(["recent", "main"]));
+  expect(sidebar.querySelector('[data-pinned-agent="working"]')).not.toBeNull();
+  result.sessions = patchRows(result.sessions, "agent:main:main", { lastInteractionAt: 300 });
+  sessions.publish({
+    result: { ...result, sessions: result.sessions.filter((row) => row.agentId === "main") },
+  });
+  await rosterActivityStore(context).refresh();
+  expect(
+    rosterActivityStore(context).snapshot.cards.find((card) => card.id === "main")?.lastActiveAt,
+  ).toBe(300);
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(agentIds(sidebar)).toEqual(["main", "recent"]));
+  result.sessions = patchRows(result.sessions, "agent:recent:work", { updatedAt: 90_000 });
+  await rosterActivityStore(context).refresh();
+  await settleRoster(sidebar);
+  expect(agentIds(sidebar)).toEqual(["main", "recent"]);
+  owner.setSessionSortMode("created");
+  context.navigation.update({ pinnedAgentIds: [] });
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]));
+});
+
+it("preserves activity order and row identity across cached-to-live hydration", async () => {
+  const { sidebar, context } = await mountRoster(roster, [
+    session("main", 100),
+    session("recent", 200),
+    session("working", 100),
+  ]);
+  sidebar.sidebarAgentsMode = "roster";
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  owner.setSessionSortMode("updated");
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(agentIds(sidebar)).toEqual(["recent", "main", "working"]));
+  const settled = vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+  const saved = parseSidebarSnapshot({
+    ...sidebarSnapshot,
+    cards: rosterActivityStore(context).snapshot.cards,
+  });
+  expect(saved).not.toBeNull();
+  owner.restoreSidebarSnapshot(saved!);
+  owner.invalidate();
+  await settleRoster(sidebar);
+  expect(owner.sidebarSnapshot).toBe(saved);
+  expect(agentIds(sidebar)).toEqual(["recent", "main", "working"]);
+  const recent = sidebar.querySelector('.sidebar-agent-roster__row[data-agent-id="recent"]');
+  owner.releaseSidebarSnapshot();
+  owner.invalidate();
+  settled.mockRestore();
+  await settleRoster(sidebar);
+  expect(agentIds(sidebar)).toEqual(["recent", "main", "working"]);
+  expect(sidebar.querySelector('.sidebar-agent-roster__row[data-agent-id="recent"]')).toBe(recent);
+});
 
 it("indexes sections once across a large mounted roster", async () => {
   const { agents, context, owner } = await prepareRoster(40);

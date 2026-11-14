@@ -95,7 +95,7 @@ describe("AppSidebar main-chat metadata", () => {
         expect(header().querySelector(".session-row-badge--incognito")).toBeNull();
         expect(header().querySelector('[aria-label="Unread"]')).toBeNull();
       });
-      expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
+      expect(agentIds(sidebar)).toEqual(["working", "main", "recent"]);
       expect(sessionKeys(sidebar)).toEqual([]);
     }
   });

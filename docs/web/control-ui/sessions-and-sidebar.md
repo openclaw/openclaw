@@ -426,7 +426,14 @@ Up and Down move between choices, and Enter selects. Automation, system sessions
 and message previews use consistent on/off toggles. Escape closes an open picker first, then the popover and returns
 focus to the filter button. **Session sources** opens its Settings destination. In **Show all agents**
 mode, Display omits grouping and empty-group controls because the sidebar always
-groups by agent. Reset leaves those hidden preferences unchanged. Person grouping
+groups by agent. **Last updated** orders unpinned agents by their latest conversation
+activity, not by renames, pin changes, or other metadata edits. Tied agents keep
+the configured roster order; the other sort choices only affect conversation rows.
+Agent recency uses the available non-archived sessions in the shared 300-session
+window, so it is not an exhaustive activity ranking across all history. Selecting
+an agent still opens its main conversation, even when another conversation
+determines its position. Pinned agents and personal session pins keep their order.
+Reset leaves those hidden preferences unchanged. Person grouping
 stays available with one owner or an empty list and remains selected while owner data refreshes.
 
 In **Show all agents**, compact agent rows show a muted preview of the agent's

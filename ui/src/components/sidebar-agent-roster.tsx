@@ -45,7 +45,7 @@ function cachedRosterCards(host: RosterHost) {
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
     activeNow: false,
-    lastActiveAt: 0,
+    lastActiveAt: card.lastActiveAt ?? 0,
     preview: undefined,
     assistantPreview: undefined,
     target: sessionNavigationTarget({
@@ -67,10 +67,9 @@ export function SidebarAgentRoster(props: {
   const presented = () => props.active;
   const host = createParkedProjection(() => hostProjection().read(), presented);
   const store = rosterActivityStore(context);
-  const snapshot = createParkedProjection(() => {
-    host();
-    return store.snapshot;
-  }, presented);
+  // Activity can change without a host render (for example, a reply in another chat).
+  const activity = projectOwner(store, (owner) => owner.snapshot);
+  const snapshot = createParkedProjection(() => activity.read(), presented);
   const cached = createMemo(() => cachedRosterCards(host()));
   const cards = createParkedProjection(() => {
     if (cached()) {
@@ -133,7 +132,13 @@ export function SidebarAgentRoster(props: {
     presented,
   );
   const pinnedCards = createMemo(() => cards().filter((card) => pinnedIds().has(card.id)));
-  const unpinnedCards = createMemo(() => cards().filter((card) => !pinnedIds().has(card.id)));
+  const unpinnedCards = createMemo(() => {
+    const unpinned = cards().filter((card) => !pinnedIds().has(card.id));
+    // Keep configured order for ties and other modes; pins retain their own partition.
+    return host().effectiveSessionSortMode() === "updated"
+      ? unpinned.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt)
+      : unpinned;
+  });
   const rosterWindow = createSidebarRosterWindow(
     unpinnedCards,
     () =>
