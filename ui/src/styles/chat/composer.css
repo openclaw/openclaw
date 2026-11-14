@@ -4293,6 +4293,21 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   pointer-events: none;
 }
 
+/* Percent heights use the viewport; stretch fits the actual anchor side instead. */
+@position-try --chat-model-fit {
+  position-area: top span-all;
+  justify-self: anchor-center;
+  max-height: stretch;
+  min-height: 200px;
+}
+
+@position-try --chat-model-below {
+  position-area: bottom span-all;
+  justify-self: anchor-center;
+  max-height: stretch;
+  min-height: 200px;
+}
+
 @media not ((max-width: 640px) or ((max-width: 932px) and (max-height: 500px) and (orientation: landscape))) {
   .chat-controls__model-menu {
     height: 350px;
@@ -4308,7 +4323,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     position-try-fallbacks:
       top span-right,
       top span-left,
-      flip-block,
+      --chat-model-fit,
+      --chat-model-below,
       --oc-overlay-fit,
       --oc-overlay-fit flip-inline;
   }
@@ -5283,31 +5299,34 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   height: 28px;
   order: 3;
   margin-inline-start: 4px;
-}
 
-.chat-controls__model-option:not(:has(.chat-controls__model-option-meta))
-  .chat-controls__model-favorite-slot {
-  margin-inline-start: auto;
-}
+  .chat-controls__model-option:not(:has(.chat-controls__model-option-meta)) & {
+    margin-inline-start: auto;
+  }
 
-.chat-controls__model-favorite-slot > * {
-  grid-area: 1 / 1;
-}
+  > * {
+    grid-area: 1 / 1;
+  }
 
-.chat-controls__model-favorite-slot .chat-controls__inline-select-check {
-  color: var(--accent);
-  pointer-events: none;
-}
-
-.chat-controls__model-favorite-slot .chat-controls__inline-select-check svg {
-  width: 14px;
-  height: 14px;
-}
-
-.chat-controls__model-option:hover
-  .chat-controls__model-favorite-slot:has(> .chat-controls__model-favorite)
   .chat-controls__inline-select-check {
-  opacity: 0;
+    color: var(--accent);
+    pointer-events: none;
+
+    svg {
+      width: 14px;
+      height: 14px;
+    }
+  }
+
+  &:has(> .chat-controls__model-favorite) .chat-controls__inline-select-check {
+    .chat-controls__model-option:hover & {
+      opacity: 0;
+    }
+
+    @media (max-width: 640px) {
+      opacity: 0;
+    }
+  }
 }
 
 /* Favorites share the selection slot without stealing the row's selection action. */
@@ -5325,42 +5344,40 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--muted);
   opacity: 0;
   cursor: var(--cursor-action);
-}
 
-.chat-controls__model-menu .chat-controls__model-favorite > svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-}
+  .chat-controls__model-menu & > svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+  }
 
-.chat-controls__model-option:hover .chat-controls__model-favorite {
-  opacity: 1;
-}
+  .chat-controls__model-option:hover & {
+    opacity: 1;
+  }
 
-.chat-controls__model-favorite[aria-pressed="true"] > svg {
-  fill: currentColor;
-}
+  &[aria-pressed="true"] > svg {
+    fill: currentColor;
+  }
 
-.chat-controls__model-favorite:hover {
-  color: var(--text-strong);
-  background: var(--menu-hover);
+  &:hover {
+    color: var(--text-strong);
+    background: var(--menu-hover);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    transition:
+      opacity 140ms,
+      color 140ms;
+
+    &[data-popped] > svg {
+      animation: chat-model-favorite-pop 360ms ease-out;
+    }
+  }
 }
 
 [data-chat-model-provider-group="$favorites"] .chat-controls__model-option-provider {
   display: inline-flex;
   visibility: visible;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__model-favorite {
-    transition:
-      opacity 140ms,
-      color 140ms;
-  }
-
-  .chat-controls__model-favorite[data-popped] > svg {
-    animation: chat-model-favorite-pop 360ms ease-out;
-  }
 }
 
 @keyframes chat-model-favorite-pop {
@@ -5379,11 +5396,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-favorite {
     border-radius: min(9px, var(--radius-menu-item));
     opacity: 1;
-  }
-
-  .chat-controls__model-favorite-slot:has(> .chat-controls__model-favorite)
-    .chat-controls__inline-select-check {
-    opacity: 0;
   }
 
   .chat-controls__model-menu .chat-controls__model-favorite > svg {
