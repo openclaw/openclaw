@@ -18,6 +18,7 @@ import { runInNewContext } from "node:vm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowCondition } from "./ci-workflow.test-support.js";
 
 const FULL_RELEASE = ".github/workflows/full-release-validation.yml";
 const FULL_RELEASE_ARTIFACTS = ".github/workflows/full-release-artifacts.yml";
@@ -439,6 +440,32 @@ describe("release validation no-push transport", () => {
       expect(notice?.run).toContain("QA Lab runtime-pair stays pinned to Blacksmith");
     },
   );
+
+  it("uploads only public repo E2E timeout diagnostics after failure", () => {
+    const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const test = job(repo, "test");
+    const run = step(test, "Run repo E2E suite");
+    const directory =
+      ".artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}";
+    expect(run.env?.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(directory);
+    const upload = step(test, "Upload public repo E2E timeout diagnostics");
+    expect(upload.with).toMatchObject({
+      path: `${directory}/failure-*/failure.public.json`,
+      "include-hidden-files": true,
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+    for (const failed of [false, true]) {
+      expect(
+        evaluateWorkflowCondition(upload.if ?? "true", {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed,
+        }),
+      ).toBe(failed);
+    }
+  });
 
   it("scopes release Gateway capacity to the existing repo E2E runner input", () => {
     const live = readWorkflow(LIVE_E2E);
