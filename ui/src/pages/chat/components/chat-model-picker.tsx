@@ -139,7 +139,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       .join(" · ");
     return {
       triggerModelOption,
-      modelToolsUnavailable,
       selectedContextWindowOption,
       showContextWindowBadge,
       triggerTitle,
@@ -175,14 +174,16 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             "chat-controls__inline-select-trigger chat-controls__model-trigger",
             {
               "chat-controls__model-trigger--loading": params.triggerLoading,
-              "chat-controls__model-trigger--empty":
-                params.modelCatalogState?.hasSnapshot && params.modelOptions.length === 0,
             },
           ]}
           data-chat-model-select="true"
           data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}
           data-chat-select-value={params.selectedModelValue}
-          data-chat-model-tools={state().modelToolsUnavailable ? "unavailable" : "available"}
+          data-chat-model-empty={
+            params.modelCatalogState?.hasSnapshot && params.modelOptions.length === 0
+              ? "true"
+              : "false"
+          }
           aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
