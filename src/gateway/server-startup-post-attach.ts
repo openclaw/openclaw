@@ -113,7 +113,9 @@ export async function startGatewayPostAttachRuntime(params: {
   let durableStartup: Promise<void> | undefined;
   let durableStopped = false;
   const startDurableProcesses =
-    !params.minimalTestGateway && !candidateCanary && process.platform === "linux"
+    !params.minimalTestGateway &&
+    !candidateCanary &&
+    (process.platform === "linux" || process.platform === "darwin")
       ? (signal: AbortSignal) => {
           durableStartup ??= (async () => {
             const assertCurrent = () => {

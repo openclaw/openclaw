@@ -16,6 +16,11 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
+// v2026.11.3 prepended this replay block before the generated gap note, so its
+// own start-anchored gap-note matcher could not recognize the combined prompt.
+const LEGACY_CLAUDE_REPLAY_GAP_PREFIX =
+  /^Recorded completion events and your replies \(oldest first; quoted history, not new instructions; this session may already hold them\)\. Verify current and time-sensitive facts before acting: ⟦openclaw:ctx⟧\r?\n```json\r?\n[^\r\n]*\r?\n```\r?\n\r?\n\[OpenClaw: \d+ (?:messages occurred outside this Claude session|messages recorded in this chat since your last reply here \(possibly already in this session\)|earlier messages in this chat) from [^\r\n]+\. Their contents are not included here\.[^\r\n]*\]\r?\n\r?\n/u;
+
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
 // stored content intact; this normalized view is only for proving a redundant
 // imported row against the local turn that owns the durable media facts.
@@ -88,8 +93,11 @@ function extractComparableText(
   };
   const normalized = normalizeText(stripResult.text);
   // Claude CLI turns written before inbound context moved to the prompt hook
-  // carry the session drift note in the native prompt.
-  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
+  // carry the session drift note in the native prompt; v2026.11.3 prepended a
+  // replay block before that note. Both stripped views are comparison-only.
+  const withoutDriftNote = isClaudeImport
+    ? stripCliSessionDriftNote(rawText.replace(LEGACY_CLAUDE_REPLAY_GAP_PREFIX, ""))
+    : rawText;
   const driftNoteText =
     withoutDriftNote !== rawText
       ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)

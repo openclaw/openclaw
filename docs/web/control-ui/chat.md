@@ -537,7 +537,11 @@ start a turn in that session. These out-of-root previews are read-only.
 
 In Chat and New session, provider groups retain their expanded or collapsed state when you close and reopen the same model picker. Closing clears the search text without resetting those toggles. Reloading the page initializes the groups from the selected model again.
 
-For providers without recommendations, the model picker initially shows up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+
+On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model.
+
+Drag provider icons to reorder the rail, or focus an icon and press **Alt+Arrow**. The order is saved in this browser and survives reloading. While the picker is open and search is not focused, **/** focuses search and **1–9** selects the corresponding available option. The number labels stay hidden; context-window values remain visible.
 
 While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes. Open tooltips also leave Escape to the input method.
 
@@ -590,9 +594,10 @@ The Labs model selector offers:
 - **Default model**: use the agent's configured default model, ignoring the
   conversation's model override.
 
-Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. Tool calls and results are skipped, and long messages keep
-their endings. They cannot run tools, retrieve memory, or send messages. An
+Predictions use your recent messages in the current conversation (up to 16) and
+the assistant's final reply, in an isolated, tool-free request with low
+reasoning. Tool calls, tool results and the assistant's progress updates are
+skipped, and long messages keep their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.
@@ -1040,6 +1045,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Each chat pane has a main view and a unified side panel. When Chat and Desktop are both present, the panel’s **Panel position** menu offers a **Swap** action that exchanges them; Dashboard keeps its own view controls. Expanding or restoring a panel preserves live content and drafts. The header’s **Panels** control hides or reopens the side panel without clearing its tabs, and the browser remembers each session’s arrangement.
     - On desktop, the **Panel position** menu in the panel header places it left, right, or below the main area. Use the adjacent expand/restore control to change how much of the pane it occupies. On mobile, **Panels** opens the shared sheet; its expand/restore control changes the sheet height without changing the saved desktop docking arrangement. Drag the grabber or empty header space to resize it: a slow release keeps the height you chose, a flick moves to the next height (docked, expanded, or full), and a downward flick or a pull past half its minimum height closes it.
     - In **Processes**, **Finished** starts collapsed; click its heading to expand or collapse the list.
+    - While the conversation is idle and a background command will continue it on exit ([`tools.exec.notifyOnExit`](/gateway/background-process)), a **Waiting on …** card sits above the composer with the command name and elapsed time. Select it to open that command's output in **Processes**, where **Stop** is available. Several commands collapse to **Waiting on N processes**; expand it to open any one. The card hides during a running turn and disappears once the command exits, when its completion starts the next turn. A successful command with no output can still finish without a new turn unless `tools.exec.notifyOnExitEmptySuccess` is enabled.
     - **Details → Processes** previews only running commands, with their elapsed time and available **Stop** action. Its count includes every running process; the preview shows up to three on desktop and two on mobile. Select a command to open its output, or **View all processes** to open the full list, including finished commands. The Details section disappears when no processes are running; **Panels → Processes** remains available.
     - A new Browser side panel uses the chat pane's available width and the rendered chat column to reclaim unused chat margins. This default applies on web, macOS, and Tauri; saved widths and manual divider adjustments take precedence.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. A confirmed model selection stays visible if the following session refresh fails; later Gateway updates can still change it. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.
@@ -1142,6 +1148,23 @@ reply to the current Control UI conversation. ClawHub supplies the official
 designation, and the Gateway checks installation status; the agent cannot assign
 those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
+
+When the agent already knows the exact plugin, for example one that a Template
+declares, it names the ClawHub package instead of searching:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "plugin": "@expediagroup/expedia-openclaw" }
+}
+```
+
+`plugin` is the exact package name and cannot be combined with `query` or
+`kind`. The chat shows only that plugin's card, never a similar search result.
+A community plugin is shown without the official badge, and its button reads
+**View details** instead of **Install**; install it from the plugin overview.
+A name that ClawHub does not know, or that is not a plugin, shows no card and
+returns an explanation. Searches still return official plugins and skills only.
 
 ### Source previews and copying code
 

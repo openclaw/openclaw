@@ -31,6 +31,7 @@ import {
   firstRespondCall,
   mockArg,
   registerNodeInvokeUploadTests,
+  registerNodeInvokeWakeFixture,
   type RespondCall,
   type TestNodeSession,
 } from "./nodes.invoke.test-support.js";
@@ -518,6 +519,8 @@ describe("plugin surface refresh", () => {
 });
 
 describe("node.invoke APNs wake path", () => {
+  registerNodeInvokeWakeFixture();
+
   beforeEach(() => {
     resetNodeWakeStateForTest();
     mocks.captureNodePairingGeneration.mockReset().mockImplementation(async (nodeId: string) => ({
@@ -544,11 +547,6 @@ describe("node.invoke APNs wake path", () => {
     mocks.sendApnsBackgroundWake.mockClear();
     mocks.sendApnsAlert.mockClear();
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    setOpenClawIdTunnelPrincipalLookup(undefined);
   });
 
   describe("node readiness recovery", () => {

@@ -1,6 +1,7 @@
 import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
+import { registerModelProviderAuthEnglish } from "./en-model-provider-auth.ts";
 import { registerPreferencesEnglish } from "./en-preferences.ts";
 import { registerSettingsSidebarEnglish } from "./en-settings-sidebar.ts";
 import { en } from "./en.ts";
@@ -272,7 +273,7 @@ const enSettings = {
       stateAttention: "Needs attention",
       stateNotConfigured: "Not configured",
       details: "Details",
-      setUp: "Set up",
+      setUp: registerModelProviderAuthEnglish.catalog.channels.hub.setUp,
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",
       lastMessageAgo: "Last message {ago}",
@@ -1117,10 +1118,10 @@ const enSettings = {
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
-      apiKey: "API key",
+      apiKey: registerModelProviderAuthEnglish.catalog.modelProviders.status.apiKey,
       denied: "Credentials rejected",
-      signInAgain: "Sign in again",
-      signInUnavailable: "Sign-in unavailable",
+      signInExpired: "Sign-in expired",
+      refreshing: "Refreshing",
       managedExternally: "Managed externally",
       configured: "Account added",
       modelsUnavailable: "Models unavailable",
@@ -1180,6 +1181,8 @@ const enSettings = {
       resetOrder: "Clear custom order",
       resetOrderHint: "Use the default account order for this agent. Accounts stay connected.",
       addAccount: "Add account",
+      signInAgain: "Sign in again",
+      signInAgainFor: "Sign in again as {account}",
       lastUsed: "Last used {time} ago",
       sourceConfig: "Provider config",
       sourceExternal: "External CLI",

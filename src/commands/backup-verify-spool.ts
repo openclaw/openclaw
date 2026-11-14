@@ -4,6 +4,7 @@ import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
 import { normalizeArchivePath } from "../infra/backup-archive-path-policy.js";
+import type { ReportBackupProgress } from "../infra/backup-progress.js";
 import {
   createBackupScratchDirectory,
   finishBackupScratch,
@@ -158,9 +159,12 @@ export async function prepareDatabaseArtifacts(
 
 /** Retain possible databases until a trailing manifest and legacy registry establish ownership. */
 export class BackupArchiveSpool {
+  constructor(private readonly onProgress?: ReportBackupProgress) {}
+
   private scratch: Promise<BackupScratch> | undefined;
   private disabled = false;
   private nextFileId = 0;
+  private capturedBytes = 0;
   private readonly files = new Map<string, string>();
   private readonly materialized = new Map<string, string>();
   readonly tempRoot = os.tmpdir();
@@ -215,6 +219,12 @@ export class BackupArchiveSpool {
           this.files.set(normalized, filename);
         }
         await output.writeFile(bytes);
+        this.capturedBytes += bytes.length;
+        this.onProgress?.({
+          stage: "verify-spool",
+          phase: "progress",
+          bytes: this.capturedBytes,
+        });
       } catch {
         // Required artifacts still surface storage failures through extraction.
         await abandon();

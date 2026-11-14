@@ -52,7 +52,6 @@ const enLogin = {
       getCode: "Get a code",
       starting: "Requesting a pairing code…",
       waiting: "Waiting for approval. Keep this page open.",
-      identity: "Code {code} · Browser ID {id}",
       failure: {
         identityRequired:
           "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",

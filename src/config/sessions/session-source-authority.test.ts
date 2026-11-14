@@ -1,16 +1,61 @@
 import { expect, it, vi } from "vitest";
 import {
+  bindSynchronousSessionSource,
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
   prepareSessionSourceEffect,
   prepareSessionSourceAuthority,
   runWithSessionSourceScope,
+  withSessionSourceValidation,
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "./session-source-authority.js";
 
 const sourceWith = (methods: Partial<SessionSourceAssertion>) => Object.assign(() => {}, methods);
+
+it("shares issued bindings only inside one synchronous consuming step", async () => {
+  const first = revocable("first binding revoked");
+  const second = revocable("second binding revoked");
+  bindSynchronousSessionSource(first.assertCurrent);
+  bindSynchronousSessionSource(second.assertCurrent);
+  const assertion = composeSessionSourceAssertion(
+    [first.assertCurrent, second.assertCurrent],
+    undefined,
+    { synchronousCheck: true },
+  );
+  withSessionSourceValidation(() => {
+    assertion();
+    assertion();
+    expect(first.assertCurrent).toHaveBeenCalledTimes(1);
+    expect(second.assertCurrent).toHaveBeenCalledTimes(1);
+    // A reentrant request gets its own step and invalidates the outer validation.
+    withSessionSourceValidation(assertion);
+    assertion();
+    expect(first.assertCurrent).toHaveBeenCalledTimes(3);
+  });
+  withSessionSourceValidation(assertion);
+  expect(first.assertCurrent).toHaveBeenCalledTimes(4);
+  await withSessionSourceValidation(async () => {
+    assertion();
+    await Promise.resolve();
+    first.revoke();
+    expect(assertion).toThrow("first binding revoked");
+  });
+  expect(first.assertCurrent).toHaveBeenCalledTimes(6);
+});
+
+it("never shares validation across an opaque callback that revokes an issued binding", () => {
+  const source = revocable("source revoked by callback");
+  bindSynchronousSessionSource(source.assertCurrent);
+  const assertion = composeSessionSourceAssertion(
+    [source.assertCurrent, source.revoke, source.assertCurrent],
+    undefined,
+    { synchronousCheck: true },
+  );
+  expect(() => withSessionSourceValidation(assertion)).toThrow("source revoked by callback");
+  expect(source.assertCurrent).toHaveBeenCalledTimes(2);
+});
 
 it("prepares empty predicates without allocating intermediate mapped arrays", async () => {
   const live = revocable("source revoked after preparation");
