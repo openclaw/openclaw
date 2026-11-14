@@ -54,7 +54,12 @@ const clients = integer("clients"),
 const sources = values["compare-source"]
   ? [values.source, values["compare-source"]]
   : [values.source];
-const owners = [];
+const owners: {
+  create: typeof import("../../src/gateway/server-connection-state.js").createGatewayConnectionState;
+  sha256: string;
+  sharingSha256: string;
+  arm: "base" | "candidate";
+}[] = [];
 for (const [index, sourcePath] of sources.entries()) {
   const source = readFileSync(path.resolve(sourcePath), "utf8");
   const ownerUrl = new URL(
@@ -155,6 +160,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
               profileId,
               displayName: null,
               hasAvatar: false,
+              avatarRevision: "synthetic",
               updatedAt: 1,
             };
             client.preparedSessionProfile = {
@@ -165,6 +171,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
           }
           state.clients.add(client);
         }
+        const recipients = new Set([...state.clients].map((client) => client.connId));
         const publish = (index: number) =>
           state.broadcastToConnIds(
             "chat",
@@ -178,7 +185,7 @@ await withOpenClawTestState({ scenario: "minimal" }, async () => {
                 content: [{ type: "text", text: "Synthetic response" }],
               },
             },
-            undefined,
+            recipients,
             { agentId: "main", sessionKeys: [scope.sessionKey] },
           );
         try {
