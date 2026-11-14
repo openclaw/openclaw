@@ -209,9 +209,7 @@ export function createMarkdownParser(): MarkdownItParser {
       // Count delimiters in one pass; suffix removal never rescans the URL.
       const counts: Record<string, number> = {};
       for (const character of match[0]) {
-        if ("()[]{}\"'".includes(character)) {
-          counts[character] = (counts[character] ?? 0) + 1;
-        }
+        counts[character] = (counts[character] ?? 0) + 1;
       }
 
       while (length > 0) {
@@ -258,10 +256,7 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.validateLink = () => true;
 
   markdownParser.core.ruler.after("linkify", "file-links", (state) => {
-    const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true && !env?.documentFileLinks) {
-      return;
-    }
+    const env = state.env as Partial<MarkdownRenderEnv>;
     const decorations: MarkdownFileLinkDecoration[] = [];
     const fileLinkTokens = (
       label: Token,
@@ -287,6 +282,7 @@ export function createMarkdownParser(): MarkdownItParser {
     };
     for (const children of markdownInlineChildren(state.tokens)) {
       let linkDepth = 0;
+      let hideClose = false;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {
@@ -296,6 +292,7 @@ export function createMarkdownParser(): MarkdownItParser {
           const href = String(token.attrGet("href") ?? "");
           if (
             href &&
+            (env.fileLinks || env.documentFileLinks) &&
             !token.attrGet("data-session-href") &&
             !token.attrGet("data-template-package")
           ) {
@@ -335,10 +332,15 @@ export function createMarkdownParser(): MarkdownItParser {
               }
             }
           }
+          // Local file decoration removes hrefs such as C:/notes.md before scheme rejection.
+          hideClose = DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""));
+          token.hidden = hideClose;
           linkDepth += 1;
           continue;
         }
         if (token.type === "link_close") {
+          token.hidden = hideClose;
+          hideClose = false;
           linkDepth = Math.max(0, linkDepth - 1);
           continue;
         }
@@ -443,9 +445,6 @@ export function createMarkdownParser(): MarkdownItParser {
           end++;
         }
         const href = String(open.attrGet("href") ?? "");
-        if (DISALLOWED_LINK_SCHEME_RE.test(href)) {
-          open.hidden = children[end]!.hidden = true;
-        }
         const url = parseWebLinkHref(href);
         const github = url && isGitHubHost(url.hostname);
         if (url && !github && label && state.env.linkFavicons) {
