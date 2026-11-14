@@ -42,14 +42,18 @@ if (!isMainThread) {
   if (workerData.reader && workerData.mode === "candidate") {
     assert.equal(read(), catalog, "Repeated reads must preserve snapshot identity");
   }
-  global.gc();
+  const cpu = process.threadCpuUsage();
   parentPort.postMessage({
     readMs,
     checksum,
+    cpuMs: (cpu.user + cpu.system) / 1000,
     materializedModels: getEnvironmentData(key).catalog?.providers.fixture.models.length ?? 0,
-    heapUsed: process.memoryUsage().heapUsed,
   });
-  parentPort.on("message", () => {});
+  parentPort.once("message", () => {
+    global.gc();
+    parentPort.postMessage({ heapUsed: process.memoryUsage().heapUsed });
+    parentPort.on("message", () => {});
+  });
 } else {
   const { values } = parseArgs({
     options: {
@@ -97,16 +101,19 @@ if (!isMainThread) {
     global.gc();
     const hostLoad = loadavg();
     const rssBefore = process.memoryUsage.rss();
-    const started = performance.now();
-    const cpuBefore = process.cpuUsage();
+    const cpuBefore = process.threadCpuUsage();
     const publishedAt = performance.now();
     if (values.mode === "baseline") setEnvironmentData(key, { catalog });
     else publish(catalog);
     const publishMs = performance.now() - publishedAt;
+    const publishCpu = process.threadCpuUsage(cpuBefore);
     const active = [];
     const results = [];
+    let readyMs = publishMs;
     try {
       for (let index = 0; index < workers; index++) {
+        const started = performance.now();
+        const hostCpuBefore = process.threadCpuUsage();
         const worker = new Worker(new URL(import.meta.url), {
           workerData: {
             mode: values.mode,
@@ -116,10 +123,15 @@ if (!isMainThread) {
         });
         active.push(worker);
         const [result] = await once(worker, "message");
+        readyMs += performance.now() - started;
+        const hostCpu = process.threadCpuUsage(hostCpuBefore);
+        result.cpuMs += (hostCpu.user + hostCpu.system) / 1000;
         if (index < readers) assert.equal(result.checksum, expected);
-        results.push(result);
+        const memory = once(worker, "message");
+        worker.postMessage("measure");
+        const [retained] = await memory;
+        results.push({ ...result, ...retained });
       }
-      const cpu = process.cpuUsage(cpuBefore);
       console.log(
         JSON.stringify({
           mode: values.mode,
@@ -127,8 +139,10 @@ if (!isMainThread) {
           readers,
           models,
           hostLoad,
-          elapsedMs: performance.now() - started,
-          cpuMs: (cpu.user + cpu.system) / 1000,
+          readyMs,
+          cpuMs:
+            (publishCpu.user + publishCpu.system) / 1000 +
+            results.reduce((sum, row) => sum + row.cpuMs, 0),
           publishMs,
           readerMs: results.reduce((sum, row) => sum + row.readMs, 0),
           materializedModels: results.reduce((sum, row) => sum + row.materializedModels, 0),
@@ -169,7 +183,7 @@ if (!isMainThread) {
         mode,
         Object.fromEntries(
           [
-            "elapsedMs",
+            "readyMs",
             "cpuMs",
             "publishMs",
             "readerMs",
