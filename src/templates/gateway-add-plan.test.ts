@@ -211,6 +211,25 @@ describe("Gateway Template Add plan", () => {
     expect(projected.configuredAccess).toBeUndefined();
   });
 
+  it("rejects a reserved system agent ID like agents add", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-templates-reserved-add-"));
+    const fixture = await readFixture();
+    const reserved = expect.objectContaining({ code: "reserved_agent_id" });
+
+    const declared = await buildPlan({
+      ...fixture,
+      manifest: { ...fixture.manifest, agent: { ...fixture.manifest.agent, id: "openclaw" } },
+    });
+    expect(declared.agent.finalId).toBe("openclaw");
+    expect(declared.blockers).toContainEqual(reserved);
+
+    const pinned = await buildPlan(fixture, undefined, "crestodian");
+    expect(pinned.blockers).toContainEqual(reserved);
+    expect(pinned.actions).toContainEqual(
+      expect.objectContaining({ kind: "agent", id: "crestodian", blocked: true }),
+    );
+  });
+
   it("preflights plugin grants with the config that Add will install under", async () => {
     const source = await readFixture("incident-response");
     const config = {

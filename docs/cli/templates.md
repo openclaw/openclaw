@@ -322,7 +322,9 @@ Template release requires `--acknowledge-clawhub-risk` when adding it. Template
 approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
-Each Add chooses an unused agent ID. The CLI reports that ID so you can open
+Each Add chooses an unused agent ID. Like `openclaw agents add`, Add rejects
+reserved system agent IDs such as `openclaw`; choose another ID with
+`--agent-id` or in the Template manifest. The CLI reports the chosen ID so you can open
 or configure the agent afterward. The Control UI opens the new agent's pending
 chat immediately. Sending becomes available when its instruction files, canonical
 conversation, and active runtime are ready, while remaining setup continues. The
@@ -339,10 +341,10 @@ is no final setup receipt or second model recap. Declared package bootstrap stil
 follows shared setup; MCP configuration alone does not prove a working connection.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` selects an unused ID. `--workspace` selects a new path for local
-preview or offline Add. Ordinary Add binds its review internally and does not
-require a separate plan token. Trust warnings and plugin capabilities still
-require their separate explicit acknowledgements.
+`--agent-id` selects an unused, non-reserved ID. `--workspace` selects a new path
+for local preview or offline Add. Ordinary Add binds its review internally and
+does not require a separate plan token. Trust warnings and plugin capabilities
+still require their separate explicit acknowledgements.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
