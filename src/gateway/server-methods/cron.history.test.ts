@@ -13,6 +13,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCronSessionRowWriter } from "../../cron/isolated-agent/run-prepare-runtime.js";
+import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
+import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import type { CronService } from "../../cron/service.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import * as cronReadOnly from "../../cron/store/read-only.js";
@@ -515,4 +518,56 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
         expect(JSON.stringify(result.calls)).not.toContain(unrelatedKey);
       },
     ),
+);
+
+it.each([false, true])(
+  "revalidates retained history after final-binding rollover (revoke sharing: %s)",
+  (revokeSharing) =>
+    withCronTranscript(async ({ baseKey, query }) => {
+      const readBinding = cronReadOnly.readCronRunHistoryBinding;
+      let reads = 0;
+      const binding = vi
+        .spyOn(cronReadOnly, "readCronRunHistoryBinding")
+        .mockImplementation(async (...args) => {
+          reads += 1;
+          if (reads === 2) {
+            const cronSession = await prepareCronSession({
+              cfg: { agents: { entries: { main: {} } } },
+              agentId: "main",
+              sessionKey: baseKey,
+              nowMs: Date.now(),
+              forceNew: true,
+            });
+            await createPersistCronSessionEntry({
+              cronSession,
+              agentSessionKey: baseKey,
+              workspaceDir: process.cwd(),
+              persistSessionEntry: createCronSessionRowWriter({
+                agentId: "main",
+                agentSessionKey: baseKey,
+              }),
+            })();
+            if (revokeSharing) {
+              await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
+                visibility: "draft",
+              }));
+            }
+          }
+          return readBinding(...args);
+        });
+      try {
+        const result = await query({ runId: "public-old-run" });
+        expect(result.ok).toBe(!revokeSharing);
+        expect(reads).toBe(3);
+        expect(result.calls).toHaveLength(1);
+        if (revokeSharing) {
+          expect(result.payload?.messages).toBeUndefined();
+          expect(JSON.stringify(result.calls)).not.toContain(baseKey);
+        } else {
+          expectMessages(result, "Old first", "Old second", "Old last");
+        }
+      } finally {
+        binding.mockRestore();
+      }
+    }),
 );
