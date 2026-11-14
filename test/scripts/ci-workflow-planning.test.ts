@@ -7240,7 +7240,12 @@ describe("ci workflow guards", () => {
         'printf "%s\\n" "$*" >> "$SDK_NODE_CALLS"',
         'printf "cache-key=fixture-sdk\\n" >> "$GITHUB_OUTPUT"',
       ]);
-      const steps = { identity: { outputs: {} }, pack: { outputs: {} }, restore: { outputs: {} } };
+      const steps = {
+        identity: { outputs: {} },
+        pack: { outputs: {} },
+        "main-pack": { outputs: {} },
+        restore: { outputs: {} },
+      };
       const run = (id: keyof typeof steps) => {
         const step = action.runs.steps.find((candidate: WorkflowStep) => candidate.id === id);
         const output = path.join(root, `${id}.outputs`);
@@ -7259,14 +7264,20 @@ describe("ci workflow guards", () => {
       };
       run("identity");
       expect(steps.identity.outputs).toMatchObject({ enabled: "true" });
-      if (mode === "publish-run" || mode === "restore-run") {
+      if (mode !== "restore-main") {
         expect(existsSync(calls)).toBe(false);
-        run(mode === "publish-run" ? "pack" : "restore");
+        run(mode === "publish-run" ? "pack" : mode === "save-main" ? "main-pack" : "restore");
       }
       expect(readFileSync(calls, "utf8").trim()).toBe(
-        `scripts/ci-sdk-declarations.mts ${mode === "publish-run" ? "pack" : mode === "restore-run" ? "restore --required" : "key"}`,
+        `scripts/ci-sdk-declarations.mts ${mode === "restore-main" ? "key" : mode === "restore-run" ? "restore --required" : "pack"}`,
       );
       expect(evaluateWorkflow(action.outputs["cache-key"].value, { steps })).toBe("fixture-sdk");
+      if (mode === "save-main") {
+        const save = action.runs.steps.find((step: WorkflowStep) =>
+          step.uses?.startsWith("actions/cache/save@"),
+        );
+        expect(evaluateWorkflow(save.with.key, { steps })).toBe("fixture-sdk");
+      }
     },
   );
 

@@ -78,7 +78,6 @@ import {
   replaceNodeWorkerDirectory,
 } from "./node-worker-workspace-replacement.js";
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
-export type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
 
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 
