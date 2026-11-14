@@ -95,7 +95,10 @@ export function encodeOpenClawStateWorkerError(
       if (
         Object.entries(identity).some(([key, value]) => {
           const fields =
-            key === "owner" || key === "blockedByRun" || key === "refusal"
+            key === "owner" ||
+            key === "blockedByRun" ||
+            key === "refusal" ||
+            (key === "leaseLoss" && value !== undefined)
               ? Object.values(value)
               : key === "missingTables" && Array.isArray(value)
                 ? value

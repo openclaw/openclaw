@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import { createOpenClawStateLeaseLostError } from "./openclaw-state-lease-error.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -62,6 +63,11 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
 }));
 // mock-isolation: Keep cleanup failure deterministic and forbid native database access.
 vi.mock("./openclaw-state-lease-storage.js", () => ({
+  createOpenClawStateLeaseLostErrorFromDatabase: (
+    identity: Parameters<typeof createOpenClawStateLeaseLostError>[0],
+    _database: unknown,
+    cause?: unknown,
+  ) => createOpenClawStateLeaseLostError(identity, cause),
   STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
   prepareLeaseDatabase: storage.forbidden,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",

@@ -108,6 +108,15 @@ the CLI fallback on the Gateway host.
 
 ## Doctor cannot enter maintenance during finalization
 
+When a state lease is lost during Doctor or plugin finalization, update history
+and the failure report retain a `lease loss` reason when the database can identify
+it: `expired`, `replaced`, or `missing`. Expiry diagnostics include the recorded
+deadline, time since expiry, and age of the last heartbeat. A delayed native renewal
+timer also reports its measured lateness; a large delay can indicate event-loop
+starvation, but does not establish its cause. Replacement owners are redacted.
+These diagnostics do not change lease duration or ownership checks. If state cannot
+be inspected safely, the original generic lease-loss error is preserved.
+
 `finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
 still owns the selected state directory. A starting Gateway and a healthy serving
 Gateway retain that ownership for their entire process lifetime; waiting for

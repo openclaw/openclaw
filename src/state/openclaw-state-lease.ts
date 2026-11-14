@@ -35,6 +35,7 @@ import {
 } from "./openclaw-state-lease-options.js";
 import { registerProcessExitLeaseCleanup } from "./openclaw-state-lease-process-exit.js";
 import {
+  createOpenClawStateLeaseLostErrorFromDatabase,
   prepareLeaseDatabase,
   resolveLeaseDatabasePath,
   renewOpenClawStateLease as renew,
@@ -103,10 +104,12 @@ async function runStateLeaseOwnerInScope<T>(
 ): Promise<T> {
   const validated = validateOpenClawStateLeaseOptions(invocation.options);
   const owner = randomUUID();
+  const renewalTimer: { dueAt?: number; lateByMs: number } = { lateByMs: 0 };
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
     owner,
+    renewalTimer,
     leaseLabel: validated.leaseLabel,
   };
   let closed = false;
@@ -149,7 +152,9 @@ async function runStateLeaseOwnerInScope<T>(
       leaseLost.abort(
         cause instanceof OpenClawStateLeaseError
           ? cause
-          : createOpenClawStateLeaseLostError(validated, cause),
+          : invocation.kind === "native" && phase === "owned" && !closed
+            ? createOpenClawStateLeaseLostErrorFromDatabase(identity, validated.database, cause)
+            : createOpenClawStateLeaseLostError(validated, cause),
       );
     }
   };
@@ -388,6 +393,9 @@ async function runStateLeaseOwnerInScope<T>(
       }
     };
     const renewFromTimer = () => {
+      const now = Date.now();
+      renewalTimer.lateByMs = Math.max(0, now - (renewalTimer.dueAt ?? now));
+      renewalTimer.dueAt = now + heartbeatMs;
       if (!runTimerRenewal) {
         return;
       }
@@ -539,6 +547,7 @@ async function runStateLeaseOwnerInScope<T>(
       } else {
         scheduleExpiry();
         runTimerRenewal = AsyncLocalStorage.snapshot();
+        renewalTimer.dueAt = Date.now() + heartbeatMs;
         heartbeat = setInterval(renewFromTimer, heartbeatMs);
         heartbeat.unref?.();
       }
@@ -650,7 +659,8 @@ async function runStateLeaseOwnerInScope<T>(
         if (failure !== error && authorityError instanceof OpenClawStateLeaseError) {
           // Nested owners may observe the same failed operation differently. Keep
           // the caller's authority code and all operation/drainage causes.
-          throw leaseError(authorityError.code, authorityError.message, failure);
+          const { code, message, loss } = authorityError;
+          throw leaseError(code, message, failure, loss);
         }
         throw authorityError;
       }

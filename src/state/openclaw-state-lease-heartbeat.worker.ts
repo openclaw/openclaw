@@ -12,7 +12,10 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
-import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
+import {
+  createOpenClawStateLeaseLostError,
+  OpenClawStateLeaseError,
+} from "./openclaw-state-lease-error.js";
 import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase as startupPhase,
@@ -31,6 +34,7 @@ import {
 } from "./openclaw-state-lease-renewal.worker.js";
 import {
   readOpenClawStateLeaseExpiry,
+  readOpenClawStateLeaseLoss,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
@@ -143,6 +147,13 @@ function startHeartbeat(
   };
   let attempt = 0;
   let firstLoss: LeaseHeartbeatLoss | undefined;
+  const observeLoss = () => {
+    try {
+      return withDatabaseAdmission(() => readOpenClawStateLeaseLoss(db, params.identity));
+    } catch {
+      return undefined;
+    }
+  };
   const recordLoss = (loss: LeaseHeartbeatLoss) => {
     if (firstLoss || Atomics.load(shared, state.status) === state.closed) {
       return;
@@ -237,7 +248,7 @@ function startHeartbeat(
     observeDurableExpiry(expiresAt);
     if (expiresAt === undefined) {
       if (!explicit) {
-        lose({ path, outcome: "no-current-owned-unexpired-row" });
+        lose({ path, outcome: "no-current-owned-unexpired-row", leaseLoss: observeLoss() });
       }
       return undefined;
     }
@@ -319,7 +330,11 @@ function startHeartbeat(
       return;
     }
     if (expiresAt === undefined) {
-      lose({ path: "activation", outcome: "no-current-owned-unexpired-row" });
+      lose({
+        path: "activation",
+        outcome: "no-current-owned-unexpired-row",
+        leaseLoss: observeLoss(),
+      });
       return;
     }
     if (
@@ -363,9 +378,7 @@ function startHeartbeat(
               );
         if (expiresAt === undefined) {
           outcome = "no-current-owned-unexpired-row";
-          throw new OpenClawStateLeaseError("state lease heartbeat no longer owns its lease", {
-            code: "OPENCLAW_STATE_LEASE_LOST",
-          });
+          throw createOpenClawStateLeaseLostError(params.identity, undefined, observeLoss());
         }
         reply = { id: request.id, ok: true, expiresAt };
       } catch (cause) {

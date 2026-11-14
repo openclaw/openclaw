@@ -10,6 +10,7 @@ import {
   readStateLeaseProcessOwnerStatus,
   type StateLeaseProcessOwner,
 } from "../infra/state-lease-process-owner.js";
+import { StateLeaseLossSchema, type StateLeaseLoss } from "../shared/state-lease-loss.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import type {
   OpenClawStateLeaseIdentity,
@@ -105,6 +106,32 @@ export function readOpenClawStateLease(
       .where("scope", "=", identity.scope)
       .where("lease_key", "=", identity.key),
   );
+}
+
+/** Observe only after authority has failed; diagnostics must never replace that failure. */
+export function readOpenClawStateLeaseLoss(
+  db: EngineConnection,
+  identity: OpenClawStateLeaseIdentity,
+): StateLeaseLoss | undefined {
+  try {
+    const row = readOpenClawStateLease(db, identity);
+    const now = Date.now();
+    const loss = !row
+      ? { reason: "missing" }
+      : row.owner !== identity.owner
+        ? { reason: "replaced", owner: "[redacted]" }
+        : row.expiresAt !== null && row.heartbeatAt !== null && row.expiresAt <= now
+          ? {
+              reason: "expired",
+              expiresAt: row.expiresAt,
+              expiredByMs: now - row.expiresAt,
+              heartbeatAgeMs: Math.max(0, now - row.heartbeatAt),
+            }
+          : undefined;
+    return StateLeaseLossSchema.safeParse(loss).data;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Reclaim only a same-host owner whose process identity is provably gone. */

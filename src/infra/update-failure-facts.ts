@@ -13,7 +13,9 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { StateLeaseLossSchema, type StateLeaseLoss } from "../shared/state-lease-loss.js";
 import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -112,11 +114,15 @@ export function createUpdateErrorFact(
   error: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact {
+  let leaseLoss: StateLeaseLoss | undefined;
   // The formatter must never reach raw cause identities or stringify private object metadata.
   const errors = collectErrorGraphCandidates(error ?? String(error), (current) => [
     ...(readErrorMetadata(() => readErrorCauses(current)) ?? []),
     readErrorMetadata(() => current.cause),
   ]).map((current) => {
+    if (current instanceof OpenClawStateLeaseError) {
+      leaseLoss ??= current.loss;
+    }
     const rawName = readErrorMetadata(() =>
       current instanceof Error ? current.constructor.name : readErrorName(current),
     );
@@ -176,6 +182,7 @@ export function createUpdateErrorFact(
       errorName: primary?.name ?? "Error",
       location: location ?? null,
       message: formatErrorMessage(new AggregateError(errors, primary?.message)),
+      ...(leaseLoss ? { leaseLoss } : {}),
     },
     env,
   );
@@ -231,6 +238,7 @@ export function createUpdateFailureFact(
     fact.code === UPDATE_FOREIGN_DESTINATION_REASON && fact.destination
       ? normalizeDestinationFailure(fact.destination, context)
       : undefined;
+  const leaseLoss = StateLeaseLossSchema.safeParse(fact.leaseLoss).data;
   return {
     check: line(fact.check, 128),
     code: line(fact.code, 80),
@@ -248,6 +256,7 @@ export function createUpdateFailureFact(
       : {}),
     ...(fact.pluginId ? { pluginId: line(fact.pluginId, 80) } : {}),
     ...(destination ? { destination } : {}),
+    ...(leaseLoss ? { leaseLoss } : {}),
     ...(fact.npmErrorCode || fact.code === "global-install-failed"
       ? {
           npmErrorCode:

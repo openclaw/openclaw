@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -7,9 +7,11 @@ import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-sup
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
+import { readOpenClawStateLease } from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
@@ -93,6 +95,7 @@ describe("OpenClaw state lease", () => {
           import { withOpenClawStateLease } from ${JSON.stringify(leaseModuleUrl.href)};
           import {
             closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
             openOpenClawStateDatabase,
           } from ${JSON.stringify(stateDbModuleUrl.href)};
           import { loggingState } from ${JSON.stringify(loggingStateModuleUrl.href)};
@@ -188,3 +191,43 @@ describe("OpenClaw state lease", () => {
     });
   });
 });
+
+it("records expiry and timer lateness when the native owner cannot run its heartbeat", () =>
+  withOpenClawTestState({ label: "lease-starvation" }, async ({ env }) => {
+    const { db } = openOpenClawStateDatabase({ env });
+    let entered = false;
+    const clock = vi.spyOn(Date, "now");
+    const lost = await withOpenClawStateLease(
+      {
+        scope: "synthetic",
+        key: "stall",
+        leaseMs: 3_000,
+        waitMs: 0,
+        database: { scope: "shared", options: { env } },
+      },
+      async (lease) => {
+        entered = true;
+        const row = readOpenClawStateLease(db, { scope: "synthetic", key: "stall" });
+        if (!row || row.expiresAt === null) {
+          throw new Error("Expected acquired lease");
+        }
+        // No timer can run while synchronous work holds the event loop.
+        clock.mockReturnValue(row.expiresAt + 2_000);
+        lease.assertOwned();
+      },
+    ).catch((error: unknown) => error);
+    clock.mockRestore();
+    if (!entered) {
+      throw lost;
+    }
+    expect(lost).toMatchObject({
+      code: "OPENCLAW_STATE_LEASE_LOST",
+      loss: {
+        reason: "expired",
+        expiresAt: expect.any(Number),
+        expiredByMs: 2_000,
+        heartbeatAgeMs: 5_000,
+        renewalTimerLateByMs: expect.any(Number),
+      },
+    });
+  }));
