@@ -1,4 +1,5 @@
 # Seeded randomized session-prefix journeys over 15 turn kinds on all five model transports, plus
 # fake servers for each wire format, a side-question fork check and per-child prefix checks: the
-# invariant gate that per-scenario prompt-cache tests missed.
-358
+# invariant gate that per-scenario prompt-cache tests missed. Tool-pin checks prove that the
+# checkpoint keeps the sent tool set after a wider turn and that an empty pin takes the first tools.
+367
