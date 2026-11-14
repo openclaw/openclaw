@@ -24,7 +24,7 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     ) ||
     (/model:\s*[a-z0-9._/-]+/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) ||
     /models\/[^\s]+ is not found/i.test(msg) ||
-    (/model/i.test(msg) && /does not exist/i.test(msg)) ||
+    /\bmodel\b[^\r\n,;]{0,120}\bdoes not exist\b/i.test(msg) ||
     (/selected model/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) ||
     (/model/i.test(msg) && /deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) ||
     // A failed turn naming the model itself as deprecated ("Model exo-free has been deprecated.").

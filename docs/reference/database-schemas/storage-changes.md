@@ -224,8 +224,10 @@ using reads of at most 256 rows, and deletes unreachable packs and path sets old
 than the preceding epoch in bounded batches. SQLite releases each read between
 pages so maintenance does not pin a checkpoint for the whole graph walk. Immutable
 pack links and the epoch check protect publications between pages; deletion
-rechecks the epoch in its writer transaction. Writers stamp the current epoch when
-preparing or reusing content. A writer stalled for more than an epoch can lose
+rechecks the epoch in its writer transaction. Candidate pages exclude bounded
+ranges of known-live indexed digests before reading epochs, avoiding large payload
+overflow pages for live packs. Writers stamp the current epoch when preparing or
+reusing content. A writer stalled for more than an epoch can lose
 unaccepted packs. Preparation returns its sweep epoch; acceptance checks the
 oldest preparation epoch inside the writer transaction and refuses an expired
 preparation before publishing any root or checkpoint. Retry the session to

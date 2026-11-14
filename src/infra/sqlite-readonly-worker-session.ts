@@ -381,6 +381,7 @@ export function createSqliteReadOnlyWorkerSession(
                       ...(options.mode === "operation"
                         ? { command: serialize(options.command).toString("base64") }
                         : {
+                            immutable: options.immutable,
                             retainReader:
                               !host.pooledRead &&
                               options.source === "canonical" &&

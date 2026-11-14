@@ -255,15 +255,19 @@ entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.
 When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
-the Gateway's page tables for each command. Sandbox housekeeping retains that
-broker when it leaves the requesting turn's context, including recurring prune
-passes. The existing process supervisors and
+the Gateway's page tables for each command. The broker belongs to the Gateway's
+lifetime, so detached work also uses it after leaving a request's async context.
+Explicit native-only scopes still keep their local transport. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted
 broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+When the host denies group signals, the broker's own process group and the worker's retained
+detached groups are signaled member by member, and their extinction is confirmed from the process
+table. A detached child lost with the broker before its group identity was recorded can only be
+confirmed, not signaled.
 Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.

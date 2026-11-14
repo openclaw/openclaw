@@ -477,8 +477,6 @@ export function GitHubConnectionSetup(props: IdentityProps & { saveLabel?: strin
                 value={view().draft.token}
                 visible={view().tokenRevealed}
                 disabled={disabled()}
-                showLabel={t("configForm.revealValue")}
-                hideLabel={t("configForm.hideValue")}
                 toggleLabel={t("agentTools.githubTokenToggle")}
                 onInput={(value) => props.identity.setDraft("token", value)}
                 onToggle={() => props.identity.toggleTokenVisibility()}

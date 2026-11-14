@@ -6,11 +6,16 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
+import {
+  readBrowserOperatorControl,
+  releaseBrowserOperatorControl,
+  takeBrowserOperatorControl,
+} from "../operator-control.js";
 import { DEFAULT_TRACE_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { mintBrowserScreencastToken } from "../screencast/tokens.js";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileOperationCurrent } from "../server-context.lifecycle.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { registerBrowserOperatorInputRoutes } from "./agent.operator-input.js";
@@ -30,7 +35,7 @@ import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { toBoolean } from "./utils.js";
+import { getProfileContext, jsonError, toBoolean } from "./utils.js";
 
 function clampScreencastOption(value: unknown, min: number, max: number, fallback: number) {
   return typeof value === "number" && Number.isFinite(value)
@@ -149,6 +154,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
       },
     });
   });
+  registerBrowserControlRoutes(app, ctx);
   registerBrowserAgentActRoutes(app, ctx);
   registerBrowserOperatorInputRoutes(app, ctx);
   const register = createPlaywrightRouteRegistrar(app, ctx, "inspection");
@@ -230,4 +236,48 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
     };
   });
   registerBrowserAgentStorageRoutes(app, ctx);
+}
+
+/** Operator take-over: the Control UI connection that takes control is the only input source. */
+function registerBrowserControlRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  const withProfile =
+    (
+      run: (
+        profile: ProfileContext["profile"],
+        req: Parameters<Parameters<BrowserRouteRegistrar["get"]>[1]>[0],
+      ) => ReturnType<typeof readBrowserOperatorControl>,
+    ): Parameters<BrowserRouteRegistrar["get"]>[1] =>
+    (req, res) => {
+      const profileCtx = getProfileContext(req, ctx);
+      if ("error" in profileCtx) {
+        return jsonError(res, profileCtx.status, profileCtx.error);
+      }
+      res.json(run(profileCtx.profile, req));
+    };
+  app.get(
+    "/control",
+    withProfile((profile, req) =>
+      readBrowserOperatorControl(ctx.state(), profile, req.requester?.connId),
+    ),
+  );
+  app.post("/control", (req, res) => {
+    const requester = req.requester;
+    if (!requester?.connId || !requester.isCurrent()) {
+      return jsonError(
+        res,
+        400,
+        "Taking control requires a direct Control UI connection to the browser host.",
+      );
+    }
+    const connId = requester.connId;
+    return withProfile((profile) =>
+      takeBrowserOperatorControl(ctx.state(), profile, { ...requester, connId }),
+    )(req, res);
+  });
+  app.delete(
+    "/control",
+    withProfile((profile, req) =>
+      releaseBrowserOperatorControl(ctx.state(), profile, req.requester?.connId),
+    ),
+  );
 }

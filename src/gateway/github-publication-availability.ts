@@ -101,10 +101,13 @@ export function currentGitHubPublicationConfig() {
 export async function prepareCurrentGitHubPublicationIdentity(
   agentId: string,
   assertCurrent?: () => void,
+  beforeCredentialRead?: () => void,
 ): Promise<PreparedGitHubPublicationIdentity> {
   assertCurrent?.();
   await requestCurrentGitHubOAuthRefresh(agentId);
   assertCurrent?.();
+  // Observe rotation after our own refresh, before the credential-read awaits.
+  beforeCredentialRead?.();
   const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationIdentity({
     config: snapshot.config,
@@ -135,7 +138,9 @@ export function matchesCurrentGitHubPublicationIdentity(params: {
   identity: PreparedGitHubPublicationIdentity;
 }): boolean {
   return matchesPreparedGitHubPublicationIdentity({
-    config: currentGitHubPublicationConfig(),
+    // Selection is committed before secrets activation finishes publishing its snapshot.
+    // Its notification must not authorize a credential against the previous snapshot.
+    config: getRuntimeConfig(),
     ...params,
   });
 }

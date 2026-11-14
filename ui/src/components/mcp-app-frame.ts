@@ -54,17 +54,34 @@ export function loadMcpAppSandbox(
   iframe: HTMLIFrameElement,
   url: string,
   addCleanup: AddCleanup,
+  sandboxShellHtml?: string,
 ): Promise<void> {
+  const sandboxOrigin = new URL(url).origin;
   const ready = new Promise<void>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
       cleanup();
       reject(new Error(t("mcpApp.errors.sandboxTimedOut")));
     }, 15_000);
     const onMessage = (event: MessageEvent) => {
+      if (event.source !== iframe.contentWindow || event.origin !== sandboxOrigin) {
+        return;
+      }
       if (
-        event.source === iframe.contentWindow &&
-        event.data?.method === "ui/notifications/sandbox-proxy-ready"
+        event.data?.method === "ui/notifications/sandbox-bootstrap-ready" &&
+        event.data?.params?.version === 1 &&
+        sandboxShellHtml !== undefined
       ) {
+        iframe.contentWindow?.postMessage(
+          {
+            jsonrpc: "2.0",
+            method: "ui/notifications/sandbox-bootstrap-shell",
+            params: { html: sandboxShellHtml },
+          },
+          sandboxOrigin,
+        );
+        return;
+      }
+      if (event.data?.method === "ui/notifications/sandbox-proxy-ready") {
         cleanup();
         resolve();
       }

@@ -63,7 +63,7 @@ export function createSubscribedToolSearchExecutor(params: {
       subscription.runToolLifecycle({
         toolName: toolParams.toolName,
         toolUsageId:
-          toolParams.source === "openclaw" &&
+          (toolParams.source === "openclaw" || toolParams.source === "mcp") &&
           !isCodeModeControlTool(toolParams.tool) &&
           !isToolUsageWrapper(toolParams.toolName)
             ? toolParams.toolId

@@ -730,6 +730,70 @@ the intended guard. The separate Ollama transport integration supplies the
 positive provider-owned link-local exemption proof. These additional retention
 decisions are source-only; no runtime result or removal is claimed for them.
 
+### Runtime FormData payload fidelity
+
+At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, the runtime FormData case checks
+the filename but not file bytes or MIME type. It now checks the dispatched
+Blob's exact bytes and MIME type while retaining its filename, model-field and
+stale-header assertions. All seven declarations and ten expanded cases across
+runtime-fetch, proxy-fetch and the FormData helper remain. Test code grows by
+seven lines; production and shared support code do not change.
+
+The baseline and clean candidate pass all ten cases. Empty-file and explicit
+generic-MIME mutations both pass the baseline but fail the repaired case at
+the corresponding assertion, with the other nine cases passing. A first
+rewrapping-only MIME control stayed green and was not counted as proof; the
+explicit control substitutes `application/octet-stream` while preserving bytes.
+All temporary production and test changes were restored byte for byte.
+The precise scanner mistakes the bounded fixture Blob read for an untrusted
+HTTP response read; a rule-specific exception documents that false positive.
+Focused checks, independent preservation review, full local review and hosted
+outcomes are tracked in [PR #198305](https://github.com/openclaw/openclaw/pull/198305).
+
+The adjacent SSRF, dispatcher-pool, guarded-body-stream and hostname suites
+retain 24 declarations and 48 expanded cases. They protect policy
+and DNS boundaries, pool capacity and lifetime, stream cleanup and metadata,
+and hostname normalization. The request-body,
+authority and release suites retain another ten declarations and 21 expanded
+cases covering wire payloads, caller authority and release ownership. These
+retention decisions are source-only; no runtime pass or removal is claimed.
+
+### Provider WebSocket proxy DNS pin proof
+
+At `cd61ce32dd28e92003b213f8d2014608504515fb`, the provider WebSocket proxy
+case used localhost and accepted any function-valued socket lookup. Replacing
+the prepared proxy lookup with Node's default DNS lookup still passed all 21
+WebSocket and Node proxy cases. The repaired fixture uses `proxy.invalid`, pinned
+to loopback through the real SSRF resolver, so the existing successful CONNECT
+and WebSocket assertions require the prepared pin. The same mutation now fails
+only the proxy transport row with `ENOTFOUND proxy.invalid`; restoring production
+passes all 21 cases. Production was restored byte for byte. No cases were added
+or removed; the test file shrinks by one line and production is unchanged.
+
+Source review covers 35 declarations and 59 expanded cases across proxy-env,
+node-proxy-agent, provider-websocket, undici-runtime and undici-global-dispatcher.
+The environment, admission, deadline, TLS and lifecycle contracts remain useful.
+Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
+the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
+findings; no runtime result or production defect is claimed for those follow-ups.
+
+### WSL managed-dispatch ordering proof
+
+At `82e8cded772dcfc01c4f470b58f123ec7cb22266`, the managed-dispatcher WSL
+case checked the disable/restore setter sequence and eventual dispatch, but did
+not order dispatch between those calls. Both moving dispatch before policy
+activation and moving it after restoration still passed all 19 global-dispatcher
+and runtime cases. The repaired case spies on the existing managed dispatcher
+and checks that its call falls between the two policy writes. Each mutation now
+fails only the WSL case (one failed, 18 passed); restored production passes all
+19 cases in 2.64 seconds. Production was restored byte for byte.
+
+All 17 declarations and 19 expanded cases remain. The repair adds five test
+lines, no cases or production code. Timeout updates, helper/lifecycle binding,
+bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
+their existing cases. This proves the synchronous dispatch ordering under the
+WSL policy fixture; it does not claim live Windows or WSL network coverage.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
