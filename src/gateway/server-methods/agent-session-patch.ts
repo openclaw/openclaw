@@ -57,6 +57,7 @@ export async function buildAgentSessionPatch(params: {
   pluginOwnerId?: string;
   fallbackSessionId?: string;
   touchInteraction: boolean;
+  clientCapabilities?: string[];
 }) {
   // Re-evaluate each read; callers retain admission and concurrent-rotation fencing.
   const lifecycleTimestamps = params.freshEntry
@@ -264,6 +265,7 @@ export async function buildAgentSessionPatch(params: {
           agentStatus: undefined,
         }
       : {}),
+    ...(params.clientCapabilities ? { clientCapabilities: params.clientCapabilities } : {}),
     ...(shouldClearRotatedState ? { resumeAfterRestart: undefined } : {}),
     delivery,
     ...(labelValue ? { label: labelValue } : {}),

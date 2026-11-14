@@ -93,7 +93,6 @@ export function createAgentTurnService(
       request,
       cfg,
       runId,
-      canUseCronRunContinuation,
       expectedSession,
       expectedExistingSessionId,
       normalizedSpawned,
@@ -345,14 +344,12 @@ export function createAgentTurnService(
 
         if (requestedSessionKey) {
           const preparedSession = await prepareAgentSession({
-            cfg,
+            ...preflight,
+            client: principal,
             requestedSessionKey,
             requestedSessionId,
-            expectedExistingSessionId,
             agentId,
             recipientChannel,
-            request,
-            canUseCronRunContinuation,
             lifecycleGeneration,
             effectiveBootstrapContextRunKind,
             preAttachmentSession,
