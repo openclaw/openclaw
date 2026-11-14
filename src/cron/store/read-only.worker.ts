@@ -6,11 +6,7 @@ import {
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
-import {
-  assertStateReadSchema,
-  openOpenClawStateReadConnection,
-} from "../../state/openclaw-state-db-read-connection.js";
+import { stateEngineInput } from "../../state/openclaw-state-db-engine-input.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { cronRunRecordToRunLogEntry } from "../run-history-detail.js";
 import { serializeCronLoadError } from "./load-error.js";
@@ -89,12 +85,17 @@ serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel
     }
     const { location, storeKey, stagingRoot } = input;
     const jobNameById = input.history?.jobNameById;
+    const postgres = stateEngineInput() !== undefined;
+    const stateRead =
+      postgres || stagingRoot || input.inspect || (input.history && storeKey !== undefined)
+        ? await import("../../state/openclaw-state-db-read-connection.js")
+        : undefined;
     return await control.runNativeSection(() => {
       // Copying stays in a separate process; the parent owns every unpublished child artifact.
-      const connection = isStatePostgres()
-        ? openOpenClawStateReadConnection(location, location)
+      const connection = postgres
+        ? stateRead!.openOpenClawStateReadConnection(location, location)
         : stagingRoot
-          ? openOpenClawStateReadConnection(
+          ? stateRead!.openOpenClawStateReadConnection(
               location,
               runSqliteReadOnlyWorkerSync(location, stagingRoot),
               undefined,
@@ -105,7 +106,7 @@ serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel
       const db = connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
       try {
         if (input.inspect) {
-          assertStateReadSchema(db, location);
+          stateRead!.assertStateReadSchema(db, location);
           return {
             ok: true,
             owners:
@@ -116,7 +117,7 @@ serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel
         }
         if (input.history && storeKey !== undefined) {
           // History consumes the canonical released table only after read admission.
-          assertStateReadSchema(db, location);
+          stateRead!.assertStateReadSchema(db, location);
           if (input.history.taskIds) {
             return {
               ok: true,

@@ -20,3 +20,12 @@ it("keeps cold chat preparation independent of tool construction", () => {
     ),
   ).toEqual([]);
 });
+
+it("keeps memory-flush projection independent of coding-tool construction", () => {
+  expect(
+    findSourceImportBackedges("src/agents/agent-tools.memory-flush.ts", [
+      "src/agents/agent-tools.read.ts",
+      "src/agents/core-coding-tools.ts",
+    ]),
+  ).toEqual([]);
+});

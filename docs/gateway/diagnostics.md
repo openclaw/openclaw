@@ -788,6 +788,11 @@ Node processes, `process_memory_threshold` also measures consumed process allowa
 from available memory, including cgroup charges absent from RSS. Unknown or
 unbounded process limits do not activate this signal.
 
+On Linux hosts with at most 1 GiB of physical or process-constrained memory,
+Gateway startup skips the optional spawn broker and keeps child spawning in-process.
+This preserves the normal child lifecycle while avoiding the broker's resident
+memory, at the cost of direct-spawn latency.
+
 Warning and critical journal lines and diagnostic events retain the measured
 `usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
 `workerThreadId`. The detector performs no file-system scan, forced main-thread GC,
