@@ -85,6 +85,9 @@ const controlUiPerformanceBudgets = {
   totalCssGzipBytes: 326_575,
   totalCssRawBytes: 1_682_231,
 } satisfies Record<string, number>;
+// Keep the measured math allowance separate from upstream baseline updates.
+// Matched 60a0ffc99ca: 1,298,140 B + 192 B headroom = 1,296,054 B + 2,278 B.
+controlUiPerformanceBudgets.chatBootJsGzipBytes += 2_278;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
 function readAssetMetrics(
