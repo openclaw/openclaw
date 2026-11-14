@@ -1,0 +1,4 @@
+# PR #196914: exact net regression growth against the source base.
+# Covers native transaction binding/expiry, invocation lifetime, and production
+# command/tool requester admission, including forbidden/reassigned principals.
+1297

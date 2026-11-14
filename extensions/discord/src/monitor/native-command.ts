@@ -539,6 +539,8 @@ async function dispatchDiscordCommandInteraction(
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
+      assertAuthorizedCurrent: authority.assertActive,
+      sessionId: targetSessionEntry?.sessionId,
       senderIsOwner,
       ...(senderIsOwner ? { assertOwnerCurrent: authority.assertOwnerCurrent } : {}),
       agentId: pluginCommandAgentId,

@@ -32,6 +32,8 @@ export type PluginCommandDispatchContext = Readonly<{
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
   assertOwnerCurrent?: () => void;
+  /** Current command-policy authority, independent of owner-only authorization. */
+  assertAuthorizedCurrent?: () => void;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
   agentId?: string;

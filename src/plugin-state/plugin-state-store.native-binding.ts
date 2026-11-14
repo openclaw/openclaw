@@ -2,6 +2,7 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import type { PluginConversationBindingCurrentSource } from "../plugins/conversation-binding-current.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PreparedKeyedStoreOptions } from "./plugin-state-store.validation.js";
@@ -22,6 +23,7 @@ type PluginStateStoreBinding = {
   assertCurrent?: () => void;
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
   moduleSource?: PluginStateOperationModuleSource;
+  conversationBindingCurrent?: PluginConversationBindingCurrentSource;
   assertReadable: () => void;
 };
 
@@ -38,8 +40,16 @@ export function bindPluginStateNativeBindingStore<T extends object>(
   assertCurrent?: () => void,
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck,
   moduleSource?: PluginStateOperationModuleSource,
+  conversationBindingCurrent?: PluginConversationBindingCurrentSource,
 ): T {
-  stores.set(store, { options, assertReadable, assertCurrent, sessionEntryCurrent, moduleSource });
+  stores.set(store, {
+    options,
+    assertReadable,
+    assertCurrent,
+    sessionEntryCurrent,
+    moduleSource,
+    conversationBindingCurrent,
+  });
   return store;
 }
 

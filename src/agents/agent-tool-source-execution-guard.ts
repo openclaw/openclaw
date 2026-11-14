@@ -87,7 +87,7 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): Sess
 
 const pluginToolInvocationSources = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginToolInvocationSource"),
-  () => new AsyncLocalStorage<SessionSourceAssertion>(),
+  () => new AsyncLocalStorage<{ source: SessionSourceAssertion; active: boolean }>(),
 );
 
 /**
@@ -96,14 +96,30 @@ const pluginToolInvocationSources = resolveGlobalSingleton(
  */
 export function runWithPluginToolInvocationSource<T>(run: () => Promise<T>): Promise<T> {
   const source = captureAgentToolSourceExecutionGuard();
+  const invocation = { source, active: true };
   return runWithAgentToolSourceExecutionScope(source, () =>
-    pluginToolInvocationSources.run(source, run),
-  );
+    pluginToolInvocationSources.run(invocation, run),
+  ).finally(() => {
+    invocation.active = false;
+  });
 }
 
 /** The invocation guard's caller part; outside a plugin tool call there is none to check. */
 export function assertPluginToolInvocationSourceCurrent(): void {
-  pluginToolInvocationSources.getStore()?.();
+  pluginToolInvocationSources.getStore()?.source();
+}
+
+/** Capture one executing call, so a retained binding method cannot borrow a successor call. */
+export function capturePluginToolInvocationAssertion(): () => void {
+  const invocation = pluginToolInvocationSources.getStore();
+  const assertCurrent = () => {
+    if (!invocation?.active) {
+      throw new Error("Plugin tool invocation closed");
+    }
+    invocation.source();
+  };
+  assertCurrent();
+  return assertCurrent;
 }
 
 /** Prepare storage authority for one effect; its final callback checks the retained receipt. */

@@ -629,6 +629,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-acp.owner.test.ts",
   "src/auto-reply/reply/commands-config.owner.test.ts",
   "src/auto-reply/reply/commands-plugins.owner.test.ts",
+  "src/auto-reply/reply/commands-plugin.binding-authority.test.ts",
+  "src/auto-reply/reply/tools-plugin.binding-authority.test.ts",
   "src/auto-reply/reply/commands-plugin.owner.test.ts",
   "src/auto-reply/reply/commands-plugin.test.ts",
   "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",

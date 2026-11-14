@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { PluginConversationBindingCurrentSource } from "../plugins/conversation-binding-current.js";
 import type {
   PluginStateOperationInput,
   PluginStateOperationResult,
@@ -102,6 +103,7 @@ export type PluginStateWorkerOperations = {
       ? undefined
       : PluginStateWorkerRequests[Request]["input"] & {
           sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
+          conversationBindingsCurrent?: readonly PluginConversationBindingCurrentSource[];
         };
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };

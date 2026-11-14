@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { deserialize, serialize } from "node:v8";
 import { threadId, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, vi } from "vitest";
+import { afterEach, assert, describe, expect, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -21,10 +21,18 @@ import {
   useMixedAgentPair,
 } from "../infra/database-engine/mixed-agent.conformance.test-support.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import {
+  bindCurrentConversationRecordAsync,
+  removeCurrentConversationBindingsAsync,
+} from "../infra/outbound/current-conversation-bindings.js";
+import type { SessionBindingRecord } from "../infra/outbound/session-binding.types.js";
 import { PostgresSyncConnection } from "../infra/postgres-sync/connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
+import * as bindingMutationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as bindingProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
@@ -57,6 +65,7 @@ import {
 import { PLUGIN_STATE_NAMESPACE_MAX_BYTES } from "./plugin-state-store.kernel.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
+import { restorePluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
 const it = stateTest("plugin-state-worker");
@@ -858,3 +867,83 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL complete plugin-state views",
     expect(reads).not.toHaveBeenCalled();
   });
 });
+
+// A prepared host descriptor can become stale before the writer admits its commit.
+// Use the real transport, transaction and binding owner; no mocked allow decision.
+it.for(["none", "rebind", "detach", "expired"] as const)(
+  "checks exact binding ownership inside the plugin-state commit transaction: %s",
+  async (change, { state }) => {
+    const conversation = {
+      channel: "fixture",
+      accountId: "default",
+      conversationId: "effect-room",
+    };
+    const requested: SessionBindingRecord = {
+      bindingId: "same-id",
+      targetSessionKey: "agent:main:original",
+      targetKind: "session",
+      conversation,
+      status: "active",
+      boundAt: 1,
+    };
+    const binding = await bindCurrentConversationRecordAsync({ record: requested });
+    assert(binding, "The fixture binding must persist before testing commit authority");
+    const source = captureOpenClawStateWorkerContext({ env: state.env });
+    if (change === "detach") {
+      await removeCurrentConversationBindingsAsync({ conversation });
+    } else if (change !== "none") {
+      await bindCurrentConversationRecordAsync({
+        record: {
+          ...binding,
+          ...(change === "rebind"
+            ? { targetSessionKey: "agent:main:replacement" }
+            : { expiresAt: Date.now() - 1 }),
+        },
+      });
+    }
+    let commits = 0;
+    bindingProbe.admission(bindingMutationAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        commits++;
+      }
+      admit(request, grant);
+    });
+    const response = await stateWriter.runOpenClawStateWorkerOperation(
+      source,
+      (worker) =>
+        worker.execute({
+          type: "pluginState.register",
+          input: {
+            pluginId: "binding-effect",
+            namespace: "effects",
+            key: "move",
+            valueJson: "1",
+            maxEntries: 10,
+            overflowPolicy: "reject-new",
+            conversationBindingsCurrent: [
+              { databaseIdentity: source.admission.identity.key, record: binding },
+            ],
+          },
+        }),
+      {
+        createAdmission: createSqliteWorkerWriteAdmission(
+          () => source.admission.assertCurrent(),
+          [source.admission.databasePath],
+        ),
+      },
+    );
+    expect(commits).toBe(1);
+    expect(response.ok).toBe(change === "none");
+    if (!response.ok) {
+      expect(restorePluginStateWorkerFailure(response.error).cause).toMatchObject({
+        message: "Plugin conversation assignment changed before state commit",
+      });
+    }
+    const rows = openOpenClawStateDatabase({ env: state.env })
+      .db.prepare(
+        "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+      )
+      .all("binding-effect", "effects", "move");
+    expect(rows).toHaveLength(change === "none" ? 1 : 0);
+  },
+);

@@ -36,6 +36,7 @@ import {
   type CommandOwnerAssertion,
 } from "./command-owner-authority.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
+import { getRequesterProfile } from "./requester-profile.js";
 import {
   formatAllowFromList,
   normalizeAllowFromEntry,
@@ -54,6 +55,8 @@ export type CommandAuthorization = {
   isAuthorizedSender: boolean;
   /** Retains command-policy admission independently of owner-only authority. */
   assertAuthorizedCurrent?: () => void;
+  /** Original host requester only; native adapters retain their own command-policy owner. */
+  assertRequesterCurrent?: () => void;
   from?: string;
   to?: string;
 };
@@ -486,8 +489,17 @@ function retainCommandAuthorization(
   params: CommandAuthorizationParams,
   prepared: CommandAuthorizationPreparation | undefined,
   readConfig: () => OpenClawConfig,
+  requester: ReturnType<typeof getRequesterProfile>,
 ): CommandAuthorization {
   const captured = { ...params, ctx: { ...params.ctx }, cfg: readConfig() };
+  const assertRequesterCurrent = requester
+    ? () => {
+        if (!requester.isCurrent()) {
+          throw new Error("Your requester identity changed; send a new request.");
+        }
+        requester.operatorAuthority?.assertCurrent();
+      }
+    : undefined;
   const { authorization, prepared: admitted } = resolveCommandAuthorizationState(
     captured,
     prepared,
@@ -497,7 +509,9 @@ function retainCommandAuthorization(
     : undefined;
   return {
     ...authorization,
+    ...(assertRequesterCurrent ? { assertRequesterCurrent } : {}),
     assertAuthorizedCurrent: () => {
+      assertRequesterCurrent?.();
       // Channel admission stays with its prepared worker/channel owner. Reuse
       // that fact while the command-policy owner evaluates the current config.
       const current = resolveCommandAuthorizationState(
@@ -527,7 +541,8 @@ export function resolveCommandAuthorization(
     method: "resolveCommandAuthorization",
     replacement: "resolveCommandAuthorizationAsync",
   });
-  return retainCommandAuthorization(params, undefined, createRuntimeConfigReader(params.cfg));
+  const readConfig = createRuntimeConfigReader(params.cfg);
+  return retainCommandAuthorization(params, undefined, readConfig, getRequesterProfile(params.ctx));
 }
 
 async function prepareCommandAuthorization(params: CommandAuthorizationParams) {
@@ -558,8 +573,11 @@ export async function resolveCommandAuthorizationAsync(
   params: CommandAuthorizationParams,
 ): Promise<CommandAuthorization> {
   const readConfig = createRuntimeConfigReader(params.cfg);
+  // A requester revoked during preparation must remain a rejected original principal,
+  // not become indistinguishable from a request that never had a linked profile.
+  const requester = getRequesterProfile(params.ctx);
   const prepared = await prepareCommandAuthorization(params);
-  return retainCommandAuthorization(params, prepared, readConfig);
+  return retainCommandAuthorization(params, prepared, readConfig, requester);
 }
 
 /** Configured owners that a turn on this channel account renders; a config fact, not authority. */

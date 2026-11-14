@@ -106,6 +106,8 @@ export type PluginCommandContext = {
   ) => Promise<PluginConversationBindingRequestResult>;
   detachConversationBinding: () => Promise<{ removed: boolean }>;
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+  /** Fail-closed invocation-bound exact assignment; absence never permits an unguarded effect. */
+  withCurrentConversationBinding?: import("./conversation-binding-authority.types.js").WithCurrentPluginConversationBinding;
 };
 
 export type PluginCommandResult = ReplyPayload & {
