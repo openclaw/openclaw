@@ -7,6 +7,7 @@ import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CronSelect, CronInput, ToggleRow, FieldRow, errorIdForField } from "./view-fields.tsx";
 import { DurationRow } from "./view-schedule.tsx";
+import { CronTimezonePicker } from "./view-timezone.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
   return [
@@ -151,14 +152,7 @@ export function Advanced(
                 errorKey="activeHoursEnd"
                 placeholder="17:00"
               />
-              <CronInput
-                {...props}
-                field="activeHoursTimezone"
-                label={t("cron.form.timezoneOptional")}
-                errorKey="activeHoursTimezone"
-                list="cron-tz-suggestions"
-                placeholder={t("cron.form.timezonePlaceholder")}
-              />
+              <CronTimezonePicker {...props} field="activeHoursTimezone" />
             </>
           ) : undefined}
           <ToggleRow
