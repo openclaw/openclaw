@@ -231,7 +231,9 @@ Table semantics:
   whose cells should be exposed as row headers by native renderers.
 - Table normalization is atomic. An invalid caption, header, row width, cell,
   or row-header index drops the table block instead of truncating or repairing
-  its data.
+  its data. The `message` tool's `send` action rejects such a table or chart
+  with an error naming `presentation.blocks[<index>]`, so the agent can fix it
+  instead of delivering the message without its data.
 - Native table rendering is opt-in through `presentationCapabilities.tables`.
   Other channels receive the caption and every row as plain
   text in a fixed format, with internal whitespace collapsed:
