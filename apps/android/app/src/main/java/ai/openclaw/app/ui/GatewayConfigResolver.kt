@@ -111,10 +111,15 @@ internal data class GatewayEndpointParseResult(
   val error: GatewayEndpointValidationError? = null,
 )
 
+/** Routes explicit input only; node invitations remain unvalidated until runtime confirmation. */
 internal data class GatewayScannedSetupCodeResult(
   val setupCode: String? = null,
   val error: GatewayEndpointValidationError? = null,
-)
+  val nodeJoinLink: String? = null,
+) {
+  // Invitations contain a fragment secret and must never appear in diagnostics.
+  override fun toString(): String = "GatewayScannedSetupCodeResult([redacted])"
+}
 
 private fun remoteGatewaySecurityRuleText(): NativeText =
   nativeText(
@@ -322,6 +327,12 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
 internal fun manualTokenLooksLikeSetupCode(rawInput: String): Boolean = resolveSetupCodeCandidate(rawInput)?.let(::decodeGatewaySetupCode) != null
 
 internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {
+  val trimmed = rawInput.trim()
+  // Do not interpret the invitation or turn it into a direct gateway setup code.
+  // The protocol owner validates the complete link and Discovery origin on confirmation.
+  if (trimmed.startsWith("openclaw-node://")) {
+    return GatewayScannedSetupCodeResult(nodeJoinLink = trimmed)
+  }
   val setupCode =
     resolveSetupCodeCandidate(rawInput)
       ?: return GatewayScannedSetupCodeResult(error = GatewayEndpointValidationError.INVALID_URL)
@@ -341,7 +352,7 @@ internal fun resolveScannedSetupCodeResult(rawInputs: Sequence<String?>): Gatewa
   for (rawInput in rawInputs) {
     if (rawInput.isNullOrBlank()) continue
     val result = resolveScannedSetupCodeResult(rawInput)
-    if (result.setupCode != null) return result
+    if (result.setupCode != null || result.nodeJoinLink != null) return result
     if (firstRejection == null) firstRejection = result
   }
   return firstRejection

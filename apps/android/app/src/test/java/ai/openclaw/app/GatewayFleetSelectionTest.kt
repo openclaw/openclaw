@@ -16,6 +16,17 @@ import org.robolectric.annotation.Config
 
 class GatewayFleetSelectionTest {
   @Test
+  fun openClawIdNodeTargetsNeverEnterTheBackgroundOperatorFleet() {
+    val node = GatewayEndpoint("openclaw-id|synthetic", "Node", "logical.example.test", 443, openClawIdNode = true)
+    val stored = gatewayRegistryEntry(node, null)
+    assertEquals(GatewayRegistryEntryKind.OPENCLAW_ID_NODE, stored.kind)
+    assertEquals(listOf("direct"), backgroundGatewayStableIds(listOf(stored, entry("direct")), listOf(stored.stableId, "direct"), null, true))
+    val plan = backgroundGatewayFleetPlan(listOf(stored), listOf(stored.stableId), null, true, listOf(stored.stableId)) { error("Node target must not resolve for operator fleet") }
+    assertEquals(listOf(stored.stableId), plan.disconnectStableIds)
+    assertTrue(plan.resolvedEndpoints.isEmpty())
+  }
+
+  @Test
   fun focusedGatewayIsExcludedButOtherEnabledGatewaysRemain() {
     val entries = listOf(entry("alpha"), entry("beta"), entry("gamma"))
 

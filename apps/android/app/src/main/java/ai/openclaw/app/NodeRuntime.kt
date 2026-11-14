@@ -46,6 +46,11 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.OpenClawIdEndpoint
+import ai.openclaw.app.gateway.OpenClawIdNodeController
+import ai.openclaw.app.gateway.OpenClawIdNodeStore
+import ai.openclaw.app.gateway.OpenClawIdTunnel
+import ai.openclaw.app.gateway.OpenClawIdWebSocket
 import ai.openclaw.app.gateway.buildNativeControlUiConnectAuth
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
@@ -742,6 +747,7 @@ class NodeRuntime internal constructor(
   initialForeground: Boolean = true,
   initialReconnectSuppressed: Boolean = false,
   private val externalTranscriptCache: ChatTranscriptCache? = null,
+  private val openClawIdEndpointFactory: (suspend (ByteArray, String) -> OpenClawIdEndpoint)? = null,
 ) {
   private val clientDatabases =
     when (mode) {
@@ -913,6 +919,91 @@ class NodeRuntime internal constructor(
 
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val openClawIdStore = OpenClawIdNodeStore(prefs::getString) { key, value -> prefs.commitSecureStrings(mapOf(key to value)) }
+  private val openClawIdController = OpenClawIdNodeController(scope, openClawIdStore)
+  internal val openClawIdEnrollment = openClawIdController.state
+
+  @Volatile private var openClawIdTunnel: Pair<String, OpenClawIdTunnel>? = null
+  private var openClawIdShutdown: Job? = null
+
+  internal fun beginOpenClawIdEnrollment(
+    link: String,
+    discoveryOrigin: String,
+    callerIsCurrent: () -> Boolean,
+    onAdmitted: suspend (GatewayEndpoint, () -> Boolean) -> Unit,
+  ) {
+    val options = connectionManager.buildNodeConnectOptions()
+    val intent = gatewayLifecycleIntent()
+    val current = { intent() && callerIsCurrent() }
+    openClawIdController.begin(link, discoveryOrigin, options.client.displayName ?: "Android", options.client.platform, options.commands, options.caps, current) { target ->
+      val enrollmentContext = currentCoroutineContext()
+      val handoffIsCurrent = { enrollmentContext.isActive && current() }
+      val endpoint = openClawIdEndpoint(target)
+      synchronized(gatewayLifecycleIntentLock) {
+        if (!handoffIsCurrent()) throw CancellationException("Node enrollment retired")
+        // Admission is durable even when the UI declines to switch away from current work.
+        registerGateway(endpoint, activate = false)
+      }
+      // The UI's quick-switch owner takes service control before runtime admission.
+      onAdmitted(endpoint, handoffIsCurrent)
+    }
+  }
+
+  internal fun cancelOpenClawIdEnrollment() = openClawIdController.cancel()
+
+  private fun openClawIdEndpoint(target: OpenClawIdNodeStore.Target): GatewayEndpoint {
+    val origin = java.net.URI("https://${target.pin.hostname}")
+    return GatewayEndpoint(target.stableId, target.pin.hostname, origin.host, origin.port.takeIf { it > 0 } ?: 443, tlsEnabled = true, openClawIdNode = true)
+  }
+
+  private suspend fun prepareOpenClawIdTunnel(
+    endpoint: GatewayEndpoint,
+    isCurrent: () -> Boolean,
+  ) {
+    // Explicit connection/re-enrollment refreshes native relay configuration and terminal state.
+    // Permission-only WebSocket refreshes bypass preparation and keep the existing endpoint.
+    retireOpenClawIdTunnel()
+    openClawIdShutdown?.join()
+    val bind = checkNotNull(openClawIdEndpointFactory) { "OpenClaw ID native transport not packaged in this build" }
+    val target = openClawIdController.refresh(endpoint.stableId)
+    if (!isCurrent()) throw CancellationException("Node connection retired")
+    val seed = openClawIdStore.seed(endpoint.stableId)
+    val native =
+      try {
+        bind(seed, target.relayUrl)
+      } finally {
+        seed.fill(0)
+      }
+    if (!isCurrent()) {
+      withContext(NonCancellable) { native.shutdown() }
+      throw CancellationException("Node connection retired")
+    }
+    val tunnel =
+      OpenClawIdTunnel(scope, native, {
+        val refreshed = openClawIdController.refresh(endpoint.stableId)
+        check(refreshed.relayUrl == target.relayUrl) { "OpenClaw ID relay changed; reconnect the node" }
+        refreshed.serverKey
+      })
+    synchronized(gatewayLifecycleIntentLock) {
+      if (isCurrent()) openClawIdTunnel = endpoint.stableId to tunnel
+    }
+    if (openClawIdTunnel?.second !== tunnel) {
+      tunnel.shutdown()
+      throw CancellationException("Node connection retired")
+    }
+  }
+
+  private fun retireOpenClawIdTunnel() {
+    val retired = openClawIdTunnel ?: return
+    openClawIdTunnel = null
+    val previous = openClawIdShutdown
+    openClawIdShutdown =
+      scope.launch {
+        previous?.join()
+        retired.second.shutdown()
+      }
+  }
+
   private val tlsProbeRunner = GatewayTlsProbeRunner(scope, tlsFingerprintProbe)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val camera =
@@ -1881,6 +1972,12 @@ class NodeRuntime internal constructor(
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      nodeTunnelWebSocketFactory = { endpoint, request, listener ->
+        val tunnel =
+          openClawIdTunnel?.takeIf { it.first == endpoint.stableId }?.second
+            ?: error("OpenClaw ID node transport has retired")
+        OpenClawIdWebSocket(scope, tunnel, request, listener)
+      },
     )
 
   /**
@@ -2383,8 +2480,14 @@ class NodeRuntime internal constructor(
       update()
       if (!preserveStandalone) gatewayStandaloneDisplay = null
       // Select and publish text plus diagnostics atomically; operator and node callbacks run concurrently.
+      val nodeOnlyDisplay =
+        if (connectedEndpoint?.openClawIdNode == true) {
+          GatewayConnectionDisplay(_nodeConnected.value, if (_nodeConnected.value) nativeString("Connected as node · Chat unavailable") else nodeStatusText, nodeConnectionProblem)
+        } else {
+          null
+        }
       val display =
-        gatewayRetirementDisplay ?: gatewayStandaloneDisplay ?: gatewayConnectionDisplay(
+        gatewayRetirementDisplay ?: gatewayStandaloneDisplay ?: nodeOnlyDisplay ?: gatewayConnectionDisplay(
           operatorConnected = operatorConnected,
           nodeConnected = _nodeConnected.value,
           operatorStatusText = operatorStatusText,
@@ -3268,6 +3371,10 @@ class NodeRuntime internal constructor(
         manualGatewayEndpoint(entry)
       }
 
+      GatewayRegistryEntryKind.OPENCLAW_ID_NODE -> {
+        openClawIdStore.target(entry.stableId)?.takeIf { it.admitted }?.let(::openClawIdEndpoint)
+      }
+
       GatewayRegistryEntryKind.DISCOVERED -> {
         val endpoint = gateways.value.firstOrNull { it.stableId == entry.stableId } ?: return null
         val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
@@ -3325,6 +3432,7 @@ class NodeRuntime internal constructor(
       ?: connectingEndpoint?.takeIf { it.stableId == stableId }
       ?: when (entry.kind) {
         GatewayRegistryEntryKind.MANUAL -> manualGatewayEndpoint(entry)
+        GatewayRegistryEntryKind.OPENCLAW_ID_NODE -> resolveRegistryEndpoint(entry)
         GatewayRegistryEntryKind.DISCOVERED -> gateways.value.firstOrNull { it.stableId == stableId }
       }
   }
@@ -3407,6 +3515,20 @@ class NodeRuntime internal constructor(
     try {
       if (!drainGatewayConnectionsForConnect(endpoint, intent)) return false
       if (!prepare()) return false
+      if (endpoint.openClawIdNode) {
+        try {
+          prepareOpenClawIdTunnel(endpoint, intent)
+        } catch (error: CancellationException) {
+          throw error
+        } catch (_: Exception) {
+          if (intent()) setStandaloneGatewayStatus(if (openClawIdEndpointFactory == null) "OpenClaw ID native transport not packaged in this build" else "OpenClaw ID node could not connect. Check the connection or re-join with the owner.")
+          return false
+        }
+        if (!intent()) {
+          retireOpenClawIdTunnel()
+          return false
+        }
+      }
       synchronized(gatewayLifecycleIntentLock) {
         if (!intent()) return false
         if (prefs.gatewayRegistry.entries.value
@@ -4285,6 +4407,10 @@ class NodeRuntime internal constructor(
         }
         return@launchGatewayLifecycle
       }
+      if (endpoint.openClawIdNode) {
+        launchConnect(endpoint, explicitAuth = null, intent = intent)
+        return@launchGatewayLifecycle
+      }
       finishGatewayConnectionOperation(intent)
       updateStatus {
         operatorStatusText = "Connecting…"
@@ -4492,10 +4618,21 @@ class NodeRuntime internal constructor(
     runGatewayConnectOperation {
       beforeConnect()
       activeGatewayConnection?.bootstrapHandoff?.invalidate()
-      val tls = connectionManager.resolveTlsParams(endpoint)
+      val tls = if (endpoint.openClawIdNode) null else connectionManager.resolveTlsParams(endpoint)
       val connection = GatewayConnectionContext(auth, acceptedConnectAttempt.value, tls)
       activeGatewayConnection = connection
       connection.attempt?.operatorReady?.value = null
+      if (endpoint.openClawIdNode) {
+        _gatewayControlPage.value = null
+        operatorSession.disconnect()
+        updateStatus {
+          operatorConnected = false
+          operatorStatusText = "Node only; chat unavailable"
+          operatorConnectionProblem = null
+        }
+        connectNodeSession(endpoint, GatewayConnectAuth(null, null, null), null, connectionManager.buildNodeConnectOptions())
+        return@runGatewayConnectOperation
+      }
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
       refreshGatewayControlPage(endpoint)
       val operatorAuth =
@@ -4550,7 +4687,7 @@ class NodeRuntime internal constructor(
       auth.bootstrapToken,
       auth.password,
       options,
-      tls,
+      if (endpoint.openClawIdNode) null else tls,
       bootstrapHandoff = auth.bootstrapHandoff,
     )
   }
@@ -4607,7 +4744,7 @@ class NodeRuntime internal constructor(
     // Do not hold the switch mutex or prevent a trust decision while the local cache loads.
     restoration.start()
     _pendingGatewayTrust.value = null
-    val tls = connectionManager.resolveTlsParams(endpoint)
+    val tls = if (endpoint.openClawIdNode) null else connectionManager.resolveTlsParams(endpoint)
     if (tls != null) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
@@ -4767,7 +4904,7 @@ class NodeRuntime internal constructor(
     operatorReady: Boolean = false,
     browserFocusAvailable: Boolean = false,
   ) {
-    if (endpoint == null) {
+    if (endpoint == null || endpoint.openClawIdNode) {
       _gatewayControlPage.value = null
       return
     }
@@ -4875,6 +5012,7 @@ class NodeRuntime internal constructor(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth? = null,
   ): GatewayConnectAuth {
+    if (endpoint.openClawIdNode) return GatewayConnectAuth(null, null, null)
     val auth =
       explicitAuth
         ?: prefs.loadGatewayCredentials(endpoint.stableId).let { credentials ->
@@ -4964,6 +5102,7 @@ class NodeRuntime internal constructor(
     endpoint: GatewayEndpoint,
     connection: GatewayConnectionContext,
   ) {
+    if (endpoint.openClawIdNode) return
     // Node callbacks hold their session lock. Read auth off that callback, then
     // revalidate its captured connection before taking the other role's session lock.
     scope.launch {
@@ -5026,7 +5165,9 @@ class NodeRuntime internal constructor(
 
   private fun disconnect(retireRunState: Boolean) {
     if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
+    openClawIdController.cancel()
     prepareDisconnect(retireRunState)
+    retireOpenClawIdTunnel()
     operatorSession.disconnect()
     nodeSession.disconnect()
   }
@@ -5070,6 +5211,7 @@ class NodeRuntime internal constructor(
           deviceAuthStore.clearToken(normalized, deviceId, "node")
           deviceAuthStore.clearToken(normalized, deviceId, "operator")
           prefs.clearGatewayCredentials(normalized)
+          openClawIdStore.forget(normalized)
           clearAppearancePreferenceOwner(normalized)
           prefs.clearGatewayCustomHeaders(normalized)
           prefs.clearGatewayTlsFingerprint(normalized)
@@ -5117,13 +5259,16 @@ class NodeRuntime internal constructor(
     prefs.gatewayRegistry.markConnected(endpoint.stableId, System.currentTimeMillis())
   }
 
-  private fun registerGateway(endpoint: GatewayEndpoint) {
+  private fun registerGateway(
+    endpoint: GatewayEndpoint,
+    activate: Boolean = true,
+  ) {
     val existing =
       prefs.gatewayRegistry.entries.value
         .firstOrNull { it.stableId == endpoint.stableId }
     val entry = gatewayRegistryEntry(endpoint, existing)
     prefs.gatewayRegistry.upsert(entry)
-    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    if (activate) prefs.gatewayRegistry.setActive(endpoint.stableId)
   }
 
   private suspend fun drainGatewayConnectionsForConnect(
@@ -5163,6 +5308,8 @@ class NodeRuntime internal constructor(
       launch { operatorSession.disconnectAndJoin() }
       launch { nodeSession.disconnectAndJoin() }
     }
+    retireOpenClawIdTunnel()
+    openClawIdShutdown?.join()
   }
 
   private fun prepareDisconnect(retireRunState: Boolean) {
@@ -8708,7 +8855,7 @@ internal fun backgroundGatewayStableIds(
   foreground: Boolean,
 ): List<String> {
   if (!foreground) return emptyList()
-  val registered = entries.mapTo(mutableSetOf()) { it.stableId }
+  val registered = entries.filter { it.kind != GatewayRegistryEntryKind.OPENCLAW_ID_NODE }.mapTo(mutableSetOf()) { it.stableId }
   return connectedIds.distinct().filter { it != activeId && it in registered }
 }
 
@@ -8769,7 +8916,14 @@ internal fun gatewayRegistryEntry(
   val manual = endpoint.stableId.startsWith("manual|")
   return GatewayRegistryEntry(
     stableId = endpoint.stableId,
-    kind = if (manual) GatewayRegistryEntryKind.MANUAL else GatewayRegistryEntryKind.DISCOVERED,
+    kind =
+      if (endpoint.openClawIdNode) {
+        GatewayRegistryEntryKind.OPENCLAW_ID_NODE
+      } else if (manual) {
+        GatewayRegistryEntryKind.MANUAL
+      } else {
+        GatewayRegistryEntryKind.DISCOVERED
+      },
     name = endpoint.name,
     host = endpoint.host,
     port = endpoint.port,

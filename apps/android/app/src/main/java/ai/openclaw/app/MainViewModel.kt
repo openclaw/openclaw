@@ -32,6 +32,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.OpenClawIdEnrollmentUiState
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
@@ -73,6 +74,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -501,6 +503,35 @@ class MainViewModel internal constructor(
     runtimeRef
       .map { runtime -> runtime != null }
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+  internal val openClawIdEnrollment: StateFlow<OpenClawIdEnrollmentUiState> = runtimeState(OpenClawIdEnrollmentUiState()) { it.openClawIdEnrollment }
+
+  internal fun beginOpenClawIdEnrollment(
+    link: String,
+    discoveryOrigin: String,
+  ) {
+    // Confirmation originates in the visible connection form. Reuse the process service-intent owner.
+    val processIntent = resumeNodeServiceForConnection()
+    val sequence = gatewayConfigOperationSeq.incrementAndGet()
+    val runtime = ensureRuntime()
+    runtime.beginOpenClawIdEnrollment(
+      link,
+      discoveryOrigin,
+      callerIsCurrent = { viewModelScope.isActive && sequence == gatewayConfigOperationSeq.get() && processIntent() },
+    ) { endpoint, isCurrent ->
+      withContext(Dispatchers.Main) {
+        // Approval can arrive after the composer or microphone acquired new work.
+        if (!isCurrent() || !canBeginQuickGatewayConnection(runtime)) return@withContext
+        launchGatewayConnectionOperation(quickSwitch = true, callerIsCurrent = isCurrent) { owner, operation ->
+          owner.connectSwitchingGateway(endpoint, isCurrent = operation)
+        }
+      }
+    }
+  }
+
+  internal fun cancelOpenClawIdEnrollment() {
+    runtimeRef.value?.cancelOpenClawIdEnrollment()
+  }
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
@@ -1350,14 +1381,20 @@ class MainViewModel internal constructor(
 
   private fun launchGatewayConnectionOperation(
     quickSwitch: Boolean = false,
+    callerIsCurrent: () -> Boolean = { true },
     onAdmitted: () -> Unit = {},
     action: suspend (NodeRuntime, NodeRuntime.GatewayConnectionOperation) -> Unit,
   ) {
     val createIntent = {
-      val processIntent = resumeNodeServiceForConnection()
-      val sequence = gatewayConfigOperationSeq.incrementAndGet()
-      val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
-      isCurrent
+      // Quick admission holds service control here: a canceled enrollment must not resume Stop.
+      if (!callerIsCurrent()) {
+        { false }
+      } else {
+        val processIntent = resumeNodeServiceForConnection()
+        val sequence = gatewayConfigOperationSeq.incrementAndGet()
+        val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
+        isCurrent
+      }
     }
     // Preserve resume-before-startup for existing callers; a rejected quick switch has no service intent.
     val existingCallerIntent = if (quickSwitch) null else createIntent()

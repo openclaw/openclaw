@@ -52,6 +52,7 @@ class AndroidLicenseNoticesTest {
         "CommonMark Java",
         "dnsjava",
         "DOMPurify",
+        "iroh",
         "JNA",
         "KaTeX",
         "Kotlin Libraries",
@@ -84,5 +85,6 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.title == "CodexBar" && license.text.contains("Peter Steinberger") })
     assertTrue(licenses.any { license -> license.title == "Lobe Icons" && license.text.contains("LobeHub") })
     assertTrue(licenses.any { license -> license.title == "llama.cpp" && license.text.contains("ggml authors") })
+    assertTrue(licenses.any { license -> license.title == "iroh" && license.text.contains("2020 Tailscale Inc & AUTHORS") })
   }
 }
