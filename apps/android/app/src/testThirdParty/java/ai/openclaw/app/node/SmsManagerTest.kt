@@ -97,6 +97,23 @@ class SmsManagerTest {
   }
 
   @Test
+  fun parseQueryParamsTreatsNullTextFiltersAsAbsent() {
+    val result = SmsManager.parseQueryParams("""{"contactName":null,"phoneNumber":null,"keyword":null}""")
+
+    assertEquals(SmsManager.QueryParseResult.Ok(SmsManager.QueryParams()), result)
+  }
+
+  @Test
+  fun parseQueryParamsPreservesLiteralNullTextFilters() {
+    val result = SmsManager.parseQueryParams("""{"contactName":"null","phoneNumber":"null","keyword":"null"}""")
+
+    assertEquals(
+      SmsManager.QueryParseResult.Ok(SmsManager.QueryParams(contactName = "null", phoneNumber = "null", keyword = "null")),
+      result,
+    )
+  }
+
+  @Test
   fun parseQueryParamsRejectsInvalidJson() {
     val result = SmsManager.parseQueryParams("not-json")
     assertTrue(result is SmsManager.QueryParseResult.Error)

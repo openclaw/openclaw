@@ -137,8 +137,8 @@ class CallLogHandler internal constructor(
     return CallLogSearchRequest(
       limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CALL_LOG_LIMIT).coerceIn(1, 200),
       offset = ((params["offset"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0).coerceAtLeast(0),
-      cachedName = (params["cachedName"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() },
-      number = (params["number"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() },
+      cachedName = parseJsonString(params, "cachedName")?.takeIf { it.isNotBlank() },
+      number = parseJsonString(params, "number")?.takeIf { it.isNotBlank() },
       date = (params["date"] as? JsonPrimitive)?.content?.toLongOrNull(),
       dateStart = (params["dateStart"] as? JsonPrimitive)?.content?.toLongOrNull(),
       dateEnd = (params["dateEnd"] as? JsonPrimitive)?.content?.toLongOrNull(),
