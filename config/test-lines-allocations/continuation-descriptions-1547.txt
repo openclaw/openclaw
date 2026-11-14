@@ -1,0 +1,3 @@
+# #1547: 67 net lines of focused description, targeting, and dispatch-timing tests.
+# Includes 4 lines of inherited debt at composed base c6276079; recheck at the final assembly head.
+71

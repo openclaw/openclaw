@@ -47,12 +47,12 @@ export function buildContinuationLines(
       "### Delegated continuation",
       ...(availableTools.has("continue_delegate")
         ? [
-            "Use the `continue_delegate` tool to dispatch background sub-agents that run now, after a delay,",
+            "Use the `continue_delegate` tool to queue background sub-agents for dispatch after this response, after a delay,",
             "or when this session compacts. The gateway owns their timing and delivery.",
             "",
             "Tool parameters:",
             "  task (required) — the delegated sub-agent's task; include scope, context, and desired return shape",
-            "  delaySeconds — seconds to wait before spawning (0 or omitted = immediate; clamped to configured min/max)",
+            "  delaySeconds — seconds to wait before spawning (0 or omitted = after this response; clamped to configured min/max)",
             '  mode — "normal" (default, announces to channel), "silent" (internal context only),',
             '         "silent-wake" (silent + triggers your next turn), "post-compaction" (fires at compaction)',
             "  attachments / attachAs — typed inline snapshots mounted into the new child workspace",

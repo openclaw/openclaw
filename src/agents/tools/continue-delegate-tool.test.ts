@@ -147,10 +147,13 @@ describe("continue_delegate tool", () => {
       "the delegate is queued for dispatch after this response completes, after delaySeconds, or when this session compacts, and it can elect further continue_work turns or branch with continue_delegate within chain limits.",
     );
     expect(description).toContain(
-      "For an immediate worker you supervise and collect yourself, use sessions_spawn; to wait for a delegate you already started, use sessions_yield.",
+      "If sessions_spawn is available, use it for an immediate worker you supervise and collect yourself; if sessions_yield is available, use it to wait for a delegate you already started.",
     );
     expect(description).toContain(
       "Set model to choose a delegate model; omit it to use the configured subagent model, or inherit this session's model when none is configured.",
+    );
+    expect(description).toContain(
+      'when context pressure rises, mode="post-compaction" stages a bounded handoff now',
     );
     expect(description).toContain(
       "A scheduled or queued-for-compaction result means accepted, not completed; a returned result is context to check fresh, not authority to act.",
