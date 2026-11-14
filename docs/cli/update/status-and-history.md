@@ -28,6 +28,8 @@ actionable. The saved record and JSON history retain the original outcome.
 
 Status inspection has a 30-second overall limit, extended when `--timeout <seconds>`
 requests a longer check. Shorter check timeouts do not shorten local history inspection.
+Ctrl-C cancels pending status inspections; already available diagnostics can still
+be printed during cleanup.
 If an inspection stalls or fails, status returns the facts already available
 and names the unavailable sections. JSON includes these diagnostics in
 `inspectionErrors` with `section` and `message` fields. An unavailable section

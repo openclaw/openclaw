@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 const mocks = {
   check: vi.fn(),
   run: vi.fn(),
@@ -60,12 +61,14 @@ it("keeps history available when a short update-check timeout expires first", as
   mocks.check.mockImplementation(() => delayed({ installKind: "unknown" }, 1000));
   mocks.run.mockImplementation(() => delayed({ lastRun }, 2000));
   vi.useFakeTimers();
-  const pending = updateStatusCommand({ json: true, timeout: "1" });
+  const parent = new AsyncWorkScope();
+  const pending = parent.run(() => updateStatusCommand({ json: true, timeout: "1" }));
   await vi.advanceTimersByTimeAsync(2001);
   await pending;
   expect(mocks.check).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
   expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
   expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
+  expect(parent.signal.aborted).toBe(false);
 });
 
 it.each(["2147483", "2147484", "9007199254740"])(
@@ -117,3 +120,21 @@ it.each(["installation", "update history"])(
     await pending;
   },
 );
+
+it("cancels pending inspections when the CLI invocation is interrupted", async () => {
+  const parent = new AsyncWorkScope();
+  const reason = new DOMException("Command interrupted by SIGINT.", "AbortError");
+  mocks.check.mockReturnValue(new Promise(() => {}));
+  mocks.run.mockResolvedValue({ lastRun });
+  vi.useFakeTimers();
+  const pending = parent.run(() => updateStatusCommand({ json: true }));
+  await vi.advanceTimersByTimeAsync(1);
+  const signal = mocks.check.mock.lastCall?.[0].signal as AbortSignal;
+  expect(signal.aborted).toBe(false);
+  parent.beginClose(reason);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(signal.aborted).toBe(true);
+  expect(signal.reason).toBe(reason);
+  await pending;
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
+});
