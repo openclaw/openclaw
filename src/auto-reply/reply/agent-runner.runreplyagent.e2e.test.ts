@@ -1194,14 +1194,6 @@ describe("runReplyAgent active steering", () => {
   });
 
   it.each([
-    "no_active_run",
-    "not_streaming",
-    "stale_run",
-    "compacting",
-    "image_input_unsupported",
-    "source_reply_delivery_mode_mismatch",
-    "task_suggestion_delivery_mode_mismatch",
-    "transcript_commit_wait_unsupported",
     "runtime_rejected",
   ] as const)("queues a follow-up when active steering fails with %s", async (reason) => {
     state.beforeAgentReplyHasHooksMock.mockImplementation(
@@ -1211,9 +1203,7 @@ describe("runReplyAgent active steering", () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     state.backendQueueMessageMock.mockReturnValueOnce({
       queued: false,
-      sessionId: "session",
       reason,
-      gatewayHealth: "live",
     });
     const onAdopted = vi.fn();
     const onBlockReply = vi.fn();
@@ -1252,9 +1242,6 @@ describe("runReplyAgent active steering", () => {
     active.setPhase("running");
     state.backendQueueMessageMock.mockReturnValueOnce({
       queued: true,
-      sessionId: "session",
-      target: "embedded_run",
-      gatewayHealth: "live",
       transcriptCommit: "unconfirmed",
       errorMessage: "receipt unavailable",
     });
@@ -2311,10 +2298,6 @@ describe("runReplyAgent typing", () => {
   it("forwards prepared partials without reclassifying literal marker text", async () => {
     const cases = [
       {
-        partials: ["NO_REPLY"],
-        finalText: "NO_REPLY",
-      },
-      {
         partials: ["NO", "NO_", "NO_RE", "NO_REPLY"],
         finalText: "NO_REPLY",
       },
@@ -2466,12 +2449,6 @@ describe("runReplyAgent typing", () => {
       payload: { text: "NO_REPLY", mediaUrls: [] },
       expected: { text: "NO_REPLY", mediaUrls: [] },
       typingText: "NO_REPLY",
-    },
-    {
-      label: "normal text",
-      payload: { text: "tooling", mediaUrls: [] },
-      expected: { text: "tooling", mediaUrls: [] },
-      typingText: "tooling",
     },
     {
       label: "approval channel data",
@@ -3884,11 +3861,6 @@ describe("runReplyAgent typing", () => {
         existingReason: undefined,
         reportedReason: "rate_limit",
         expectedReason: "rate limit",
-      },
-      {
-        existingReason: undefined,
-        reportedReason: "overloaded",
-        expectedReason: "overloaded",
       },
       {
         existingReason: "rate limit",

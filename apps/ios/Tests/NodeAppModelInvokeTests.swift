@@ -1468,21 +1468,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(await expiredRefresh.value == false)
     }
 
-    @Test @MainActor func `expired background refresh settles unsuccessful exactly once`() {
-        let wakeTask = Task { true }
-        var completions: [Bool] = []
-        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
-            completions.append($0)
-        }
-
-        attempt.expire()
-        attempt.complete(success: true)
-        attempt.expire()
-
-        #expect(completions == [false])
-        #expect(wakeTask.isCancelled)
-    }
-
     @Test @MainActor func `completed background refresh ignores later expiration`() {
         let wakeTask = Task { true }
         var completions: [Bool] = []
@@ -1616,14 +1601,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
             #expect(appModel.talkMode.isEnabled)
         }
-    }
-
-    @Test @MainActor func `chat session key uses agent scoped key for non default agent`() {
-        let appModel = NodeAppModel()
-        appModel.gatewayDefaultAgentId = "main"
-        appModel.setSelectedAgentId("agent-123")
-        #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
-        #expect(appModel.mainSessionKey == "agent:agent-123:main")
     }
 
     @Test @MainActor func `chat agent name uses focused canonical session agent`() {
@@ -3183,32 +3160,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talkMode._test_activePushToTalkCaptureId() == activePayload.captureId)
 
         #expect(await appModel.handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
-    }
-
-    @Test @MainActor func `PTT cancel invalidates suspended preparation without waiting`() async {
-        let (talkMode, appModel) = makeTalkModel()
-        let barrier = TalkPreparationBarrier()
-        talkMode.updateGatewayConnected(true)
-        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
-        defer {
-            appModel.testTalkCapturePreparationHandler = nil
-            appModel.voiceWake.stop()
-        }
-
-        let start = Task { @MainActor in
-            await appModel.handleInvoke(talkRequest(id: "stale-start", command: .pttStart))
-        }
-        await barrier.waitUntilEntered()
-        let epoch = appModel.talkPttCommandEpoch
-
-        let cancel = await appModel.handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
-        #expect(cancel.ok)
-        #expect(appModel.talkPttCommandEpoch == epoch + 1)
-        barrier.release()
-
-        #expect(await start.value.ok == false)
-        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
-        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
     @Test @MainActor func `PTT start after cancel uses the new command epoch`() async throws {

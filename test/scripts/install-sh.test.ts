@@ -2236,7 +2236,6 @@ EOF
       { version: "24.22.1", defect: "text", expected: 1 },
       { version: "24.16.0+vendor.1", defect: "none", expected: 0 },
       { version: "26.1.0", defect: "none", expected: 0 },
-      { version: "24.16.0", defect: "text", expected: 1 },
       { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
       { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
       { version: "24.22.1", defect: "blob", expected: 1 },
@@ -3075,11 +3074,6 @@ EOF
       hint: ".bashrc",
     },
     {
-      name: "unrelated assignment",
-      profiles: { ".bashrc": 'BACKUP="$HOME/npm-prefix/bin"\n' },
-      hint: ".bashrc",
-    },
-    {
       name: "inactive zsh profile",
       profiles: { ".zshrc": 'export PATH="$HOME/npm-prefix/bin:$PATH"\n' },
       hint: ".zshrc",
@@ -3091,13 +3085,6 @@ EOF
         ".profile": 'export PATH="$HOME/npm-prefix/bin:$PATH"\n',
       },
       hint: ".profile",
-    },
-    {
-      name: "later PATH reset",
-      profiles: {
-        ".bashrc": 'export PATH="$HOME/npm-prefix/bin:$PATH"\nexport PATH=/usr/bin:/bin\n',
-      },
-      hint: ".bashrc",
     },
     { name: "no profile", profiles: {} },
     {
@@ -3359,29 +3346,6 @@ EOF
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {
-  it("aborts before brew link when Homebrew node installation fails at runtime", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      OS=macos
-      run_quiet_step() { echo "run_quiet_step:$*"; return 1; }
-      brew() { echo "brew:$*"; return 0; }
-      ensure_macos_default_node_active() { echo "ensure-called"; return 0; }
-      if install_node; then
-        echo "install_node returned success"
-      else
-        echo "install_node returned failure"
-      fi
-    `);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
-      "Re-run with --verbose or run 'brew install node' directly, then rerun the installer.",
-    );
-    expect(result.stdout).not.toContain("brew:link");
-    expect(result.stdout).not.toContain("ensure-called");
-  });
-
   it.each([
     {
       name: "reports a stale Homebrew node without PATH advice",

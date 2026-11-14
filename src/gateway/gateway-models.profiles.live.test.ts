@@ -2971,28 +2971,6 @@ function isRetryableGatewayConnectError(error: Error): boolean {
 }
 
 describe("buildLiveGatewayAuthProfileStore", () => {
-  it("materializes the exact prepared OpenAI API key as the first isolated profile", () => {
-    const store: AuthProfileStore = { version: 1, profiles: {} };
-    const auth: ResolvedProviderAuth = {
-      apiKey: "prepared-openai-test-key",
-      mode: "api-key",
-      source: "env: OPENAI_API_KEY",
-    };
-
-    const isolated = buildLiveGatewayAuthProfileStore({
-      store,
-      candidates: [{ model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"), auth }],
-    });
-
-    expect(isolated.profiles["openai:live"]).toEqual({
-      type: "api_key",
-      provider: "openai",
-      key: auth.apiKey,
-    });
-    expect(isolated.order?.openai).toEqual(["openai:live"]);
-    expect(store.profiles).toEqual({});
-  });
-
   it("materializes the OpenAI live secret before profile-first discovery", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
 

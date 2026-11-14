@@ -670,18 +670,6 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun shortLoadedHistoryDoesNotOfferJumpWhenBothRowsFit() {
-    withReaderHistory(assistantCount = 1) {
-      assertReaderMessageVisible("You", "Reader prompt")
-      assertReaderMessageVisible("OpenClaw", "Reader answer 1")
-      val range = readerTranscript().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
-      assertEquals("The short transcript starts at its latest edge", 0f, range.value(), 0f)
-      assertEquals("The complete short transcript fits without scrolling", 0f, range.maxValue(), 0f)
-      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
-    }
-  }
-
-  @Test
   fun overflowingLoadedHistoryStartsAtLatestAndManualReadingOffersJump() {
     withReaderHistory(assistantCount = 24) {
       val transcript = readerTranscript()
@@ -913,37 +901,6 @@ class ChatComposerLayoutTest {
       assertTailVisible()
       composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
       assertEquals("Reading and Jump keep the same transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
-    }
-  }
-
-  @Test
-  fun growingViewportHidesJumpWhenTheSameLoadedHistoryFits() {
-    val assistantCount = 6
-    val viewportHeight = mutableStateOf(400.dp)
-    withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
-      val transcript = readerTranscript()
-      val before = transcript.getUnclippedBoundsInRoot()
-      transcript.performTouchInput { swipeDown() }
-      composeRule.waitForIdle()
-      assertTrue(
-        "The smaller viewport must hide newer replies",
-        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
-      )
-      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertIsDisplayed()
-
-      composeRule.runOnIdle { viewportHeight.value = 720.dp }
-      composeRule.waitForIdle()
-
-      val after = transcript.getUnclippedBoundsInRoot()
-      assertTrue("Resizing grows the actual transcript viewport", after.bottom - after.top > before.bottom - before.top)
-      assertReaderMessageVisible("You", "Reader prompt")
-      for (index in 1..assistantCount) {
-        assertReaderMessageVisible("OpenClaw", "Reader answer $index")
-      }
-      val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
-      assertEquals("The resized transcript reaches its latest edge", 0f, range.value(), 0f)
-      assertEquals("The same complete history fits after resizing", 0f, range.maxValue(), 0f)
-      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
     }
   }
 

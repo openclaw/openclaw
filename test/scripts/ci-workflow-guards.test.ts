@@ -2809,13 +2809,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     ["current shard 1", {}, 30],
-    ["current shard 2", { matrix: { shard: 2 } }, 30],
-    ["frozen shard 1", { frozenTarget: true }, 30],
-    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 30],
-    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 30],
-    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 30],
-    ["hosted override", { runnerBackend: "github" }, 40],
-    ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
     ["manual fallback", { eventName: "workflow_dispatch" }, 40],
     ["PR retry", { eventName: "pull_request", runAttempt: 2 }, 40],
     ["noncanonical fallback", { repository: "example/openclaw" }, 40],

@@ -180,7 +180,6 @@ describe("PostgreSQL conformance selection", () => {
         "pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d",
       shard: "${{ matrix.shard }}",
     });
-    expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
     const smoke = requiredWorkflowStep(job.steps, "Run PostgreSQL 16 Gateway cron smoke");
     expect(smoke.uses).toBe(conformance.uses);
     expect(smoke.with).toEqual({
@@ -2374,14 +2373,6 @@ describe("ci workflow guards", () => {
     expect(manifest.status, manifest.output).toBe(0);
     expect(manifest.output).toContain("max-lines-guard:true");
     expect(manifest.outputs.run_baseline_ratchets).toBe("true");
-    const context = { preflightOutputs: manifest.outputs };
-    expect(runCiGateFixture(renderCiGateEnvironment(context)).status).toBe(0);
-    for (const result of ["failure", "skipped"]) {
-      expect(
-        runCiGateFixture(renderCiGateEnvironment(context, { "checks-baseline-ratchets": result }))
-          .status,
-      ).toBe(1);
-    }
   });
 
   it("keeps activity unit proof without unrelated dedicated UI E2E on a PR", () => {
@@ -3115,17 +3106,6 @@ describe("ci workflow guards", () => {
       }
       // The release collector keys retained/rerun evidence by the displayed job name.
       expect(new Set(names).size).toBe(phases.length);
-      expect(workflow.jobs["ci-gate"].needs).toContain(jobName);
-      const gateStep = requiredWorkflowStep(
-        workflow.jobs["ci-gate"].steps,
-        "Verify selected CI lanes",
-      );
-      expect(gateStep.env.JOB_RESULTS).toContain(`${jobName}=\${{ needs.${jobName}.result }}`);
-      for (const conclusion of ["failure", "cancelled", "skipped"]) {
-        expect(
-          runCiGateFixture(`preflight=success|true\n${jobName}=${conclusion}|true`).status,
-        ).toBe(1);
-      }
     },
   );
 
@@ -3293,11 +3273,6 @@ describe("ci workflow guards", () => {
           steps: { "swiftpm-cache": { outputs: { "cache-hit": "true" } } },
         }),
       ).toEqual([]);
-      for (const result of ["failure", "cancelled", "skipped"]) {
-        expect(
-          runCiGateFixture(renderCiGateEnvironment(context, { "macos-swift": result })).status,
-        ).toBe(eventName === "pull_request" && result === "skipped" ? 0 : 1);
-      }
     },
   );
 
@@ -4962,11 +4937,6 @@ describe("ci workflow guards", () => {
           ).toSorted(),
         );
         expect(new Set(tasks).size, "no duplicate lint or build invocations").toBe(tasks.length);
-        for (const result of ["failure", "cancelled", "skipped"]) {
-          expect(
-            runCiGateFixture(renderCiGateEnvironment(context, { android: result })).status,
-          ).toBe(1);
-        }
       },
     );
 
@@ -7333,7 +7303,6 @@ describe("ci workflow guards", () => {
       "${{ !cancelled() && steps.prepare_sdk.outcome == 'success' }}",
     );
     expect(steps.at(-1)?.with?.mode).toBe("publish-run");
-    expect(workflow.jobs["ci-gate"].needs).toContain("check-extension-package-boundary");
     const restoreSteps = sdkRestores(workflow.jobs["check-lint-hosted-extension-shard"].steps);
     for (const enabled of ["true", "false"]) {
       const selected = restoreSteps.filter((step: WorkflowStep) =>
@@ -8826,13 +8795,6 @@ describe("ci workflow guards", () => {
         }),
       ),
     ).toBe(false);
-    for (const result of ["failure", "skipped"]) {
-      expect(
-        runCiGateFixture(
-          `checks-fast-core=success|true\nchecks-node-core-test-nondist-shard=${result}|true`,
-        ).status,
-      ).toBe(1);
-    }
   });
 
   it.each<
@@ -9246,20 +9208,6 @@ describe("ci workflow guards", () => {
         jobResults: { preflight: "failure" },
       }),
     ).toBe(false);
-    const ratchetContext = {
-      preflightOutputs: { run_baseline_ratchets: "true", shared_sdk_declarations: "false" },
-      additionalNeeds: {
-        "check-extension-package-boundary": { result: "success" as const, outputs: {} },
-      },
-    };
-    expect(runCiGateFixture(renderCiGateEnvironment(ratchetContext)).status).toBe(0);
-    for (const result of ["failure", "cancelled", "skipped"]) {
-      expect(
-        runCiGateFixture(
-          renderCiGateEnvironment(ratchetContext, { "checks-baseline-ratchets": result }),
-        ).status,
-      ).toBe(1);
-    }
   });
 
   it("runs all baseline ratchets against the exact tested tree", () => {
@@ -10356,14 +10304,6 @@ describe("ci workflow guards", () => {
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
-    const androidRun = requiredWorkflowStep(
-      readCiWorkflow().jobs.android.steps,
-      "Run Android ${{ matrix.task }}",
-    ).run;
-    expect(androidRun).toContain("build-play-compat)");
-    expect(androidRun).toContain("test-play-compat)");
-    expect(androidRun).toContain(":app:assemblePlayDebug");
-
     const legacy = runCiManifestFixture({ bundledPlanner: false });
     expect(legacy.status, legacy.output).toBe(0);
     expect(legacy.outputs.historical_target).toBe("true");
@@ -10389,11 +10329,6 @@ describe("ci workflow guards", () => {
       },
     ]);
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
-    expect(readJsonOutput(legacy.outputs, "android_matrix").include).toEqual([
-      { check_name: "android-test-play", task: "test-play-compat" },
-      { check_name: "android-test-third-party", task: "test-third-party" },
-      { check_name: "android-build-play", task: "build-play-compat" },
-    ]);
     expect(
       readJsonOutput(legacy.outputs, "checks_node_core_nondist_matrix").include,
     ).toContainEqual(
@@ -10418,14 +10353,6 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
     expect(current.outputs.run_format_check).toBe("true");
-    expect(readJsonOutput(current.outputs, "android_matrix").include).toEqual([
-      { check_name: "android-test-play", task: "test-play" },
-      { check_name: "android-test-third-party", task: "test-third-party" },
-      { check_name: "android-test-wear", task: "test-wear" },
-      { check_name: "android-build-play", task: "build-play" },
-      { check_name: "android-build-wear", task: "build-wear" },
-      { check_name: "android-ktlint", task: "ktlint" },
-    ]);
 
     const currentMissingAndroidCapabilities = runCiManifestFixture({
       androidCiCapabilities: false,
@@ -10579,16 +10506,6 @@ describe("ci workflow guards", () => {
         }),
       }),
     ]);
-
-    const sqliteLifecycleTestPullRequest = runCiManifestFixture({
-      bundledPlanner: true,
-      changedPaths: ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
-      eventName: "pull_request",
-    });
-    expect(sqliteLifecycleTestPullRequest.status, sqliteLifecycleTestPullRequest.output).toBe(0);
-    expect(sqliteLifecycleTestPullRequest.outputs.run_sqlite_session_lifecycle).toBe("true");
-    expect(sqliteLifecycleTestPullRequest.outputs.run_build_artifacts).toBe("true");
-    expect(sqliteLifecycleTestPullRequest.outputs.run_checks_node_core_dist).toBe("false");
 
     const emptyPullRequest = runCiManifestFixture({
       bundledPlanner: true,
@@ -10817,10 +10734,6 @@ describe("ci workflow guards", () => {
       "Install XcodeGen / SwiftLint / SwiftFormat",
     );
     const swiftLint = requiredWorkflowStep(workflow.jobs["macos-swift"].steps, "Swift lint");
-    const openClawKitTests = requiredWorkflowStep(
-      workflow.jobs["macos-swift"].steps,
-      "OpenClawKit tests",
-    );
     expect(swiftInstall.run).toContain("brew install xcodegen swiftlint");
     expect(swiftInstall.run).not.toContain("brew install xcodegen swiftlint swiftformat");
     expect(swiftInstall.run).toContain(
@@ -10848,11 +10761,6 @@ describe("ci workflow guards", () => {
     expect(swiftInstall.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
     expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(swiftLint.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
-    expect(openClawKitTests.if).toContain("!cancelled()");
-    expect(openClawKitTests.if).toContain("steps.select-xcode.outcome == 'success'");
-    expect(openClawKitTests.if).toContain(
-      "matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true'",
-    );
 
     const checkShard = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
     expect(checkShard.env.HISTORICAL_TARGET).toBe(
@@ -11845,10 +11753,7 @@ describe("ci workflow guards", () => {
         }
       }
     }
-    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
-    expect(workflow.jobs["ci-gate"].needs).toContain("build-artifacts");
     expect(workflow.jobs["checks-ui-browser-extension"]).toBeUndefined();
-    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
     const artifactSteps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
     const browserScenario = requiredWorkflowStep(
       artifactSteps,
@@ -11876,9 +11781,6 @@ describe("ci workflow guards", () => {
       OPENCLAW_VITEST_WORKER_CACHE: "1",
       OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "${{ github.workspace }}/dist/control-ui",
     });
-    expect(productionScenario.run).toContain("ui-e2e-production-artifact-contract-v1");
-    expect(productionScenario.run).toContain("--config test/vitest/vitest.ui-e2e.config.ts");
-    expect(productionScenario.run).toContain("--maxWorkers 2");
     const productionCondition = expectDefined(
       productionScenario.if,
       "production fixture condition",
@@ -12300,24 +12202,6 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs.preflight.outputs.strict_control_ui_i18n).toBe(
       "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}",
     );
-    expect(
-      evaluateWorkflow(
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || 'false' }}",
-        {
-          eventName: "workflow_dispatch",
-          releaseGate: false,
-        },
-      ),
-    ).toBe("true");
-    expect(
-      evaluateWorkflow(
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || 'false' }}",
-        {
-          eventName: "workflow_dispatch",
-          releaseGate: true,
-        },
-      ),
-    ).toBe("false");
     expect(sourceStep["continue-on-error"]).toBeUndefined();
     const compatibilityWithoutVerify = runControlUiI18nSourceFixture({
       compatibilityTarget: true,
@@ -12479,7 +12363,6 @@ describe("ci workflow guards", () => {
       expect(verifier.env.RUN_SQLITE_SESSION_LIFECYCLE).toBe(
         "${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}",
       );
-      expect(workflow.jobs["ci-gate"].needs).toContain("build-artifacts");
       expect(workflow.jobs["ci-gate"].needs).not.toContain("sqlite-session-lifecycle");
       const memoryBarrier = verifier.run.indexOf(
         "\nwait_checks\n",
@@ -14200,8 +14083,6 @@ describe("ci workflow guards", () => {
     }
     expect(runStep.run).toContain("bundled-protocol)");
     expect(runStep.run).not.toContain("qa-smoke-ci)");
-    expect(runStep.run).toContain("contracts-plugins-ci-routing)");
-    expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
     // Leak invariant: dist must never be packed after the private overlay

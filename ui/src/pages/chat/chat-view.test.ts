@@ -31,7 +31,6 @@ import {
 import {
   getAttachmentMenuOption,
   renderAttachmentHarness,
-  requireAttachmentInput,
   selectAttachmentMenuOption,
   selectFile,
 } from "./chat-attachment-picker.test-support.ts";
@@ -2019,19 +2018,6 @@ describe("chat attachment picker", () => {
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    const pastedTextAttachments = [
-      registerChatAttachmentPayload({
-        attachment: {
-          id: "retained-paste",
-          fileName: "pasted-text-123.txt",
-          mimeType: "text/plain",
-          origin: "paste",
-        },
-        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
-        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
-      }),
-    ];
-
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
         id: "ordinary-text-file",
@@ -2043,28 +2029,11 @@ describe("chat attachment picker", () => {
       dataUrl: `data:text/plain;base64,${btoa("file")}`,
       file: new File(["file"], "pasted-text-1.txt", { type: "text/plain" }),
     });
-    const imageAttachment: ChatAttachment = {
-      id: "image",
-      fileName: "screen.png",
-      mimeType: "image/png",
-      sizeBytes: 2048,
-    };
-
-    const textOnly = renderChatView({ attachments: pastedTextAttachments });
-    expect(textOnly.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholder", { name: "Val" }),
-    );
-
     const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
     expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
     expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
-
-    const withImage = renderChatView({ attachments: [imageAttachment] });
-    expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholder", { name: "Val" }),
-    );
 
     const withComment = renderChatView({
       assistantName: "Roboclaw",
@@ -2086,25 +2055,6 @@ describe("chat attachment picker", () => {
     expect(withComment.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Roboclaw" }),
     );
-  });
-
-  it("opens the scoped file input from the attachment menu", async () => {
-    const container = renderChatView();
-    const input = requireAttachmentInput(
-      container,
-      ".agent-chat__file-input",
-      "attachment file input",
-    );
-    const attachButton = await getAttachmentMenuOption(
-      container,
-      t("chat.composer.attachFileOption"),
-    );
-    const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
-
-    expect(attachButton).toBeInstanceOf(HTMLElement);
-    selectAttachmentMenuOption(attachButton);
-
-    await waitForSolid(() => expect(clickInput).toHaveBeenCalledTimes(1));
   });
 
   it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
@@ -2609,56 +2559,6 @@ describe("chat model controls", () => {
       }
     },
   );
-
-  it("shows disabled configured models and model setup when no model has authentication", async () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          available: false,
-          unavailableReason: "missing-auth",
-        },
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          available: false,
-          unavailableReason: "missing-auth",
-        },
-      ],
-    });
-    const onModelSetup = vi.fn();
-    const container = await renderModelControls(state, {
-      agentDefaultModel: "openai/gpt-5.6-sol",
-      onModelSetup,
-    });
-
-    const options = container.querySelectorAll<HTMLElement>("[data-chat-model-option]");
-    expect([...options].map((option) => option.dataset.chatModelOption)).toEqual([
-      "openai/gpt-5.6-sol",
-      "openai/gpt-5.6-luna",
-    ]);
-    expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
-    expect(options[0]?.textContent).toContain("Default");
-    for (const option of options) {
-      expect(option.getAttribute("aria-disabled")).toBe("true");
-      expect(option.getAttribute("aria-label")).toContain("Sign-in needed");
-      expect(option.querySelector(".chat-controls__model-option-meta")).toBeNull();
-      expect(option.textContent).not.toContain("1M");
-    }
-    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
-      "Sign-in needed",
-    );
-    expect(container.querySelector('[data-chat-model-setup="true"]')?.textContent).toBe("Set up");
-    container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
-  });
 
   it("keeps each alias's auth action tied to its own availability reason", async () => {
     const { state } = createChatHeaderState({

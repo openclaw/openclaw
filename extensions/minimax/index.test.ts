@@ -156,7 +156,7 @@ describe("minimax provider hooks", () => {
     ],
   ] as const)(
     "discovers configured endpoint %s/%s ahead of the CN environment",
-    async (baseUrl, api, expectedEndpoint, portal: boolean = false) => {
+    async (baseUrl, api, expectedEndpoint, portal?: boolean) => {
       const providerId = portal ? "minimax-portal" : "minimax";
       const expectedBaseUrl = baseUrl.trim() || cnApi;
       const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>

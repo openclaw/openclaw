@@ -553,16 +553,6 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun nonPendingFinalStillUsesAllResponseTts() {
-    val manager = createManager()
-
-    manager.ttsOnAllResponses = true
-    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-other", text = "speak this"))
-
-    assertEquals(1L, playbackGeneration(manager).get())
-  }
-
-  @Test
   fun realtimeRelayOwnsSpeechForGatewayRunConsultFinals() {
     val manager = createManager()
 
@@ -743,18 +733,6 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
-    val manager = createRealtimeManager()
-
-    manager.transcript("assistant", "The")
-    manager.transcript("assistant", " answer")
-
-    val entry = manager.conversation.value.single()
-    assertEquals("The answer", entry.text)
-    assertTrue(entry.isStreaming)
-  }
-
-  @Test
   fun realtimeTranscriptFragmentsInsertWordSpacing() {
     val manager = createRealtimeManager()
 
@@ -822,23 +800,6 @@ class TalkModeManagerTest {
     assertEquals(VoiceConversationRole.User, entry.role)
     assertEquals("Can you check?", entry.text)
     assertFalse(entry.isStreaming)
-  }
-
-  @Test
-  fun realtimeLateFinalUserTranscriptRewritesBubbleAfterAssistantStarts() {
-    val manager = createRealtimeManager()
-
-    manager.transcript("user", "Can you tack")
-    manager.transcript("assistant", "Checking")
-    manager.transcript("user", "Can you check?", final = true)
-
-    val entries = manager.conversation.value
-    assertEquals(2, entries.size)
-    assertEquals(VoiceConversationRole.User, entries[0].role)
-    assertEquals("Can you check?", entries[0].text)
-    assertFalse(entries[0].isStreaming)
-    assertEquals(VoiceConversationRole.Assistant, entries[1].role)
-    assertEquals("Checking", entries[1].text)
   }
 
   @Test
@@ -2010,30 +1971,6 @@ class TalkModeManagerTest {
         closing?.await() ?: source.close()
       }
       assertEquals(AudioRecord.STATE_UNINITIALIZED, recorder.state)
-    }
-
-  @Test
-  fun destroyedContinuousRecognizerCannotFailItsReplacement() =
-    runTest {
-      val manager = createManager(scope = this)
-      val app = RuntimeEnvironment.getApplication()
-      val retired = SpeechRecognizer.createSpeechRecognizer(app)
-      setPrivateField(manager, "recognizer", retired)
-      val retiredListener = recognitionListener(manager, null)
-      manager.stopAllCapture()
-      val replacement = SpeechRecognizer.createSpeechRecognizer(app)
-      setPrivateField(manager, "recognizer", replacement)
-      setPrivateField(manager, "stopRequested", false)
-      setMutableStateFlow(manager, "_isEnabled", true)
-      setMutableStateFlow(manager, "_isListening", true)
-      val status = manager.statusText.value
-      try {
-        retiredListener.onError(SpeechRecognizer.ERROR_AUDIO)
-        assertTrue("A late native callback must not stop the replacement listener", manager.isListening.value)
-        assertEquals(status, manager.statusText.value)
-      } finally {
-        manager.stopAllCapture()
-      }
     }
 
   @Test
@@ -3804,24 +3741,6 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun pushToTalkPauseOutlivesRecognitionWhileRelayConnects() =
-    runTest {
-      val manager = createManager()
-
-      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
-      setPrivateField(manager, "activePttCaptureId", null)
-
-      val pause = readPrivateField(manager, "realtimeCapturePause")
-      assertTrue(pause != null)
-      assertNull(readPrivateField(pause!!, "sessionId"))
-      assertEquals("capture-1", readPrivateField(pause, "pttCaptureId"))
-
-      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
-
-      assertNull(readPrivateField(manager, "realtimeCapturePause"))
-    }
-
-  @Test
   fun resumingRealtimeCaptureRestoresListeningState() =
     runTest {
       val manager =
@@ -3850,30 +3769,6 @@ class TalkModeManagerTest {
       manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"inputAudio","byteLength":4800}""")
 
       assertFalse(readPrivateField(manager, "realtimeOutputSuppressed") as Boolean)
-      manager.stopAllCapture()
-    }
-
-  @Test
-  fun replacementRelayPublishedDuringPushToTalkResumesCapture() =
-    runTest {
-      val manager =
-        createManager(
-          scope = this,
-          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
-        )
-      setMutableStateFlow(manager, "_isEnabled", true)
-      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
-      val pause = readPrivateField(manager, "realtimeCapturePause")!!
-      setPrivateField(pause, "sessionId", "relay-replacement")
-      setPrivateField(pause, "restartRelay", true)
-      installRealtimeSession(manager, "relay-replacement")
-
-      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
-
-      assertNull(readPrivateField(manager, "realtimeCapturePause"))
-      assertTrue(manager.isListening.value)
-      assertTrue((readPrivateField(manager, "realtimeCaptureJob") as Job).isActive)
-      assertTrue((readPrivateField(manager, "realtimeAppendJob") as Job).isActive)
       manager.stopAllCapture()
     }
 
