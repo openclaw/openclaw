@@ -191,11 +191,21 @@ admitted P. Pre-cutover frozen workflows retain strict validation; changing P
 alone does not retrofit waiver support. Readers still accept the historical empty
 `telegram_waiver` field without rewriting authenticated evidence.
 
-Only exact terminal **failed** live-provider or Telegram leaves, or the
-operator-authorized Kova threshold exceptions above, are eligible.
+The operator also authorized exact-job failure grants for `2026.11.5-beta.3`
+on November 14, 2026 at 13:30 UTC: the recorded UI reply-navigation shard,
+Android screenshots, Google Decision and Gateway runtime shards, and Docker
+package/update OpenAI test job from FRV `43594812558/1`. The checked-in list
+is authoritative. These accept failures of those named jobs, not only the
+individual observed assertions. Raw failures remain visible; the CI and release
+aggregates must contain only causes explained by granted jobs. This exception
+does not carry to another release or excuse package/receipt integrity failures.
+
+Only exact terminal **failed** live-provider or Telegram leaves, the beta.3
+operator-accepted jobs, or the Kova threshold exceptions above are eligible.
 Every other required result must pass. Missing, skipped, cancelled, timed-out,
-incomplete, or mismatched required evidence still blocks. Normal CI, npm/Docker
-artifacts, package integrity, install/upgrade, soak, performance outside the
+incomplete, or mismatched required evidence still blocks. Normal CI outside
+the exact beta.3 grants, npm/Docker artifact production, package integrity,
+install/upgrade outside the named Docker test job, soak, performance outside the
 explicit 2026.9.37 not-run exception, plugin
 prerelease, dispatch identity, and seal/evidence integrity cannot be waived.
 An aggregate failure is tolerated only when its causes are entirely explained
@@ -224,10 +234,18 @@ and frozen upgrade baselines remain authoritative; there is no new test selectio
 or current-registry baseline resolution.
 
 The recovery owner authenticates the original admission and dispatches, each
-current successful child attempt and its complete composite receipt, the sealed
+current policy-passing child attempt and its complete composite receipt, the sealed
 candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
-producer receipts and payload digests. Missing payloads, incomplete job history,
-changed attempts, or lost authority fail closed. Each recovery child verification
+producer receipts and payload digests. Only the candidate version authenticated by
+the original admission selects checked-in P-owned waivers. Recovery rechecks exact
+failed aggregate causes, preserves raw child conclusions, and records the matched
+waivers in its new seal. Strict readers independently recompute that policy and
+reject added or omitted waivers. Previously reused children retain their original
+dispatch origin; recovery checks the original qualification parent’s exact reuse
+digest witness with the same validator used by ordinary aggregation. Ordinary
+green-only child reuse is unchanged.
+Missing payloads, incomplete job history, changed attempts, or lost authority fail
+closed. Each recovery child verification
 has a ten-minute budget to read its complete rerun history; ordinary child reuse
 keeps its two-minute default, and job-inventory request timeouts and retry limits are unchanged.
 It never dispatches test or preparation workflows and has only Actions/content

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { writeConfigFile } from "../../config/io.runtime.js";
@@ -213,37 +214,48 @@ async function addTemplate(
 }
 
 it.each([false, true])(
-  "starts selected work only after bootstrap is seeded, retaining installation on opening failure (%s)",
+  "releases selected-prompt chat after the opening reply, retaining installation on failure (%s)",
   async (failOpening) => {
     await withFixture(async (fixture) => {
       const bootstrap =
         "# First-run setup\nAsk which repository to track and wait for the answer.\n";
       await remoteTemplate({ "CLAW.md": manifest, "BOOTSTRAP.md": bootstrap });
       await withTemplateRuntime(fixture, async () => {
+        const client = {
+          connId: "template-selection",
+          invalidated: false,
+          connect: gatewayConnect(["operator.admin"]),
+        };
+        const context = templateContext(fixture, client);
+        const stages: string[] = [];
+        vi.spyOn(context, "broadcastToConnIds").mockImplementation((event, payload) => {
+          if (
+            event === "templates.add.progress" &&
+            isRecord(payload) &&
+            payload.stage === "agent-ready"
+          ) {
+            stages.push(payload.stage);
+          }
+        });
+        let installedBootstrap: string | undefined;
+        let installedJobs: number | undefined;
         greeting.mockClear();
         greeting.mockImplementationOnce(async () => {
-          expect(
-            await fs.readFile(
-              path.join(resolveAgentWorkspaceDir(fixture.getConfig(), agentId), "BOOTSTRAP.md"),
-              "utf8",
-            ),
-          ).toBe(bootstrap);
-          expect((await fixture.status()).jobs).toBe(1);
+          installedBootstrap = await fs.readFile(
+            path.join(resolveAgentWorkspaceDir(fixture.getConfig(), agentId), "BOOTSTRAP.md"),
+            "utf8",
+          );
+          installedJobs = (await fixture.status()).jobs;
+          stages.push("opening attempt");
           if (failOpening) {
             throw new Error("Opening model unavailable");
           }
         });
-        const result = await addTemplate(
-          fixture,
-          {
-            connId: "template-selection",
-            invalidated: false,
-            connect: gatewayConnect(["operator.admin"]),
-          },
-          undefined,
-          "Set up a repository",
-        );
+        const result = await addTemplate(fixture, client, context, "Set up a repository");
         expect(greeting).toHaveBeenCalledOnce();
+        expect(installedBootstrap).toBe(bootstrap);
+        expect(installedJobs).toBe(1);
+        expect(stages).toEqual(["opening attempt", ...(failOpening ? [] : ["agent-ready"])]);
         expect(result).toMatchObject({ agentId, status: failOpening ? "partial" : "complete" });
         if (failOpening) {
           expect(result).toMatchObject({

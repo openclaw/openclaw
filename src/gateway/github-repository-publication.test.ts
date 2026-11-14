@@ -491,7 +491,8 @@ it.each([
       },
     },
   });
-  let now = performance.now();
+  // Fractional uptime exposes rounding above the configured recovery delay.
+  let now = 50_000.1;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   onTestFinished(() => clock.mockRestore());
   const error = failure === "unattached disk" ? "must be attached" : "capture tunnel failure";

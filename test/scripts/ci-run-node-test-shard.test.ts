@@ -543,6 +543,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       },
       preset: "runtime",
     },
+    {
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      files: [
+        "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+        "src/gateway/server.startup-fixture-lifetime.test.ts",
+      ],
+      sibling: {
+        configs: [gatewayDatabaseConfig],
+        includePatterns: ["src/gateway/test-helpers.acquisition.test.ts"],
+      },
+      preset: "runtime",
+    },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     {
       configs: ["test/vitest/vitest.unit.config.ts"],

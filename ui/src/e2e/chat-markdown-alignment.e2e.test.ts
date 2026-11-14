@@ -151,8 +151,10 @@ suite.define(() => {
             summaryInset: 24,
           });
           expect(Math.abs(geometry.bodyTextX - geometry.summaryTextX)).toBeLessThanOrEqual(1);
-          expect(geometry.collapsedHeight).toBe(
+          // A fractional line height lands on the nearest layout unit.
+          expect(geometry.collapsedHeight).toBeCloseTo(
             Number.parseFloat(geometry.collapsedLineHeight) + 12,
+            1,
           );
           expect(Number.parseFloat(geometry.summaryMarginBottom)).toBeGreaterThan(0);
           expect(

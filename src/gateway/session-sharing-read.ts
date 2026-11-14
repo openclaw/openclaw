@@ -5,6 +5,7 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { withSessionSourceValidation } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
@@ -198,33 +199,34 @@ export function createSessionSharingConsumption(params: {
       prepared: PreparedMutationSharing | (() => PreparedMutationSharing) | undefined,
       consume: () => T,
       profiles: PreparedSessionSharingProfiles | undefined = params.getProfiles(),
-    ): T => {
-      const previous = {
-        sharing: current.sharing,
-        profiles: current.profiles,
-        members: current.members,
-      };
-      Object.assign(current, {
-        sharing: typeof prepared === "function" ? undefined : prepared,
-        profiles,
-      });
-      try {
-        profiles?.readCurrent();
-        if (typeof prepared === "function") {
-          // The reader validates its owner after the caller check, in this consuming frame.
-          current.sharing = prepared();
-        } else {
-          prepared?.assertCurrent();
+    ): T =>
+      withSessionSourceValidation(() => {
+        const previous = {
+          sharing: current.sharing,
+          profiles: current.profiles,
+          members: current.members,
+        };
+        Object.assign(current, {
+          sharing: typeof prepared === "function" ? undefined : prepared,
+          profiles,
+        });
+        try {
+          profiles?.readCurrent();
+          if (typeof prepared === "function") {
+            // The reader validates its owner after the caller check, in this consuming frame.
+            current.sharing = prepared();
+          } else {
+            prepared?.assertCurrent();
+          }
+          const result = consume();
+          if (isPromiseLike(result)) {
+            throw new Error("Sharing authorization consumers must remain synchronous");
+          }
+          return result;
+        } finally {
+          Object.assign(current, previous);
         }
-        const result = consume();
-        if (isPromiseLike(result)) {
-          throw new Error("Sharing authorization consumers must remain synchronous");
-        }
-        return result;
-      } finally {
-        Object.assign(current, previous);
-      }
-    },
+      }),
   });
 }
 

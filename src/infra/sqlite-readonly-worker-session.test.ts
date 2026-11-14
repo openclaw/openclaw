@@ -32,10 +32,11 @@ class MockChild extends EventEmitter {
   kill = vi.fn<(_signal?: NodeJS.Signals) => boolean>(() => true);
 }
 const mock = vi.hoisted(() => ({ spawn: vi.fn<(executable: string) => MockChild>() }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mock.spawn,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const mocked = { ...actual, spawn: mock.spawn };
+  return { ...mocked, default: mocked };
+});
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];

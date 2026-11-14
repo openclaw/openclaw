@@ -311,6 +311,8 @@ export function MarkdownText(
   props: MarkdownContentProps & {
     direction?: "ltr" | "rtl" | "auto";
     class?: string;
+    /** Keeps a collapsed preview out of focus, selection and the accessibility tree. */
+    inert?: boolean;
     elementRef?: (element: HTMLDivElement) => void;
     fetchLinkFavicon?: LinkFaviconFetcher;
     onOpenImage?: (item: ImageLightboxItem, index: number) => void;
@@ -338,6 +340,7 @@ export function MarkdownText(
   return (
     <div
       class={props.class ?? "chat-text"}
+      inert={props.inert}
       dir={props.direction}
       onClick={openImage}
       onKeyDown={(event) => {

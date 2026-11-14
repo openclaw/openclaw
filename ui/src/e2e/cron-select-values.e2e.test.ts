@@ -129,7 +129,8 @@ suite.define(() => {
             .toBe(true);
           await page.locator("#cron-payload-text").fill(gardenMessage);
           if (keyboardName) {
-            for (let field = 0; field < 4; field++) {
+            // Action, scrollable preview, model, reasoning, then name.
+            for (let field = 0; field < 5; field++) {
               await page.keyboard.press("Tab");
             }
             expect(

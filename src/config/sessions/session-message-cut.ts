@@ -19,6 +19,7 @@ import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.j
 import { executeSessionForkOperation } from "./session-fork-domain.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
 import { selectSessionMessageCut } from "./session-message-cut-plan.js";
+import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,
@@ -103,6 +104,7 @@ export async function mutateSessionHistoryInWorker(
     if (preparedEntry.worktree) {
       const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
         loadSessionTranscriptEvents({
+          maxEventBytes: SESSION_MESSAGE_CUT_MAX_BYTES,
           agentId: resolved.agentId,
           env: database.env,
           storePath: database.path,
